@@ -12,6 +12,7 @@ from pathlib import Path
 
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
+from sregym.service.docker_runtime import rootless_workload_enabled
 from sregym.service.internet_policy import InternetPolicy
 
 from .agent_registry import AgentRegistration
@@ -84,6 +85,8 @@ class AgentLauncher:
     def prepare_agent(self, reg: AgentRegistration | None, *, force_build: bool = False) -> None:
         """Prepare isolated tools and validate credentials before a run."""
         try:
+            if rootless_workload_enabled() and reg is not None and not reg.container_isolation:
+                raise RuntimeError("Rootless runs require agent execution inside the workload boundary")
             if reg is None or reg.container_isolation:
                 self.enable_container_isolation(force_build=force_build)
             if reg is not None and self._container_runner is not None:
@@ -152,6 +155,9 @@ class AgentLauncher:
                 f"Agent '{reg.name}' does not use container isolation. "
                 "Run it with --internet-access open or enable container isolation."
             )
+
+        if rootless_workload_enabled():
+            raise RuntimeError("Rootless runs cannot execute agent-selected commands as the trusted host user")
 
         env = os.environ.copy()
         if reg.kickoff_env:
@@ -286,6 +292,8 @@ class AgentLauncher:
         # Check if already terminated
         existing.proc.poll()
         if existing.proc.returncode is not None:
+            if rootless_workload_enabled() and existing.container_name:
+                ContainerRunner.stop_container(existing.container_name, timeout=timeout)
             del self._procs[agent_name]
             self._cleanup_container_runner_tmps()
             return

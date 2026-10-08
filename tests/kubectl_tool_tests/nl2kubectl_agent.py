@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -62,11 +63,11 @@ class NL2KubectlAgent:
         session_id = str(uuid.uuid4())
         transport = SSETransport(
             url=KUBECTL_TOOLS_MCP_URL,
-            headers={"sregym_ssid": session_id},
+            headers={"x-session-id": session_id},
         )
         self.client = Client(transport)
 
-        exec_kubectl_cmd_safely = ExecKubectlCmdSafely(self.client)
+        exec_kubectl_cmd_safely = ExecKubectlCmdSafely(self.client, session_id)
         rollback_command = RollbackCommand(self.client)
         get_previous_rollbackable_cmd = GetPreviousRollbackableCmd(self.client)
         self.kubectl_tools = [
@@ -131,8 +132,6 @@ class NL2KubectlAgent:
         output = [*state["messages"], ai_message_template]
         return {
             "messages": output,
-            "curr_file": state["curr_file"],
-            "curr_line": state["curr_line"],
         }
 
     def llm_inference_step(self, state: State):
@@ -190,6 +189,9 @@ class NL2KubectlAgent:
         self.graph = self.graph_builder.compile(checkpointer=memory)
 
     def graph_step(self, user_input: str):
+        asyncio.run(self._graph_step(user_input))
+
+    async def _graph_step(self, user_input: str):
         if not self.graph:
             raise ValueError("Agent graph is None. Have you built the agent?")
         config = {"configurable": {"thread_id": "1"}}
@@ -203,11 +205,12 @@ class NL2KubectlAgent:
         else:
             state = {
                 "messages": [{"role": "user", "content": user_input}],
-                "workdir": "",
-                "curr_file": "",
-                "curr_line": 0,
+                "num_steps": 0,
+                "submitted": False,
+                "rollback_stack": "",
+                "executed_commands": [],
             }
-        for event in self.graph.stream(
+        async for event in self.graph.astream(
             state,
             config=config,
             stream_mode="values",

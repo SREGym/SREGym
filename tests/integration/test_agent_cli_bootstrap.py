@@ -9,19 +9,29 @@ from pathlib import Path
 import pytest
 
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
+from sregym.service.internet_policy import InternetPolicy
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize("agent", ["claudecode", "codex", "gemini", "opencode", "copilot"])
 def test_agent_cli_installs_and_reports_version(agent, monkeypatch, tmp_path):
-    runner = ContainerRunner(ContainerConfig(memory="2g", cpus=2))
+    runner = ContainerRunner(
+        ContainerConfig(
+            memory="2g",
+            cpus=2,
+            codex_auth="none",
+            forward_host_credentials=False,
+            internet_policy=InternetPolicy.from_mode("open"),
+        )
+    )
     monkeypatch.setattr(runner, "API_KEY_VARS", [])
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     try:
+        runner.ensure_image_exists()
         result = runner.run_sync(
             ExecInput(
-                command=f"bash /opt/sregym/install-scripts/install-{agent}.sh",
+                command=f"bash /opt/runtime/install-scripts/install-{agent}.sh",
                 env={"DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1"},
                 timeout=600,
                 label=f"bootstrap-{agent}",

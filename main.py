@@ -36,6 +36,7 @@ from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
+from sregym.service.docker_runtime import rootless_workload_enabled, validate_rootless_boundary
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
 from sregym.service.kubectl import ContainerPlatformError
@@ -94,7 +95,7 @@ def run_preflight_check(
         return
     check_cmd = f"python3 -c 'from {module_path} import run_preflight; run_preflight()'"
     if install_script and not container_runner.has_prepared_agent_tools:
-        check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
+        check_cmd = f"{container_runner.runtime_root}/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
     try:
         result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
     except BaseException:
@@ -198,7 +199,8 @@ def _artifact_environment(run: RunArtifacts):
         HARNESS_ARTIFACT_ID_ENV: os.environ.get(HARNESS_ARTIFACT_ID_ENV),
         HARNESS_PROBLEM_ID_ENV: os.environ.get(HARNESS_PROBLEM_ID_ENV),
     }
-    os.environ["AGENT_LOGS_DIR"] = str(run.active_dir.resolve())
+    agent_dir = run.active_dir / "agent" if rootless_workload_enabled() else run.active_dir
+    os.environ["AGENT_LOGS_DIR"] = str(agent_dir.resolve())
     os.environ[HARNESS_ARTIFACT_ID_ENV] = run.artifact_id
     os.environ.pop(HARNESS_PROBLEM_ID_ENV, None)
     try:
@@ -677,6 +679,8 @@ def driver_loop(
                     "deployment_profile": get_profile(),
                     "judge_backend": judge_backend,
                 }
+                if rootless_workload_enabled():
+                    snapshot["workload_boundary"] = "rootless-docker-v1-experimental"
                 if os.environ.get("AGENT_JEV_MODEL"):
                     snapshot["jev_model"] = os.environ["AGENT_JEV_MODEL"]
                 internet_audit = LAUNCHER.internet_policy_result(agent_proc)
@@ -828,11 +832,31 @@ def _run_driver_and_shutdown(
 
 
 def main(args):
+    if getattr(args, "verifier_isolation", "container") != "container":
+        raise RuntimeError("Independent container verification is required for every run")
+    if rootless_workload_enabled():
+        validate_rootless_boundary()
+        if args.use_external_harness:
+            raise RuntimeError("Rootless external harnesses require a qualified persistent runner lifecycle")
+        registration = (
+            get_agent(args.agent, path=Path(__file__).resolve().parent / "agents.yaml") if args.agent else None
+        )
+        if registration and not registration.container_isolation:
+            raise RuntimeError("Rootless runs require agent execution inside the workload boundary")
     configure_jev(args)
     init_logger()
     backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
-    with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
-        return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
+    try:
+        with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
+            return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
+    except BaseException:
+        # Preflight failures happen before the driver's normal shutdown path.
+        # Release this launcher's proxies and credentials even on interruption.
+        try:
+            LAUNCHER.cleanup_all()
+        except Exception:
+            logger.exception("Failed to release launcher resources after startup failure")
+        raise
 
 
 def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None = None):
@@ -848,6 +872,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         additional_allowed_endpoints=getattr(args, "allow_agent_endpoint", ()),
     )
     harden_container = args.container_hardening == "on"
+    if getattr(args, "verifier_isolation", "container") != "container":
+        raise RuntimeError("Independent container verification is required for every run")
 
     set_profile(args.profile)
 
@@ -899,7 +925,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
 
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
-        if internet_policy.is_filtered and not args.use_external_harness
+        if (internet_policy.is_filtered or rootless_workload_enabled()) and not args.use_external_harness
         else "127.0.0.1"
     )
     conductor_config = ConductorConfig(
@@ -910,8 +936,9 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
         stages=tuple(args.stages) if args.stages else None,
-        baseline_override_s=args.baseline,
-        propagation_override_s=args.propagation,
+        baseline_override_s=getattr(args, "baseline", None),
+        propagation_override_s=getattr(args, "propagation", None),
+        verifier_kubeconfig_path=getattr(args, "verifier_kubeconfig", None),
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)
@@ -1025,6 +1052,18 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SREGym benchmark suite")
+    parser.add_argument(
+        "--verifier-isolation",
+        choices=("container",),
+        default="container",
+        help="Independent container verification is mandatory for all run modes.",
+    )
+    parser.add_argument(
+        "--verifier-kubeconfig",
+        type=Path,
+        default=None,
+        help="Private materialized Kubernetes credentials for the verifier (never the agent proxy kubeconfig).",
+    )
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument(
         "--problem",

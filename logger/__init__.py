@@ -31,7 +31,7 @@ def init_logger():
         timestamp = get_current_datetime_formatted()
         # create dir and file
         log_dir = os.environ.get("AGENT_LOGS_DIR", "./logs")
-        path = f"{log_dir}/sregym_{timestamp}.log"
+        path = f"{log_dir}/runtime_{timestamp}.log"
         os.makedirs(log_dir, exist_ok=True)
 
         handler = logging.FileHandler(path)

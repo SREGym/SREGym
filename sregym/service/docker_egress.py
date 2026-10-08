@@ -13,6 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
+from sregym.service.docker_runtime import docker_command, rootless_workload_enabled, runner_address
 from sregym.service.internet_policy import EndpointRule
 
 logger = logging.getLogger("all.sregym.docker_egress")
@@ -54,7 +55,14 @@ def _find_host_ca_bundle() -> Path:
 
 
 class DockerEgress:
-    def __init__(self, image: str = DEFAULT_EGRESS_PROXY_IMAGE, *, k8s_proxy_port: int = 16443):
+    def __init__(
+        self,
+        image: str = DEFAULT_EGRESS_PROXY_IMAGE,
+        *,
+        k8s_proxy_port: int = 16443,
+        docker_host: str | None = None,
+    ):
+        self.docker_host = docker_host
         self.image = image
         self.k8s_proxy_port = k8s_proxy_port
         self._network_name: str | None = None
@@ -64,6 +72,17 @@ class DockerEgress:
         self._ca_bundle: Path | None = None
         self._rules: tuple[EndpointRule, ...] = ()
 
+    def _docker_command(self):
+        return docker_command(host=self.docker_host)
+
+    def _host_mapping(self):
+        address = (
+            runner_address()
+            if rootless_workload_enabled() and self.docker_host in {None, os.environ.get("DOCKER_HOST")}
+            else "host-gateway"
+        )
+        return f"--add-host=host.docker.internal:{address}"
+
     def _require_ready(self) -> None:
         if not all((self._network_name, self._proxy_name, self._proxy_ca, self._ca_bundle)):
             raise RuntimeError("Filtered egress proxy is not ready")
@@ -72,7 +91,7 @@ class DockerEgress:
         self._require_ready()
         return [
             f"--network={self._network_name}",
-            "--add-host=host.docker.internal:host-gateway",
+            self._host_mapping(),
             "-v",
             f"{self._proxy_ca}:{PROXY_CA_CONTAINER_PATH}:ro",
             "-v",
@@ -133,7 +152,7 @@ class DockerEgress:
     def ensure_started(self, rules: tuple[EndpointRule, ...]) -> None:
         if self._proxy_name is not None:
             running = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", self._proxy_name],
+                [*self._docker_command(), "inspect", "-f", "{{.State.Running}}", self._proxy_name],
                 capture_output=True,
                 text=True,
             )
@@ -156,13 +175,23 @@ class DockerEgress:
 
         try:
             self._prepare_state()
+            if rootless_workload_enabled() and self.docker_host in {None, os.environ.get("DOCKER_HOST")}:
+                # The daemon's account cannot traverse the private runner
+                # checkout. Copy only these public proxy modules to its public
+                # temporary state directory; credentials are never staged here.
+                for source in (addon_path, policy_path):
+                    target = self._tmp_dir / source.name
+                    shutil.copyfile(source, target)
+                    target.chmod(0o644)
+                addon_path = self._tmp_dir / addon_path.name
+                policy_path = self._tmp_dir / policy_path.name
             self._run_docker_checked(
-                ["docker", "network", "create", "--internal", self._network_name],
+                [*self._docker_command(), "network", "create", "--internal", self._network_name],
                 "create the filtered egress network",
             )
             self._run_docker_checked(
                 [
-                    "docker",
+                    *self._docker_command(),
                     "run",
                     "-d",
                     "--rm",
@@ -170,7 +199,7 @@ class DockerEgress:
                     self._proxy_name,
                     "--network",
                     self._network_name,
-                    "--add-host=host.docker.internal:host-gateway",
+                    self._host_mapping(),
                     "-v",
                     f"{addon_path}:/addons/egress_proxy.py:ro",
                     "-v",
@@ -203,7 +232,7 @@ class DockerEgress:
                 "start the filtered egress proxy",
             )
             self._run_docker_checked(
-                ["docker", "network", "connect", "bridge", self._proxy_name],
+                [*self._docker_command(), "network", "connect", "bridge", self._proxy_name],
                 "connect the egress proxy to the internet",
             )
             self._copy_proxy_certificate()
@@ -247,11 +276,11 @@ class DockerEgress:
 
     def _ensure_proxy_image_exists(self) -> None:
         image = self.image
-        inspected = subprocess.run(["docker", "image", "inspect", image], capture_output=True)
+        inspected = subprocess.run([*self._docker_command(), "image", "inspect", image], capture_output=True)
         if inspected.returncode == 0:
             return
         logger.info("Pulling filtered egress proxy image '%s'...", image)
-        self._run_docker_checked(["docker", "pull", image], "pull the filtered egress proxy image")
+        self._run_docker_checked([*self._docker_command(), "pull", image], "pull the filtered egress proxy image")
 
     def _copy_proxy_certificate(self) -> None:
         if self._proxy_name is None or self._tmp_dir is None:
@@ -262,7 +291,7 @@ class DockerEgress:
         while time.monotonic() < deadline:
             copied = subprocess.run(
                 [
-                    "docker",
+                    *self._docker_command(),
                     "cp",
                     f"{self._proxy_name}:/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem",
                     str(proxy_ca),
@@ -272,13 +301,13 @@ class DockerEgress:
             if copied.returncode == 0 and proxy_ca.is_file() and proxy_ca.stat().st_size > 0:
                 break
             running = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", self._proxy_name],
+                [*self._docker_command(), "inspect", "-f", "{{.State.Running}}", self._proxy_name],
                 capture_output=True,
                 text=True,
             )
             if running.returncode != 0 or running.stdout.strip() != "true":
                 logs = subprocess.run(
-                    ["docker", "logs", self._proxy_name],
+                    [*self._docker_command(), "logs", self._proxy_name],
                     capture_output=True,
                     text=True,
                 )
@@ -304,12 +333,12 @@ class DockerEgress:
     def close(self) -> None:
         if self._proxy_name:
             subprocess.run(
-                ["docker", "rm", "-f", self._proxy_name],
+                [*self._docker_command(), "rm", "-f", self._proxy_name],
                 capture_output=True,
             )
         if self._network_name:
             subprocess.run(
-                ["docker", "network", "rm", self._network_name],
+                [*self._docker_command(), "network", "rm", self._network_name],
                 capture_output=True,
             )
         if self._tmp_dir:

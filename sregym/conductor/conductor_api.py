@@ -122,7 +122,8 @@ async def _submit_when_stage_is_ready(solution: str, stage: str | None) -> dict:
                 raise SubmissionRequestRejected(409, str(exc)) from exc
             except RuntimeError as exc:
                 if loop.time() >= deadline:
-                    raise SubmissionRequestRejected(503, str(exc)) from exc
+                    logger.exception("Submission processing failed before acceptance")
+                    raise SubmissionRequestRejected(503, "Submission could not be processed.") from exc
                 await asyncio.sleep(_SUBMISSION_POLL_SECONDS)
                 continue
 
@@ -150,8 +151,9 @@ async def submit_via_conductor(ans: str, stage: str | None = None) -> dict[str, 
         result = await _submit_when_stage_is_ready(ans, stage)
     except SubmissionRequestRejected as exc:
         return {"status": "error", "text": str(exc)}
-    except Exception as exc:
-        return {"status": "error", "text": f"Grading error: {exc}"}
+    except Exception:
+        logger.exception("Submission processing failed")
+        return {"status": "error", "text": "Submission could not be processed."}
 
     return {"status": "200", "text": result["message"], "stage": result["stage"]}
 
@@ -223,8 +225,8 @@ async def submit_solution(req: SubmitRequest):
         logger.error("Submission rejected: %s", exc)
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error("Grading error: %s", exc)
-        raise HTTPException(status_code=400, detail=f"Grading error: {exc}") from exc
+        logger.exception("Submission processing failed")
+        raise HTTPException(status_code=400, detail="Submission could not be processed.") from exc
 
     return {"status": "200", "message": result["message"], "stage": result["stage"]}
 

@@ -680,7 +680,7 @@ class KubeCtl:
                     node_name=node_name,
                     namespace=pod_namespace,
                     script=script,
-                    name_prefix="sregym-localpv-gc",
+                    name_prefix="localpv-gc",
                     env={"KEEP": keep_blob},
                     timeout=timeout,
                 )

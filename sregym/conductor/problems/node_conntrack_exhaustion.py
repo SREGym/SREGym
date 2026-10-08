@@ -8,7 +8,6 @@ from kubernetes.client.rest import ApiException
 from sregym.conductor.oracles.conntrack_mitigation import (
     ConntrackMitigationOracle,
     read_node_conntrack_usage,
-    write_node_conntrack_max,
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -23,7 +22,9 @@ class NodeConntrackExhaustionHotelReservation(Problem):
     client_deployment = "edge-traffic-client"
     gateway_port, gateway_port_count, gateway_replicas = 9090, 16, 4
     client_replicas, connections_per_worker = 1, 10000
-    conntrack_max_cap = 262144
+    task_version = "conntrack-existing-limit-v2"
+    # Bound the traffic generator, not a physical-host kernel setting.
+    connection_budget = 2_097_152
     inject_ratio_threshold, recovery_ratio_threshold = 0.98, 0.10
 
     def __init__(self):
@@ -69,22 +70,18 @@ class NodeConntrackExhaustionHotelReservation(Problem):
         except Exception:
             with contextlib.suppress(Exception):
                 self._delete_support_resources()
-            self._restore_conntrack_limit()
             raise
 
-    @mark_fault_injected
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         print("== Fault Recovery ==")
-        try:
-            self._delete_support_resources()
-            node = self.victim_node
-            if not node:
-                with contextlib.suppress(Exception):
-                    node = self.select_worker_nodes()[0]
-            if node:
-                self._wait_for_conntrack(node, self.recovery_ratio_threshold, timeout=180, below=True)
-        finally:
-            self._restore_conntrack_limit()
+        self._delete_support_resources()
+        node = self.victim_node
+        if not node:
+            with contextlib.suppress(Exception):
+                node = self.select_worker_nodes()[0]
+        if node:
+            self._wait_for_conntrack(node, self.recovery_ratio_threshold, timeout=180, below=True)
 
     def select_worker_nodes(self) -> tuple[str, str]:
         control_plane_labels = {"node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"}
@@ -105,40 +102,26 @@ class NodeConntrackExhaustionHotelReservation(Problem):
         if not node:
             raise RuntimeError("Cannot prepare nf_conntrack_max before selecting a victim node")
         count, original_maximum = read_node_conntrack_usage(self.kubectl, node, self.namespace)
+        if original_maximum <= 0 or count < 0:
+            raise RuntimeError(f"Invalid conntrack measurements on {node}: {count}/{original_maximum}")
+        target = (original_maximum * 105 + 99) // 100
+        if target > self.connection_budget:
+            raise RuntimeError(
+                f"Conntrack table on {node} requires {target} connections, exceeding the "
+                f"generator budget {self.connection_budget}; no host setting was changed"
+            )
+        if count >= original_maximum * self.inject_ratio_threshold:
+            raise RuntimeError(f"Conntrack table on {node} is already saturated before injection")
         self.original_conntrack_max = original_maximum
-        effective_maximum = min(original_maximum, self.conntrack_max_cap)
-        if effective_maximum < original_maximum:
-            if count >= effective_maximum * self.inject_ratio_threshold:
-                raise RuntimeError(
-                    f"Refusing to lower nf_conntrack_max on {node}: "
-                    f"current usage {count} is already above {self.inject_ratio_threshold:.0%} "
-                    f"of injection limit {effective_maximum}"
-                )
-            self.conntrack_max_changed = True
-            write_node_conntrack_max(self.kubectl, node, effective_maximum, self.namespace)
-            _, updated_maximum = read_node_conntrack_usage(self.kubectl, node, self.namespace)
-            if updated_maximum != effective_maximum:
-                raise RuntimeError(
-                    f"Could not set nf_conntrack_max on {node} to {effective_maximum}; observed {updated_maximum}"
-                )
-
-        self.target_connections = (effective_maximum * 105 + 99) // 100
+        self.target_connections = target
+        # One source IP needs enough destination ports to fit the requested
+        # sockets within the usual ephemeral-port range. Resolve once before
+        # spawning workers so DNS is not flooded while conntrack fills.
+        self.gateway_port_count = max(type(self).gateway_port_count, (target + 19999) // 20000)
         print(
             f"Calibrated {self.client_deployment}: {self.client_replicas} pod "
-            f"(nf_conntrack_max={effective_maximum}, target_connections={self.target_connections})"
+            f"(nf_conntrack_max={original_maximum}, target_connections={self.target_connections})"
         )
-
-    def _restore_conntrack_limit(self):
-        if not self.conntrack_max_changed or not self.victim_node or self.original_conntrack_max is None:
-            return
-        write_node_conntrack_max(self.kubectl, self.victim_node, self.original_conntrack_max, self.namespace)
-        _, maximum = read_node_conntrack_usage(self.kubectl, self.victim_node, self.namespace)
-        if maximum != self.original_conntrack_max:
-            raise RuntimeError(
-                f"Could not restore nf_conntrack_max on {self.victim_node} "
-                f"to {self.original_conntrack_max}; observed {maximum}"
-            )
-        self.conntrack_max_changed = False
 
     def _frontend_node(self):
         pods = self.core_v1.list_namespaced_pod(self.namespace, label_selector="io.kompose.service=frontend").items
@@ -213,8 +196,9 @@ class NodeConntrackExhaustionHotelReservation(Problem):
             ports = [int(port) for port in os.environ["TARGET_PORTS"].split(",")]
             total = int(os.environ["CONNECTIONS"])
             per_worker = int(os.environ["CONNECTIONS_PER_WORKER"])
+            target_ip = socket.getaddrinfo(target, ports[0], type=socket.SOCK_STREAM)[0][4][0]
+            addrs = [(target_ip, port) for port in ports]
             def hold_connections(goal):
-                addrs = [socket.getaddrinfo(target, port, type=socket.SOCK_STREAM)[0][4] for port in ports]
                 held = []
                 while len(held) < goal:
                     for _ in range(min(200, goal - len(held))):

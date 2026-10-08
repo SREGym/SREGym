@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import platform
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -16,8 +17,10 @@ from urllib.parse import urlsplit, urlunsplit
 import yaml
 
 from sregym.service.docker_egress import DEFAULT_EGRESS_PROXY_IMAGE, DockerEgress
+from sregym.service.docker_runtime import docker_command, rootless_workload_enabled, runner_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.provider_endpoints import provider_endpoint_rules
+from sregym.service.workload_volumes import WorkloadVolumes
 
 logger = logging.getLogger("all.sregym.container_runner")
 
@@ -74,6 +77,8 @@ def _codex_subscription_auth_available(auth_path: Path) -> bool:
 
 def get_container_host_bind_address() -> str:
     """Return a host bind address reachable from the agent container."""
+    if rootless_workload_enabled():
+        return runner_address()
     if platform.system() != "Linux":
         # Docker Desktop exposes the host to containers through
         # host.docker.internal. The proxy must therefore bind beyond the host
@@ -121,6 +126,8 @@ class ContainerConfig:
     published_ports: list[str] = field(default_factory=list)
     forward_host_credentials: bool = True
     codex_auth: Literal["copy", "shared", "none"] = "copy"
+    docker_host: str | None = None
+    isolate_mounts: bool = field(default_factory=rootless_workload_enabled)
 
 
 class ContainerRunner:
@@ -279,9 +286,38 @@ class ContainerRunner:
 
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
+        self._public_runtime = self.config.image in {
+            DEFAULT_AGENT_IMAGE,
+            LOCAL_AGENT_IMAGE,
+        } or self.config.image.startswith("incident-agent:runtime-")
+        if self.config.isolate_mounts and self.config.docker_host is None:
+            self.config.docker_host = os.environ.get("DOCKER_HOST") or None
         self._credential_tmps: list[str] = []
-        self._egress = DockerEgress(self.config.egress_proxy_image, k8s_proxy_port=self.config.k8s_proxy_port)
+        self._egress = DockerEgress(
+            self.config.egress_proxy_image,
+            k8s_proxy_port=self.config.k8s_proxy_port,
+            docker_host=self.config.docker_host,
+        )
         self._agent_tools_volume: str | None = None
+        self._volumes = (
+            WorkloadVolumes(self.config.image, self.config.docker_host) if self.config.isolate_mounts else None
+        )
+
+    def _docker_command(self):
+        return docker_command(host=self.config.docker_host)
+
+    @property
+    def runtime_root(self) -> str:
+        return "/opt/runtime" if self._public_runtime else "/opt/sregym"
+
+    def _read_runtime_layout(self, inspection: subprocess.CompletedProcess) -> None:
+        try:
+            metadata = json.loads(inspection.stdout)
+            labels = metadata[0]["Config"].get("Labels") or {}
+        except (TypeError, ValueError, KeyError, IndexError):
+            return
+        if labels.get("io.incident.runtime.root") == "/opt/runtime":
+            self._public_runtime = True
 
     @property
     def internet_access_mode(self) -> str:
@@ -348,14 +384,16 @@ class ContainerRunner:
 
         suffix = uuid.uuid4().hex[:8]
         volume = f"evaluation-agent-tools-{suffix}"
-        self._run_docker_checked(["docker", "volume", "create", volume], "create the agent tools volume")
+        self._run_docker_checked([*self._docker_command(), "volume", "create", volume], "create the agent tools volume")
         self._agent_tools_volume = volume
         version = agent_version or "latest"
-        command = f"AGENT_VERSION={shlex.quote(version)} /opt/sregym/install-scripts/{shlex.quote(install_script)}"
+        command = (
+            f"AGENT_VERSION={shlex.quote(version)} {self.runtime_root}/install-scripts/{shlex.quote(install_script)}"
+        )
         try:
             result = subprocess.run(
                 [
-                    "docker",
+                    *self._docker_command(),
                     "run",
                     "--rm",
                     "--network=bridge",
@@ -382,7 +420,7 @@ class ContainerRunner:
     def cleanup_agent_tools(self) -> None:
         if self._agent_tools_volume:
             subprocess.run(
-                ["docker", "volume", "rm", "-f", self._agent_tools_volume],
+                [*self._docker_command(), "volume", "rm", "-f", self._agent_tools_volume],
                 capture_output=True,
             )
         self._agent_tools_volume = None
@@ -408,7 +446,7 @@ class ContainerRunner:
             args.extend(["-v", f"{auth_src.resolve()}:/root/.codex/auth.json:rw"])
             return
 
-        tmp = tempfile.mkdtemp(prefix="sregym-codex-")
+        tmp = tempfile.mkdtemp(prefix="agent-codex-")
         auth_dst = Path(tmp) / "auth.json"
         shutil.copy2(auth_src, auth_dst)
 
@@ -442,6 +480,8 @@ class ContainerRunner:
         for tmp in self._credential_tmps:
             shutil.rmtree(tmp, ignore_errors=True)
         self._credential_tmps = []
+        if self._volumes:
+            self._volumes.close()
 
     def _build_env_vars(self, extra_env: dict[str, str] | None = None) -> dict[str, str]:
         env_vars = dict(self.config.env_vars)
@@ -454,6 +494,12 @@ class ContainerRunner:
 
         if extra_env:
             env_vars.update(extra_env)
+
+        # Keep the host's legacy settings out of the public runtime.
+        if self._public_runtime:
+            for old, new in (("SREGYM_ARTIFACT_ID", "RUN_ARTIFACT_ID"), ("SREGYM_PROBLEM_ID", "PROBLEM_ID")):
+                if old in env_vars:
+                    env_vars[new] = env_vars.pop(old)
 
         if self.config.internet_policy.agent_name == "codex" and env_vars.get("AGENT_API_BASE"):
             env_vars.setdefault("CODEX_HOME", "/logs")
@@ -472,7 +518,7 @@ class ContainerRunner:
         # Docker Desktop and filtered containers cannot reach host loopback
         # directly. Rewrite every forwarded provider endpoint that points to a
         # loopback address, not only the primary agent endpoint.
-        if _docker_uses_separate_host() or self.config.internet_policy.is_filtered:
+        if _docker_uses_separate_host() or self.config.internet_policy.is_filtered or self.config.isolate_mounts:
             for key, value in list(env_vars.items()):
                 if not isinstance(value, str) or not (
                     key.endswith(("_API_BASE", "_BASE_URL", "_URL", "_ENDPOINT"))
@@ -483,9 +529,11 @@ class ContainerRunner:
 
         # Agent containers use Docker's host alias to reach SREGym services
         # running on the host, including the MCP port-forward.
-        if self.config.network_mode == "host" or self.config.internet_policy.is_filtered:
+        # Internal service routing remains necessary without provider keys.
+        # Keep the egress allowlist and URL on the same active forwarded port.
+        mcp_port = env_vars.setdefault("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
+        if self.config.network_mode == "host" or self.config.internet_policy.is_filtered or self.config.isolate_mounts:
             env_vars["API_HOSTNAME"] = "host.docker.internal"
-            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
 
         if self._agent_tools_volume is not None:
@@ -506,7 +554,7 @@ class ContainerRunner:
 
     def _build_base_docker_args(self, extra_env: dict[str, str] | None = None) -> list[str]:
         args = [
-            "docker",
+            *self._docker_command(),
             "run",
             "--rm",
             f"--cpus={self.config.cpus}",
@@ -571,12 +619,26 @@ class ContainerRunner:
             for subdir in self.config.sregym_app_subdirs:
                 host_path = self.config.sregym_apps_path / subdir
                 if host_path.exists():
-                    args.extend(["-v", f"{host_path.resolve()}:/opt/sregym/SREGym-applications/{subdir}:ro"])
+                    utilities = "applications" if self._public_runtime else "SREGym-applications"
+                    args.extend(["-v", f"{host_path.resolve()}:{self.runtime_root}/{utilities}/{subdir}:ro"])
 
+        if self.config.isolate_mounts:
+            address = runner_address()
+            args = [
+                f"--add-host=host.docker.internal:{address}"
+                if argument == "--add-host=host.docker.internal:host-gateway"
+                else argument
+                for argument in args
+            ]
+            if not any(argument.startswith("--add-host=host.docker.internal:") for argument in args):
+                args.append(f"--add-host=host.docker.internal:{address}")
+            outputs = {path.resolve() for path in (self.config.logs_path, self.config.workspace_path) if path}
+            self._volumes.image = self.config.image
+            args = self._volumes.rewrite(args, outputs)
         return args
 
     def _prepare_kubeconfig(self, source: Path) -> Path:
-        if not self.config.internet_policy.is_filtered:
+        if not self.config.internet_policy.is_filtered and not self.config.isolate_mounts:
             return source
 
         with source.open(encoding="utf-8") as handle:
@@ -593,7 +655,7 @@ class ContainerRunner:
         if not changed:
             return source
 
-        temp_dir = Path(tempfile.mkdtemp(prefix="sregym-kubeconfig-"))
+        temp_dir = Path(tempfile.mkdtemp(prefix="operator-kubeconfig-"))
         output = temp_dir / source.name
         with output.open("w", encoding="utf-8") as handle:
             yaml.safe_dump(config, handle, sort_keys=False)
@@ -606,8 +668,9 @@ class ContainerRunner:
         self._ensure_filtered_egress(env_vars)
         cmd = self._build_base_docker_args(exec_input.env)
         suffix = uuid.uuid4().hex[:8]
-        if exec_input.label:
-            container_name = f"sregym-{exec_input.label}-{suffix}"
+        if exec_input.label or self.config.isolate_mounts:
+            label = exec_input.label or "agent"
+            container_name = f"agent-{label}-{suffix}"
             cmd.extend(["--name", container_name])
             exec_input.container_name = container_name
         cmd.extend(self._build_env_flags(exec_input.env))
@@ -628,9 +691,9 @@ class ContainerRunner:
         if install_script and not self.has_prepared_agent_tools:
             version_env = f'AGENT_VERSION="{agent_version}" ' if agent_version else ""
             if not capture_logs:
-                return f"{version_env}/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {driver_command}"
+                return f"{version_env}{self.runtime_root}/install-scripts/{install_script} > /dev/null 2>&1 && {driver_command}"
             parts.append(
-                f"{version_env}/opt/sregym/install-scripts/{install_script} 2>&1 "
+                f"{version_env}{self.runtime_root}/install-scripts/{install_script} 2>&1 "
                 f"| tee /logs/install.log; INSTALL_RC=${{PIPESTATUS[0]}}; "
                 f'echo "$INSTALL_RC" > /logs/install.rc; '
                 f'[ "$INSTALL_RC" -eq 0 ] || exit "$INSTALL_RC"'
@@ -667,9 +730,15 @@ class ContainerRunner:
             )
         except (KeyboardInterrupt, subprocess.TimeoutExpired):
             if exec_input.container_name:
-                ContainerRunner.stop_container(exec_input.container_name, timeout=5)
+                ContainerRunner.stop_container(
+                    exec_input.container_name,
+                    timeout=5,
+                    **({"docker_host": self.config.docker_host} if self.config.docker_host else {}),
+                )
             raise
         finally:
+            if self.config.isolate_mounts and exec_input.container_name:
+                self.stop_container(exec_input.container_name, timeout=5, docker_host=self.config.docker_host)
             self.cleanup_credential_tmps()
 
     def run_async(self, exec_input: ExecInput) -> subprocess.Popen:
@@ -689,17 +758,55 @@ class ContainerRunner:
         """Pull the selected release, or build the explicit local-development tag."""
         image = self.config.image
         result = subprocess.run(
-            ["docker", "image", "inspect", image],
+            [*self._docker_command(), "image", "inspect", image],
             capture_output=True,
         )
         if result.returncode == 0:
+            self._read_runtime_layout(result)
+            if image == DEFAULT_AGENT_IMAGE:
+                self._prepare_public_runtime()
             return
 
         if image == LOCAL_AGENT_IMAGE:
             self.build_image()
             return
         logger.info("Pulling agent image '%s'...", image)
-        self._run_docker_checked(["docker", "pull", image], f"pull agent image '{image}'")
+        self._run_docker_checked([*self._docker_command(), "pull", image], f"pull agent image '{image}'")
+        if image == DEFAULT_AGENT_IMAGE:
+            self._prepare_public_runtime()
+
+        else:
+            self._read_runtime_layout(
+                subprocess.run(
+                    [*self._docker_command(), "image", "inspect", image],
+                    capture_output=True,
+                )
+            )
+
+    def _prepare_public_runtime(self) -> None:
+        """Use current public sources on top of the immutable dependency release."""
+        repo = Path(__file__).resolve().parents[2]
+        prepare = runpy.run_path(str(repo / "docker/agents/runtime_context.py"))["write_context"]
+        with tempfile.TemporaryDirectory(prefix="agent-runtime-") as folder:
+            context = Path(folder)
+            identity = prepare(repo, context, base_image=DEFAULT_AGENT_IMAGE)
+            image = f"incident-agent:runtime-{identity}"
+            cached = subprocess.run([*self._docker_command(), "image", "inspect", image], capture_output=True)
+            if cached.returncode != 0:
+                self._run_docker_checked(
+                    [
+                        *self._docker_command(),
+                        "build",
+                        "--build-arg",
+                        f"BASE_IMAGE={DEFAULT_AGENT_IMAGE}",
+                        "--tag",
+                        image,
+                        str(context),
+                    ],
+                    "prepare public agent runtime",
+                )
+            self.config.image = image
+            self._public_runtime = True
 
     def build_image(self) -> None:
         """Build (or rebuild) the container image using docker/agents/build.sh."""
@@ -721,19 +828,24 @@ class ContainerRunner:
         result = subprocess.run(
             ["bash", str(build_script)],
             cwd=str(repo_root),
-            env={**os.environ, "SREGYM_AGENT_IMAGE": image},
+            env={
+                **os.environ,
+                "SREGYM_AGENT_IMAGE": image,
+                **({"DOCKER_HOST": self.config.docker_host} if self.config.docker_host else {}),
+            },
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to build container image '{image}'. Check the build output above for errors.")
         self.config.image = image
+        self._public_runtime = True
         logger.info(f"✅ Container image '{image}' built successfully.")
 
     @staticmethod
-    def stop_container(container_name: str, timeout: int = 10) -> None:
+    def stop_container(container_name: str, timeout: int = 10, *, docker_host: str | None = None) -> None:
         """Stop a running container by name. Used for cleanup."""
         try:
             subprocess.run(
-                ["docker", "stop", "-t", str(timeout), container_name],
+                docker_command("stop", "-t", str(timeout), container_name, host=docker_host),
                 capture_output=True,
                 timeout=timeout + 5,
             )
@@ -741,7 +853,7 @@ class ContainerRunner:
             # Force remove if stop fails
             try:
                 subprocess.run(
-                    ["docker", "rm", "-f", container_name],
+                    docker_command("rm", "-f", container_name, host=docker_host),
                     capture_output=True,
                     timeout=5,
                 )
@@ -749,7 +861,7 @@ class ContainerRunner:
                 # Force remove if stop fails
                 with contextlib.suppress(Exception):
                     subprocess.run(
-                        ["docker", "rm", "-f", container_name],
+                        docker_command("rm", "-f", container_name, host=docker_host),
                         capture_output=True,
                         timeout=5,
                     )

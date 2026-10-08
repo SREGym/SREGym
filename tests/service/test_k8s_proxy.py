@@ -1,18 +1,27 @@
 import copy
 import http.client
 import json
+import os
 import socket
 import ssl
 import threading
 import time
 from datetime import timedelta
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+import yaml
 from cryptography import x509
+from kubernetes import config
 
 from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
     HELM_RELEASE_SECRET_TYPE,
+    HIDDEN_LABELS,
+    HIDDEN_NAMESPACES,
+    MCP_CONTROL_NAMESPACE,
+    VERIFIER_PROBE_NAMESPACE,
     filter_resource_list,
     is_helm_release_secret,
 )
@@ -48,6 +57,24 @@ ORDINARY_SECRET = {
     "type": "Opaque",
     "data": {"password": "runtime-secret"},
 }
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_upstream_kubeconfig_is_explicit_and_never_implicitly_uses_proxy_environment(monkeypatch, tmp_path, explicit):
+    # An existing caller can have its agent-facing config in the environment;
+    # a rootless deployment needs the separate, validated workload config.
+    monkeypatch.setenv("KUBECONFIG", str(tmp_path / "agent-proxy.kubeconfig"))
+    monkeypatch.setattr(KubernetesAPIProxy, "_INCLUSTER_TOKEN_PATH", str(tmp_path / "missing-token"))
+    load = Mock()
+    connection = Mock(return_value=("upstream.example", 6443, "ca", "cert", "key"))
+    monkeypatch.setattr(config, "load_kube_config", load)
+    monkeypatch.setattr(KubernetesAPIProxy, "_load_cluster_config", connection)
+    selected = str(tmp_path / "workload.kubeconfig") if explicit else None
+    proxy = KubernetesAPIProxy(upstream_kubeconfig_path=selected)
+    expected = selected or os.path.expanduser("~/.kube/config")
+    load.assert_called_once_with(config_file=expected)
+    connection.assert_called_once_with(kubeconfig_path=expected)
+    assert proxy.api_host == "upstream.example"
 
 
 class FakeResponse:
@@ -128,6 +155,20 @@ def proxy(monkeypatch):
         yield instance
     finally:
         instance.stop()
+
+
+def test_generated_agent_kubeconfig_uses_neutral_names_and_preserves_authentication(proxy, tmp_path):
+    path = proxy.generate_agent_kubeconfig(str(tmp_path / "config"))
+    text = Path(path).read_text()
+    data = yaml.safe_load(text)
+    assert "sregym" not in text.lower()
+    assert data["current-context"] == data["contexts"][0]["name"]
+    context = data["contexts"][0]["context"]
+    assert context["cluster"] == data["clusters"][0]["name"]
+    assert context["user"] == data["users"][0]["name"]
+    assert data["users"][0]["user"]["token"] == proxy._agent_token
+    assert data["clusters"][0]["cluster"]["server"] == proxy.get_proxy_url()
+    assert data["clusters"][0]["cluster"]["certificate-authority-data"]
 
 
 def request(
@@ -350,6 +391,47 @@ def test_hidden_namespace_looks_absent_to_agent(proxy):
     assert status == 404
     assert b"chaos-mesh" not in body
     assert FakeHTTPSConnection.requests == []
+
+
+@pytest.mark.parametrize("namespace", [MCP_CONTROL_NAMESPACE, VERIFIER_PROBE_NAMESPACE])
+@pytest.mark.parametrize(
+    "method,suffix",
+    [("GET", "/pods"), ("GET", "/pods/control/log"), ("POST", "/pods/control/exec"), ("DELETE", "/pods/control")],
+)
+def test_control_services_cannot_be_read_executed_or_deleted_by_agent(proxy, namespace, method, suffix):
+    proxy.hidden_namespaces = HIDDEN_NAMESPACES.copy()
+    # The handler captures the policy at startup, as the actual server does.
+    proxy.stop()
+    proxy.start()
+    status, _, body = request(proxy, f"/api/v1/namespaces/{namespace}{suffix}", method=method)
+    assert status == 404
+    assert namespace.encode() not in body
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_control_bindings_are_private_without_changing_application_state():
+    binding = {
+        "metadata": {"name": "control-access"},
+        "roleRef": {"kind": "ClusterRole", "name": "mcp-server"},
+        "subjects": [{"kind": "ServiceAccount", "name": "mcp-server", "namespace": MCP_CONTROL_NAMESPACE}],
+    }
+    application = {
+        "metadata": {"name": "frontend", "namespace": "hotel-reservation"},
+        "spec": {"containers": [{"image": "registry.example/app:v1"}]},
+    }
+    result = filter_resource_list({"items": [binding, copy.deepcopy(application)]}, HIDDEN_NAMESPACES, HIDDEN_LABELS)
+    assert result["items"] == [application]
+
+
+def test_upstream_exception_does_not_leak_private_runner_paths(proxy, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("private runner /repo/SREGym/private-verifier-state")
+
+    monkeypatch.setattr(FakeHTTPSConnection, "request", fail)
+    status, _, body = request(proxy, "/api/v1/nodes")
+    assert status == 502
+    assert b"Upstream request failed" in body
+    assert b"SREGym" not in body and b"private-verifier-state" not in body
 
 
 def test_api_discovery_does_not_advertise_chaos_mesh(proxy):
@@ -1043,3 +1125,84 @@ def test_requests_are_served_while_another_client_has_not_finished_its_tls_hands
 
     assert served_in_time
     assert statuses == [200]
+
+
+@pytest.mark.parametrize("blocked", [None, "secret", "network"])
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+def test_binary_workload_is_decoded_without_persisting_before_policy_check(proxy, monkeypatch, blocked, method):
+    proxy.stop()
+    proxy.restrict_network_access = True
+    proxy.start()
+    spec = {"containers": [{"name": "web", "image": "nginx"}]}
+    if blocked == "secret":
+        spec["imagePullSecrets"] = [{"name": HELM_SECRET_NAME}]
+    elif blocked == "network":
+        spec["hostNetwork"] = True
+    decoded = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "web", "namespace": "demo", "uid": "dry-run-uid", "resourceVersion": "7"},
+        "spec": {"template": {"spec": spec}},
+    }
+    calls = []
+
+    def record_request(self, request_method, path, body=None, headers=None):
+        calls.append((request_method, path, body, headers or {}))
+
+    def getresponse(self):
+        if calls[-1][0] == "GET":
+            return FakeResponse(b'{"spec":{"template":{"spec":{"containers":[{"name":"web","image":"nginx"}]}}}}')
+        return FakeResponse(json.dumps(decoded).encode())
+
+    monkeypatch.setattr(FakeHTTPSConnection, "request", record_request)
+    monkeypatch.setattr(FakeHTTPSConnection, "getresponse", getresponse)
+    path = "/apis/apps/v1/namespaces/demo/deployments" + ("/web" if method == "PUT" else "")
+    status, _, _ = request(
+        proxy,
+        path + "?fieldManager=operator&dryRun=&dryRun=invalid",
+        method=method,
+        headers={"Content-Type": "application/vnd.kubernetes.protobuf"},
+        body=b"k8s\x00public-fixture",
+    )
+    dry_call = calls[0]
+    assert dry_call[0] == method
+    assert dry_call[1] == path + "?fieldManager=operator&dryRun=All"
+    assert dry_call[2] == b"k8s\x00public-fixture"
+    assert dry_call[3]["Accept"] == "application/json"
+    real_calls = [call for call in calls if call[0] == method and call[1].endswith("dryRun=invalid")]
+    if blocked:
+        assert status == 403
+        assert not real_calls
+    else:
+        assert status == 200
+        assert len(real_calls) == 1
+        _, _, body, headers = real_calls[0]
+        assert headers["Content-Type"] == "application/json"
+        assert "Content-Length" not in headers
+        forwarded = json.loads(body)
+        assert ("uid" in forwarded["metadata"]) is (method == "PUT")
+        assert ("resourceVersion" in forwarded["metadata"]) is (method == "PUT")
+
+
+@pytest.mark.parametrize(
+    "payload,content_type,status",
+    [
+        (b"not JSON", "application/json", 200),
+        (b"{}", "application/json", 200),
+        (b"[]", "application/json", 200),
+        (b"binary", "application/vnd.kubernetes.protobuf", 200),
+        (b'{"spec":{},"metadata":{}}', "application/json", 422),
+    ],
+)
+def test_binary_workload_decoder_failure_never_submits_real_mutation(proxy, payload, content_type, status):
+    FakeHTTPSConnection.response = FakeResponse(payload, content_type=content_type, status=status)
+    result, _, _ = request(
+        proxy,
+        "/apis/apps/v1/namespaces/demo/deployments",
+        method="POST",
+        headers={"Content-Type": "application/vnd.kubernetes.protobuf"},
+        body=b"k8s\x00public-fixture",
+    )
+    assert result == 422
+    assert len(FakeHTTPSConnection.requests) == 1
+    assert FakeHTTPSConnection.requests[0][1].endswith("?dryRun=All")

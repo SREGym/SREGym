@@ -28,7 +28,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address
-from urllib.parse import parse_qs, unquote, urlparse, urlsplit
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlparse, urlsplit
 
 import urllib3
 import yaml
@@ -446,6 +446,7 @@ class KubernetesAPIProxy:
         block_workload_creation: bool = False,
         *,
         restrict_network_access: bool = False,
+        upstream_kubeconfig_path: str | None = None,
     ):
         self.hidden_namespaces: set[str] = (
             hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES.copy()
@@ -476,12 +477,13 @@ class KubernetesAPIProxy:
             self.api_port = int(os.environ.get("KUBERNETES_SERVICE_PORT", "443"))
         else:
             # Running outside the cluster — load from kubeconfig
-            # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
-            # This prevents circular dependency if KUBECONFIG points to our proxy
-            default_kubeconfig = os.path.expanduser("~/.kube/config")
-            config.load_kube_config(config_file=default_kubeconfig)
+            # Retain the default for existing callers: ambient KUBECONFIG can
+            # point back to this proxy. A verified workload may select its
+            # private upstream file explicitly before the agent proxy opens.
+            upstream_kubeconfig = upstream_kubeconfig_path or os.path.expanduser("~/.kube/config")
+            config.load_kube_config(config_file=upstream_kubeconfig)
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
-                kubeconfig_path=default_kubeconfig
+                kubeconfig_path=upstream_kubeconfig
             )
 
     def _load_cluster_config(self, kubeconfig_path: str | None = None):
@@ -672,6 +674,45 @@ class KubernetesAPIProxy:
                 finally:
                     conn.close()
 
+            def _decode_binary_workload(self, path: str, method: str, body: bytes) -> bytes:
+                """Use Kubernetes' decoder in dry-run mode, then inspect and send JSON.
+
+                A binary body must never bypass policy inspection. The dry run
+                cannot persist a workload; only the inspected JSON is submitted
+                for the real operation.
+                """
+                if not body.startswith(b"k8s\x00") or _object_subresource(path) is not None:
+                    raise ValueError("Invalid binary Kubernetes workload")
+                parsed = urlsplit(path)
+                query = [(key, value) for key, value in parse_qsl(parsed.query) if key != "dryRun"]
+                query.append(("dryRun", "All"))
+                dry_path = parsed._replace(query=urlencode(query)).geturl()
+                conn = self._get_upstream_connection()
+                try:
+                    headers = {"Accept": "application/json", "Content-Type": "application/vnd.kubernetes.protobuf"}
+                    if bearer_token:
+                        headers["Authorization"] = f"Bearer {bearer_token}"
+                    conn.request(method, dry_path, body=body, headers=headers)
+                    response = conn.getresponse()
+                    payload = response.read()
+                    if not 200 <= response.status < 300:
+                        raise ValueError("Kubernetes rejected the binary workload dry run")
+                    if response.getheader("Content-Type", "").partition(";")[0] != "application/json":
+                        raise ValueError("Kubernetes returned an uninspectable workload")
+                    data = json.loads(payload)
+                    if not isinstance(data, dict) or not isinstance(data.get("spec"), dict):
+                        raise ValueError("Kubernetes returned an invalid workload")
+                    metadata = data.get("metadata")
+                    if not isinstance(metadata, dict):
+                        raise ValueError("Kubernetes returned invalid workload metadata")
+                    if method == "POST":
+                        # These values belong to the non-persisted dry-run object.
+                        for field in ("uid", "resourceVersion", "creationTimestamp", "managedFields"):
+                            metadata.pop(field, None)
+                    return json.dumps(data).encode()
+                finally:
+                    conn.close()
+
             def _validate_mutation(self, path, method, body, content_type):
                 resource, name = _resource_request(path)
                 if method not in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -779,13 +820,20 @@ class KubernetesAPIProxy:
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length) if content_length > 0 else None
 
+                content_type = self.headers.get("Content-Type", "")
+                normalized_binary = False
                 try:
-                    workload_inspection = self._validate_mutation(
-                        path,
-                        method,
-                        body,
-                        self.headers.get("Content-Type", ""),
-                    )
+                    resource, _ = _resource_request(path)
+                    if (
+                        method in {"POST", "PUT"}
+                        and resource in WORKLOAD_RESOURCES
+                        and body
+                        and content_type.partition(";")[0].strip().lower() == "application/vnd.kubernetes.protobuf"
+                    ):
+                        body = self._decode_binary_workload(path, method, body)
+                        content_type = "application/json"
+                        normalized_binary = True
+                    workload_inspection = self._validate_mutation(path, method, body, content_type)
                 except (ValueError, yaml.YAMLError, JsonPatchException, JsonPointerException, TypeError, KeyError):
                     self.send_error(422, "Invalid Kubernetes mutation")
                     return
@@ -820,6 +868,8 @@ class KubernetesAPIProxy:
                     # Forward headers (except Host and Accept-Encoding to avoid gzip).
                     # The per-run proxy credential must not be forwarded upstream.
                     excluded_headers = {"host", "accept-encoding", "authorization"}
+                    if normalized_binary:
+                        excluded_headers.update({"content-length", "content-type"})
                     if requires_json:
                         excluded_headers.add("accept")
                     headers: dict[str, str] = {}
@@ -836,6 +886,8 @@ class KubernetesAPIProxy:
                             headers[stream_protocol_header] = f"{previous}, {value}" if previous else value
                         else:
                             headers[header] = value
+                    if normalized_binary:
+                        headers["Content-Type"] = "application/json"
                     if requires_json:
                         headers["Accept"] = (
                             "application/json" if watch else json_accept_header(self.headers.get("Accept", ""))
@@ -1015,7 +1067,7 @@ class KubernetesAPIProxy:
                     pass
                 except Exception as e:
                     logger.error(f"Proxy error: {e}")
-                    self.send_error(502, f"Bad Gateway: {str(e)}")
+                    self.send_error(502, "Bad Gateway: Upstream request failed")
 
             def do_GET(self):
                 self._proxy_request("GET")
@@ -1094,10 +1146,10 @@ class KubernetesAPIProxy:
         kubeconfig = {
             "apiVersion": "v1",
             "kind": "Config",
-            "current-context": "sregym-agent",
+            "current-context": "operator",
             "clusters": [
                 {
-                    "name": "sregym-proxy",
+                    "name": "cluster-api",
                     "cluster": {
                         "server": f"https://{server_host}:{self.listen_port}",
                         "certificate-authority-data": base64.b64encode(self._server_cert_pem.encode()).decode(),
@@ -1106,16 +1158,16 @@ class KubernetesAPIProxy:
             ],
             "contexts": [
                 {
-                    "name": "sregym-agent",
+                    "name": "operator",
                     "context": {
-                        "cluster": "sregym-proxy",
-                        "user": "sregym-agent",
+                        "cluster": "cluster-api",
+                        "user": "operator",
                     },
                 }
             ],
             "users": [
                 {
-                    "name": "sregym-agent",
+                    "name": "operator",
                     "user": {"token": self._agent_token},
                 }
             ],
@@ -1123,7 +1175,7 @@ class KubernetesAPIProxy:
 
         owns_output = output_path is None
         if owns_output:
-            fd, output_path = tempfile.mkstemp(prefix="sregym-agent-kubeconfig-", suffix=".yaml")
+            fd, output_path = tempfile.mkstemp(prefix="operator-kubeconfig-", suffix=".yaml")
             os.close(fd)
 
         with open(output_path, "w") as f:
