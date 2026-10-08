@@ -121,6 +121,15 @@ def test_product_catalog_has_headroom_above_gomemlimit():
     assert limit.endswith("Mi") and int(limit[:-2]) >= 64
 
 
+def test_product_catalog_waits_for_postgresql():
+    # product-catalog exits when PostgreSQL is not yet listening on 5432, which
+    # gives it restarts on a fresh deployment before any fault is injected.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    (init,) = values["components"]["product-catalog"]["initContainers"]
+    assert init["name"] == "wait-for-postgresql"
+    assert "nc -z" in init["command"][2] and "postgresql 5432" in init["command"][2]
+
+
 def test_frontend_proxy_envoy_prefers_ipv4():
     # Envoy's STRICT_DNS default (AUTO, IPv6-first) can walk host search domains
     # on AAAA lookups and dial an unreachable external address (503 UF).

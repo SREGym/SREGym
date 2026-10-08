@@ -150,6 +150,13 @@ components:
       limits:
         memory: 64Mi
   product-catalog:
+    # Wait for PostgreSQL to finish running /docker-entrypoint-initdb.d and bind
+    # TCP 5432 so product-catalog does not crash-restart on initial deployment.
+    # Same pattern and image as the chart's own wait-for-kafka init containers.
+    initContainers:
+      - name: wait-for-postgresql
+        image: busybox:latest
+        command: ["sh", "-c", "until nc -z -v -w30 postgresql 5432; do echo waiting for postgresql; sleep 2; done;"]
     resources:
       # The chart caps this Go service at 20Mi with GOMEMLIMIT 16MiB. Under
       # SREGym's locust load it idles at 11-15Mi working set, and in one
