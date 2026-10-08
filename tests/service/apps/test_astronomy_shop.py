@@ -130,6 +130,14 @@ def test_frontend_proxy_envoy_prefers_ipv4():
     assert "exec envoy -c envoy.yaml" in script
 
 
+def test_grafana_sidecar_is_not_chronically_throttled():
+    # At the chart's 100m CPU limit the sidecar keeps ContainerCPUThrottling firing.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    resources = values["grafana"]["sidecar"]["resources"]
+    assert resources["requests"]["cpu"] == "100m"
+    assert resources["limits"]["cpu"] == "1000m"
+
+
 def test_locust_exporter_sidecar_is_not_chronically_throttled():
     # The sidecar is the only CPU-limited container in the load-generator pod, so
     # it alone decides the pod-scoped ContainerCPUThrottling alert.

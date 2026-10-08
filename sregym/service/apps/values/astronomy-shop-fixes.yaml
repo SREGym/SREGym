@@ -17,6 +17,17 @@ grafana:
       plugins: /opt/grafana/plugins
   env:
     GF_PLUGINS_PREINSTALL_DISABLED: "true"
+  # The chart sets sidecar.resources.limits.cpu=100m, which chronically trips
+  # ContainerCPUThrottling (SREGym#745) and fails the agent's AlertOracle check.
+  # Keep the 100m scheduling request while raising the CFS burst ceiling.
+  sidecar:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 100Mi
+      limits:
+        cpu: 1000m
+        memory: 100Mi
 
 opentelemetry-collector:
   config:
