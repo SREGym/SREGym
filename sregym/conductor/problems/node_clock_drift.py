@@ -29,6 +29,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.node_clock_drift_mitigation import NodeClockDriftMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
+from sregym.service.docker_runtime import rootless_workload_enabled
 from sregym.service.kubectl import KubeCtl
 from sregym.service.runtime_images import TLS_CLIENT_IMAGE
 from sregym.utils.decorators import mark_fault_injected
@@ -63,6 +64,7 @@ class NodeClockDriftHotelReservation(Problem):
     """Inject node clock drift causing TLS validation failures."""
 
     clock_drift_seconds = 86400 * 30
+    task_version = "native-node-clock-v1"
     clock_injector_namespace = "default"
     clock_injector_image = "ubuntu:22.04"
 
@@ -291,6 +293,8 @@ class NodeClockDriftHotelReservation(Problem):
     # ── Fault Injection ─────────────────────────────────────────────────────────
     @mark_fault_injected
     def inject_fault(self):
+        if rootless_workload_enabled() or self.kubectl.is_emulated_cluster():
+            raise RuntimeError("Native node clock drift cannot run on Kind; use the TLS validation-clock v2 task")
         print("Fault Injection (Node Clock Drift)")
         self._setup_tls_infrastructure()
         print("TLS infrastructure set up (Secret + CA ConfigMap + verification sidecar)")

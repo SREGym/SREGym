@@ -1,4 +1,5 @@
 import contextlib
+import os
 import subprocess
 import time
 
@@ -6,6 +7,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.service.agent_visibility_policy import VERIFIER_PROBE_NAMESPACE
 
 CONNTRACK_CMD = "cat /proc/sys/net/netfilter/nf_conntrack_count; cat /proc/sys/net/netfilter/nf_conntrack_max"
 CONNTRACK_MAX_PATH = "/proc/sys/net/netfilter/nf_conntrack_max"
@@ -52,6 +54,11 @@ def _parse_conntrack_usage(node_name: str, output: str) -> tuple[int, int]:
 
 
 def _run_node_check_pod(kubectl, node_name: str, namespace: str, command: str, *, privileged: bool = False) -> str:
+    if os.environ.get("SREGYM_VERIFIER_CONTAINER") == "1":
+        namespace = VERIFIER_PROBE_NAMESPACE
+        kubectl.exec_command_checked(
+            f"kubectl create namespace {namespace} --dry-run=client -o yaml | kubectl apply -f -"
+        )
     core_v1 = getattr(kubectl, "core_v1_api", client.CoreV1Api())
     pod_name = f"node-healthcheck-{int(time.time() * 1000)}"
     container = {

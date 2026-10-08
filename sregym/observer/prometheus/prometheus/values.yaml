@@ -1069,7 +1069,7 @@ serverFiles:
         # Noise infrastructure is not part of the incident the agent must diagnose.
         metric_relabel_configs:
           - source_labels: [namespace]
-            regex: 'chaos-mesh|khaos'
+            regex: 'chaos-mesh|khaos|sregym-verifier'
             action: drop
         relabel_configs:
           # Only scrape the service named 'prometheus-kube-state-metrics'
@@ -1086,7 +1086,7 @@ serverFiles:
 
         metric_relabel_configs:
           - source_labels: [namespace]
-            regex: 'chaos-mesh|khaos'
+            regex: 'chaos-mesh|khaos|sregym-verifier'
             action: drop
 
         # Default to scraping over https. If required, just disable this or change to

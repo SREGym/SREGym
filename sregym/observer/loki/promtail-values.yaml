@@ -7,4 +7,4 @@ config:
       # Keep noise-controller logs out of Loki, including direct API queries.
       - action: drop
         source_labels: [__meta_kubernetes_namespace]
-        regex: chaos-mesh|khaos
+        regex: chaos-mesh|khaos|sregym-verifier

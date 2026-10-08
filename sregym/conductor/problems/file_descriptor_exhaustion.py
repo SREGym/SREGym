@@ -18,6 +18,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class FileDescriptorExhaustion(Problem):
+    verifier_excluded_fields = ("flooder_thread",)
+
     def __init__(self):
         self.app = HotelReservation()
         self.namespace = self.app.namespace

@@ -30,6 +30,7 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
                             "result": [
                                 {"metric": {"namespace": "chaos-mesh", "pod": "chaos-daemon-123"}, "value": [1, "1"]},
                                 {"metric": {"namespace": "khaos", "pod": "helper"}, "value": [1, "1"]},
+                                {"metric": {"namespace": "sregym-verifier", "pod": "private-probe"}, "value": [1, "1"]},
                                 {"metric": {"namespace": "astronomy-shop", "pod": "checkout"}, "value": [1, "1"]},
                             ],
                         }
@@ -40,6 +41,7 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
                     "data": {
                         "alerts": [
                             {"state": "firing", "labels": {"namespace": "chaos-mesh", "alertname": "PodDown"}},
+                            {"state": "firing", "labels": {"namespace": "sregym-verifier", "alertname": "ProbeDown"}},
                             {"state": "firing", "labels": {"namespace": "astronomy-shop", "alertname": "CheckoutDown"}},
                         ]
                     }
@@ -54,8 +56,11 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
     assert "checkout" in metrics
     assert "chaos-mesh" not in metrics
     assert "khaos" not in metrics
+    assert "private-probe" not in metrics
+    assert "sregym-verifier" not in metrics
     assert "CheckoutDown" in alerts
     assert "chaos-mesh" not in alerts
+    assert "ProbeDown" not in alerts
 
 
 def test_observability_collectors_use_the_shared_hidden_namespaces():

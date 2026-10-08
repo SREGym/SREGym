@@ -629,6 +629,11 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
                 raise RuntimeError("cart request did not drain")
             self._thread = None
 
+    def prepare_verification(self):
+        # The oracle already drains this traffic before grading. Do that on
+        # its owning host so the snapshot contains all acknowledged operations.
+        self.stop_traffic()
+
     def restart_callers(self):
         # Replace running Pods, including a paused edge's old ReplicaSet Pods.
         # Do not apply pending templates or otherwise finish an agent's repair.

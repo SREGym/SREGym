@@ -2,7 +2,8 @@
 
 import json
 
-HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
+VERIFIER_PROBE_NAMESPACE = "sregym-verifier"
+HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos", VERIFIER_PROBE_NAMESPACE}
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},

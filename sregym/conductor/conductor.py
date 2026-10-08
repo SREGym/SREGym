@@ -16,7 +16,6 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
-from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
@@ -40,6 +39,7 @@ from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
+from sregym.service.docker_runtime import rootless_workload_enabled, validate_rootless_boundary
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.kubectl import KubeCtl
@@ -69,6 +69,14 @@ class ConductorConfig:
     stages: tuple[str, ...] | None = None
     baseline_override_s: int | None = None  # overrides per-problem baseline_duration_s when set
     propagation_override_s: int | None = None  # overrides per-problem propagation_duration_s when set
+    # Retained as a constructor argument to reject obsolete embedding configs.
+    verifier_isolation: bool = True
+    verifier_kubeconfig_path: Path | None = None
+    verifier_timeout_seconds: float = 300.0
+
+    def __post_init__(self):
+        if self.verifier_isolation is not True:
+            raise ValueError("Independent container verification is required for every run")
 
     @property
     def restrict_network_access(self) -> bool:
@@ -80,6 +88,9 @@ class ConductorConfig:
 class Conductor:
     def __init__(self, config: ConductorConfig | None = None):
         self.config = config or ConductorConfig()
+        self.workload_boundary = validate_rootless_boundary() if rootless_workload_enabled() else None
+        if self.workload_boundary and self.config.k8s_proxy_listen_host == "127.0.0.1":
+            self.config.k8s_proxy_listen_host = self.workload_boundary["runner_address"]
 
         # core services
         self.problems = ProblemRegistry()
@@ -136,6 +147,7 @@ class Conductor:
         self.waiting_for_agent: bool = False
         self._evaluating: bool = False  # True while a submission is being evaluated
         self.fault_injected: bool = False
+        self._verifier_runtime = None
 
     @property
     def current_problem(self):
@@ -306,6 +318,11 @@ class Conductor:
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
 
+        if self.stage_sequence:
+            # Build and validate connectivity before fault injection and before
+            # the agent clock starts. Image build time is not grading time.
+            self._get_verifier_runtime().prepare()
+
         # Snapshot the healthy cluster before breaking it. The oracle is built
         # in Problem.__init__, which runs before deploy_app(), so this is the
         # first point at which the app actually exists. Also lets a mitigation
@@ -335,10 +352,15 @@ class Conductor:
 
         self.logger.info("Start Eval for Diagnosis", extra={"sol": solution})
         try:
-            r = problem.diagnosis_oracle.evaluate(solution)
+            r = self._get_verifier_runtime().evaluate(problem.diagnosis_oracle, solution)
         except Exception as e:
             self.logger.exception("Diagnosis oracle raised; recording as failure to avoid a stuck stage.")
-            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
+            r = {
+                "success": False,
+                "reason": "verifier_execution_failed",
+                "failure_class": "harness_error",
+                "error": f"{type(e).__name__}: {e}",
+            }
         r["submission"] = solution
         self.logger.info(
             f"[EVAL] Diagnosis {'Succeed' if r.get('success') else 'Failed'}\n "
@@ -346,17 +368,32 @@ class Conductor:
         )
         return r
 
+    def _get_verifier_runtime(self):
+        from sregym.service.verifier_runtime import VerifierRuntime
+
+        if getattr(self, "_verifier_runtime", None) is None:
+            self._verifier_runtime = VerifierRuntime(
+                kubeconfig_path=self.config.verifier_kubeconfig_path,
+                timeout_seconds=self.config.verifier_timeout_seconds,
+            )
+        return self._verifier_runtime
+
     def _evaluate_mitigation(self, solution):
         """Evaluation logic for mitigation stage."""
         problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
         try:
-            r = problem.mitigation_oracle.evaluate()
+            r = self._get_verifier_runtime().evaluate(problem.mitigation_oracle)
         except Exception as e:
             self.logger.exception("Mitigation oracle raised; recording as failure to avoid a stuck stage.")
             # Keep the existing top-level error field for result consumers.
-            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
+            r = {
+                "success": False,
+                "reason": "verifier_execution_failed",
+                "failure_class": "harness_error",
+                "error": f"{type(e).__name__}: {e}",
+            }
         self.logger.info(
             f"[EVAL] Mitigation {'Succeed' if r.get('success') else 'Failed'}\n "
             f"TTM: {time.time() - self.execution_start_time}"
@@ -487,6 +524,13 @@ class Conductor:
             return True
 
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
+
+        verifier = getattr(self, "_verifier_runtime", None)
+        if verifier is not None:
+            try:
+                verifier.cancel()
+            except Exception as exc:
+                cleanup_errors.append(f"verifier_cleanup: {type(exc).__name__}: {exc}")
 
         # Stop noises
         if self.config.enable_noise:
@@ -667,6 +711,9 @@ class Conductor:
         with self._submission_lock:
             self._submit_future = None
             self._submission_generation += 1
+            # Prior evaluation and cleanup have drained. Cancellation is
+            # permanent on their runtime; this attempt gets a fresh owner.
+            self._verifier_runtime = None
             self._accepting_submissions = False
             self._attempt_closed = False
             self.submission_stage = "setup"
@@ -678,6 +725,9 @@ class Conductor:
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
+        task_version = getattr(self.problem, "task_version", None)
+        if task_version is not None:
+            self.results["task_version"] = task_version
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)
 
@@ -1024,6 +1074,9 @@ class Conductor:
             self._evaluating = False
             self.submission_stage = "aborted"
             self._submit_future = None
+        verifier = getattr(self, "_verifier_runtime", None)
+        if verifier is not None:
+            verifier.cancel()
 
     async def wait_for_submission_evaluations(self, timeout: float | None) -> None:
         """Wait for accepted stage requests and grading, but not teardown.

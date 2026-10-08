@@ -6,12 +6,15 @@ that the human-readable prints survive alongside the machine-readable reason --
 they have different consumers and neither replaces the other.
 """
 
+from unittest.mock import Mock
+
 import pytest
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.wrong_pod_selection_mitigation import (
     WrongPodSelectionMitigationOracle as Oracle,
 )
+from sregym.service.verifier_worker import execute_oracle
 
 
 @pytest.fixture
@@ -191,8 +194,12 @@ def test_a_raising_oracle_is_harness_error_not_the_model_fault():
     c.problem = P()  # current_problem is a read-only property over this
     c.logger = __import__("logging").getLogger("test.failure_class")
     c.execution_start_time = 0.0
+    # Emulate the worker at the transport boundary; production grading runs in Docker.
+    c._verifier_runtime = Mock()
+    c._verifier_runtime.evaluate.side_effect = lambda oracle, *args: execute_oracle(oracle, args)
 
     r = c._evaluate_mitigation("some solution")
+    c._verifier_runtime.evaluate.assert_called_once_with(c.problem.mitigation_oracle)
     assert r["success"] is False
     assert r["failure_class"] == "harness_error"
     assert r["reason"] == "oracle_raised"
@@ -214,6 +221,9 @@ def test_a_successful_mitigation_carries_no_failure_class(oracle, monkeypatch):
     c.problem = P()  # current_problem is a read-only property over this
     c.logger = __import__("logging").getLogger("test.failure_class")
     c.execution_start_time = 0.0
+    c._verifier_runtime = Mock()
+    c._verifier_runtime.evaluate.side_effect = lambda oracle, *args: execute_oracle(oracle, args)
 
     r = c._evaluate_mitigation("sol")
+    c._verifier_runtime.evaluate.assert_called_once_with(c.problem.mitigation_oracle)
     assert r == {"success": True}

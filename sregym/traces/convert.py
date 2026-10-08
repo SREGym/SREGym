@@ -151,7 +151,7 @@ def _find_session_file(run_dir: Path, tool: str) -> Path | None:
     return None
 
 
-def _convert_native_run(run_dir: Path, tool: str) -> Trajectory | None:
+def _convert_native_run(run_dir: Path, tool: str, *, metadata_dir: Path | None = None) -> Trajectory | None:
     """Convert the native artifact selected from one canonical SREGym run."""
     try:
         if tool == "claudecode":
@@ -160,7 +160,7 @@ def _convert_native_run(run_dir: Path, tool: str) -> Trajectory | None:
                 return None
             return claudecode.convert_files(
                 session_files,
-                total_cost_usd=_claudecode_total_cost_usd(run_dir),
+                total_cost_usd=_claudecode_total_cost_usd(metadata_dir or run_dir),
             )
 
         session_file = _find_session_file(run_dir, tool)
@@ -333,7 +333,14 @@ def convert_run(run_dir: Path | str) -> Trajectory | None:
 
     sregym_meta = build_sregym_meta(run_dir, info)
 
-    trajectory = _convert_native_run(run_dir, info.tool)
+    # Rootless agents export only into the agent directory. Trusted result
+    # metadata remains at the canonical run root. Legacy flat runs still work.
+    agent_dir = run_dir / "agent"
+    trajectory = (
+        _convert_native_run(agent_dir, info.tool, metadata_dir=run_dir)
+        if agent_dir.is_dir()
+        else _convert_native_run(run_dir, info.tool)
+    )
     if trajectory is None:
         return None
 
