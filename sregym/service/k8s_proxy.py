@@ -446,6 +446,7 @@ class KubernetesAPIProxy:
         block_workload_creation: bool = False,
         *,
         restrict_network_access: bool = False,
+        upstream_kubeconfig_path: str | None = None,
     ):
         self.hidden_namespaces: set[str] = (
             hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES.copy()
@@ -476,12 +477,13 @@ class KubernetesAPIProxy:
             self.api_port = int(os.environ.get("KUBERNETES_SERVICE_PORT", "443"))
         else:
             # Running outside the cluster — load from kubeconfig
-            # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
-            # This prevents circular dependency if KUBECONFIG points to our proxy
-            default_kubeconfig = os.path.expanduser("~/.kube/config")
-            config.load_kube_config(config_file=default_kubeconfig)
+            # Retain the default for existing callers: ambient KUBECONFIG can
+            # point back to this proxy. A verified workload may select its
+            # private upstream file explicitly before the agent proxy opens.
+            upstream_kubeconfig = upstream_kubeconfig_path or os.path.expanduser("~/.kube/config")
+            config.load_kube_config(config_file=upstream_kubeconfig)
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
-                kubeconfig_path=default_kubeconfig
+                kubeconfig_path=upstream_kubeconfig
             )
 
     def _load_cluster_config(self, kubeconfig_path: str | None = None):

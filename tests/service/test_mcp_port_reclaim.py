@@ -7,8 +7,14 @@ takes out unrelated processes on a developer's machine, so ownership is decided
 by the command line rather than by port occupancy.
 """
 
+import contextlib
+import os
 import re
+import select
+import signal
+import socket
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -125,6 +131,48 @@ def test_mcp_port_is_overridable(monkeypatch):
     assert MCPServer().port == 9954
     monkeypatch.setenv("MCP_SERVER_PORT", "9970")
     assert MCPServer().port == 9970
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Executable surrogate for the POSIX port-forward child")
+def test_stop_releases_the_actual_port_forward_child_and_listener(server, monkeypatch, tmp_path):
+    # Exercise a real child and listener without contacting Kubernetes. A
+    # shell-owned process handle would stop the shell and leave this child alive.
+    executable = tmp_path / "kubectl"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os, signal, socket, sys\n"
+        "listener = socket.socket()\n"
+        "listener.bind(('127.0.0.1', int(sys.argv[3].split(':')[0])))\n"
+        "listener.listen()\n"
+        "print(os.getpid(), flush=True)\n"
+        "signal.pause()\n"
+    )
+    executable.chmod(0o755)
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        server.port = reservation.getsockname()[1]
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("MCP_SERVER_PORT", str(server.port))
+    monkeypatch.setenv("MCP_SERVER_URL", f"http://127.0.0.1:{server.port}")
+    child_pid = None
+    try:
+        server.start_port_forward()
+        process = server.port_forward_process
+        assert select.select([process.stdout], [], [], 5)[0], "Child did not become ready"
+        child_pid = int(process.stdout.readline())
+        assert process.pid == child_pid, "The lifecycle handle must own kubectl directly"
+        assert server.is_port_in_use(server.port)
+        server.stop_port_forward()
+        assert process.poll() is not None
+        assert server.port_forward_process is None
+        assert not server.is_port_in_use(server.port)
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
+    finally:
+        server.stop_port_forward()
+        if child_pid is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child_pid, signal.SIGTERM)
 
 
 def test_k8s_proxy_port_is_overridable():

@@ -1,14 +1,17 @@
 import copy
 import http.client
 import json
+import os
 import socket
 import ssl
 import threading
 import time
 from datetime import timedelta
+from unittest.mock import Mock
 
 import pytest
 from cryptography import x509
+from kubernetes import config
 
 from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
@@ -48,6 +51,24 @@ ORDINARY_SECRET = {
     "type": "Opaque",
     "data": {"password": "runtime-secret"},
 }
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_upstream_kubeconfig_is_explicit_and_never_implicitly_uses_proxy_environment(monkeypatch, tmp_path, explicit):
+    # An existing caller can have its agent-facing config in the environment;
+    # a rootless deployment needs the separate, validated workload config.
+    monkeypatch.setenv("KUBECONFIG", str(tmp_path / "agent-proxy.kubeconfig"))
+    monkeypatch.setattr(KubernetesAPIProxy, "_INCLUSTER_TOKEN_PATH", str(tmp_path / "missing-token"))
+    load = Mock()
+    connection = Mock(return_value=("upstream.example", 6443, "ca", "cert", "key"))
+    monkeypatch.setattr(config, "load_kube_config", load)
+    monkeypatch.setattr(KubernetesAPIProxy, "_load_cluster_config", connection)
+    selected = str(tmp_path / "workload.kubeconfig") if explicit else None
+    proxy = KubernetesAPIProxy(upstream_kubeconfig_path=selected)
+    expected = selected or os.path.expanduser("~/.kube/config")
+    load.assert_called_once_with(config_file=expected)
+    connection.assert_called_once_with(kubeconfig_path=expected)
+    assert proxy.api_host == "upstream.example"
 
 
 class FakeResponse:

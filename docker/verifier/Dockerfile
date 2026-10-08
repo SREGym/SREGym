@@ -19,7 +19,8 @@ RUN set -eu; arch="$(dpkg --print-architecture)"; \
     rm -rf /tmp/*
 WORKDIR /opt/sregym
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project --python /usr/local/bin/python
+RUN uv sync --frozen --no-dev --no-install-project --python /usr/local/bin/python \
+    && uv cache clean
 COPY sregym/ ./sregym/
 COPY logger/ ./logger/
 COPY clients/ ./clients/

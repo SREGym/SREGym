@@ -200,12 +200,18 @@ class MCPServer:
                 time.sleep(3)
                 continue
 
-            command = (
-                f"kubectl port-forward svc/{self.service_name} {self.port}:9954 -n {self.namespace} --address 0.0.0.0"
-            )
+            command = [
+                "kubectl",
+                "port-forward",
+                f"svc/{self.service_name}",
+                f"{self.port}:9954",
+                "-n",
+                self.namespace,
+                "--address",
+                "0.0.0.0",
+            ]
             self.port_forward_process = subprocess.Popen(
                 command,
-                shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -234,6 +240,7 @@ class MCPServer:
             except subprocess.TimeoutExpired:
                 logger.warning("Port-forward process did not terminate in time, killing...")
                 self.port_forward_process.kill()
+                self.port_forward_process.wait(timeout=5)
 
             if self.port_forward_process.stdout:
                 self.port_forward_process.stdout.close()
@@ -241,3 +248,4 @@ class MCPServer:
                 self.port_forward_process.stderr.close()
 
             logger.info("Port forwarding for MCP server stopped.")
+            self.port_forward_process = None

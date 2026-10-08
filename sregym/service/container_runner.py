@@ -503,9 +503,11 @@ class ContainerRunner:
 
         # Agent containers use Docker's host alias to reach SREGym services
         # running on the host, including the MCP port-forward.
-        if self.config.network_mode == "host" or self.config.internet_policy.is_filtered:
+        # Internal service routing remains necessary without provider keys.
+        # Keep the egress allowlist and URL on the same active forwarded port.
+        mcp_port = env_vars.setdefault("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
+        if self.config.network_mode == "host" or self.config.internet_policy.is_filtered or self.config.isolate_mounts:
             env_vars["API_HOSTNAME"] = "host.docker.internal"
-            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
 
         if self._agent_tools_volume is not None:

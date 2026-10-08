@@ -20,6 +20,9 @@ symlinks, private dotfiles, Git data, virtual environments and runtime artifacts
 are excluded. The invocation pins
 the resulting Docker image ID, rather than relying on a mutable tag. Image
 preparation happens before injection and before the agent stage opens.
+Package-download cache is removed in the dependency-install layer so it does
+not occupy the read-only runtime image. The frozen dependency environment is
+retained and qualified through real worker execution.
 
 The standard DinD build launcher supplies a separate, allowlisted source context
 with a path and SHA256 manifest. Packaged runtimes without Git validate that
@@ -144,6 +147,10 @@ independent data and behavioral invariants remain necessary for new fault tasks.
 No verifier answers or repair hints are added to agent prompts or operational
 evidence. The explicitly versioned task reworks below change application manifests
 where required by their modeled fault.
+HTTP and MCP submission responses allowlist acknowledgment fields rather than
+exporting trusted results. Unexpected internal exceptions return a generic
+processing error; their details remain in runner-owned logs. This also applies
+when an unexpected runtime error exhausts the submission wait budget.
 Full LLM evaluation campaigns have not been established by container isolation
 tests alone.
 
@@ -297,6 +304,12 @@ Account IDs, addresses and private paths are deployment inputs, not universal
 defaults. The dedicated baseline file prevents experimental reconciliation
 from reusing the ordinary cluster's cached state. A benchmark run records
 `workload_boundary=rootless-docker-v1-experimental` in its trusted results.
+The Kubernetes proxy receives this validated cluster's upstream kubeconfig
+explicitly. Existing callers still use the default kubeconfig and ignore an
+ambient `KUBECONFIG` that might point back to the agent proxy. Internal MCP
+routing uses the active forwarded port even when host provider credentials
+are disabled. Port forwarding owns the kubectl process directly so shutdown
+reaps the actual process and releases its listener.
 
 Agent credentials and selected application inputs are transferred into workload
 volumes through Docker's copy API, without granting the workload daemon read
@@ -333,6 +346,34 @@ The experimental preflight now requires that minimum and records the configured
 budget. It only reads host configuration; provisioning changes are never made
 by the benchmark runner or exposed as an agent tool. Larger catalogs may need
 more headroom, and this minimum does not reserve instances against workload DoS.
+
+The full application run also exhausted the sandbox account's default
+200-key kernel keyring quota. Container creation failed with `unable to create
+session key: disk quota exceeded`, independently of available RAM. Operator
+provisioning, explicitly approved for this CloudLab VM, increased non-root
+capacity to 10000 keys and 2000000 bytes. The original limits were recorded;
+the benchmark runner never changes them. These are host-wide per-user resource
+limits, not new access permissions or a reservation against workload DoS.
+See the [kernel keyring quota documentation](https://www.kernel.org/doc/html/latest/security/keys/core.html).
+
+CloudLab initially exposed only a 64 GiB root partition despite 375 GiB of
+adjacent unused space on its 447 GiB system disk. Verifier builds and cached
+application images filled that filesystem while about 240 GiB of RAM remained
+available. Approved operator provisioning grew the existing root partition to
+439 GiB and its ext3 filesystem online, after saving the partition table and
+checking unchanged partition starts, UUIDs, boot partitions and swap. The
+filesystem then reported 432 GiB total and 357 GiB available. No drive was
+formatted, Docker data moved or service restarted. The separate 1.5 TiB NVMe
+device remains available for later storage provisioning.
+
+Host capacity and application limits are different. An `OOMKilled` container
+can exhaust its own small cgroup allowance on an otherwise idle 251 GiB RAM
+server. Full-profile Astronomy startup now bounds OpenSearch JVM and UI Erlang
+thread-pool sizing on this 128-logical-CPU host while retaining the existing
+400 MiB JVM heap, 1100 MiB OpenSearch limit and 250 MiB UI limit. Its cart
+continuity task no longer replaces that shared healthy UI configuration with
+an older sidecar definition. These settings apply before injection and carry
+no fault identity, expected answer or recovery instructions.
 
 After provisioning, all eight operational checks passed, including genuine
 `OOMKilled` reporting and denial of host-global conntrack-limit writes. The
@@ -435,7 +476,7 @@ The full catalog gate remains required before enabling rootless by default.
 Run the bounded suite with the same explicit rootless environment using
 `uv run pytest -m integration tests/service/test_verifier_adversarial_integration.py`.
 
-The complete non-integration regression suite passed 2327 tests and seven subtests,
+The complete non-integration regression suite passed 2326 tests,
 with zero failures or warnings and two skips: the live judge has no configured
 model, and real trajectory fixtures are absent. The initial
 comparison found 28 failures also present upstream. The final run fixes those
@@ -446,10 +487,28 @@ temporary copies, preserving their assertions without restoring the checkout.
 Startup failures and interruption release launcher resources. CLI installation
 checks explicitly permit their required downloads and disable host credentials;
 the production network policy is unchanged.
+The GitLab database-state helper and its tests are preserved in a separate
+`feature/gitlab-db-deletion` worktree and are excluded from this verifier branch
+and its regression count.
 
-Selected real integration runs passed 35 checks with no skips: 12 adversarial,
-11 rootful verifier, four experimental rootless, one full TLS-clock application,
-two Kubernetes MCP campaigns, and five credential-free CLI installation checks.
+All 102 registered tasks completed constructor and diagnosis/mitigation oracle
+snapshot roundtrips. These checks used constructor IO stubs and no fault
+injection; they do not establish application baselines or qualify recovery for
+the full catalog. The live Astronomy Shop lifecycle additionally exercises its
+acknowledged cart ledger through the private verifier. Runner-owned traffic is
+drained before snapshotting, preserving the oracle's existing behavior.
+
+All 39 collected integration cases passed with no skips: 12 adversarial,
+11 trusted-engine verifier checks against the rootless cluster, four experimental
+rootless checks, one full TLS-clock application, two Kubernetes MCP campaigns,
+five credential-free CLI installation checks, one native conductor smoke test,
+one full Astronomy lifecycle, and two agent connectivity modes.
+Worker lifecycle checks inspect and remove invocations through the runtime's
+captured trusted Docker endpoint, even when the workload engine is different.
+The missing-telemetry check temporarily scales the actual Prometheus deployment
+to zero, requires the existing failed verdict on both host and worker, and
+restores its original replica count and readiness in cleanup. It also works on
+a disposable cluster where Prometheus was never installed.
 The four affected tasks also passed healthy, injected-no-op, and operator-repair
 controls. The two OOM tasks produced genuine kernel OOM evidence; temporary
 repair while the recurring actor remained active still failed. Social Network
@@ -462,9 +521,13 @@ exclusion, exact Python compatibility, image identity and real worker execution.
 An unexpected stderr-drain failure rejects grading; closing a pipe during
 intentional teardown no longer leaves an unhandled reader-thread exception.
 
-The regression command deselects 39 integration cases; the 35 selected checks
-above run explicitly under their required deployment settings. The four remaining
-full-stack integration cases are outside this qualification. These counts are
+The regression command deselects 39 integration cases; all 39 run explicitly
+under their required deployment settings. The native smoke test requires a real
+failed application verdict, private worker logs, and successful cleanup. The
+Astronomy lifecycle requires healthy, injected-no-op, and recovered grades from
+the isolated worker. Both open and filtered agent modes query the real
+Kubernetes, Prometheus, Loki, and Jaeger services without provider credentials.
+These counts are
 regression and bounded integration evidence, not full task catalog or LLM
 evaluation results. Rootless remains opt-in pending the catalog and further
 checks of evidence controlled by workload nodes.

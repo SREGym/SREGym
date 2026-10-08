@@ -28,6 +28,7 @@ from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.workload.hotel_search import HotelSearchWorkload, WorkloadSnapshot
 from sregym.service.agent_visibility_policy import VERIFIER_PROBE_NAMESPACE
+from sregym.service.docker_runtime import docker_command
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.kubectl import KubeCtl
 from sregym.service.verifier_runtime import VerifierError, VerifierRuntime
@@ -140,7 +141,7 @@ def test_actual_timeout_and_crash_never_pass_or_leave_a_container(runtime, monke
     # another run's worker.
     for name in invocation_names:
         inspection = subprocess.run(
-            ["docker", "inspect", "--type", "container", name],
+            docker_command("inspect", "--type", "container", name, host=runtime.docker_host),
             capture_output=True,
             timeout=30,
         )
@@ -173,7 +174,15 @@ def test_docker_client_death_removes_the_worker_and_never_returns_a_verdict(runt
             name = isolated._active_name
             if name:
                 inspection = subprocess.run(
-                    ["docker", "inspect", "--type", "container", "--format", "{{.State.Running}}", name],
+                    docker_command(
+                        "inspect",
+                        "--type",
+                        "container",
+                        "--format",
+                        "{{.State.Running}}",
+                        name,
+                        host=isolated.docker_host,
+                    ),
                     capture_output=True,
                     text=True,
                     check=False,
@@ -196,7 +205,7 @@ def test_docker_client_death_removes_the_worker_and_never_returns_a_verdict(runt
         assert not thread.is_alive(), "Verifier did not finish after its Docker client died"
         assert isinstance(completed.get_nowait(), VerifierError)
         inspection = subprocess.run(
-            ["docker", "inspect", "--type", "container", name],
+            docker_command("inspect", "--type", "container", name, host=isolated.docker_host),
             capture_output=True,
             text=True,
             check=False,
@@ -209,7 +218,12 @@ def test_docker_client_death_removes_the_worker_and_never_returns_a_verdict(runt
     finally:
         isolated.cancel()
         if name:
-            subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False, timeout=15)
+            subprocess.run(
+                docker_command("rm", "-f", name, host=isolated.docker_host),
+                capture_output=True,
+                check=False,
+                timeout=15,
+            )
         thread.join(timeout=5)
 
 
@@ -291,15 +305,42 @@ def test_actual_diagnosis_scoring_runs_in_the_container_with_private_host_model_
 
 
 def test_missing_telemetry_preserves_the_existing_failed_verdict(runtime, monkeypatch):
-    # This disposable cluster has no Prometheus deployment. Losing the
-    # measuring instrument must not look like recovered alert silence.
+    # Other live tests may have installed Prometheus in this disposable cluster.
+    # Remove the actual measuring instrument temporarily; no mocked verdict or
+    # endpoint is sufficient to establish behavior inside the real worker.
     monkeypatch.setenv("KUBECONFIG", str(runtime.kubeconfig_path))
-    oracle = AlertOracle(SimpleNamespace(namespace="verifier-test"), buffer_seconds=0, sustained_silence_seconds=1)
-    oracle._baseline_instances = {(("alertname", "chronic"), ("namespace", "verifier-test"))}
-    expected = oracle.evaluate()
-    assert expected["success"] is False
-    assert expected["reason"] == "prometheus_unreachable"
-    assert _grade(runtime, oracle) == expected
+    command = ["kubectl", "--kubeconfig", str(runtime.kubeconfig_path), "-n", "observe"]
+    existing = subprocess.check_output(
+        [*command, "get", "deployment", "prometheus-server", "--ignore-not-found", "-o", "json"], text=True, timeout=30
+    ).strip()
+    deployment = json.loads(existing) if existing else None
+    replicas = deployment["spec"].get("replicas", 1) if deployment else None
+    try:
+        if deployment:
+            subprocess.run([*command, "scale", "deployment/prometheus-server", "--replicas=0"], check=True, timeout=30)
+            selector = ",".join(
+                f"{key}={value}" for key, value in deployment["spec"]["selector"]["matchLabels"].items()
+            )
+            subprocess.run(
+                [*command, "wait", "--for=delete", "pod", "-l", selector, "--timeout=90s"], check=True, timeout=100
+            )
+        oracle = AlertOracle(SimpleNamespace(namespace="verifier-test"), buffer_seconds=0, sustained_silence_seconds=1)
+        oracle._baseline_instances = {(("alertname", "chronic"), ("namespace", "verifier-test"))}
+        expected = oracle.evaluate()
+        assert expected["success"] is False
+        assert expected["reason"] == "prometheus_unreachable"
+        assert _grade(runtime, oracle) == expected
+    finally:
+        if deployment:
+            subprocess.run(
+                [*command, "scale", "deployment/prometheus-server", f"--replicas={replicas}"], check=True, timeout=30
+            )
+            if replicas:
+                subprocess.run(
+                    [*command, "rollout", "status", "deployment/prometheus-server", "--timeout=120s"],
+                    check=True,
+                    timeout=130,
+                )
 
 
 def test_node_configuration_probe_runs_through_kubernetes_without_a_docker_socket(runtime, monkeypatch):
@@ -343,7 +384,11 @@ def test_real_native_agent_proxy_cannot_read_mutate_or_exec_into_verifier_probes
     with socket.socket() as available:
         available.bind(("127.0.0.1", 0))
         port = available.getsockname()[1]
-    proxy = KubernetesAPIProxy(listen_port=port, restrict_network_access=restrict_network_access)
+    proxy = KubernetesAPIProxy(
+        listen_port=port,
+        restrict_network_access=restrict_network_access,
+        upstream_kubeconfig_path=path,
+    )
     namespace_created = False
     pod = {
         "apiVersion": "v1",

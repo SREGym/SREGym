@@ -344,6 +344,65 @@ def test_mcp_reports_the_stage_that_accepted_the_submission(monkeypatch):
     _wait_for_current_evaluation(conductor)
 
 
+@pytest.mark.parametrize("transport", ["http", "mcp"])
+def test_submission_acknowledgment_does_not_export_private_grading_fields(monkeypatch, transport):
+    async def accept(_solution, _stage):
+        return {
+            "status": "accepted",
+            "message": "Submission received",
+            "stage": "diagnosis",
+            "expected": "private expected answer",
+            "baseline": {"replicas": 19},
+            "verdict": {"success": False},
+            "task_version": "private fault identity",
+        }
+
+    monkeypatch.setattr(conductor_api, "_submit_when_stage_is_ready", accept)
+    if transport == "http":
+        response = asyncio.run(conductor_api.submit_solution(conductor_api.SubmitRequest(solution="diagnosis")))
+        assert response == {"status": "200", "message": "Submission received", "stage": "diagnosis"}
+    else:
+        response = asyncio.run(conductor_api.submit_via_conductor.fn("diagnosis", stage="diagnosis"))
+        assert response == {"status": "200", "text": "Submission received", "stage": "diagnosis"}
+
+
+@pytest.mark.parametrize("transport", ["http", "mcp"])
+def test_submission_unexpected_exception_is_private(monkeypatch, transport, caplog):
+    monkeypatch.setattr(conductor_api.logger, "handlers", [caplog.handler])
+
+    async def fail(_solution, _stage):
+        raise OSError("private expected answer and verifier snapshot path")
+
+    monkeypatch.setattr(conductor_api, "_submit_when_stage_is_ready", fail)
+    if transport == "http":
+        with pytest.raises(HTTPException) as caught:
+            asyncio.run(conductor_api.submit_solution(conductor_api.SubmitRequest(solution="diagnosis")))
+        assert caught.value.status_code == 400
+        assert caught.value.detail == "Submission could not be processed."
+    else:
+        response = asyncio.run(conductor_api.submit_via_conductor.fn("diagnosis", stage="diagnosis"))
+        assert response == {"status": "error", "text": "Submission could not be processed."}
+    assert "private expected answer and verifier snapshot path" in caplog.text
+
+
+def test_submission_runtime_error_timeout_does_not_export_private_state(monkeypatch, caplog):
+    monkeypatch.setattr(conductor_api.logger, "handlers", [caplog.handler])
+    conductor = _conductor()
+
+    async def fail(_solution, **_kwargs):
+        raise RuntimeError("private expected answer and verifier snapshot path")
+
+    monkeypatch.setattr(conductor, "submit", fail)
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+    monkeypatch.setattr(conductor_api, "_SUBMISSION_WAIT_SECONDS", 0)
+    with pytest.raises(conductor_api.SubmissionRequestRejected) as caught:
+        asyncio.run(conductor_api._submit_when_stage_is_ready("diagnosis", "diagnosis"))
+    assert caught.value.status_code == 503
+    assert str(caught.value) == "Submission could not be processed."
+    assert "private expected answer and verifier snapshot path" in caplog.text
+    assert conductor._pending_submission_stages == {}
+
+
 def test_legacy_nonempty_mitigation_uses_current_stage(monkeypatch):
     conductor = _conductor()
     conductor.current_stage_index = 1

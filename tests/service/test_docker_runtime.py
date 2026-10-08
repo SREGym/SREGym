@@ -10,7 +10,7 @@ import pytest
 
 from sregym.service import docker_runtime as runtime
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
-from sregym.service.internet_policy import InternetPolicy
+from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.verifier_runtime import VerifierRuntime
 
 
@@ -129,7 +129,7 @@ def test_rootless_preflight_fails_if_host_inotify_budget_cannot_be_read(monkeypa
 def test_rootless_mounts_do_not_change_trusted_container_config(monkeypatch, tmp_path):
     monkeypatch.setenv("SREGYM_ROOTLESS_WORKLOAD", "1")
     monkeypatch.setenv("SREGYM_RUNNER_ADDRESS", "192.0.2.10")
-    config = ContainerConfig(logs_path=tmp_path, codex_auth="none")
+    config = ContainerConfig(logs_path=tmp_path, codex_auth="none", internet_policy=InternetPolicy.from_mode("open"))
     runner = ContainerRunner(config)
     rewrite = Mock(side_effect=lambda args, outputs: args)
     runner._volumes.rewrite = rewrite
@@ -138,6 +138,25 @@ def test_rootless_mounts_do_not_change_trusted_container_config(monkeypatch, tmp
     assert "AGENT_API_BASE=http://host.docker.internal:9000/v1" in command
     assert rewrite.call_args.args[1] == {tmp_path.resolve()}
     assert ContainerConfig(isolate_mounts=False).isolate_mounts is False
+
+
+@pytest.mark.parametrize("mode", ["open", "filtered"])
+def test_rootless_mcp_routing_and_egress_use_the_active_port_without_host_credentials(monkeypatch, mode):
+    monkeypatch.setenv("SREGYM_ROOTLESS_WORKLOAD", "1")
+    monkeypatch.setenv("MCP_SERVER_PORT", "24944")
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-be-forwarded")
+    runner = ContainerRunner(
+        ContainerConfig(
+            forward_host_credentials=False, codex_auth="none", internet_policy=InternetPolicy.from_mode(mode)
+        )
+    )
+    environment = runner._build_env_vars()
+    assert environment["MCP_SERVER_PORT"] == "24944"
+    assert environment["MCP_SERVER_URL"] == "http://host.docker.internal:24944"
+    assert "OPENAI_API_KEY" not in environment
+    rules = runner._configured_egress_rules(environment)
+    assert EndpointRule("host.docker.internal", 24944, inspect_tools=False) in rules
+    assert EndpointRule("host.docker.internal", 9954, inspect_tools=False) not in rules
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Linux private workload kubeconfig")

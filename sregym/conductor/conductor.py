@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import math
+import os
 import shlex
 import shutil
 import threading
@@ -112,6 +113,7 @@ class Conductor:
             listen_port=self.config.k8s_proxy_listen_port,
             listen_host=self.config.k8s_proxy_listen_host,
             restrict_network_access=self.config.restrict_network_access,
+            upstream_kubeconfig_path=os.environ["KUBECONFIG"] if self.workload_boundary else None,
         )
         self._agent_kubeconfig_path: str | None = None
 
