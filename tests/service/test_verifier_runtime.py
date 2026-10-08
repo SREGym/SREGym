@@ -298,6 +298,19 @@ def test_malformed_protocol_never_becomes_a_verdict(line):
         _json_frame(line)
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        b'{"run_id":"old","run_id":"current"}\n',
+        b'{"result":{"success":false,"success":true}}\n',
+        b'{"type":"resource","op":"metrics","op":"model_inference"}\n',
+    ],
+)
+def test_duplicate_protocol_keys_cannot_replace_verdict_or_operation(line):
+    with pytest.raises(VerifierError, match="Duplicate verifier JSON key"):
+        _json_frame(line)
+
+
 def test_worker_rejects_truncated_input():
     with pytest.raises(ValueError, match="protocol frame"):
         read_frame(io.BytesIO(b'{"run_id":"wrong"}'))
@@ -585,6 +598,26 @@ def test_pipe_preserves_real_pass_and_fail_verdicts(monkeypatch, success):
     body = f"print(json.dumps({{'run_id':request['run_id'],'type':'verdict','result':{{'success':{success!r},'detail':{{'baseline':2}}}}}}))"
     result = _protocol_runtime(monkeypatch, body).evaluate_snapshot(b"trusted-snapshot")
     assert result == {"success": success, "detail": {"baseline": 2}}
+
+
+def test_unexpected_stderr_failure_cannot_accept_a_success_verdict(monkeypatch):
+    runtime = _protocol_runtime(
+        monkeypatch,
+        "print(json.dumps({'run_id':request['run_id'],'type':'verdict','result':{'success':True}}))",
+    )
+    launch = verifier_runtime.subprocess.Popen
+
+    def broken_stderr(*args, **kwargs):
+        process = launch(*args, **kwargs)
+        process.stderr.close()
+        process.stderr = io.BytesIO()
+        process.stderr.close()
+        return process
+
+    monkeypatch.setattr(verifier_runtime.subprocess, "Popen", broken_stderr)
+    with pytest.raises(VerifierError):
+        runtime.evaluate_snapshot(b"trusted-snapshot")
+    assert runtime._active_process is None
 
 
 @pytest.mark.parametrize(

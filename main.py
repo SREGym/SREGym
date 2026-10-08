@@ -846,8 +846,17 @@ def main(args):
     configure_jev(args)
     init_logger()
     backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
-    with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
-        return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
+    try:
+        with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
+            return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
+    except BaseException:
+        # Preflight failures happen before the driver's normal shutdown path.
+        # Release this launcher's proxies and credentials even on interruption.
+        try:
+            LAUNCHER.cleanup_all()
+        except Exception:
+            logger.exception("Failed to release launcher resources after startup failure")
+        raise
 
 
 def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None = None):
@@ -927,8 +936,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
         stages=tuple(args.stages) if args.stages else None,
-        baseline_override_s=args.baseline,
-        propagation_override_s=args.propagation,
+        baseline_override_s=getattr(args, "baseline", None),
+        propagation_override_s=getattr(args, "propagation", None),
         verifier_kubeconfig_path=getattr(args, "verifier_kubeconfig", None),
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)

@@ -40,8 +40,16 @@ def _json_frame(line: bytes):
     def reject_constant(value):
         raise VerifierError(f"Nonfinite verifier JSON value: {value}")
 
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise VerifierError(f"Duplicate verifier JSON key: {key}")
+            result[key] = value
+        return result
+
     try:
-        value = json.loads(line, parse_constant=reject_constant)
+        value = json.loads(line, parse_constant=reject_constant, object_pairs_hook=unique_object)
     except (ValueError, UnicodeError) as exc:
         raise VerifierError("Malformed verifier protocol frame") from exc
     if not isinstance(value, dict):
@@ -404,11 +412,16 @@ class VerifierRuntime:
 
             def read_stderr():
                 size = 0
-                with log_path.open("wb") as output:
-                    log_path.chmod(0o600)
-                    while chunk := process.stderr.read(8192):
-                        output.write(chunk[: max(0, MAX_LOG_BYTES - size)])
-                        size += len(chunk)
+                try:
+                    with log_path.open("wb") as output:
+                        log_path.chmod(0o600)
+                        while chunk := process.stderr.read(8192):
+                            output.write(chunk[: max(0, MAX_LOG_BYTES - size)])
+                            size += len(chunk)
+                except Exception as exc:
+                    # Teardown can close the pipe before this thread runs.
+                    # An unexpected drain failure must still prevent a verdict.
+                    publish(exc)
 
             reader = threading.Thread(target=read_stdout, daemon=True)
             logger = threading.Thread(target=read_stderr, daemon=True)

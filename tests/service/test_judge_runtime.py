@@ -125,8 +125,14 @@ def test_main_image_selection_reuses_one_build(monkeypatch, backend, external, f
     monkeypatch.setattr(main, "set_profile", lambda _: None)
     monkeypatch.setattr(main, "run_judge_preflight_check", Mock())
     monkeypatch.setattr(main, "run_preflight_check", Mock())
-    monkeypatch.setattr(main, "Conductor", Mock(side_effect=StopBeforeCluster))
     launcher = AgentLauncher()
+    prepared_runners = []
+
+    def stop_before_cluster(*_, **__):
+        prepared_runners.append(launcher._container_runner)
+        raise StopBeforeCluster
+
+    monkeypatch.setattr(main, "Conductor", stop_before_cluster)
     monkeypatch.setattr(main, "LAUNCHER", launcher)
     args = SimpleNamespace(
         judge_backend=backend,
@@ -151,7 +157,8 @@ def test_main_image_selection_reuses_one_build(monkeypatch, backend, external, f
         return
 
     expected_image = LOCAL_AGENT_IMAGE if force_build else DEFAULT_AGENT_IMAGE
-    assert launcher._container_runner.config.image == expected_image
+    assert prepared_runners[0].config.image == expected_image
+    assert launcher._container_runner is None
     if backend != "api" and not external:
         assert popen.call_args.args[0][-2] == expected_image
     else:

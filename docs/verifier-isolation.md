@@ -141,7 +141,9 @@ This change protects grading execution and state. It does not change existing
 oracle acceptance criteria or guarantee the absence of reward hacking. A weak
 oracle can still reward a fabricated application response or missing telemetry;
 independent data and behavioral invariants remain necessary for new fault tasks.
-Agent prompts, operational evidence, and application manifests are unchanged.
+No verifier answers or repair hints are added to agent prompts or operational
+evidence. The explicitly versioned task reworks below change application manifests
+where required by their modeled fault.
 Full LLM evaluation campaigns have not been established by container isolation
 tests alone.
 
@@ -397,8 +399,10 @@ cleanup, and the four rootless nodes remained Ready.
 
 The task reworks resolve the host-operation compatibility issues through
 explicit versioning and workload-local operations. They preserve ordinary native
-node behavior outside emulated clusters. The persistent external-harness lifecycle
-and full catalog/adversarial qualification remain outstanding. Larger conntrack
+node behavior outside emulated clusters. The persistent external-harness lifecycle,
+full catalog qualification, and deeper attacks on node-controlled observations
+remain outstanding. The bounded grading-execution adversarial suite is described
+below. Larger conntrack
 tables within the traffic budget have unit calibration coverage, not completed
 physical saturation qualification. Rootless remains opt-in during that work.
 
@@ -408,15 +412,62 @@ and [Docker cgroup delegation guidance](https://docs.docker.com/engine/security/
 
 ## Validation
 
-The latest complete regression run passed 2291 tests and seven subtests, with
-three skips and 28 failures. Comparing failure identifiers against an unchanged
-upstream checkout found the same 28 failures and no new ones. Real integration
-runs passed 11 verifier checks on rootful Kind and four on the experimental
-rootless deployment, plus the full TLS-clock application qualification. The
-Gitless packaged-runtime check also passed manifest
-validation, untracked-file exclusion, exact Python compatibility, image identity
-and real worker execution. These numbers describe regression and integration
-coverage, not full task catalog or LLM evaluation results.
+After merging upstream main at `93284263` (README link corrections only), the
+explicit rootless adversarial suite passed all 12 checks with no skips. It checks
+every logical node's root UID mapping and separate PID namespace, absence of the
+trusted workspace and socket, denied reads of a synthetic private runner directory,
+and denied connection to the trusted Docker socket even from a temporary logically
+privileged workload probe. Those probes use only the qualified rootless engine.
+The trusted Docker host does not grant them additional capabilities or identities.
+
+The integration suites reject verdict and adapter requests printed through Python, raw
+stdout, or subprocess output, drains an 18 MiB log flood while retaining only the
+16 MiB private log budget, and rejects actual agent symlink, hardlink, FIFO, and
+oversized output archives before exporting any files. Three repeated cancellation
+checks first observe a live worker, verify that the workload engine cannot discover
+it, cancel it, and require an error plus removal of that specific container. JSON
+protocol parsing also rejects duplicate keys at every nesting level rather than
+letting a repeated key replace a verdict or operation.
+
+These are passing controls for the configured execution boundary, not a claim
+that agent-controlled Kubernetes responses or every task oracle are authoritative.
+The full catalog gate remains required before enabling rootless by default.
+Run the bounded suite with the same explicit rootless environment using
+`uv run pytest -m integration tests/service/test_verifier_adversarial_integration.py`.
+
+The complete non-integration regression suite passed 2327 tests and seven subtests,
+with zero failures or warnings and two skips: the live judge has no configured
+model, and real trajectory fixtures are absent. The initial
+comparison found 28 failures also present upstream. The final run fixes those
+compatibility and test-fixture issues, includes all test files, and supplies the
+required Helm and kubectl binaries without live Docker endpoint overrides.
+The three original file-tool campaigns now exercise the current tool API on
+temporary copies, preserving their assertions without restoring the checkout.
+Startup failures and interruption release launcher resources. CLI installation
+checks explicitly permit their required downloads and disable host credentials;
+the production network policy is unchanged.
+
+Selected real integration runs passed 35 checks with no skips: 12 adversarial,
+11 rootful verifier, four experimental rootless, one full TLS-clock application,
+two Kubernetes MCP campaigns, and five credential-free CLI installation checks.
+The four affected tasks also passed healthy, injected-no-op, and operator-repair
+controls. The two OOM tasks produced genuine kernel OOM evidence; temporary
+repair while the recurring actor remained active still failed. Social Network
+was requalified using the published image override, and Helm rendering checks
+all 13 application containers against their recorded image pins. The Train Ticket
+image lock now matches the installer already configured by the application.
+
+The Gitless packaged-runtime check passed manifest validation, untracked-file
+exclusion, exact Python compatibility, image identity and real worker execution.
+An unexpected stderr-drain failure rejects grading; closing a pipe during
+intentional teardown no longer leaves an unhandled reader-thread exception.
+
+The regression command deselects 39 integration cases; the 35 selected checks
+above run explicitly under their required deployment settings. The four remaining
+full-stack integration cases are outside this qualification. These counts are
+regression and bounded integration evidence, not full task catalog or LLM
+evaluation results. Rootless remains opt-in pending the catalog and further
+checks of evidence controlled by workload nodes.
 
 Run the unit and lifecycle checks with
 `uv run pytest tests/service/test_verifier_runtime.py`. To exercise real Docker

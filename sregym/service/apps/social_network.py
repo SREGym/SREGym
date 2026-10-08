@@ -1,6 +1,7 @@
 """Interface to the social network application from DeathStarBench"""
 
 import logging
+from pathlib import Path
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.paths import SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
@@ -30,6 +31,7 @@ class SocialNetwork(Application):
         self.description = metadata["Desc"]
         self.frontend_service = metadata.get("frontend_service", "nginx-thrift")
         self.frontend_port = metadata.get("frontend_port", 8080)
+        self.helm_configs["values_file"] = str(Path(__file__).parent / "values/social-network-images.yaml")
 
     def create_tls_secret(self):
         """Create TLS secret for MongoDB if it doesn't exist."""
