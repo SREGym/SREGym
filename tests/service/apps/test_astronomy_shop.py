@@ -121,6 +121,15 @@ def test_product_catalog_has_headroom_above_gomemlimit():
     assert limit.endswith("Mi") and int(limit[:-2]) >= 64
 
 
+def test_frontend_proxy_envoy_prefers_ipv4():
+    # Envoy's STRICT_DNS default (AUTO, IPv6-first) can walk host search domains
+    # on AAAA lookups and dial an unreachable external address (503 UF).
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    script = values["components"]["frontend-proxy"]["command"][2]
+    assert "dns_lookup_family: V4_PREFERRED" in script
+    assert "exec envoy -c envoy.yaml" in script
+
+
 def test_locust_exporter_sidecar_is_not_chronically_throttled():
     # The sidecar is the only CPU-limited container in the load-generator pod, so
     # it alone decides the pod-scoped ContainerCPUThrottling alert.
