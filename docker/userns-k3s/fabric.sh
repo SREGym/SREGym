@@ -69,8 +69,17 @@ for n in $NODES; do
     if [ $cgroup_version = 2 ]; then
         # The unshare parent stays outside the node's PID namespace, where the
         # node cannot move it; park it in the node's leaf so the node's root
-        # cgroup can delegate controllers.
-        echo $pid > /sys/fs/cgroup/node-$n/init/cgroup.procs
+        # cgroup can delegate controllers. Retried: on Daytona this write once
+        # failed with EIO, which ended the fabric and the whole cluster.
+        attempt=1
+        until echo $pid 2>/dev/null > /sys/fs/cgroup/node-$n/init/cgroup.procs; do
+            if [ $attempt -ge 20 ]; then
+                echo "[fabric] cannot move node $n's unshare parent ($pid) into its cgroup" >&2
+                exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep 0.5
+        done
     fi
     # Interface names are limited to 15 characters.
     ip link add veth$i type veth peer name eth0 netns $pid
