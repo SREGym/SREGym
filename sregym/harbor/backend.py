@@ -11,7 +11,8 @@ Interfaces (see ``sregym.harbor.protocol``):
 
 - ``SHARED_DIR``: ``state``, ``status.json`` and the agent ``kubeconfig``.
 - ``0.0.0.0:API_PORT``: ``GET /status``; ``POST /oracle/recover`` runs the
-  problem's ``recover_fault()`` for Harbor's oracle agent. It requires a bearer
+  problem's ``recover_fault()`` for Harbor's oracle agent, then waits until the
+  mitigation oracle passes. It requires a bearer
   token whose SHA-256 is configured in the task image; only the task's reference
   solution can derive the token.
 - ``127.0.0.1:GRADE_PORT``: ``POST /grade`` evaluates the mitigation oracle once
@@ -47,6 +48,11 @@ logger = logging.getLogger("all.sregym.harbor")
 
 DEPLOY_ATTEMPTS = 2
 RECOVERY_READY_TIMEOUT_S = 600
+# After the reference recovery, poll the mitigation oracle until it passes, as
+# SREGym's problem validator does. Alert-based oracles keep failing for minutes
+# after recover_fault() returns, until rate-based alerts clear.
+RECOVERY_SETTLE_TIMEOUT_S = 600
+RECOVERY_SETTLE_INTERVAL_S = 15
 
 
 class ProblemSession(Protocol):
@@ -156,6 +162,8 @@ class Backend:
         output_dir: Path,
         oracle_token_sha256: str | None,
         grade_token: str | None = None,
+        recovery_settle_timeout_s: float = RECOVERY_SETTLE_TIMEOUT_S,
+        recovery_settle_interval_s: float = RECOVERY_SETTLE_INTERVAL_S,
     ):
         self.session = session
         self.problem_id = problem_id
@@ -163,6 +171,8 @@ class Backend:
         self.output_dir = output_dir
         self.oracle_token_sha256 = (oracle_token_sha256 or "").strip().lower() or None
         self.grade_token = grade_token
+        self.recovery_settle_timeout_s = recovery_settle_timeout_s
+        self.recovery_settle_interval_s = recovery_settle_interval_s
         self.state = protocol.STATE_STARTING
         self.error: str | None = None
         # Grading, recovery and setup all act on the live cluster; never overlap them.
@@ -240,7 +250,38 @@ class Backend:
                 raise RuntimeError("the problem has already been graded")
             started = time.monotonic()
             self.session.recover()
-            return {"recovered": True, "duration_s": round(time.monotonic() - started, 3)}
+            settled, checks = self._wait_until_mitigated()
+            return {
+                "recovered": True,
+                "settled": settled,
+                "checks": checks,
+                "duration_s": round(time.monotonic() - started, 3),
+            }
+
+    def _wait_until_mitigated(self) -> tuple[bool, int]:
+        """Poll the mitigation oracle after the reference recovery until it passes.
+
+        The verifier grades once, right after the agent exits, and some oracles
+        fail until the application's alerts catch up with the fix. Returns
+        whether a check passed and how many ran. Nothing is cached: the
+        verifier's grade is the one that counts.
+        """
+        deadline = time.monotonic() + self.recovery_settle_timeout_s
+        checks = 0
+        while True:
+            checks += 1
+            try:
+                verdict = self.session.grade()
+            except Exception:
+                logger.exception("[HARBOR] Mitigation check after recovery raised")
+                verdict = {}
+            if verdict.get("success") is True:
+                logger.info(f"[HARBOR] Mitigation oracle passed after recovery (check {checks})")
+                return True, checks
+            if time.monotonic() >= deadline:
+                logger.warning(f"[HARBOR] Mitigation oracle still failing after recovery: {verdict}")
+                return False, checks
+            time.sleep(self.recovery_settle_interval_s)
 
     def token_is_valid(self, authorization: str | None) -> bool:
         if not self.oracle_token_sha256 or not authorization:

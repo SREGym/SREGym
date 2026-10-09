@@ -15,11 +15,15 @@ GRADE_TOKEN = "grade-token"
 
 
 class FakeSession:
-    def __init__(self, tmp_path, *, fail_setup=False):
+    def __init__(self, tmp_path, *, fail_setup=False, settles_after=1):
         self.tmp_path = tmp_path
         self.fail_setup = fail_setup
+        # The oracle passes from this many checks after recovery on, as when
+        # alerts take a while to clear. None: never.
+        self.settles_after = settles_after
         self.recovered = False
         self.grades = 0
+        self.grades_since_recovery = 0
 
     def setup(self) -> str:
         if self.fail_setup:
@@ -30,7 +34,12 @@ class FakeSession:
 
     def grade(self) -> dict:
         self.grades += 1
-        return {"success": self.recovered, "reason": None if self.recovered else "fault_present"}
+        if not self.recovered:
+            return {"success": False, "reason": "fault_present"}
+        self.grades_since_recovery += 1
+        if self.settles_after is None or self.grades_since_recovery < self.settles_after:
+            return {"success": False, "reason": "alerts_still_firing"}
+        return {"success": True, "reason": None}
 
     def recover(self) -> None:
         self.recovered = True
@@ -41,7 +50,7 @@ class FakeSession:
 
 @pytest.fixture
 def make_backend(tmp_path):
-    def make(**session_options):
+    def make(recovery_settle_timeout_s=60, **session_options):
         session = FakeSession(tmp_path, **session_options)
         backend = Backend(
             session,
@@ -50,6 +59,8 @@ def make_backend(tmp_path):
             output_dir=tmp_path / "output",
             oracle_token_sha256=hashlib.sha256(TOKEN.encode()).hexdigest(),
             grade_token=GRADE_TOKEN,
+            recovery_settle_timeout_s=recovery_settle_timeout_s,
+            recovery_settle_interval_s=0,
         )
         return backend, session
 
@@ -102,6 +113,24 @@ def test_recovery_then_grade_succeeds(make_backend):
     backend.setup()
     assert backend.recover()["recovered"] is True
     assert backend.grade()["success"] is True
+
+
+def test_recovery_waits_until_the_oracle_passes(make_backend):
+    backend, session = make_backend(settles_after=3)
+    backend.setup()
+    result = backend.recover()
+    assert (result["settled"], result["checks"]) == (True, 3)
+    # Checks during recovery are not the grade: the verifier still runs one.
+    assert backend.grade()["success"] is True
+    assert session.grades == 4
+
+
+def test_recovery_stops_waiting_at_the_timeout(make_backend):
+    backend, _ = make_backend(settles_after=None, recovery_settle_timeout_s=0)
+    backend.setup()
+    result = backend.recover()
+    assert (result["recovered"], result["settled"], result["checks"]) == (True, False, 1)
+    assert backend.grade()["mitigation"]["reason"] == "alerts_still_firing"
 
 
 @pytest.mark.parametrize(

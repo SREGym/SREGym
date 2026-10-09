@@ -53,8 +53,10 @@ The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
    1.0 when the oracle succeeds and 0.0 otherwise. If the backend could not
    grade, no reward is written, so Harbor reports an error instead of a zero.
 5. **Reference solution.** Harbor's oracle agent runs `solution/solve.sh`. It
-   asks the backend to run the problem's own `recover_fault()`. The endpoint
-   needs a per-task token: an HMAC of the task name keyed by the dataset's
+   asks the backend to run the problem's own `recover_fault()`, then waits up
+   to 10 minutes for the mitigation oracle to pass, as SREGym's problem
+   validator does. Alert-based oracles keep failing for a few minutes after a
+   fix, until rate-based alerts clear. The endpoint needs a per-task token: an HMAC of the task name keyed by the dataset's
    oracle secret. The task image carries only the token's SHA-256, root-only.
    The secret reaches `solve.sh` at run time through task.toml's `[solution]
    env`, which Harbor resolves for the oracle agent only.
