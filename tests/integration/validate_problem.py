@@ -54,7 +54,7 @@ class ValidationError(Exception):
     """Raised when a stage does not behave as a correct problem requires."""
 
 
-def _poll_oracle(oracle, expect_success: bool, timeout_s: int, poll_interval_s: int):
+def _poll_oracle(runtime, oracle, expect_success: bool, timeout_s: int, poll_interval_s: int):
     """Evaluate the oracle until ``success == expect_success`` or the timeout elapses.
 
     Returns a tuple of (matched, checks, last_result).
@@ -65,11 +65,15 @@ def _poll_oracle(oracle, expect_success: bool, timeout_s: int, poll_interval_s: 
     while True:
         checks += 1
         try:
-            last = oracle.evaluate() or {}
+            last = runtime.evaluate(oracle) or {}
         except Exception as e:
-            logger.exception("mitigation_oracle.evaluate() raised")
-            last = {"success": None, "error": f"{type(e).__name__}: {e}"}
+            logger.exception("isolated mitigation verification raised")
+            last = {"success": None, "failure_class": "harness_error", "error": f"{type(e).__name__}: {e}"}
         logger.info(f"Oracle check #{checks}: {last}")
+        if not isinstance(last, dict) or last.get("failure_class") == "harness_error":
+            return False, checks, last
+        if type(last.get("success")) is not bool:
+            return False, checks, last
         if last.get("success") is expect_success:
             return True, checks, last
         if time.monotonic() >= deadline:
@@ -87,7 +91,13 @@ def _mark_failure(stages: dict, message: str):
 
 
 def validate(
-    problem_id: str, inject_timeout: int, recover_timeout: int, poll_interval: int, *, deploy_loki: bool = False
+    problem_id: str,
+    inject_timeout: int,
+    recover_timeout: int,
+    poll_interval: int,
+    *,
+    deploy_loki: bool = False,
+    enable_noise: bool = False,
 ):
     """Run the full deploy/inject/recover lifecycle. Returns (passed, stages)."""
     stages = {
@@ -101,10 +111,11 @@ def validate(
     }
 
     conductor = None
+    runtime = None
     injection_attempted = False
     recovery_verified = False
     try:
-        conductor = Conductor(config=ConductorConfig(deploy_loki=deploy_loki))
+        conductor = Conductor(config=ConductorConfig(deploy_loki=deploy_loki, enable_noise=enable_noise))
 
         # --- Resolve the problem ----------------------------------------------
         logger.info(f"[STAGE] Resolving problem '{problem_id}'")
@@ -137,6 +148,11 @@ def validate(
         conductor.undeploy_app()  # clear any leftovers from a previous run
         conductor.deploy_app()
         oracle.capture_baseline()
+        runtime = conductor._get_verifier_runtime()
+        runtime.prepare()
+        matched, checks, result = _poll_oracle(runtime, oracle, True, recover_timeout, poll_interval)
+        if not matched:
+            raise ValidationError(f"healthy application failed isolated verification ({checks} check(s)): {result}")
         stages["deploy"].status = PASS
         stages["deploy"].detail = f"`{problem.app.name}` deployed to namespace `{problem.namespace}`"
 
@@ -149,7 +165,7 @@ def validate(
 
         # --- The oracle must now FAIL (the fault is live) ---------------------
         logger.info("[STAGE] Verifying the oracle detects the injected fault")
-        matched, checks, result = _poll_oracle(oracle, False, inject_timeout, poll_interval)
+        matched, checks, result = _poll_oracle(runtime, oracle, False, inject_timeout, poll_interval)
         if not matched:
             raise ValidationError(
                 f"the mitigation oracle still reports success {inject_timeout}s after injection "
@@ -167,7 +183,7 @@ def validate(
 
         # --- The oracle must now PASS (recovery restored health) --------------
         logger.info("[STAGE] Verifying the oracle confirms recovery")
-        matched, checks, result = _poll_oracle(oracle, True, recover_timeout, poll_interval)
+        matched, checks, result = _poll_oracle(runtime, oracle, True, recover_timeout, poll_interval)
         if not matched:
             raise ValidationError(
                 f"the mitigation oracle still reports failure {recover_timeout}s after recovery "
@@ -188,12 +204,15 @@ def validate(
         # Namespace deletion alone cannot undo cluster-scoped webhooks or DNS
         # changes. Attempt fault recovery even after a partially failed inject.
         cleanup_actions = []
+        if runtime is not None:
+            cleanup_actions.append(("cancel isolated verifier", runtime.cancel))
         if conductor is not None:
             if conductor.problem is not None:
                 if injection_attempted and not recovery_verified:
                     cleanup_actions.append(("recover fault", conductor.problem.recover_fault))
                 cleanup_actions.extend(
                     [
+                        ("stop problem environment", conductor.problem.stop_environment),
                         ("remove application", conductor.problem.app.cleanup),
                         (
                             "wait for namespace deletion",
@@ -271,6 +290,7 @@ def main():
     parser.add_argument("--json-summary", type=Path, help="Optional machine-readable lifecycle results")
     parser.add_argument("--profile", choices=PROFILES, default="full")
     parser.add_argument("--with-loki", action="store_true", help="Also validate deployment of Loki and Promtail")
+    parser.add_argument("--noise", action="store_true", help="Enable problem-owned environmental noise")
     parser.add_argument(
         "--inject-timeout",
         type=int,
@@ -297,7 +317,12 @@ def main():
     start = time.time()
 
     passed, stages = validate(
-        args.problem, args.inject_timeout, args.recover_timeout, args.poll_interval, deploy_loki=args.with_loki
+        args.problem,
+        args.inject_timeout,
+        args.recover_timeout,
+        args.poll_interval,
+        deploy_loki=args.with_loki,
+        enable_noise=args.noise,
     )
 
     elapsed = time.time() - start

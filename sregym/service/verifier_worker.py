@@ -47,6 +47,24 @@ class RemoteWorkload:
 
         return SimpleNamespace(content=self.call(self.index, "model_inference", [messages_to_dict(messages)]))
 
+    def begin_epoch(self):
+        return self.call(self.index, "journal_begin_epoch", [])
+
+    def request(self, epoch, group, operation, effects, provenance=None):
+        return self.call(self.index, "journal_request", [epoch, group, operation, effects, provenance])
+
+    def acknowledge(self, epoch, event_id, origin, latency_ms, status_code, receipt):
+        return self.call(self.index, "journal_acknowledge", [epoch, event_id, origin, latency_ms, status_code, receipt])
+
+    def reject(self, epoch, event_id, origin, latency_ms, status_code):
+        return self.call(self.index, "journal_reject", [epoch, event_id, origin, latency_ms, status_code])
+
+    def close_epoch(self, epoch):
+        return self.call(self.index, "journal_close_epoch", [epoch])
+
+    def delivery_receipts(self, identities):
+        return self.call(self.index, "journal_delivery_receipts", [identities])
+
 
 def execute_oracle(oracle, args=()):
     """Run grading inside the worker and preserve oracle failure classifications."""

@@ -176,6 +176,10 @@ trace_output/
 metrics_output/
 .runtime/
 
+# Local implementation plans, maintained outside commits
+/docs/plans/regional-failover-scaling.md
+/docs/plans/gitlab-recovery-scaling.md
+
 # Ignore telemetry data directories
 sregym/observer/telemetry_data_*/
 

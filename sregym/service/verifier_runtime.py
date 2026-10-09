@@ -8,7 +8,10 @@ import io
 import ipaddress
 import json
 import math
+import os
 import queue
+import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -27,6 +30,26 @@ from sregym.service.verifier_worker import MAX_FRAME_BYTES
 BUILD_TIMEOUT_SECONDS = 1800
 DEFAULT_TIMEOUT_SECONDS = 300
 MAX_LOG_BYTES = 16 * 1024 * 1024
+MAX_SCRATCH_BYTES = 8 * 1024**3
+SCRATCH_DISK_RESERVE_BYTES = 1024**3
+
+
+def _scratch_budget(value):
+    if type(value) is not int or not 0 <= value <= MAX_SCRATCH_BYTES:
+        raise VerifierError("Verifier scratch budget must be an integer between zero and 8 GiB")
+    return value
+
+
+@dataclasses.dataclass
+class _ScratchVolume:
+    name: str
+    run_id: str
+    owner: str
+    created_at: str | None = None
+
+    @property
+    def labels(self):
+        return {"io.sregym.verifier.run": self.run_id, "io.sregym.verifier.owner": self.owner}
 
 
 class VerifierError(RuntimeError):
@@ -204,6 +227,13 @@ def _resource_call(workloads, frame):
     if type(index) is not int or not 0 <= index < len(workloads) or not isinstance(args, list):
         raise VerifierError("Invalid verifier workload resource")
     workload = workloads[index]
+    from sregym.service.codehub_verification_journal import CodeHubVerificationJournal
+
+    if isinstance(workload, CodeHubVerificationJournal):
+        entry = CodeHubVerificationJournal.OPERATIONS.get(operation)
+        if entry is None or len(args) != entry[1]:
+            raise VerifierError("Invalid verifier receipt operation")
+        return getattr(workload, entry[0])(*args)
     if isinstance(workload, tuple) and workload[0] == "model":
         if operation != "model_inference" or len(args) != 1 or not isinstance(args[0], list):
             raise VerifierError("Invalid verifier model operation")
@@ -243,6 +273,7 @@ class VerifierRuntime:
         self._lock = threading.Lock()
         self._active_name = None
         self._active_process = None
+        self._active_run_id = None
         self._cancelled = threading.Event()
         self.last_log_path = None
 
@@ -263,10 +294,10 @@ class VerifierRuntime:
             raise VerifierError("Verifier invocation was cancelled")
         self.image, self.kubeconfig, self.network = image, kubeconfig, network
 
-    def docker_command(self, name):
+    def docker_command(self, name, *, scratch_volume=None, scratch_bytes=0):
         if not self.image or not self.network:
             raise VerifierError("Verifier has not been prepared")
-        return [
+        arguments = [
             *docker_command("run", host=self.docker_host),
             "--rm",
             "-i",
@@ -282,8 +313,170 @@ class VerifierRuntime:
             "--log-driver=none",
             "--tmpfs=/tmp:rw,nosuid,nodev,size=256m,mode=1777",
             f"--network={self.network}",
-            self.image,
         ]
+        if scratch_volume is not None:
+            arguments.extend(
+                [
+                    f"--mount=type=volume,source={scratch_volume.name},target=/scratch,volume-nocopy",
+                    "--env=TMPDIR=/scratch",
+                    f"--env=SREGYM_VERIFIER_SCRATCH_BYTES={_scratch_budget(scratch_bytes)}",
+                ]
+            )
+        return [*arguments, self.image]
+
+    def _scratch_host_capacity(self, scratch_bytes, remaining):
+        if os.name != "posix" or not self.docker_host or not self.docker_host.startswith("unix://"):
+            raise VerifierError("Verifier scratch requires an explicit local trusted Unix Docker endpoint")
+        endpoint = Path(self.docker_host.removeprefix("unix://"))
+        if not endpoint.is_absolute() or endpoint.is_symlink():
+            raise VerifierError("Trusted scratch endpoint must be an absolute root-owned socket")
+        metadata = endpoint.stat()
+        if metadata.st_uid != 0 or not stat.S_ISSOCK(metadata.st_mode):
+            raise VerifierError("Trusted scratch endpoint must be a root-owned Unix socket")
+        if self.docker_host == os.environ.get("DOCKER_HOST"):
+            raise VerifierError("Scratch cannot use the workload Docker endpoint")
+        info = json.loads(
+            subprocess.run(
+                docker_command("info", "--format", "{{json .}}", host=self.docker_host),
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=min(15, remaining()),
+            ).stdout
+        )
+        root = Path(info.get("DockerRootDir", ""))
+        if (
+            info.get("OSType") != "linux"
+            or any("rootless" in option for option in info.get("SecurityOptions", []))
+            or not root.is_absolute()
+            or not root.is_dir()
+            or shutil.disk_usage(root).free < scratch_bytes + SCRATCH_DISK_RESERVE_BYTES
+        ):
+            raise VerifierError("Trusted Docker scratch storage lacks verified local capacity")
+
+    def _inspect_scratch(self, volume, *, timeout=15):
+        result = subprocess.run(
+            docker_command("volume", "inspect", volume.name, host=self.docker_host),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+        if result.returncode:
+            if "no such volume" in result.stderr.lower():
+                return None
+            raise VerifierError("Could not inspect the owned verifier scratch volume")
+        try:
+            values = json.loads(result.stdout)
+            info = values[0]
+            valid = (
+                len(values) == 1
+                and info["Name"] == volume.name
+                and info["Driver"] == "local"
+                and info["Scope"] == "local"
+                and not info.get("Options")
+                and all((info.get("Labels") or {}).get(key) == value for key, value in volume.labels.items())
+                and isinstance(info.get("CreatedAt"), str)
+                and bool(info["CreatedAt"])
+                and (volume.created_at is None or info["CreatedAt"] == volume.created_at)
+            )
+        except (KeyError, TypeError, ValueError, IndexError) as exc:
+            raise VerifierError("Malformed scratch volume ownership inspection") from exc
+        if not valid:
+            raise VerifierError("Verifier scratch volume ownership changed")
+        volume.created_at = info["CreatedAt"]
+        return info
+
+    def _initialize_scratch(self, volume, scratch_bytes, remaining):
+        if (
+            type(self.image) is not str
+            or not self.image.startswith("sha256:")
+            or len(self.image) != 71
+            or any(character not in "0123456789abcdef" for character in self.image[7:])
+        ):
+            raise VerifierError("Scratch initialization requires the immutable trusted verifier image ID")
+        if self._inspect_scratch(volume, timeout=min(15, remaining())) is None:
+            raise VerifierError("Created verifier scratch volume disappeared")
+        name = f"sregym-verifier-scratch-init-{volume.run_id}"
+        # chmod precedes chown: the initializer has CHOWN only, not FOWNER.
+        program = (
+            "import os,pathlib,shutil; p=pathlib.Path('/scratch'); "
+            "assert p.is_dir() and not p.is_symlink() and not any(p.iterdir()), 'scratch must be empty'; "
+            f"assert shutil.disk_usage(p).free >= {scratch_bytes + SCRATCH_DISK_RESERVE_BYTES}, 'insufficient scratch capacity'; "
+            "os.chmod(p,0o700); os.chown(p,10001,10001)"
+        )
+        command = [
+            *docker_command("run", host=self.docker_host),
+            "--rm",
+            "--name",
+            name,
+            "--user=0:0",
+            "--read-only",
+            "--network=none",
+            "--cap-drop=ALL",
+            "--cap-add=CHOWN",
+            "--security-opt=no-new-privileges",
+            "--cpus=0.5",
+            "--memory=128m",
+            "--memory-swap=128m",
+            "--pids-limit=32",
+            "--log-driver=none",
+            "--tmpfs=/tmp:rw,nosuid,nodev,size=16m",
+            f"--label=io.sregym.verifier.run={volume.run_id}",
+            f"--label=io.sregym.verifier.owner={volume.owner}",
+            f"--mount=type=volume,source={volume.name},target=/scratch,volume-nocopy",
+            "--entrypoint=python",
+            self.image,
+            "-c",
+            program,
+        ]
+        process = None
+        try:
+            with self._lock:
+                remaining()
+                process = subprocess.Popen(
+                    command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                self._active_name, self._active_process = name, process
+            while True:
+                try:
+                    process.communicate(timeout=min(0.1, remaining()))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            remaining()
+            if process.returncode != 0:
+                raise VerifierError("Private verifier scratch initialization failed")
+        finally:
+            if process is not None:
+                with contextlib.suppress(subprocess.SubprocessError, OSError):
+                    subprocess.run(
+                        docker_command("rm", "-f", name, host=self.docker_host),
+                        capture_output=True,
+                        timeout=15,
+                        check=False,
+                    )
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=15)
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None and not stream.closed:
+                        stream.close()
+                with self._lock:
+                    if self._active_process is process:
+                        self._active_name, self._active_process = None, None
+
+    def _remove_scratch(self, volume):
+        if self._inspect_scratch(volume) is not None:
+            result = subprocess.run(
+                docker_command("volume", "rm", volume.name, host=self.docker_host),
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode:
+                raise VerifierError("Owned verifier scratch volume could not be removed")
 
     def cancel(self):
         self._cancelled.set()
@@ -302,6 +495,7 @@ class VerifierRuntime:
                 process.kill()
 
     def evaluate(self, oracle, *args) -> dict:
+        scratch_bytes = _scratch_budget(getattr(oracle, "verification_scratch_bytes", 0))
         if self._cancelled.is_set():
             raise VerifierError("Verifier invocation was cancelled")
         if self.kubeconfig is None:
@@ -318,10 +512,15 @@ class VerifierRuntime:
             prepare()
         payload, workloads = snapshot_oracle(oracle, Path(__file__).resolve().parents[2])
         return self.evaluate_snapshot(
-            payload, workloads, getattr(oracle, "evaluation_timeout_seconds", None), args=args
+            payload,
+            workloads,
+            getattr(oracle, "evaluation_timeout_seconds", None),
+            args=args,
+            scratch_bytes=scratch_bytes,
         )
 
-    def evaluate_snapshot(self, payload, workloads=(), oracle_timeout=None, *, args=()) -> dict:
+    def evaluate_snapshot(self, payload, workloads=(), oracle_timeout=None, *, args=(), scratch_bytes=0) -> dict:
+        scratch_bytes = _scratch_budget(scratch_bytes)
         if self._cancelled.is_set():
             raise VerifierError("Verifier invocation was cancelled")
         if self.kubeconfig is None:
@@ -348,6 +547,7 @@ class VerifierRuntime:
         messages = queue.Queue(maxsize=16)
         stopped = threading.Event()
         process = None
+        scratch_volume = None
 
         def remaining():
             if self._cancelled.is_set():
@@ -390,13 +590,40 @@ class VerifierRuntime:
 
         try:
             with self._lock:
+                remaining()
+                if self._active_process is not None or self._active_run_id is not None:
+                    raise VerifierError("A verifier invocation is already active")
+                self._active_run_id = run_id
+            if scratch_bytes:
+                self._scratch_host_capacity(scratch_bytes, remaining)
+                remaining()
+                scratch_volume = _ScratchVolume(f"sregym-verifier-scratch-{run_id}", run_id, uuid.uuid4().hex)
+                command = docker_command("volume", "create", "--driver", "local", host=self.docker_host)
+                for key, value in scratch_volume.labels.items():
+                    command.extend(["--label", f"{key}={value}"])
+                subprocess.run(
+                    [*command, scratch_volume.name],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=min(15, remaining()),
+                )
+                self._initialize_scratch(scratch_volume, scratch_bytes, remaining)
+                if self._inspect_scratch(scratch_volume, timeout=min(15, remaining())) is None:
+                    raise VerifierError("Verifier scratch disappeared before grading")
+            with self._lock:
                 if self._cancelled.is_set():
                     raise VerifierError("Verifier invocation was cancelled")
                 if self._active_process is not None:
                     raise VerifierError("A verifier invocation is already active")
                 self.last_log_path = log_path
                 process = subprocess.Popen(
-                    self.docker_command(name), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                    self.docker_command(name, scratch_volume=scratch_volume, scratch_bytes=scratch_bytes)
+                    if scratch_volume
+                    else self.docker_command(name),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                 )
                 self._active_name, self._active_process = name, process
 
@@ -489,6 +716,7 @@ class VerifierRuntime:
                     raise VerifierError("Verifier wrote unexpected data after its verdict")
                 return result
         finally:
+            original_error = sys.exc_info()[1]
             stopped.set()
             try:
                 if process is not None:
@@ -512,6 +740,18 @@ class VerifierRuntime:
                             with contextlib.suppress(OSError):
                                 stream.close()
             finally:
+                scratch_error = None
+                if scratch_volume is not None:
+                    try:
+                        self._remove_scratch(scratch_volume)
+                    except Exception as exc:
+                        scratch_error = exc
                 with self._lock:
-                    if self._active_process is process:
+                    if self._active_run_id == run_id:
                         self._active_name, self._active_process = None, None
+                        self._active_run_id = None
+                if scratch_error is not None:
+                    if original_error is not None:
+                        original_error.add_note(f"Owned verifier scratch cleanup failed: {scratch_error}")
+                    else:
+                        raise scratch_error

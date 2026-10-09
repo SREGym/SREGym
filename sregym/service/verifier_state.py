@@ -31,6 +31,7 @@ class OraclePickler(cloudpickle.CloudPickler):
 
     def persistent_id(self, obj):
         from sregym.generators.workload.hotel_search import HotelSearchWorkload
+        from sregym.service.codehub_verification_journal import CodeHubVerificationJournal
         from sregym.service.kubectl import KubeCtl
 
         if isinstance(obj, ModelHandle):
@@ -41,7 +42,7 @@ class OraclePickler(cloudpickle.CloudPickler):
         cls = type(obj)
         if cls.__module__.startswith("kubernetes.client.api.") and cls.__name__.endswith("Api"):
             return ("api", id(obj), cls.__module__, cls.__name__)
-        if isinstance(obj, HotelSearchWorkload):
+        if isinstance(obj, (HotelSearchWorkload, CodeHubVerificationJournal)):
             for index, existing in enumerate(self.workloads):
                 if existing is obj:
                     return ("workload", index)

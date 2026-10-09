@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import logging
+import stat
 import sys
 import threading
 from concurrent.futures import Future
@@ -459,6 +460,7 @@ def test_new_attempt_gets_a_fresh_runtime_without_reviving_the_cancelled_owner(p
     conductor.config = ConductorConfig()
     conductor.logger = logging.getLogger("test.verifier")
     conductor.problem_id = "test-problem"
+    conductor.problem = None
     conductor._submission_lock = threading.Lock()
     conductor._submission_generation = 0
     conductor._aborted_submission_generations = set()
@@ -713,3 +715,305 @@ def test_node_probe_api_paths_are_hidden_from_the_agent(suffix):
     assert _is_hidden_namespace_request(
         f"/api/v1/namespaces/{VERIFIER_PROBE_NAMESPACE}/pods{suffix}", HIDDEN_NAMESPACES
     )
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.0, "1024", 8 * 1024**3 + 1])
+def test_scratch_budget_rejects_invalid_values_before_preparation(monkeypatch, value):
+    runtime = VerifierRuntime()
+    prepare = Mock()
+    monkeypatch.setattr(runtime, "prepare", prepare)
+    with pytest.raises(VerifierError, match="scratch budget"):
+        runtime.evaluate_snapshot(b"trusted", scratch_bytes=value)
+    prepare.assert_not_called()
+
+
+def test_scratch_zero_preserves_the_default_command_and_creates_no_volume(monkeypatch):
+    runtime = _protocol_runtime(
+        monkeypatch, "print(json.dumps({'run_id':request['run_id'],'type':'verdict','result':{'success':True}}))"
+    )
+    capacity = Mock(side_effect=AssertionError("default must not inspect scratch"))
+    monkeypatch.setattr(runtime, "_scratch_host_capacity", capacity)
+    assert runtime.evaluate_snapshot(b"trusted", scratch_bytes=0) == {"success": True}
+    capacity.assert_not_called()
+
+
+def test_scratch_insufficient_capacity_never_creates_a_volume_or_runs_an_oracle(monkeypatch):
+    runtime, commands, _state = _scratch_protocol_runtime(monkeypatch)
+    monkeypatch.setattr(
+        runtime, "_scratch_host_capacity", Mock(side_effect=VerifierError("insufficient local capacity"))
+    )
+    with pytest.raises(VerifierError, match="capacity"):
+        runtime.evaluate_snapshot(b"trusted", scratch_bytes=1024**3)
+    assert commands == [] and runtime._active_run_id is None
+
+
+def test_scratch_initializer_refuses_a_mutable_image_before_inspection_or_launch(monkeypatch):
+    runtime = VerifierRuntime(docker_host="unix:///var/run/docker.sock")
+    runtime.image = "some-registry/verifier:latest"
+    launch, inspect = Mock(), Mock()
+    monkeypatch.setattr(verifier_runtime.subprocess, "Popen", launch)
+    monkeypatch.setattr(runtime, "_inspect_scratch", inspect)
+    with pytest.raises(VerifierError, match="immutable"):
+        runtime._initialize_scratch(verifier_runtime._ScratchVolume("owned", "run", "owner"), 1024, lambda: 10)
+    launch.assert_not_called()
+    inspect.assert_not_called()
+
+
+def test_owner_oracle_declares_the_scratch_budget_without_host_grading(monkeypatch):
+    runtime = VerifierRuntime()
+    runtime.kubeconfig, runtime.network = {}, "bridge"
+    oracle = SimpleNamespace(verification_scratch_bytes=1024**3, problem=SimpleNamespace(), evaluate=Mock())
+    monkeypatch.setattr(verifier_runtime, "verifier_connection", lambda *a, **kw: ({}, "bridge"))
+    monkeypatch.setattr(verifier_runtime, "snapshot_oracle", lambda *a: (b"trusted", []))
+    snapshot = Mock(return_value={"success": True})
+    monkeypatch.setattr(runtime, "evaluate_snapshot", snapshot)
+    assert runtime.evaluate(oracle) == {"success": True}
+    assert snapshot.call_args.kwargs["scratch_bytes"] == 1024**3
+    oracle.evaluate.assert_not_called()
+
+
+def test_scratch_initializer_and_grader_mount_only_a_private_named_volume(monkeypatch):
+    runtime, commands, _state = _scratch_protocol_runtime(monkeypatch)
+    assert runtime.evaluate_snapshot(b"trusted", scratch_bytes=1024**3) == {"success": True}
+    initializer = next(command for command in commands if "--entrypoint=python" in command)
+    grader = next(command for command in commands if "--env=TMPDIR=/scratch" in command)
+    for flag in (
+        "--network=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--cap-add=CHOWN",
+        "--user=0:0",
+        "--memory=128m",
+        "--memory-swap=128m",
+        "--pids-limit=32",
+    ):
+        assert flag in initializer
+    assert sum(flag.startswith("--cap-add") for flag in initializer) == 1
+    assert all(
+        "type=volume" in flag and "volume-nocopy" in flag
+        for command in (initializer, grader)
+        for flag in command
+        if flag.startswith("--mount=")
+    )
+    assert not any(
+        "docker.sock" in flag or "type=bind" in flag or flag == "--privileged"
+        for command in (initializer, grader)
+        for flag in command
+        if not flag.startswith("unix://")
+    )
+    assert "--user=10001:10001" in grader and "--cap-drop=ALL" in grader
+    assert "--env=SREGYM_VERIFIER_SCRATCH_BYTES=1073741824" in grader
+    program = initializer[-1]
+    assert program.index("os.chmod") < program.index("os.chown")
+    assert "not any(p.iterdir())" in program and "10001,10001" in program
+    assert any(command[-3:-1] == ["volume", "rm"] for command in commands)
+    assert runtime._active_run_id is None
+
+
+def _scratch_protocol_runtime(
+    monkeypatch,
+    *,
+    init_failure=False,
+    cleanup_failure=False,
+    replace_owner=False,
+    cancel_init=False,
+    cancel_create=False,
+):
+    runtime = VerifierRuntime(docker_host="unix:///var/run/docker.sock", timeout_seconds=5)
+    runtime.image, runtime.network, runtime.kubeconfig = "sha256:" + "a" * 64, "bridge", {}
+    monkeypatch.setattr(runtime, "_scratch_host_capacity", lambda *a: None)
+    commands, state = [], {"volume": None}
+    real_launch = verifier_runtime.subprocess.Popen
+
+    def docker(command, **kwargs):
+        commands.append(command)
+        tail = command[3:]
+        if tail[:2] == ["volume", "create"]:
+            labels = dict(value.split("=", 1) for i, value in enumerate(tail) if i and tail[i - 1] == "--label")
+            state["volume"] = {
+                "Name": tail[-1],
+                "Driver": "local",
+                "Scope": "local",
+                "Options": None,
+                "Labels": labels,
+                "CreatedAt": "2026-10-09T01:02:03Z",
+            }
+            if cancel_create:
+                runtime.cancel()
+        elif tail[:2] == ["volume", "inspect"]:
+            if state["volume"] is None:
+                return SimpleNamespace(returncode=1, stdout="", stderr="Error: no such volume")
+            return SimpleNamespace(returncode=0, stdout=json.dumps([state["volume"]]), stderr="")
+        elif tail[:2] == ["volume", "rm"]:
+            if cleanup_failure:
+                return SimpleNamespace(returncode=1, stdout="", stderr="volume remains in use")
+            state["volume"] = None
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def launch(command, **kwargs):
+        commands.append(command)
+        if "--entrypoint=python" in command:
+            process = Mock(stdout=io.BytesIO(), stderr=io.BytesIO())
+            process.returncode = 1 if init_failure else 0
+            process.poll.side_effect = lambda: process.returncode
+            process.kill.side_effect = lambda: setattr(process, "returncode", 137)
+
+            def communicate(**kwargs):
+                if cancel_init:
+                    process.returncode = None
+                    runtime.cancel()
+                return b"", b""
+
+            process.communicate.side_effect = communicate
+            state["initializer"] = process
+            return process
+        if replace_owner:
+            state["volume"]["CreatedAt"] = "2026-10-09T02:03:04Z"
+        script = "import json,sys; request=json.loads(sys.stdin.readline()); print(json.dumps({'run_id':request['run_id'],'type':'verdict','result':{'success':True}}))"
+        return real_launch([sys.executable, "-u", "-c", script], **kwargs)
+
+    monkeypatch.setattr(verifier_runtime.subprocess, "run", docker)
+    monkeypatch.setattr(verifier_runtime.subprocess, "Popen", launch)
+    return runtime, commands, state
+
+
+@pytest.mark.parametrize("failure", ["init", "create-cancel", "init-cancel"])
+def test_scratch_partial_setup_and_cancellation_remove_only_the_owned_volume(monkeypatch, failure):
+    runtime, commands, state = _scratch_protocol_runtime(
+        monkeypatch,
+        init_failure=failure == "init",
+        cancel_create=failure == "create-cancel",
+        cancel_init=failure == "init-cancel",
+    )
+    with pytest.raises(VerifierError):
+        runtime.evaluate_snapshot(b"trusted", scratch_bytes=1024**3)
+    assert state["volume"] is None
+    assert any(command[3:5] == ["volume", "rm"] for command in commands)
+    assert not any("--env=TMPDIR=/scratch" in command for command in commands)
+    assert runtime._active_run_id is None and runtime._active_process is None
+    if failure == "init-cancel":
+        state["initializer"].kill.assert_called_once()
+
+
+def test_scratch_owner_replacement_cannot_be_deleted_or_return_a_passing_verdict(monkeypatch):
+    runtime, commands, state = _scratch_protocol_runtime(monkeypatch, replace_owner=True)
+    with pytest.raises(VerifierError, match="ownership changed"):
+        runtime.evaluate_snapshot(b"trusted", scratch_bytes=1024**3)
+    assert state["volume"] is not None
+    assert not any(command[3:5] == ["volume", "rm"] for command in commands)
+    assert runtime._active_run_id is None
+
+
+def test_scratch_cleanup_failure_blocks_a_completed_success_verdict(monkeypatch):
+    runtime, _commands, state = _scratch_protocol_runtime(monkeypatch, cleanup_failure=True)
+    with pytest.raises(VerifierError, match="could not be removed"):
+        runtime.evaluate_snapshot(b"trusted", scratch_bytes=1024**3)
+    assert state["volume"] is not None and runtime._active_run_id is None
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("Name", "other-volume"),
+        ("Driver", "nfs"),
+        ("Options", {"type": "none", "o": "bind", "device": "/"}),
+        ("Labels", {}),
+        ("CreatedAt", ""),
+    ],
+)
+def test_scratch_inspection_rejects_foreign_storage_before_removal(monkeypatch, field, value):
+    runtime = VerifierRuntime(docker_host="unix:///var/run/docker.sock")
+    volume = verifier_runtime._ScratchVolume("sregym-verifier-scratch-test", "run", "owner")
+    info = {
+        "Name": volume.name,
+        "Driver": "local",
+        "Scope": "local",
+        "Options": None,
+        "Labels": volume.labels,
+        "CreatedAt": "original",
+    }
+    info[field] = value
+    run = Mock(return_value=SimpleNamespace(returncode=0, stdout=json.dumps([info]), stderr=""))
+    monkeypatch.setattr(verifier_runtime.subprocess, "run", run)
+    with pytest.raises(VerifierError, match="ownership changed"):
+        runtime._remove_scratch(volume)
+    assert run.call_count == 1
+
+
+@pytest.mark.parametrize("failure", [None, "nonroot", "rootless", "capacity", "workload"])
+def test_scratch_capacity_requires_a_separate_local_rootful_trusted_engine(monkeypatch, failure):
+    runtime = VerifierRuntime(docker_host="unix:///var/run/docker.sock")
+
+    class LocalPath:
+        def __init__(self, value):
+            self.value = value
+
+        def is_absolute(self):
+            return True
+
+        def is_symlink(self):
+            return False
+
+        def is_dir(self):
+            return True
+
+        def stat(self):
+            return SimpleNamespace(st_uid=1001 if failure == "nonroot" else 0, st_mode=stat.S_IFSOCK)
+
+    monkeypatch.setattr(verifier_runtime, "Path", LocalPath)
+    monkeypatch.setattr(
+        verifier_runtime,
+        "os",
+        SimpleNamespace(
+            name="posix",
+            environ={
+                "DOCKER_HOST": runtime.docker_host if failure == "workload" else "unix:///run/user/1001/docker.sock"
+            },
+        ),
+    )
+    info = {
+        "DockerRootDir": "/var/lib/docker",
+        "OSType": "linux",
+        "SecurityOptions": ["name=rootless"] if failure == "rootless" else [],
+    }
+    monkeypatch.setattr(verifier_runtime.subprocess, "run", Mock(return_value=SimpleNamespace(stdout=json.dumps(info))))
+    monkeypatch.setattr(
+        verifier_runtime.shutil,
+        "disk_usage",
+        lambda path: SimpleNamespace(free=1024 if failure == "capacity" else 4 * 1024**3),
+    )
+    if failure is None:
+        runtime._scratch_host_capacity(1024**3, lambda: 10)
+    else:
+        with pytest.raises(VerifierError):
+            runtime._scratch_host_capacity(1024**3, lambda: 10)
+
+
+def test_scratch_preparation_reserves_the_invocation_without_second_call_clearing_it(monkeypatch):
+    runtime, _commands, _state = _scratch_protocol_runtime(monkeypatch)
+    entered, release = threading.Event(), threading.Event()
+
+    def capacity(*args):
+        entered.set()
+        assert release.wait(3)
+
+    monkeypatch.setattr(runtime, "_scratch_host_capacity", capacity)
+    results = []
+
+    def owner():
+        try:
+            results.append(runtime.evaluate_snapshot(b"trusted", scratch_bytes=1024**3))
+        except Exception as exc:
+            results.append(exc)
+
+    thread = threading.Thread(target=owner)
+    thread.start()
+    try:
+        assert entered.wait(2)
+        with pytest.raises(VerifierError, match="already active"):
+            runtime.evaluate_snapshot(b"trusted")
+        assert runtime._active_run_id is not None
+    finally:
+        release.set()
+        thread.join(3)
+    assert results == [{"success": True}] and runtime._active_run_id is None
