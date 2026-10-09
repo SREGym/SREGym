@@ -220,12 +220,10 @@ def test_inspection_skips_problems_that_cannot_run_on_kind():
 
 
 def test_inspection_skips_problems_the_unprivileged_cluster_cannot_run():
-    from sregym.conductor.problems.registry import ProblemRegistry
-
-    assert set(adapter.K3S_UNSUPPORTED) <= set(ProblemRegistry().get_problem_ids(all=True))
-    inspection = adapter.inspect_problems(["network_policy_block", "kubelet_crash"])
+    # inspect_problems() rejects unknown IDs, so a renamed problem fails here.
+    inspection = adapter.inspect_problems(["network_policy_block", *adapter.K3S_UNSUPPORTED])
     assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]
-    assert "docker exec" in inspection.skipped["kubelet_crash"]
+    assert inspection.skipped == adapter.K3S_UNSUPPORTED
 
 
 def test_inspection_rejects_unknown_problems():
