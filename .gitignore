@@ -224,6 +224,7 @@ sregym/conductor/tasklist.yml
 
 # HTMLs
 *.html
+!sregym/viewer/templates/*.html
 *.csv
 kubeconfig.yaml
 

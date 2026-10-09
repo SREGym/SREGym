@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Step {{ step }} · Full {{ field }} · SREGym traces</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='viewer.css') }}">
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="{{ back }}">Back to step {{ step }}</a><span>Full recorded text</span>
+</header>
+<main class="full-text">
+  <h1>Step {{ step }} · {{ field|replace('-', ' ') }}</h1><pre>{{ text }}</pre>
+</main>
+</body>
+</html>

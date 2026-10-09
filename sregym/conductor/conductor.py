@@ -416,8 +416,7 @@ class Conductor:
             self.finish_problem_in_background()
             return
 
-        # Inject fault before the first stage if not already done -- the
-        # interactive visualizer injects itself before calling this.
+        # Inject the fault once before the first stage.
         if start_index == 0 and not self.fault_injected:
             with self._phase("inject_fault"):
                 self._inject_fault()
