@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import math
+import os
 import shlex
 import shutil
 import threading
@@ -16,7 +17,6 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
-from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
@@ -40,6 +40,7 @@ from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
+from sregym.service.docker_runtime import rootless_workload_enabled, validate_rootless_boundary
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.kubectl import KubeCtl
@@ -69,6 +70,14 @@ class ConductorConfig:
     stages: tuple[str, ...] | None = None
     baseline_override_s: int | None = None  # overrides per-problem baseline_duration_s when set
     propagation_override_s: int | None = None  # overrides per-problem propagation_duration_s when set
+    # Retained as a constructor argument to reject obsolete embedding configs.
+    verifier_isolation: bool = True
+    verifier_kubeconfig_path: Path | None = None
+    verifier_timeout_seconds: float = 300.0
+
+    def __post_init__(self):
+        if self.verifier_isolation is not True:
+            raise ValueError("Independent container verification is required for every run")
 
     @property
     def restrict_network_access(self) -> bool:
@@ -80,6 +89,9 @@ class ConductorConfig:
 class Conductor:
     def __init__(self, config: ConductorConfig | None = None):
         self.config = config or ConductorConfig()
+        self.workload_boundary = validate_rootless_boundary() if rootless_workload_enabled() else None
+        if self.workload_boundary and self.config.k8s_proxy_listen_host == "127.0.0.1":
+            self.config.k8s_proxy_listen_host = self.workload_boundary["runner_address"]
 
         # core services
         self.problems = ProblemRegistry()
@@ -101,6 +113,7 @@ class Conductor:
             listen_port=self.config.k8s_proxy_listen_port,
             listen_host=self.config.k8s_proxy_listen_host,
             restrict_network_access=self.config.restrict_network_access,
+            upstream_kubeconfig_path=os.environ["KUBECONFIG"] if self.workload_boundary else None,
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -136,6 +149,7 @@ class Conductor:
         self.waiting_for_agent: bool = False
         self._evaluating: bool = False  # True while a submission is being evaluated
         self.fault_injected: bool = False
+        self._verifier_runtime = None
 
     @property
     def current_problem(self):
@@ -305,6 +319,15 @@ class Conductor:
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
+        requires_healthy = getattr(problem, "requires_healthy_verification", False) is True
+        mitigation_oracle = getattr(problem, "mitigation_oracle", None)
+        if requires_healthy and mitigation_oracle is None:
+            raise RuntimeError("Task requires an isolated healthy verification oracle")
+
+        if self.stage_sequence or requires_healthy:
+            # Build and validate connectivity before fault injection and before
+            # the agent clock starts. Image build time is not grading time.
+            self._get_verifier_runtime().prepare()
 
         # Snapshot the healthy cluster before breaking it. The oracle is built
         # in Problem.__init__, which runs before deploy_app(), so this is the
@@ -312,9 +335,22 @@ class Conductor:
         # oracle ignore chronic pre-existing noise (e.g. ContainerCPUThrottling
         # from the astronomy-shop Grafana sidecar, SREGym#745) and grade only
         # the injected fault.
-        mitigation_oracle = getattr(problem, "mitigation_oracle", None)
         if mitigation_oracle is not None:
             mitigation_oracle.capture_baseline()
+
+        if requires_healthy:
+            runtime = self._get_verifier_runtime()
+            try:
+                healthy = runtime.evaluate(mitigation_oracle)
+                if type(healthy) is not dict or healthy.get("success") is not True:
+                    raise RuntimeError("Initial application failed isolated healthy verification")
+            except BaseException:
+                try:
+                    runtime.cancel()
+                except Exception:
+                    self.logger.exception("Failed to cancel verifier after healthy setup failure")
+                raise
+            self.logger.info("Initial application passed isolated healthy verification")
 
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
@@ -335,10 +371,15 @@ class Conductor:
 
         self.logger.info("Start Eval for Diagnosis", extra={"sol": solution})
         try:
-            r = problem.diagnosis_oracle.evaluate(solution)
+            r = self._get_verifier_runtime().evaluate(problem.diagnosis_oracle, solution)
         except Exception as e:
             self.logger.exception("Diagnosis oracle raised; recording as failure to avoid a stuck stage.")
-            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
+            r = {
+                "success": False,
+                "reason": "verifier_execution_failed",
+                "failure_class": "harness_error",
+                "error": f"{type(e).__name__}: {e}",
+            }
         r["submission"] = solution
         self.logger.info(
             f"[EVAL] Diagnosis {'Succeed' if r.get('success') else 'Failed'}\n "
@@ -346,17 +387,32 @@ class Conductor:
         )
         return r
 
+    def _get_verifier_runtime(self):
+        from sregym.service.verifier_runtime import VerifierRuntime
+
+        if getattr(self, "_verifier_runtime", None) is None:
+            self._verifier_runtime = VerifierRuntime(
+                kubeconfig_path=self.config.verifier_kubeconfig_path,
+                timeout_seconds=self.config.verifier_timeout_seconds,
+            )
+        return self._verifier_runtime
+
     def _evaluate_mitigation(self, solution):
         """Evaluation logic for mitigation stage."""
         problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
         try:
-            r = problem.mitigation_oracle.evaluate()
+            r = self._get_verifier_runtime().evaluate(problem.mitigation_oracle)
         except Exception as e:
             self.logger.exception("Mitigation oracle raised; recording as failure to avoid a stuck stage.")
             # Keep the existing top-level error field for result consumers.
-            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
+            r = {
+                "success": False,
+                "reason": "verifier_execution_failed",
+                "failure_class": "harness_error",
+                "error": f"{type(e).__name__}: {e}",
+            }
         self.logger.info(
             f"[EVAL] Mitigation {'Succeed' if r.get('success') else 'Failed'}\n "
             f"TTM: {time.time() - self.execution_start_time}"
@@ -401,6 +457,16 @@ class Conductor:
         """True if `name` was started and not yet ended. False with no ledger."""
         ledger = getattr(self, "phases", None)
         return ledger is not None and ledger.is_open(name)
+
+    def _uses_default_noise(self, problem) -> bool:
+        """Select built-in noise without interrupting a task-owned controller."""
+        return self.config.enable_noise and getattr(problem, "run_default_noise", True)
+
+    def _stop_problem_environment(self, problem) -> None:
+        # Older external problem implementations may not inherit Problem.
+        stop = getattr(problem, "stop_environment", None)
+        if stop is not None:
+            stop()
 
     async def _advance_to_next_stage(self, start_index: int = 0):
         """
@@ -448,7 +514,7 @@ class Conductor:
             self._mark(f"stage:{stage_name}", "start")
 
             # Update NoiseManager stage
-            if self.config.enable_noise:
+            if self._uses_default_noise(self.problem):
                 try:
                     nm = get_noise_manager()
                     nm.set_stage(stage_name)
@@ -466,8 +532,12 @@ class Conductor:
         """
         # Snapshot the problem reference immediately so that any concurrent
         # replacement of self.problem by start_problem() does not affect this cleanup.
-        problem = self.problem
-        cleanup_generation = self._submission_generation if generation is None else generation
+        with self._submission_lock:
+            cleanup_generation = self._submission_generation if generation is None else generation
+            if cleanup_generation != self._submission_generation:
+                return
+            problem = self.problem
+            verifier = getattr(self, "_verifier_runtime", None)
         cleanup_errors: list[str] = []
 
         def cleanup_was_abandoned() -> bool:
@@ -488,8 +558,18 @@ class Conductor:
 
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
-        # Stop noises
-        if self.config.enable_noise:
+        if verifier is not None:
+            try:
+                verifier.cancel()
+            except Exception as exc:
+                cleanup_errors.append(f"verifier_cleanup: {type(exc).__name__}: {exc}")
+
+        # Stop owned producers before recovery or deletion of their resources.
+        # A failed stop must prevent resource teardown beneath a live controller.
+        self._stop_problem_environment(problem)
+
+        # Stop built-in noise only for problems that use that lifecycle.
+        if self._uses_default_noise(problem):
             get_noise_manager().stop()
             self.logger.info("[CLEANUP] NoiseManager stopped")
 
@@ -665,8 +745,14 @@ class Conductor:
             await self.wait_for_submission_work(timeout=None)
             self.logger.info("[WAIT] Previous problem's submission work finished")
         with self._submission_lock:
+            previous_problem = self.problem
+        self._stop_problem_environment(previous_problem)
+        with self._submission_lock:
             self._submit_future = None
             self._submission_generation += 1
+            # Prior evaluation and cleanup have drained. Cancellation is
+            # permanent on their runtime; this attempt gets a fresh owner.
+            self._verifier_runtime = None
             self._accepting_submissions = False
             self._attempt_closed = False
             self.submission_stage = "setup"
@@ -678,67 +764,83 @@ class Conductor:
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
-        self.app = self.problem.app
-        self.detection_oracle = DetectionOracle(self.problem)
+        problem = self.problem
+        try:
+            task_version = getattr(self.problem, "task_version", None)
+            if task_version is not None:
+                self.results["task_version"] = task_version
+            self.app = self.problem.app
+            self.detection_oracle = DetectionOracle(self.problem)
 
-        self.dependency_check(["kubectl", "helm", "docker"])
-        self.logger.debug("Dependency check passed: kubectl, helm")
+            self.dependency_check(["kubectl", "helm", "docker"])
+            self.logger.debug("Dependency check passed: kubectl, helm")
 
-        self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
-        self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
+            self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
+            self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
-        with self._phase("fix_kubernetes"):
-            self.fix_kubernetes()
+            with self._phase("fix_kubernetes"):
+                self.fix_kubernetes()
 
-        self.get_problem_stages()
-        self._build_stage_sequence()
+            self.get_problem_stages()
+            self._build_stage_sequence()
 
-        self.logger.info("Undeploying app leftovers...")
-        with self._phase("undeploy_leftovers"):
-            self.undeploy_app()  # Cleanup any leftovers
-        self.logger.info("App leftovers undeployed.")
-        self.logger.info("Deploying app...")
-        with self._phase("deploy"):
-            self.deploy_app()
-        self.logger.info("App deployed.")
+            self.logger.info("Undeploying app leftovers...")
+            with self._phase("undeploy_leftovers"):
+                self.undeploy_app()  # Cleanup any leftovers
+            self.logger.info("App leftovers undeployed.")
+            self.logger.info("Deploying app...")
+            with self._phase("deploy"):
+                self.deploy_app()
+            self.logger.info("App deployed.")
 
-        baseline = (
-            self.config.baseline_override_s
-            if self.config.baseline_override_s is not None
-            else self.problem.baseline_duration_s
-        )
-        if baseline > 0:
-            self.logger.info(f"[BASELINE] Running steady-state for {baseline}s before fault injection...")
-            with self._phase("baseline", seconds=baseline):
-                await asyncio.sleep(baseline)
-            self.logger.info("[BASELINE] Baseline period complete.")
-
-        # Update NoiseManager with problem context
-        if self.config.enable_noise:
-            try:
-                nm = get_noise_manager()
-                context = {
-                    "namespace": self.app.namespace,
-                    "app_name": self.app.name,
-                    # We can add more info here if needed, e.g. service list
-                }
-                nm.set_problem_context(context)
-                nm.start()
-            except Exception as e:
-                self.logger.warning(f"Failed to update NoiseManager context: {e}")
-
-        # After deployment, advance to the first stage
-        await self._advance_to_next_stage(start_index=0)
-
-        self.execution_start_time = time.time()  # Reset: measure agent time only
-
-        if self.submission_stage and self.submission_stage != "done":
-            self.logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}")
-        else:
-            self.logger.info(
-                "✅ Deployment complete. No stages configured; problem will complete without agent submission."
+            baseline = (
+                self.config.baseline_override_s
+                if self.config.baseline_override_s is not None
+                else self.problem.baseline_duration_s
             )
-        return StartProblemResult.SUCCESS
+            if baseline > 0:
+                self.logger.info(f"[BASELINE] Running steady-state for {baseline}s before fault injection...")
+                with self._phase("baseline", seconds=baseline):
+                    await asyncio.sleep(baseline)
+                self.logger.info("[BASELINE] Baseline period complete.")
+
+            # Update NoiseManager with problem context
+            if self._uses_default_noise(self.problem):
+                try:
+                    nm = get_noise_manager()
+                    context = {
+                        "namespace": self.app.namespace,
+                        "app_name": self.app.name,
+                        # We can add more info here if needed, e.g. service list
+                    }
+                    nm.set_problem_context(context)
+                    nm.start()
+                except Exception as e:
+                    self.logger.warning(f"Failed to update NoiseManager context: {e}")
+
+            # After deployment, advance to the first stage
+            await self._advance_to_next_stage(start_index=0)
+
+            self.execution_start_time = time.time()  # Reset: measure agent time only
+
+            if self.submission_stage and self.submission_stage != "done":
+                self.logger.info(
+                    f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}"
+                )
+            else:
+                self.logger.info(
+                    "✅ Deployment complete. No stages configured; problem will complete without agent submission."
+                )
+            return StartProblemResult.SUCCESS
+        except BaseException:
+            # Deployment, baseline waits and fault setup may all be interrupted.
+            # Stop only this attempt's producers; resource cleanup remains owned
+            # by the caller's normal teardown path.
+            try:
+                self._stop_problem_environment(problem)
+            except Exception:
+                self.logger.exception("Failed to stop task environment after setup failure")
+            raise
 
     def _submit_evaluate_and_advance(self, sol, current_stage, generation: int):
         """
@@ -748,8 +850,13 @@ class Conductor:
         stage_name: str = current_stage["name"]
         self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
+        with self._submission_lock:
+            if generation != self._submission_generation or generation in self._aborted_submission_generations:
+                return
+            problem = self.problem
+
         # Stop noise before evaluation to ensure clean environment
-        if self.config.enable_noise:
+        if self._uses_default_noise(problem):
             self.logger.info("Stopping noise manager before evaluation...")
             get_noise_manager().stop()
 
@@ -770,7 +877,13 @@ class Conductor:
                 f"Stage '{stage_name}' evaluation raised unexpectedly; advancing anyway "
                 "so the conductor doesn't get stuck waiting on a dead stage."
             )
-            outcome = {"success": False, "error": "stage evaluation raised", "submission": sol}
+            outcome = {
+                "success": False,
+                "reason": "stage_evaluation_failed",
+                "failure_class": "harness_error",
+                "error": "stage evaluation raised",
+                "submission": sol,
+            }
 
         next_index = self.current_stage_index + 1
         next_stage_name: str | None = None
@@ -798,7 +911,7 @@ class Conductor:
             # partially completed transition. Do not hold the submission lock
             # across NoiseManager I/O because a stuck noise backend must not
             # prevent the driver from closing or abandoning the attempt.
-            if self.config.enable_noise:
+            if self._uses_default_noise(problem):
                 nm = None
                 try:
                     nm = get_noise_manager()
@@ -821,7 +934,7 @@ class Conductor:
                     transition_aborted = (
                         generation != self._submission_generation or generation in self._aborted_submission_generations
                     )
-                if transition_aborted and nm is not None:
+                if transition_aborted and nm is not None and self._uses_default_noise(problem):
                     try:
                         nm.stop()
                     except Exception as e:
@@ -1017,6 +1130,8 @@ class Conductor:
         """Detach a stuck evaluator and prevent it from mutating this or a later attempt."""
         with self._submission_lock:
             generation = self._submission_generation
+            problem = self.problem
+            verifier = getattr(self, "_verifier_runtime", None)
             self._aborted_submission_generations.add(generation)
             self._attempt_closed = True
             self._accepting_submissions = False
@@ -1024,6 +1139,29 @@ class Conductor:
             self._evaluating = False
             self.submission_stage = "aborted"
             self._submit_future = None
+        try:
+            if verifier is not None:
+                verifier.cancel()
+        finally:
+            # The driver is enforcing a deadline. A stuck controller stop must
+            # not block abandonment, and this Conductor cannot be reused.
+            if getattr(problem, "stop_environment", None) is not None:
+
+                def stop_abandoned_environment() -> None:
+                    try:
+                        self._stop_problem_environment(problem)
+                    except Exception as exc:
+                        self.logger.exception("Failed to stop abandoned task environment")
+                        with self._submission_lock:
+                            if generation == self._submission_generation:
+                                self.results["cleanup_failed"] = True
+                                self.results["cleanup_error"] = f"stop_environment: {type(exc).__name__}: {exc}"
+
+                threading.Thread(
+                    target=stop_abandoned_environment,
+                    name=f"sregym-environment-stop-{generation}",
+                    daemon=True,
+                ).start()
 
     async def wait_for_submission_evaluations(self, timeout: float | None) -> None:
         """Wait for accepted stage requests and grading, but not teardown.
@@ -1151,6 +1289,24 @@ class Conductor:
             return "incomplete"
         if self.results.get("cleanup_failed"):
             self.record_incomplete_attempt("cleanup_failed")
+            return "incomplete"
+        environment_failure = getattr(getattr(self, "problem", None), "environment_failure", None)
+        if environment_failure is not None:
+            self.results["environment_failure"] = environment_failure
+            self.record_incomplete_attempt("owner_environment_failed")
+            return "incomplete"
+        from sregym.results.validity import non_agent_failure_classes
+
+        stage_results = {
+            stage + "." + key: value
+            for stage in ("Diagnosis", "Mitigation")
+            for result in (self.results.get(stage),)
+            if isinstance(result, dict)
+            for key, value in result.items()
+            if key in {"success", "failure_class"}
+        }
+        if non_agent_failure_classes(stage_results):
+            self.record_incomplete_attempt("non_agent_verification_failure")
             return "incomplete"
         if self.missing_submission_stages():
             self.record_incomplete_attempt("missing_stage_results")
@@ -1367,6 +1523,20 @@ class Conductor:
     def deploy_app(self):
         """Kubectl + Prometheus + problem.app deployment."""
         problem = self.current_problem
+        try:
+            self._deploy_app(problem)
+            prepare = getattr(problem, "prepare_environment", None)
+            if prepare is not None:
+                prepare(enable_noise=self.config.enable_noise)
+        except BaseException:
+            try:
+                self._stop_problem_environment(problem)
+            except Exception:
+                self.logger.exception("Failed to stop partially deployed task environment")
+            raise
+
+    def _deploy_app(self, problem):
+        """Deploy infrastructure and the captured problem's application."""
         self.submission_stage = "setup"
 
         # Load or capture baseline state BEFORE any infrastructure deployment.
@@ -1497,8 +1667,10 @@ class Conductor:
 
     def undeploy_app(self):
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""
-        if self.problem:
-            self.problem.app.cleanup()
+        problem = self.problem
+        if problem:
+            self._stop_problem_environment(problem)
+            problem.app.cleanup()
 
     def _wait_for_infrastructure_ready(self, name: str, is_ready: Callable[[], bool], timeout: float = 180) -> None:
         """Require functional infrastructure, not just Ready surviving pods."""

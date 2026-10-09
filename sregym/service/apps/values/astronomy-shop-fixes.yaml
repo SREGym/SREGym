@@ -18,6 +18,11 @@ grafana:
   env:
     GF_PLUGINS_PREINSTALL_DISABLED: "true"
 
+opensearch:
+  # Bound JVM thread-pool sizing on large hosts while retaining the upstream
+  # 400 MiB heap and 1100 MiB container limit.
+  opensearchJavaOpts: "-Xms400m -Xmx400m -XX:ActiveProcessorCount=2"
+
 opentelemetry-collector:
   config:
     service:
@@ -140,6 +145,10 @@ components:
             value: yYrECL4qbNwleYInGJYvVnSkwJuSQJ4ijPTx5tirGUXrbznFIBFVJdPl5t6O9ASw
           - name: PHX_HOST
             value: localhost
+          # Erlang otherwise creates scheduler pools for every host CPU even
+          # though this UI has a 250 MiB cgroup budget.
+          - name: ERL_FLAGS
+            value: "+S 2:2 +SDcpu 1 +SDio 1"
         resources:
           limits:
             memory: 250Mi

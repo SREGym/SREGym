@@ -6,21 +6,82 @@ import pytest
 from sregym.service.container_runner import DEFAULT_AGENT_IMAGE, LOCAL_AGENT_IMAGE, ContainerConfig, ContainerRunner
 
 
-def test_cached_image_needs_no_pull_or_build(monkeypatch):
+def test_cached_dependency_and_public_runtime_need_no_pull_or_build(monkeypatch):
     run = Mock(return_value=subprocess.CompletedProcess([], 0))
     monkeypatch.setattr(subprocess, "run", run)
     runner = ContainerRunner(ContainerConfig())
     runner.ensure_image_exists()
-    run.assert_called_once_with(["docker", "image", "inspect", DEFAULT_AGENT_IMAGE], capture_output=True)
+    assert run.call_count == 2
+    assert run.call_args_list[0].args[0] == ["docker", "image", "inspect", DEFAULT_AGENT_IMAGE]
+    assert runner.config.image.startswith("incident-agent:runtime-")
+    assert run.call_args.args[0] == ["docker", "image", "inspect", runner.config.image]
 
 
 @pytest.mark.parametrize("image", [DEFAULT_AGENT_IMAGE, "example.org/custom-agent:v1"])
 def test_missing_release_is_pulled_not_rebuilt(monkeypatch, image):
-    run = Mock(side_effect=[subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 0)])
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 1),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 0),
+        ]
+    )
     monkeypatch.setattr(subprocess, "run", run)
     runner = ContainerRunner(ContainerConfig(image=image))
+    runner._prepare_public_runtime = Mock()
     runner.ensure_image_exists()
-    assert run.call_args.args[0] == ["docker", "pull", image]
+    assert run.call_args_list[1].args[0] == ["docker", "pull", image]
+    assert runner._prepare_public_runtime.call_count == int(image == DEFAULT_AGENT_IMAGE)
+
+
+@pytest.mark.parametrize("status", [0, 1])
+def test_public_runtime_build_preserves_dependency_identity_and_only_selects_after_success(monkeypatch, status):
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 1),
+            subprocess.CompletedProcess([], status, "", "build failed"),
+        ]
+    )
+    monkeypatch.setattr(subprocess, "run", run)
+    runner = ContainerRunner(ContainerConfig())
+    if status:
+        with pytest.raises(RuntimeError, match="build failed"):
+            runner.ensure_image_exists()
+        assert runner.config.image == DEFAULT_AGENT_IMAGE
+    else:
+        runner.ensure_image_exists()
+        assert runner.config.image.startswith("incident-agent:runtime-")
+    command = run.call_args.args[0]
+    assert command[:2] == ["docker", "build"]
+    assert f"BASE_IMAGE={DEFAULT_AGENT_IMAGE}" in command
+    assert command[command.index("--tag") + 1] != DEFAULT_AGENT_IMAGE
+
+
+def test_legacy_host_artifact_setting_is_forwarded_with_neutral_name():
+    runner = ContainerRunner(ContainerConfig(forward_host_credentials=False))
+    env = runner._build_env_vars({"SREGYM_ARTIFACT_ID": "anon_123", "AGENT_LOGS_DIR": "/logs"})
+    assert env["RUN_ARTIFACT_ID"] == "anon_123"
+    assert env["AGENT_LOGS_DIR"] == "/logs"
+    assert not any("sregym" in key.lower() for key in env)
+
+
+@pytest.mark.parametrize("modern", [False, True])
+def test_explicit_custom_image_retains_its_runtime_contract(monkeypatch, modern):
+    metadata = (
+        '[{"Config": {"Labels": {"io.incident.runtime.root": "/opt/runtime"}}}]' if modern else '[{"Config": {}}]'
+    )
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, metadata))
+    monkeypatch.setattr(subprocess, "run", run)
+    runner = ContainerRunner(ContainerConfig(image="custom-agent:v1", forward_host_credentials=False))
+    runner.ensure_image_exists()
+    assert runner.config.image == "custom-agent:v1"
+    assert runner.runtime_root == ("/opt/runtime" if modern else "/opt/sregym")
+    command = runner.build_composite_command("install-codex.sh", None, "python -m clients.codex.driver")
+    assert f"{runner.runtime_root}/install-scripts/install-codex.sh" in command
+    env = runner._build_env_vars({"SREGYM_ARTIFACT_ID": "anon_123"})
+    assert env["RUN_ARTIFACT_ID" if modern else "SREGYM_ARTIFACT_ID"] == "anon_123"
+    run.assert_called_once()
 
 
 def test_failed_pull_does_not_silently_build_different_code(monkeypatch):

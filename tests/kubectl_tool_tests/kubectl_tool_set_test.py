@@ -21,6 +21,9 @@ TEST_SETTINGS = [
     KUBECTL_TOOL_TEST_DIR / "tests" / "patch_test.yaml",
 ]
 
+# These campaigns execute real commands against Kubernetes and the MCP server.
+pytestmark = pytest.mark.integration
+
 # in seconds
 TIME_OUT = 30
 WAIT_TIME_GAP = 3
@@ -52,8 +55,7 @@ def get_agent(is_mock):
 
 
 def validate_condition(validate_cmd, validator):
-    exec_shell_cmd(validate_cmd)
-    return eval(validator)
+    return eval(validator, {"opt": exec_shell_cmd(validate_cmd)})
 
 
 def set_up_preconditions(preconditions):
@@ -104,7 +106,8 @@ def running_test(test_rounds, agent):
 
 @pytest.mark.parametrize("test_campaign_file", TEST_SETTINGS)
 class TestKubectlTools:
-    def test_kubectl_tools_success(self, test_campaign_file: str):
+    def test_kubectl_tools_success(self, test_campaign_file: str, monkeypatch):
+        monkeypatch.chdir(KUBECTL_TOOL_TEST_DIR)
         agent = get_agent(is_mock=True)
         logger.info(f"agent msg switch branch: {agent.test_tool_or_ai_response}")
         agent.test_campaign_setter(test_campaign_file)

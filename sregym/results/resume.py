@@ -1,6 +1,11 @@
+from sregym.results.validity import non_agent_failure_classes
+
+
 def resume_row_is_complete(row: dict[str, str]) -> bool:
     """Return whether a prior CSV row satisfies one requested attempt."""
     run_status = str(row.get("run_status", "")).strip().lower()
+    if non_agent_failure_classes(row):
+        return False
     if run_status:
         return run_status == "complete"
     if str(row.get("deploy_failed", "")).strip().lower() in {"true", "1", "yes"}:

@@ -8,9 +8,7 @@ import shlex
 import threading
 import time
 import uuid
-from pathlib import Path
 
-import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
@@ -202,14 +200,10 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
     def deploy_app(self):
         # Scope baseline options to this app instance; no shared app or image changes.
         self._ensure_trace_backend()
-        chart = Path(self.app.helm_configs["chart_path"])
-        sidecars = yaml.safe_load((chart / "values.yaml").read_text())["components"]["flagd"]["sidecarContainers"]
-        sidecars[0].setdefault("envOverrides", []).append({"name": "ERL_FLAGS", "value": "+Q 65536"})
         args = ["--set", "prometheus.enabled=false", "-f", str(AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml")]
         if is_svelte():
             args += ["-f", str(AstronomyShop._VALUES_DIR / "astronomy-shop-svelte.yaml")]
         settings = {
-            "components.flagd.sidecarContainers": sidecars,
             "components.load-generator.envOverrides": [
                 {"name": "LOCUST_BROWSER_TRAFFIC_ENABLED", "value": "false"},
                 {"name": "LOCUST_AUTOSTART", "value": "false"},
@@ -628,6 +622,11 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
             if self._thread.is_alive():
                 raise RuntimeError("cart request did not drain")
             self._thread = None
+
+    def prepare_verification(self):
+        # The oracle already drains this traffic before grading. Do that on
+        # its owning host so the snapshot contains all acknowledged operations.
+        self.stop_traffic()
 
     def restart_callers(self):
         # Replace running Pods, including a paused edge's old ReplicaSet Pods.

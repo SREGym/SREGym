@@ -114,6 +114,7 @@ dependencies = [
     "pygments==2.19.1",
     "pyjwt==2.10.1",
     "pynacl==1.5.0",
+    "pymysql[rsa]==1.1.2",
     "pyparsing==3.2.3",
     "pyright==1.1.401",
     "pytest>=8.3.5",
@@ -211,6 +212,7 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 markers = [
     "integration: end-to-end tests requiring a running Kubernetes cluster",
+    "slow: long-running validation with additional fixtures or services",
 ]
 
 [build-system]

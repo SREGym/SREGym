@@ -16,6 +16,7 @@ from sregym.conductor.oracles.env_variable_shadowing_mitigation import EnvVariab
 from sregym.conductor.oracles.hpa_control_plane_mitigation import HPAControlPlaneMitigationOracle
 from sregym.conductor.oracles.postgres_lock_mitigation import PostgresLockMitigationOracle
 from sregym.conductor.oracles.priority_preemption_mitigation import PriorityPreemptionMitigationOracle
+from sregym.service.verifier_worker import execute_oracle
 
 
 class RaisingOracle(Oracle):
@@ -56,7 +57,12 @@ def test_exception_classification_is_consistent_across_evaluation_routes(route, 
         conductor.problem = SimpleNamespace(mitigation_oracle=oracle, diagnosis_oracle=oracle)
         conductor.logger = logging.getLogger(__name__)
         conductor.execution_start_time = 0
+        # Model the private worker handoff without launching Docker in these unit tests.
+        conductor._verifier_runtime = Mock()
+        conductor._verifier_runtime.evaluate.side_effect = lambda oracle, *args: execute_oracle(oracle, args)
         result = getattr(conductor, f"_evaluate_{route}")("answer")
+        expected_args = (oracle, "answer") if route == "diagnosis" else (oracle,)
+        conductor._verifier_runtime.evaluate.assert_called_once_with(*expected_args)
         assert type(error).__name__ in result["error"]
     assert result["success"] is False
     assert result["reason"] == reason

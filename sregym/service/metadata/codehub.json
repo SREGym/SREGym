@@ -1,0 +1,12 @@
+{
+  "Name": "codehub",
+  "Namespace": "codehub-region-a",
+  "Desc": "Regional source hosting with authenticated projects, issues, Git repositories, builds, search and durable delivery.",
+  "Supported Operations": [
+    "Inspect application and database routing",
+    "Manage authorized projects, issues and change requests",
+    "Push, fetch and verify Git repositories",
+    "Inspect durable jobs, search indexes and delivery records",
+    "Operate database replicas and service maintenance controls"
+  ]
+}

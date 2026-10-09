@@ -344,6 +344,65 @@ def test_mcp_reports_the_stage_that_accepted_the_submission(monkeypatch):
     _wait_for_current_evaluation(conductor)
 
 
+@pytest.mark.parametrize("transport", ["http", "mcp"])
+def test_submission_acknowledgment_does_not_export_private_grading_fields(monkeypatch, transport):
+    async def accept(_solution, _stage):
+        return {
+            "status": "accepted",
+            "message": "Submission received",
+            "stage": "diagnosis",
+            "expected": "private expected answer",
+            "baseline": {"replicas": 19},
+            "verdict": {"success": False},
+            "task_version": "private fault identity",
+        }
+
+    monkeypatch.setattr(conductor_api, "_submit_when_stage_is_ready", accept)
+    if transport == "http":
+        response = asyncio.run(conductor_api.submit_solution(conductor_api.SubmitRequest(solution="diagnosis")))
+        assert response == {"status": "200", "message": "Submission received", "stage": "diagnosis"}
+    else:
+        response = asyncio.run(conductor_api.submit_via_conductor.fn("diagnosis", stage="diagnosis"))
+        assert response == {"status": "200", "text": "Submission received", "stage": "diagnosis"}
+
+
+@pytest.mark.parametrize("transport", ["http", "mcp"])
+def test_submission_unexpected_exception_is_private(monkeypatch, transport, caplog):
+    monkeypatch.setattr(conductor_api.logger, "handlers", [caplog.handler])
+
+    async def fail(_solution, _stage):
+        raise OSError("private expected answer and verifier snapshot path")
+
+    monkeypatch.setattr(conductor_api, "_submit_when_stage_is_ready", fail)
+    if transport == "http":
+        with pytest.raises(HTTPException) as caught:
+            asyncio.run(conductor_api.submit_solution(conductor_api.SubmitRequest(solution="diagnosis")))
+        assert caught.value.status_code == 400
+        assert caught.value.detail == "Submission could not be processed."
+    else:
+        response = asyncio.run(conductor_api.submit_via_conductor.fn("diagnosis", stage="diagnosis"))
+        assert response == {"status": "error", "text": "Submission could not be processed."}
+    assert "private expected answer and verifier snapshot path" in caplog.text
+
+
+def test_submission_runtime_error_timeout_does_not_export_private_state(monkeypatch, caplog):
+    monkeypatch.setattr(conductor_api.logger, "handlers", [caplog.handler])
+    conductor = _conductor()
+
+    async def fail(_solution, **_kwargs):
+        raise RuntimeError("private expected answer and verifier snapshot path")
+
+    monkeypatch.setattr(conductor, "submit", fail)
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+    monkeypatch.setattr(conductor_api, "_SUBMISSION_WAIT_SECONDS", 0)
+    with pytest.raises(conductor_api.SubmissionRequestRejected) as caught:
+        asyncio.run(conductor_api._submit_when_stage_is_ready("diagnosis", "diagnosis"))
+    assert caught.value.status_code == 503
+    assert str(caught.value) == "Submission could not be processed."
+    assert "private expected answer and verifier snapshot path" in caplog.text
+    assert conductor._pending_submission_stages == {}
+
+
 def test_legacy_nonempty_mitigation_uses_current_stage(monkeypatch):
     conductor = _conductor()
     conductor.current_stage_index = 1
@@ -904,6 +963,19 @@ def test_cleanup_failure_makes_a_fully_graded_attempt_incomplete():
     assert conductor.results["incomplete_reason"] == "cleanup_failed"
 
 
+@pytest.mark.parametrize("failure", [None, "native_capacity_observation_failed"])
+def test_retained_owner_failure_invalidates_a_graded_attempt_without_claiming_agent_failure(failure):
+    conductor = _conductor()
+    conductor.problem = SimpleNamespace(environment_failure=failure)
+    conductor.results["Diagnosis"] = {"success": True}
+    conductor.results["Mitigation"] = {"success": True}
+    assert conductor.finalize_attempt_status() == ("complete" if failure is None else "incomplete")
+    if failure is not None:
+        assert conductor.results["incomplete_reason"] == "owner_environment_failed"
+        assert conductor.results["environment_failure"] == failure
+        assert conductor.results["Mitigation"] == {"success": True}
+
+
 def test_cleanup_continues_after_recovery_error_and_reaches_terminal_state():
     conductor = _conductor()
     app_cleaned = threading.Event()
@@ -1062,3 +1134,25 @@ def test_teardown_failure_stays_incomplete_even_when_stage_results_exist():
     assert conductor.finalize_attempt_status() == "incomplete"
     assert conductor.results["incomplete_stage"] == "tearing_down"
     assert conductor.results["missing_stages"] == ""
+
+
+@pytest.mark.parametrize(
+    "classification", ["agent_error", "harness_error", "environment_error", "ambiguous", "unknown"]
+)
+def test_classified_verification_failure_controls_attempt_validity(classification):
+    conductor = _conductor()
+    conductor.results["Diagnosis"] = {"success": True, "failure_class": "harness_error"}
+    conductor.results["Mitigation"] = {"success": False, "failure_class": classification}
+    assert conductor.finalize_attempt_status() == ("complete" if classification == "agent_error" else "incomplete")
+    if classification != "agent_error":
+        assert conductor.results["incomplete_reason"] == "non_agent_verification_failure"
+
+
+def test_outer_stage_execution_failure_is_explicitly_invalid():
+    conductor = _conductor()
+    conductor.results["Mitigation"] = {"success": True}
+    conductor.stage_sequence[0]["evaluation"] = Mock(side_effect=RuntimeError("wrapper failed"))
+    conductor._submit_evaluate_and_advance("answer", conductor.stage_sequence[0], 1)
+    assert conductor.results["Diagnosis"]["failure_class"] == "harness_error"
+    assert conductor.finalize_attempt_status() == "incomplete"
+    assert conductor.results["incomplete_reason"] == "non_agent_verification_failure"

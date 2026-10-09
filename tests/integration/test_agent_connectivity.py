@@ -5,6 +5,7 @@ No agent installation or model API request is made.
 """
 
 import json
+import os
 import shlex
 import socket
 from pathlib import Path
@@ -42,7 +43,11 @@ def mcp_forward(monkeypatch):
 
 @pytest.mark.parametrize("mode", ["open", "filtered"])
 def test_agent_can_query_cluster_and_mcp_tools(mode, monkeypatch, tmp_path, mcp_forward):
-    proxy = KubernetesAPIProxy(listen_host=get_container_host_bind_address(), listen_port=16443)
+    proxy = KubernetesAPIProxy(
+        listen_host=get_container_host_bind_address(),
+        listen_port=16443,
+        upstream_kubeconfig_path=os.environ.get("KUBECONFIG"),
+    )
     runner = None
     try:
         proxy.start()
@@ -53,6 +58,8 @@ def test_agent_can_query_cluster_and_mcp_tools(mode, monkeypatch, tmp_path, mcp_
                 internet_policy=InternetPolicy.from_mode(mode),
                 memory="1g",
                 cpus=1,
+                codex_auth="none",
+                forward_host_credentials=False,
             )
         )
         # This test needs only the ephemeral proxy token, not provider or CLI credentials.

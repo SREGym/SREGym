@@ -1,3 +1,5 @@
+import pytest
+
 from sregym.results.report import build_report
 
 
@@ -21,6 +23,51 @@ def test_report_marks_five_complete_passes_as_saturated():
 
     assert "**Overall pass rate:** 5/5 (100%)" in report
     assert "🔴 **Saturated**" in report
+
+
+@pytest.mark.parametrize(
+    "classification", ["harness_error", "environment_error", "ambiguous", "unknown", " HARNESS_ERROR "]
+)
+@pytest.mark.parametrize("stage", ["Diagnosis", "Mitigation"])
+def test_explicit_non_agent_failures_cannot_form_zero_of_five(classification, stage):
+    rows = [
+        _row(
+            attempt, **{stage + ".success": "False", stage + ".failure_class": classification, "run_status": "complete"}
+        )
+        for attempt in range(1, 6)
+    ]
+    report = build_report(rows, problem_id="example_problem", model="test", requested_attempts=5)
+    assert "**Complete attempts:** 0" in report
+    assert "**Overall pass rate:** n/a" in report
+    assert "**Inconclusive**" in report
+    assert "**Unsolved**" not in report
+
+
+def test_five_actual_agent_failures_remain_a_valid_difficulty_sample():
+    rows = [_row(attempt, mitigation=False, **{"Mitigation.failure_class": " AGENT_ERROR "}) for attempt in range(1, 6)]
+    report = build_report(rows, problem_id="example_problem", model="test", requested_attempts=5)
+    assert "**Overall pass rate:** 0/5 (0%)" in report
+    assert "**Unsolved**" in report
+
+
+def test_invalid_duplicate_cannot_replace_valid_retry_in_report():
+    valid = _row(1, **{"Diagnosis.failure_class": "harness_error"})
+    invalid = _row(1, mitigation=False, **{"Mitigation.failure_class": "harness_error", "run_status": "complete"})
+    for rows in ([invalid, valid], [valid, invalid]):
+        report = build_report(rows, problem_id="example_problem", model="test", requested_attempts=1)
+        assert "**Overall pass rate:** 1/1 (100%)" in report
+        assert "**Saturated**" in report
+
+
+def test_mixed_valid_and_invalid_attempts_remain_inconclusive():
+    rows = [
+        _row(1),
+        _row(2, mitigation=False, **{"Mitigation.failure_class": "agent_error"}),
+        _row(3, mitigation=False, **{"Mitigation.failure_class": "ambiguous"}),
+    ]
+    report = build_report(rows, problem_id="example_problem", model="test", requested_attempts=3)
+    assert "**Overall pass rate:** 1/2 (50%)" in report
+    assert "**Inconclusive**" in report
 
 
 def test_report_keeps_mixed_result_as_not_saturated():

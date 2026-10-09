@@ -13,6 +13,7 @@
     - [Suggesting Features](#suggesting-features)
     - [Code Contributions](#code-contributions)
   - [Development Guidelines](#development-guidelines)
+    - [Agent Visibility and Verification](#agent-visibility-and-verification)
     - [Code Style](#code-style)
       - [Python Code Style](#python-code-style)
       - [Running Code Formatters](#running-code-formatters)
@@ -136,6 +137,45 @@ We welcome contributions including:
 - Performance optimizations
 
 ## Development Guidelines
+
+### Agent Visibility and Verification
+
+Diagnosis and mitigation grading must run in a separate verifier container for
+every task. Preserve the live oracle's baseline and use the shared
+[verifier runtime](docs/verifier-isolation.md). Do not add host-grading fallbacks
+or copy verifier code, expected answers, snapshots, credentials, or logs into
+agent images, mounts, tools, or responses. A read-only filesystem does not hide
+files from an agent that can reach them. The agent must have no route to the
+trusted Docker daemon or runner filesystem, including through workload node
+access.
+
+Do not put the SREGym name or benchmark-specific identifiers anywhere an agent
+can inspect. Audit prompts, help text, runtime source and paths, environment
+variables, kubeconfig names, image references and OCI metadata, node and resource
+names, labels, annotations, events, logs, metrics, mounted application files,
+and mount metadata such as `/proc/self/mountinfo`.
+Repository documentation may use the project name when it stays outside the
+evaluated environment. Use opaque run identifiers for agent artifacts instead
+of registry task IDs or fault names.
+
+Keep fault descriptions, expected states, grading criteria, and reference
+recovery instructions private. Provide the operational evidence an SRE needs
+to diagnose an incident without labels, comments, or messages that disclose the
+injected fault. Permissions and available tools must be consistent across faults
+and preserve legitimate repair operations.
+
+Replace published image references only after their replacements are available
+for every supported architecture and their behavior is qualified. Renaming an
+image string or hiding application state in API responses is not a working
+migration. Verify recreation and recovery as well as initial deployment.
+Custom images and native agent integrations need the same visibility audit;
+passing the default container's audit does not qualify them.
+
+Before claiming a task is ready, verify a healthy pass, an injected no-op failure,
+and a reference-repair pass through the isolated verifier. Check relevant ways
+an agent could obtain a pass without restoring service or data. Keep the
+verification boundary audit separate from task solvability and LLM difficulty
+evaluations, and report the scope and any remaining gaps accurately.
 
 ### Code Style
 
@@ -378,6 +418,10 @@ Before submitting, ensure:
 - [ ] No unnecessary files or changes included
 - [ ] Commit messages are clear and descriptive
 - [ ] PR description explains the changes
+- [ ] Grading uses the isolated verifier and private inputs/results
+- [ ] Agent-visible materials contain no benchmark names or fault/repair hints
+- [ ] Changed deployment and image references support recreation and recovery
+- [ ] Task validation and relevant grading-bypass controls pass
 
 ## Community
 

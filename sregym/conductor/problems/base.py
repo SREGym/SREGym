@@ -5,6 +5,24 @@ from abc import ABC, abstractmethod
 
 class Problem(ABC):
     run_default_workload = True
+    run_default_noise = True
+    requires_healthy_verification = False
+    environment_failure = None
+    # Only handles unrelated to grading may be explicitly omitted. Unknown
+    # nonserializable state is an error, never a reason to grade on the host.
+    verifier_excluded_fields: tuple[str, ...] = ()
+
+    def prepare_environment(self, *, enable_noise: bool) -> None:
+        """Start task-owned services after deployment and before healthy baselines."""
+        return
+
+    def stop_environment(self) -> None:
+        """Idempotently stop task-owned services, including partially started ones."""
+        return
+
+    def prepare_verification(self) -> None:
+        """Drain runner-owned state before taking a trusted grading snapshot."""
+        return
 
     def __init__(self, app, namespace: str | None = None):
         self.app = app

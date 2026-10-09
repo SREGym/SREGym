@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from sregym.paths import MCP_SERVER_K8S
+from sregym.service.agent_visibility_policy import HIDDEN_NAMESPACES, MCP_CONTROL_NAMESPACE
 from sregym.service.kubernetes_access_policy import restricted_cluster_role
 from sregym.service.mcp_server import MCPServer
 
@@ -42,11 +43,16 @@ def test_deploy_applies_final_permissions_before_exposing_mcp(rendered_manifests
 
     server.deploy()
 
+    assert server.namespace == MCP_CONTROL_NAMESPACE
+    assert server.namespace in HIDDEN_NAMESPACES
+
     calls = server.kubectl.exec_command_checked.call_args_list
     applies = [call for call in calls if call.args[0].startswith("kubectl apply")]
     assert len(applies) == 1
     assert applies[0].args == ("kubectl apply -f -",)
     resources = list(yaml.safe_load_all(applies[0].kwargs["input_data"]))
+    binding = next(body for body in resources if body["kind"] == "ClusterRoleBinding")
+    assert {subject["namespace"] for subject in binding["subjects"]} == {server.namespace}
     role = next(body for body in resources if body["kind"] == "ClusterRole")
     for resource in ("felixconfigurations", "networkpolicies", "globalnetworkpolicies"):
         assert ("create" in verbs(role, resource)) is (not filtered or resource != "felixconfigurations")
@@ -63,6 +69,7 @@ def test_deploy_applies_final_permissions_before_exposing_mcp(rendered_manifests
         assert f"BLOCK_WORKLOAD_CREATION={expected}" in env_command
     else:
         deployment = next(body for body in resources if body["kind"] == "Deployment")
+        assert deployment["metadata"]["namespace"] == server.namespace
         container = deployment["spec"]["template"]["spec"]["containers"][0]
         env = {entry["name"]: entry.get("value") for entry in container["env"]}
         assert env["RESTRICT_NETWORK_ACCESS"] == expected
