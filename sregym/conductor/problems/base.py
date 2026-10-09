@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 class Problem(ABC):
     run_default_workload = True
     run_default_noise = True
+    requires_healthy_verification = False
+    environment_failure = None
     # Only handles unrelated to grading may be explicitly omitted. Unknown
     # nonserializable state is an error, never a reason to grade on the host.
     verifier_excluded_fields: tuple[str, ...] = ()

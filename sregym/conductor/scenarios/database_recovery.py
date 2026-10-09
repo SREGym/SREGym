@@ -5,13 +5,103 @@ a schedule neither performs noise nor qualifies a runnable incident task.
 """
 
 import hashlib
+import os
 import random
+import re
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 
 def _positive_integer(value: int, name: str) -> None:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+
+
+@dataclass(frozen=True)
+class HostCapacity:
+    """Observed runner capacity, never advertised VM size or PVC requests."""
+
+    physical_cores: int
+    available_memory_gib: int
+    available_disk_gib: int
+
+    def __post_init__(self):
+        for field in ("physical_cores", "available_memory_gib", "available_disk_gib"):
+            _positive_integer(getattr(self, field), field)
+
+    @classmethod
+    def observe(cls, storage_path: Path, *, proc_root=Path("/proc")):
+        if not storage_path.is_absolute():
+            raise ValueError("Capacity observation requires the qualified existing storage directory")
+        try:
+            if not storage_path.is_dir():
+                raise ValueError("Capacity observation requires the qualified existing storage directory")
+            free_bytes = shutil.disk_usage(storage_path).free
+        except PermissionError:
+            # A separately owned engine's data directory is intentionally
+            # private. Read its kernel mount identity and observe the same
+            # ext4/XFS filesystem through an accessible mount, without granting
+            # the runner access to workload files or guessing a parent disk.
+            free_bytes = cls._private_filesystem_free(storage_path, proc_root)
+        cores = set()
+        for processor in (proc_root / "cpuinfo").read_text().split("\n\n"):
+            fields = {
+                key.strip(): value.strip()
+                for line in processor.splitlines()
+                if ":" in line
+                for key, value in (line.split(":", 1),)
+            }
+            if "physical id" in fields and "core id" in fields:
+                cores.add((int(fields["physical id"]), int(fields["core id"])))
+        memory = {
+            key.strip(): value.strip()
+            for line in (proc_root / "meminfo").read_text().splitlines()
+            if ":" in line
+            for key, value in (line.split(":", 1),)
+        }.get("MemAvailable", "").split()
+        if not cores or len(memory) != 2 or memory[1] != "kB":
+            raise ValueError("Physical CPU and currently available memory must be observable")
+        return cls(len(cores), int(memory[0]) // 1024**2, free_bytes // 1024**3)
+
+    @staticmethod
+    def _private_filesystem_free(storage_path, proc_root):
+        payload = (proc_root / "self/mountinfo").read_text()
+        if len(payload) > 1024**2:
+            raise ValueError("Kernel mount inventory exceeds the observation bound")
+        mounts = []
+        for line in payload.splitlines():
+            left, separator, right = line.partition(" - ")
+            fields, filesystem = left.split(), right.split()
+            if separator and len(fields) >= 6 and filesystem:
+                path = Path(re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4]))
+                mounts.append((path, fields[2], filesystem[0], fields[5]))
+        candidates = [entry for entry in mounts if storage_path.is_relative_to(entry[0])]
+        if not candidates:
+            raise ValueError("Private storage lacks a kernel-observed filesystem identity")
+        owner = max(candidates, key=lambda entry: len(entry[0].parts))
+        if storage_path != owner[0]:
+            raise ValueError("Private storage must have an exact kernel-observed mount identity")
+        if owner[2] not in {"ext4", "xfs"} or "rw" not in owner[3].split(","):
+            raise ValueError("Private storage requires a supported writable observed filesystem")
+        for path, device, filesystem, _options in mounts:
+            if device != owner[1] or filesystem != owner[2]:
+                continue
+            try:
+                info = path.stat()
+                if f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}" != device:
+                    continue
+                return shutil.disk_usage(path).free
+            except PermissionError:
+                continue
+        raise ValueError("Private storage filesystem has no accessible capacity observation mount")
+
+    def admit(self, tier: "ScaleTier"):
+        tier.admit(
+            physical_cores=self.physical_cores,
+            available_memory_gib=self.available_memory_gib,
+            available_disk_gib=self.available_disk_gib,
+        )
 
 
 @dataclass(frozen=True)

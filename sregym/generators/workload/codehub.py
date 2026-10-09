@@ -9,15 +9,19 @@ import json
 import math
 import os
 import re
+import shutil
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
+
+from sregym.generators.workload.http_deadline import DeadlineTransport
 
 
 def canonical(value) -> str:
@@ -185,10 +189,16 @@ def validate_git_provenance(operation: Operation, provenance: dict) -> dict:
 class ReceiptLedger:
     """Durable private provenance, with closure rejected while outcomes are unknown."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, byte_budget=32 * 1024**3):
+        if type(byte_budget) is not int or byte_budget < 4 * 1024**2:
+            raise ValueError("Private receipt storage requires at least a bounded 4 MiB budget")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._lock = threading.RLock()
         self._db = sqlite3.connect(path, check_same_thread=False)
+        self._path = path.resolve()
+        self._read_only = False
+        self._byte_budget = byte_budget
+        self.capacity_error = None
         os.chmod(path, 0o600)
         self._db.executescript(
             """
@@ -203,6 +213,8 @@ class ReceiptLedger:
                 UNIQUE(record_key,revision)
             );
             CREATE INDEX IF NOT EXISTS receipt_epoch ON requests(epoch,status,event_id);
+            CREATE INDEX IF NOT EXISTS receipt_status_epoch ON requests(status,epoch,event_id);
+            CREATE INDEX IF NOT EXISTS receipt_tenant ON requests(tenant_id);
             CREATE TABLE IF NOT EXISTS expectations(
                 event_id TEXT PRIMARY KEY REFERENCES requests(event_id),
                 effects TEXT NOT NULL, provenance TEXT
@@ -210,14 +222,68 @@ class ReceiptLedger:
             """
         )
         self._db.execute("PRAGMA foreign_keys=ON")
+        self._db.execute("PRAGMA wal_autocheckpoint=64")
+        page_size = self._db.execute("PRAGMA page_size").fetchone()[0]
+        self._db.execute(f"PRAGMA max_page_count={byte_budget // (2 * page_size)}")
+
+    @contextmanager
+    def read_snapshot(self, *, deadline_seconds=600, cancel=None, maximum_wal_growth_bytes=256 * 1024**2):
+        """Pin one WAL read transaction without holding the live writer lock."""
+        if not 0 < deadline_seconds <= 600 or not 0 < maximum_wal_growth_bytes <= 1024**3:
+            raise ValueError("Private snapshot preparation needs bounded time and WAL growth")
+        deadline = time.monotonic() + deadline_seconds
+        wal = self._path.with_name(self._path.name + "-wal")
+        initial_wal = wal.stat().st_size if wal.exists() else 0
+        next_storage_check, interrupted = 0.0, None
+
+        def progress():
+            nonlocal next_storage_check, interrupted
+            now = time.monotonic()
+            if now >= deadline or (cancel is not None and cancel.is_set()):
+                interrupted = "Private snapshot preparation deadline or cancellation"
+                return 1
+            if now >= next_storage_check:
+                next_storage_check = now + 1
+                growth = (wal.stat().st_size if wal.exists() else 0) - initial_wal
+                if growth > maximum_wal_growth_bytes or shutil.disk_usage(self._path.parent).free < 256 * 1024**2:
+                    interrupted = "Private snapshot preparation storage capacity unavailable"
+                    return 1
+            return 0
+
+        view = object.__new__(ReceiptLedger)
+        view._lock = threading.RLock()
+        view._path = self._path
+        view._read_only = True
+        view._byte_budget = self._byte_budget
+        view._snapshot_guard = progress
+        view._db = sqlite3.connect(self._path.as_uri() + "?mode=ro", uri=True, check_same_thread=False)
+        view._db.set_progress_handler(progress, 1000)
+        try:
+            view._db.execute("PRAGMA query_only=ON")
+            with self._lock:
+                view._db.execute("BEGIN")
+                # Establish the entire database's snapshot before releasing the
+                # owner lock. Subsequent tables and closed epochs share this cut.
+                view._db.execute("SELECT id FROM epochs LIMIT 1").fetchone()
+            yield view
+            if progress():
+                raise TimeoutError(interrupted)
+        except sqlite3.OperationalError as error:
+            if interrupted is not None:
+                raise TimeoutError(interrupted) from error
+            raise
+        finally:
+            view._db.close()
 
     def begin_epoch(self) -> int:
+        self._assert_writable()
         with self._lock, self._db:
             epoch = self._db.execute("SELECT COALESCE(MAX(id),-1)+1 FROM epochs").fetchone()[0]
             self._db.execute("INSERT INTO epochs(id) VALUES (?)", (epoch,))
             return epoch
 
     def request(self, operation: Operation, epoch: int, *, effects=(), provenance=None) -> None:
+        self._assert_writable()
         if type(epoch) is not int or epoch < 0:
             raise ValueError("Epoch must be a nonnegative integer")
         body = canonical(operation.observed_row())
@@ -302,6 +368,7 @@ class ReceiptLedger:
         self._finish(event_id, "rejected", origin, latency_ms, status_code)
 
     def _finish(self, event_id, status, origin, latency_ms, status_code):
+        self._assert_writable()
         with self._lock, self._db:
             row = self._db.execute("SELECT status FROM requests WHERE event_id=?", (event_id,)).fetchone()
             if row is None:
@@ -314,6 +381,7 @@ class ReceiptLedger:
             )
 
     def close_epoch(self, epoch: int) -> None:
+        self._assert_writable()
         with self._lock, self._db:
             row = self._db.execute("SELECT closed FROM epochs WHERE id=?", (epoch,)).fetchone()
             if row is None:
@@ -329,6 +397,12 @@ class ReceiptLedger:
 
     def partition_cuts(self, tenant_groups: dict[str, str]) -> dict[str, ReceiptCut]:
         """Expected partition hashes come from private receipts and frozen routing."""
+        with self._lock:
+            groups = self.validate_routing(tenant_groups)
+            return {group: self._cut(tuple(sorted(tenants))) for group, tenants in sorted(groups.items())}
+
+    def validate_routing(self, tenant_groups: dict[str, str]) -> dict[str, list[str]]:
+        """Validate routing coverage without materializing every receipt cut."""
         if type(tenant_groups) is not dict or not tenant_groups:
             raise ValueError("Tenant routing must be a nonempty mapping")
         groups = {}
@@ -341,7 +415,7 @@ class ReceiptLedger:
             known = {row[0] for row in self._db.execute("SELECT DISTINCT tenant_id FROM requests")}
             if not known <= set(tenant_groups):
                 raise ValueError("Frozen routing omits requested tenants")
-            return {group: self._cut(tuple(sorted(tenants))) for group, tenants in sorted(groups.items())}
+            return groups
 
     def _cut(self, tenants: tuple[str, ...] | None = None) -> ReceiptCut:
         scope = "" if tenants is None else " AND r.tenant_id IN (" + ",".join("?" for _ in tenants) + ")"
@@ -395,21 +469,57 @@ class ReceiptLedger:
             for body, epoch, effects, provenance in rows
         )
 
+    def pending_epochs(self) -> frozenset[int]:
+        """Bounded closure metadata, using the pending-status index."""
+        with self._lock:
+            return frozenset(
+                row[0] for row in self._db.execute("SELECT DISTINCT epoch FROM requests WHERE status='pending'")
+            )
+
     def close(self):
         with self._lock:
             self._db.close()
+
+    def _assert_writable(self):
+        if self._read_only:
+            # Reject before sqlite's context manager can roll back the pinned
+            # read transaction in response to a failed write.
+            raise sqlite3.OperationalError("attempt to write a readonly receipt snapshot")
+        used = sum(
+            path.stat().st_size
+            for path in (
+                self._path,
+                self._path.with_name(self._path.name + "-wal"),
+                self._path.with_name(self._path.name + "-shm"),
+            )
+            if path.exists()
+        )
+        if (
+            self.capacity_error is not None
+            or used > self._byte_budget - min(2 * 1024**2, self._byte_budget // 2)
+            or shutil.disk_usage(self._path.parent).free < 256 * 1024**2
+        ):
+            self.capacity_error = "Private receipt storage capacity is unavailable"
+            raise RuntimeError(self.capacity_error)
+
+
+class InvalidApplicationReceipt(RuntimeError):
+    """An actual product response did not prove its requested acknowledgment."""
 
 
 class WorkloadClient:
     """A retry keeps its identity; an HTTP timeout never becomes an acknowledgment."""
 
-    def __init__(self, origin: str, token: str, ledger: ReceiptLedger, *, transport=None, verify=True):
+    def __init__(self, origin: str, token: str, ledger: ReceiptLedger, *, transport=None, verify=True, cancel=None):
         self.origin, self.ledger = origin.rstrip("/"), ledger
+        self.last_rejection = None
+        self.cancel, self.deadline = cancel, None
         self._client = httpx.Client(
             base_url=self.origin,
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"},
             timeout=10,
-            transport=transport,
+            transport=transport
+            or DeadlineTransport(verify=verify, cancelled=lambda: self.cancel is not None and self.cancel.is_set()),
             verify=verify,
         )
 
@@ -423,28 +533,66 @@ class WorkloadClient:
         effects=(),
         provenance=None,
     ) -> bool:
-        if type(attempts) is not int or attempts < 1 or not math.isfinite(retry_delay) or retry_delay < 0:
+        if type(attempts) is not int or not 1 <= attempts <= 10 or not math.isfinite(retry_delay) or retry_delay < 0:
             raise ValueError("Invalid bounded retry policy")
+        self.last_rejection = None
         self.ledger.request(operation, epoch, effects=effects, provenance=provenance)
         for attempt in range(attempts):
+            if self.cancel is not None and self.cancel.is_set():
+                return False
             start = time.monotonic()
+            deadline = min(start + 10, self.deadline) if self.deadline is not None else start + 10
+            if deadline <= start:
+                return False
             try:
-                response = self._client.post("/v1/operations", json=operation.request())
+                content = bytearray()
+                with self._client.stream(
+                    "POST",
+                    "/v1/operations",
+                    json=operation.request(),
+                    timeout=deadline - start,
+                    extensions={"absolute_deadline": deadline},
+                ) as response:
+                    if response.headers.get("Content-Encoding", "identity") != "identity":
+                        raise InvalidApplicationReceipt("Application receipt uses an unsupported content encoding")
+                    for block in response.iter_bytes():
+                        if time.monotonic() >= deadline or (self.cancel is not None and self.cancel.is_set()):
+                            return False
+                        if len(content) + len(block) > 256 * 1024:
+                            raise InvalidApplicationReceipt("Application receipt exceeds bounded response capacity")
+                        content.extend(block)
+                if time.monotonic() >= deadline:
+                    return False
                 latency = (time.monotonic() - start) * 1000
                 if response.status_code in {200, 201}:
-                    receipt = response.json()
+                    try:
+                        receipt = json.loads(content)
+                    except (ValueError, UnicodeError) as error:
+                        raise InvalidApplicationReceipt("Application returned an invalid committed receipt") from error
                     expected = operation.observed_row()
                     if type(receipt) is not dict or any(receipt.get(key) != value for key, value in expected.items()):
-                        raise RuntimeError("Application returned an invalid committed receipt")
+                        raise InvalidApplicationReceipt("Application returned an invalid committed receipt")
                     self.ledger.acknowledge(operation.event_id, self.origin, latency, response.status_code)
                     return True
                 if response.status_code in {400, 401, 403, 404, 409, 422}:
                     self.ledger.reject(operation.event_id, self.origin, latency, response.status_code)
+                    detail = None
+                    if len(content) <= 4096:
+                        try:
+                            body = json.loads(content)
+                            if type(body) is dict and type(body.get("detail")) is str:
+                                detail = body["detail"][:512]
+                        except ValueError:
+                            pass
+                    self.last_rejection = (response.status_code, detail)
                     return False
             except httpx.TransportError:
                 pass
             if attempt + 1 < attempts:
-                time.sleep(retry_delay)
+                if self.cancel is None:
+                    time.sleep(min(retry_delay, 10))
+                elif self.cancel.wait(min(retry_delay, 10)):
+                    return False
         return False  # Ledger remains pending; the epoch cannot be graded as complete.
 
     def close(self):

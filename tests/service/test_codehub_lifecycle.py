@@ -2,9 +2,12 @@ import base64
 import copy
 import hashlib
 import json
+import os
 import re
 import shlex
 import sys
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +17,7 @@ import pytest
 
 from sregym.conductor.scenarios.codehub_contracts import LifecyclePhase, OwnedResource
 from sregym.conductor.scenarios.codehub_regions import REGION_LABEL, ZONE_LABEL, mysql_groups, regional_inventory
-from sregym.conductor.scenarios.database_recovery import TIERS
+from sregym.conductor.scenarios.database_recovery import TIERS, HostCapacity
 from sregym.service.apps import codehub as codehub_module
 from sregym.service.apps.codehub import MYSQL_BOOTSTRAP_IMAGE, CodeHub
 
@@ -214,10 +217,15 @@ class FakeCluster:
 
 
 @pytest.fixture
-def app(tmp_path):
+def app(tmp_path, monkeypatch):
     cluster = FakeCluster()
-    application = CodeHub(chart_path=tmp_path, kubectl=cluster)
-    application._validate_boundary = lambda: None
+    application = CodeHub(chart_path=tmp_path, kubectl=cluster, lease_path=tmp_path / "campaign.lock")
+    application._validate_boundary = lambda: {
+        "workload_storage_root": str(tmp_path),
+        "trusted_storage_root": str(tmp_path),
+    }
+    monkeypatch.setattr(HostCapacity, "observe", lambda *_: HostCapacity(64, 256, 1000))
+    monkeypatch.setattr("sregym.conductor.scenarios.codehub_capacity.capture_kernel_baseline", lambda _: {})
     return application
 
 
@@ -227,6 +235,28 @@ def test_constructor_and_unused_cleanup_are_cluster_free(app):
     assert app.kubectl.node_reads == 0
     assert app.kubectl.commands == []
     assert app.kubectl.namespaces == {}
+
+
+def test_capacity_rejects_insufficient_host_before_node_or_namespace_creation(app, monkeypatch):
+    monkeypatch.setattr(HostCapacity, "observe", lambda *_: HostCapacity(8, 256, 1000))
+    with pytest.raises(ValueError, match="CPU headroom"):
+        app.deploy()
+    assert not app.kubectl.node_reads and not app.kubectl.namespaces
+    assert app.inventory.phase == LifecyclePhase.CREATED and app._environment_lease is None
+
+
+def test_application_lease_prevents_second_deployment_until_owned_cleanup(app, monkeypatch):
+    app.deploy()
+    competing = CodeHub(chart_path=app.chart_path, kubectl=FakeCluster(), lease_path=app.lease_path)
+    competing._validate_boundary = app._validate_boundary
+    with pytest.raises(RuntimeError, match="already owns"):
+        competing.deploy()
+    assert not competing.kubectl.node_reads and not competing.kubectl.namespaces
+    state = app.__getstate__()
+    assert state["_environment_lease"] is None and app._environment_lease.handle is not None
+    app.cleanup()
+    competing.deploy()
+    competing.cleanup()
 
 
 def test_deployment_requires_real_complete_regions_and_checks_durable_dependencies(app):
@@ -475,6 +505,33 @@ def test_writer_route_changes_only_the_selected_group_and_group_zero_compatibili
     )
 
 
+def mock_route_inventory(app, monkeypatch):
+    identities = {}
+
+    def inventory(region, role, **_kwargs):
+        return tuple(
+            (name, identities.setdefault((region.namespace, name), f"{region.namespace}/{name}"))
+            for name in (f"{role}-0", f"{role}-1")
+        )
+
+    monkeypatch.setattr(app, "_serving_route_inventory", inventory)
+    monkeypatch.setattr(
+        app.kubectl,
+        "read_namespaced_pod",
+        lambda name, namespace, **_kwargs: SimpleNamespace(metadata=SimpleNamespace(uid=identities[(namespace, name)])),
+        raising=False,
+    )
+    return identities
+
+
+def mounted_route_digest(app, command):
+    arguments = shlex.split(command)
+    assert arguments[:2] == ["exec", "kubectl"]
+    namespace, pod = arguments[3], arguments[5]
+    name = "worker-database-routes" if pod.startswith("worker") else "database-routes"
+    return hashlib.sha256(app.kubectl.maps[(namespace, name)].data["database-routes.json"].encode()).hexdigest()
+
+
 def test_route_projection_requires_every_serving_replica_and_the_actual_file_bytes(routing_app, monkeypatch):
     app, _ = routing_app
     tenant = str(uuid4())
@@ -482,17 +539,17 @@ def test_route_projection_requires_every_serving_replica_and_the_actual_file_byt
     app.configure_tenant_route(tenant, group)
     seen = []
     reads = 0
-    monkeypatch.setattr(app, "_serving_route_pods", lambda region, role: (f"{role}-0", f"{role}-1"))
+    mock_route_inventory(app, monkeypatch)
     monkeypatch.setattr(codehub_module.time, "sleep", lambda seconds: None)
 
     def mounted(command, *, timeout):
         nonlocal reads
         reads += 1
         assert 0 < timeout <= 5
-        namespace, pod = command.split()[2], command.split()[4]
+        arguments = shlex.split(command)
+        namespace, pod = arguments[3], arguments[5]
         seen.append((namespace, pod))
-        name = "worker-database-routes" if pod.startswith("worker") else "database-routes"
-        digest = hashlib.sha256(app.kubectl.maps[(namespace, name)].data["database-routes.json"].encode()).hexdigest()
+        digest = mounted_route_digest(app, command)
         return "older-configmap-projection" if reads == 12 else digest
 
     app.kubectl.exec_command_checked = mounted
@@ -504,7 +561,7 @@ def test_route_projection_requires_every_serving_replica_and_the_actual_file_byt
 def test_route_projection_fails_closed_when_declared_customer_mapping_is_missing(routing_app, monkeypatch):
     app, _ = routing_app
     monkeypatch.setattr(
-        app, "_serving_route_pods", lambda *_: pytest.fail("Missing routing must fail before pod access")
+        app, "_serving_route_inventory", lambda *_a, **_kw: pytest.fail("Missing routing must fail before pod access")
     )
     with pytest.raises(RuntimeError, match="omits declared"):
         app.await_database_routes({str(uuid4()): app.database_groups[1].name})
@@ -515,16 +572,324 @@ def test_route_projection_timeout_never_accepts_a_stale_file(routing_app, monkey
     tenant = str(uuid4())
     group = app.database_groups[1].name
     app.configure_tenant_route(tenant, group)
-    monkeypatch.setattr(app, "_serving_route_pods", lambda *_: ("api-0",))
+    mock_route_inventory(app, monkeypatch)
     monkeypatch.setattr(app.kubectl, "exec_command_checked", lambda *a, **kw: "stale")
-    monkeypatch.setattr(codehub_module.time, "sleep", lambda _: None)
-    now = iter((0, 0, 2))
-    monkeypatch.setattr(codehub_module.time, "monotonic", lambda: next(now))
+    now = [0]
+    monkeypatch.setattr(codehub_module.time, "sleep", lambda _: now.__setitem__(0, 2))
+    monkeypatch.setattr(codehub_module.time, "monotonic", lambda: now[0])
     with pytest.raises(TimeoutError, match="every serving"):
         app.await_database_routes({tenant: group}, timeout_seconds=1)
 
 
-def test_serving_route_pods_require_the_captured_replica_owner(routing_app, monkeypatch):
+@pytest.mark.parametrize("unready_at", [1, 7])
+def test_route_projection_waits_for_initial_and_recheck_ready_cohorts(routing_app, monkeypatch, unready_at):
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+    mock_route_inventory(app, monkeypatch)
+    original = app._serving_route_inventory
+    observations, checks = 0, []
+
+    def inventory(*args, **kwargs):
+        nonlocal observations
+        observations += 1
+        if observations == unready_at:
+            raise codehub_module.RouteReplicasUnavailable("Owned cohort is temporarily incomplete")
+        return original(*args, **kwargs)
+
+    def mounted(command, **kwargs):
+        checks.append(command)
+        return mounted_route_digest(app, command)
+
+    monkeypatch.setattr(app, "_serving_route_inventory", inventory)
+    monkeypatch.setattr(codehub_module.time, "sleep", lambda _: None)
+    app.kubectl.exec_command_checked = mounted
+    app.await_database_routes({tenant: group}, timeout_seconds=2)
+    assert observations > unready_at
+    assert len(checks) == (12 if unready_at == 1 else 24)
+
+
+def test_route_projection_never_accepts_a_persistently_incomplete_cohort(routing_app, monkeypatch):
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+
+    def incomplete(*args, **kwargs):
+        raise codehub_module.RouteReplicasUnavailable("Owned cohort is incomplete")
+
+    monkeypatch.setattr(app, "_serving_route_inventory", incomplete)
+    monkeypatch.setattr(
+        app.kubectl, "exec_command_checked", lambda *_a, **_kw: pytest.fail("Incomplete cohort was used")
+    )
+    now = [0]
+    monkeypatch.setattr(codehub_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(codehub_module.time, "sleep", lambda _: now.__setitem__(0, 2))
+    with pytest.raises(TimeoutError, match="every serving"):
+        app.await_database_routes({tenant: group}, timeout_seconds=1)
+
+
+def test_route_projection_wait_does_not_retry_ownership_failures(routing_app, monkeypatch):
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+
+    def foreign(*args, **kwargs):
+        raise RuntimeError("Serving route pod differs from its captured controller")
+
+    monkeypatch.setattr(app, "_serving_route_inventory", foreign)
+    monkeypatch.setattr(codehub_module.time, "sleep", lambda _: pytest.fail("Foreign ownership must fail immediately"))
+    with pytest.raises(RuntimeError, match="captured controller"):
+        app.await_database_routes({tenant: group}, timeout_seconds=1)
+
+
+def test_route_projection_cancels_while_waiting_for_ready_replicas(routing_app, monkeypatch):
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+    cancel, waits = threading.Event(), []
+
+    def incomplete(*args, **kwargs):
+        raise codehub_module.RouteReplicasUnavailable("Owned cohort is incomplete")
+
+    def wait(seconds):
+        waits.append(seconds)
+        cancel.set()
+
+    monkeypatch.setattr(app, "_serving_route_inventory", incomplete)
+    monkeypatch.setattr(cancel, "wait", wait)
+    with pytest.raises(RuntimeError, match="cancelled"):
+        app.await_database_routes({tenant: group}, timeout_seconds=1, cancel=cancel)
+    assert len(waits) == 1 and 0 < waits[0] <= 0.2
+
+
+def test_route_projection_checks_replicas_concurrently_with_a_fixed_bound(routing_app, monkeypatch):
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+    mock_route_inventory(app, monkeypatch)
+    gate, lock = threading.Barrier(8), threading.Lock()
+    calls, active, peak = 0, 0, 0
+
+    def mounted(command, *, timeout):
+        nonlocal calls, active, peak
+        assert 0 < timeout <= 5
+        with lock:
+            calls += 1
+            number = calls
+            active += 1
+            peak = max(peak, active)
+        try:
+            if number <= 8:
+                gate.wait(timeout=5)
+            return mounted_route_digest(app, command)
+        finally:
+            with lock:
+                active -= 1
+
+    app.kubectl.exec_command_checked = mounted
+    app.await_database_routes({tenant: group})
+    assert calls == 12 and peak == 8 and active == 0
+
+
+@pytest.mark.parametrize("change", ["map_version", "pod_uid"])
+def test_route_projection_rechecks_a_changed_map_or_serving_incarnation(routing_app, monkeypatch, change):
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+    identities = mock_route_inventory(app, monkeypatch)
+    namespace = app.regions[0].namespace
+    calls, changed = 0, False
+    lock = threading.Lock()
+
+    def mounted(command, **_kwargs):
+        nonlocal calls, changed
+        with lock:
+            calls += 1
+            if not changed and shlex.split(command)[3:6:2] == [namespace, "api-0"]:
+                changed = True
+                if change == "map_version":
+                    current = app.kubectl.maps[(namespace, "database-routes")]
+                    current.metadata.resource_version = str(int(current.metadata.resource_version) + 1)
+                else:
+                    identities[(namespace, "api-0")] = "same-name-new-pod"
+        return mounted_route_digest(app, command)
+
+    app.kubectl.exec_command_checked = mounted
+    app.await_database_routes({tenant: group})
+    assert changed and calls == 24
+
+
+def test_route_projection_cancellation_drains_active_and_queued_checks(routing_app, monkeypatch):
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+    mock_route_inventory(app, monkeypatch)
+    cancel, entered, release = threading.Event(), threading.Event(), threading.Event()
+    lock = threading.Lock()
+    active, calls, errors = 0, 0, []
+
+    def mounted(command, **_kwargs):
+        nonlocal active, calls
+        with lock:
+            active += 1
+            calls += 1
+        entered.set()
+        try:
+            assert release.wait(3)
+            return mounted_route_digest(app, command)
+        finally:
+            with lock:
+                active -= 1
+
+    def run():
+        try:
+            app.await_database_routes({tenant: group}, cancel=cancel)
+        except RuntimeError as error:
+            errors.append(str(error))
+
+    app.kubectl.exec_command_checked = mounted
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        assert entered.wait(3)
+        cancel.set()
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive() and active == 0 and calls <= 8
+    assert len(errors) == 1 and "cancelled" in errors[0]
+
+
+def test_route_projection_cancellation_bounds_each_inventory_request(routing_app, monkeypatch):
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+    cancel, timeouts = threading.Event(), []
+    original = app.kubectl.read_namespace
+
+    def namespace(name, **kwargs):
+        timeouts.append(kwargs["_request_timeout"])
+        cancel.set()
+        return original(name, **kwargs)
+
+    monkeypatch.setattr(app.kubectl, "read_namespace", namespace)
+    monkeypatch.setattr(
+        app.kubectl,
+        "read_namespaced_config_map",
+        lambda *_a, **_kw: pytest.fail("Cancelled inventory made another request"),
+    )
+    with pytest.raises(RuntimeError, match="cancelled"):
+        app.await_database_routes({tenant: group}, timeout_seconds=1, cancel=cancel)
+    assert len(timeouts) == 1 and isinstance(timeouts[0], tuple)
+    assert all(0 < value <= 1 for value in timeouts[0]) and sum(timeouts[0]) <= 1
+
+
+def test_fractional_route_timeout_reaches_the_real_kubernetes_rest_client(monkeypatch):
+    import urllib3
+    from kubernetes.client import Configuration
+    from kubernetes.client.rest import RESTClientObject
+
+    rest, timeouts = RESTClientObject(Configuration()), []
+
+    def request(*_args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return urllib3.HTTPResponse(status=200, body=b"{}")
+
+    monkeypatch.setattr(rest.pool_manager, "request", request)
+    try:
+        rest.GET("https://unused.invalid", _preload_content=False, _request_timeout=(0.05, 0.05))
+    finally:
+        rest.pool_manager.clear()
+    assert len(timeouts) == 1
+    assert timeouts[0].connect_timeout == 0.05 and timeouts[0].read_timeout == 0.05
+
+
+def test_route_observation_disables_retry_after_without_changing_the_shared_client(routing_app, monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from kubernetes.client import ApiClient, Configuration, CoreV1Api
+    from kubernetes.client.rest import ApiException
+
+    app, _ = routing_app
+    tenant, group = str(uuid4()), app.database_groups[1].name
+    app.configure_tenant_route(tenant, group)
+    requests = []
+
+    class Busy(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            body = b'{"reason":"ServiceUnavailable"}'
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Retry-After", "2")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Busy)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    configuration = Configuration()
+    configuration.host = f"http://127.0.0.1:{server.server_port}"
+    configuration.retries = 3
+    try:
+        with ApiClient(configuration) as shared:
+            monkeypatch.setattr(app, "_client", lambda: SimpleNamespace(core_v1_api=CoreV1Api(shared)))
+            started = time.monotonic()
+            with pytest.raises(ApiException) as error:
+                app.await_database_routes({tenant: group}, timeout_seconds=1)
+            assert error.value.status == 503 and time.monotonic() - started < 1.5
+            assert shared.configuration.retries == 3 and len(requests) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+    assert not thread.is_alive()
+
+
+def test_worker_projection_requires_every_worker_final_bytes_and_preserves_other_routes(routing_app, monkeypatch):
+    app, _ = routing_app
+    region, group = app.regions[-1], app.database_groups[1].name
+    tenant = str(uuid4())
+    app.configure_tenant_route(tenant, group)
+    current = app.kubectl.maps[(region.namespace, "worker-database-routes")]
+    routes = json.loads(current.data["database-routes.json"])
+    routes[tenant].update(writer_host="mysql-g1-recovered", port=3306)
+    current.data["database-routes.json"] = json.dumps(routes)
+    mock_route_inventory(app, monkeypatch)
+    checks = []
+
+    def mounted(command, **_kwargs):
+        arguments = shlex.split(command)
+        checks.append((arguments[3], arguments[5]))
+        assert arguments[3] == region.namespace and arguments[5].startswith("worker-")
+        return "stale" if len(checks) == 2 else mounted_route_digest(app, command)
+
+    app.kubectl.exec_command_checked = mounted
+    app.await_worker_group_route(region.name, group, "mysql-g1-recovered", 3306)
+    assert len(checks) == 4 and len(set(checks)) == 2
+    assert current.data["database-routes.json"] == json.dumps(routes)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Route command replaces its POSIX shell")
+def test_route_command_timeout_reaps_the_replacement_process(tmp_path):
+    from sregym.service.kubectl import KubeCtl
+
+    pidfile = tmp_path / "route-command.pid"
+    program = f"import os,pathlib,time;pathlib.Path({str(pidfile)!r}).write_text(str(os.getpid()));time.sleep(60)"
+    command = f"exec {shlex.quote(sys.executable)} -c {shlex.quote(program)}"
+    with pytest.raises(RuntimeError, match="timed out"):
+        KubeCtl.__new__(KubeCtl).exec_command_checked(command, timeout=0.5)
+    pid = int(pidfile.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+@pytest.mark.parametrize("ready", [True, False])
+def test_serving_route_pods_require_the_captured_replica_owner(routing_app, monkeypatch, ready):
     app, _ = routing_app
     region = app.regions[0]
     uid = "captured-api-deployment"
@@ -534,12 +899,13 @@ def test_serving_route_pods_require_the_captured_replica_owner(routing_app, monk
     pod = SimpleNamespace(
         metadata=SimpleNamespace(
             name="api-current",
+            uid="api-current-uid",
             deletion_timestamp=None,
             owner_references=[
                 SimpleNamespace(kind="ReplicaSet", name="api-current-rs", uid="current-rs", controller=True)
             ],
         ),
-        status=SimpleNamespace(conditions=[SimpleNamespace(type="Ready", status="True")]),
+        status=SimpleNamespace(conditions=[SimpleNamespace(type="Ready", status="True" if ready else "False")]),
     )
     replica = SimpleNamespace(
         metadata=SimpleNamespace(
@@ -1028,6 +1394,11 @@ def test_physical_bootstrap_preflights_all_members_and_proves_snapshots_before_c
     assert all(copy < proof for copy, proof in zip(copies, proofs, strict=True))
     statements = "\n".join(sql or "" for _, sql in commands)
     assert "SOURCE_AUTO_POSITION=1" in statements
+    for index in channels:
+        sql = commands[index][1]
+        interval = int(re.search(r"SOURCE_CONNECT_RETRY=(\d+)", sql).group(1))
+        attempts = int(re.search(r"SOURCE_RETRY_COUNT=(\d+)", sql).group(1))
+        assert interval == 1 and interval * attempts == 600
     assert all(
         word not in statements.upper()
         for word in ("GTID_PURGED", "GTID_NEXT", "SQL_SLAVE_SKIP_COUNTER", "RESET BINARY")
@@ -1042,10 +1413,17 @@ def test_physical_bootstrap_preflights_all_members_and_proves_snapshots_before_c
     assert all(password not in command for password in clone_passwords for command, _ in commands)
 
 
-def test_large_physical_bootstrap_clones_every_reader_from_its_own_group(tmp_path):
+def test_large_physical_bootstrap_clones_every_reader_from_its_own_group(tmp_path, monkeypatch):
     cluster = FakeCluster(regions=3, groups=4)
-    application = CodeHub(tier=TIERS["large"], chart_path=tmp_path, kubectl=cluster)
-    application._validate_boundary = lambda: None
+    application = CodeHub(
+        tier=TIERS["large"], chart_path=tmp_path, kubectl=cluster, lease_path=tmp_path / "campaign.lock"
+    )
+    application._validate_boundary = lambda: {
+        "workload_storage_root": str(tmp_path),
+        "trusted_storage_root": str(tmp_path),
+    }
+    monkeypatch.setattr(HostCapacity, "observe", lambda *_: HostCapacity(64, 256, 1000))
+    monkeypatch.setattr("sregym.conductor.scenarios.codehub_capacity.capture_kernel_baseline", lambda _: {})
     application.deploy()
     assert application.inventory.phase == LifecyclePhase.HEALTHY
     assert len(cluster.clone_sources) == 16
@@ -1203,3 +1581,44 @@ def test_replication_error_capture_preserves_sql_cause_and_redacts_credentials(a
     monkeypatch.setattr(app, "mysql_command", disconnected)
     with pytest.raises(RuntimeError, match="observation failed.*Duplicate CREATE USER"):
         app._await_replication()
+
+
+@pytest.mark.parametrize("failure", ["node_api", "missing_regions"])
+def test_admitted_deploy_discovery_failure_releases_lease_before_namespaces(app, monkeypatch, failure):
+    if failure == "node_api":
+
+        def fail():
+            raise OSError("Node inventory unavailable")
+
+        monkeypatch.setattr(app.kubectl.core_v1_api, "list_node", fail)
+    else:
+        monkeypatch.setattr(app.kubectl.core_v1_api, "list_node", lambda: SimpleNamespace(items=[]))
+    with pytest.raises((OSError, ValueError)):
+        app.deploy()
+    assert app._environment_lease is None
+    assert not app.inventory.resources
+    assert not app.kubectl.namespaces
+
+
+def test_actual_snapshot_excludes_held_lease_without_releasing_owner(app, tmp_path):
+    from sregym.service.verifier_state import restore_oracle, snapshot_oracle
+
+    app.deploy()
+    payload, resources = snapshot_oracle(SimpleNamespace(app=app), tmp_path)
+    restored = restore_oracle(payload, lambda index: None)
+    assert resources == [] and restored.app._environment_lease is None
+    assert app._environment_lease.handle is not None
+    competing = CodeHub(chart_path=app.chart_path, kubectl=FakeCluster(), lease_path=app.lease_path)
+    competing._validate_boundary = app._validate_boundary
+    with pytest.raises(RuntimeError, match="already owns"):
+        competing.deploy()
+    app.cleanup()
+
+
+def test_capacity_rejects_nearly_full_separate_owner_filesystem_before_nodes(app, monkeypatch):
+    owner_root = app.lease_path.parent / "private-owner-store"
+    app.owner_storage_root = owner_root
+    monkeypatch.setattr(HostCapacity, "observe", lambda path: HostCapacity(64, 256, 1 if path == owner_root else 1000))
+    with pytest.raises(ValueError, match="control storage"):
+        app.deploy()
+    assert app._environment_lease is None and not app.kubectl.node_reads and not app.kubectl.namespaces

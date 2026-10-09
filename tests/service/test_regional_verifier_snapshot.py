@@ -4,6 +4,7 @@ These are transport tests with a tiny owner receipt history. They do not deploy
 an application, evaluate an oracle on the host, or claim a recovery campaign.
 """
 
+import datetime
 import hashlib
 import pickle
 import threading
@@ -13,6 +14,10 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 from sregym.conductor.oracles.regional_database_recovery import (
     DeliveryObserverTarget,
@@ -92,6 +97,23 @@ def regional_snapshot(tmp_path):
     }
     app.regions = regional_inventory(app.tier, labels)
     app.database_groups = mysql_groups(app.tier, app.regions)
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Snapshot fixture CA")])
+    now = datetime.datetime.now(datetime.UTC)
+    authority = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+        .public_bytes(serialization.Encoding.PEM)
+        .decode()
+    )
+    app.gateway_certificates = {region.namespace: authority for region in app.regions}
     app._credentials = {"mysql-observer-password": "readonly-" + "o" * 32, "service-token": "service-" + "s" * 32}
     ledger = ReceiptLedger(tmp_path / "owner-only" / "owner-receipts.sqlite")
     observer = DeliveryObserver(tmp_path / "owner-only" / "observer-private.sqlite", delivery_address="127.0.0.1")

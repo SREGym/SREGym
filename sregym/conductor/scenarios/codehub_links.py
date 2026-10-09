@@ -316,7 +316,7 @@ class RegionalLinkController:
                 pids_limit=64,
                 restart_policy={"Name": "no"},
                 log_config={"type": "json-file", "config": {"max-size": "1m", "max-file": "2"}},
-                environment={"LOG_LEVEL": "warn"},
+                environment={"LOG_LEVEL": "warn", "GOMAXPROCS": "1"},
                 detach=True,
             )
             self._container_id = self._container.id

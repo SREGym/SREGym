@@ -8,7 +8,9 @@ only immutable count/hash and endpoint DTOs enter the verifier snapshot.
 import hashlib
 import json
 import re
+import shutil
 import sqlite3
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +34,15 @@ from sregym.conductor.oracles.regional_database_recovery import (
     RecoveryOutcomePlan,
     SQLTarget,
     WebhookDestination,
+)
+from sregym.conductor.scenarios.codehub_contracts import (
+    DatasetManifest,
+    DigestEntry,
+    EntityCount,
+    OperationCount,
+    RecoverySource,
+    SizeDistribution,
+    StorageFootprint,
 )
 from sregym.generators.workload.codehub import (
     ReceiptLedger,
@@ -86,6 +97,98 @@ def _accounts(tenants):
     return tenants
 
 
+def build_dataset_manifest(ledger, tenants, cuts, databases, physical, *, queue_count, oldest_queue_age_seconds):
+    """Capture owner history metadata; source anchoring is qualified by the oracle.
+
+    This sidecar never changes expected cuts or replaces them with observed SQL.
+    A recovery-source digest names its protected payload history, not a hash of
+    database files or a claim that a mutable server passed verification.
+    """
+    accounts = _accounts(tuple(tenants))
+    by_tenant = {account.tenant_id: account for account in accounts}
+    epochs = tuple(sorted({epoch for cut in cuts for epoch in cut.closed_epochs}))
+    if not epochs or type(ledger) is not ReceiptLedger:
+        raise ValueError("Dataset metadata requires the immutable owner receipt cut")
+    scope = "r.status='acknowledged' AND r.epoch IN (" + ",".join("?" for _ in epochs) + ")"
+    counts, mix = [], []
+    histogram, digesters, operations = Counter(), {cut.group: hashlib.sha256() for cut in cuts}, Counter()
+    with ledger._lock:
+        for tenant, body in ledger._db.execute(
+            "SELECT r.tenant_id,r.body FROM requests r WHERE " + scope + " ORDER BY r.event_id", epochs
+        ):
+            if tenant not in by_tenant:
+                raise ValueError("Dataset receipts omit frozen tenant routing")
+            encoded = body.encode("utf-8")
+            if len(encoded) > 132 * 1024:
+                raise ValueError("Dataset receipt exceeds the bounded operation size")
+            histogram[len(encoded)] += 1
+            group = by_tenant[tenant].group
+            digesters[group].update(encoded + b"\n")
+            operations[group] += 1
+        for tenant, kind, count in ledger._db.execute(
+            "SELECT r.tenant_id,substr(json_extract(r.body,'$.kind'),1,instr(json_extract(r.body,'$.kind'),'.')-1),"
+            "COUNT(DISTINCT r.record_key) FROM requests r WHERE " + scope + " GROUP BY r.tenant_id,2",
+            epochs,
+        ):
+            counts.append(EntityCount(kind, tenant, by_tenant[tenant].region, count))
+        for tenant, project, kind, count in ledger._db.execute(
+            "SELECT r.tenant_id,json_extract(r.body,'$.project_id'),json_extract(r.body,'$.kind'),COUNT(*) "
+            "FROM requests r WHERE " + scope + " GROUP BY r.tenant_id,2,3 ORDER BY r.tenant_id,2,3",
+            epochs,
+        ):
+            account = by_tenant[tenant]
+            mix.append(OperationCount(kind, tenant, project, account.group, account.region, count))
+    for cut in cuts:
+        if operations[cut.group] != cut.operations or digesters[cut.group].hexdigest() != cut.journal_sha256:
+            raise ValueError("Dataset metadata differs from the original protected receipt watermark")
+    for account in accounts:
+        counts.append(
+            EntityCount(
+                "user",
+                account.tenant_id,
+                account.region,
+                len({identity for identity in (account.owner_id, account.reviewer_id) if identity}),
+            )
+        )
+    count = sum(histogram.values())
+    if not count:
+        raise ValueError("Dataset metadata requires accepted business records")
+    ordered = sorted(histogram)
+
+    def quantile(numerator):
+        target, seen = (count * numerator + 99) // 100, 0
+        for size in ordered:
+            seen += histogram[size]
+            if seen >= target:
+                return size
+        raise ValueError("Dataset size distribution is incomplete")
+
+    cuts_by_group = {cut.group: cut for cut in cuts}
+    return DatasetManifest(
+        2,
+        tuple(sorted(counts, key=lambda item: (item.region, item.tenant, item.entity))),
+        count,
+        tuple(DigestEntry(cut.group, cut.journal_sha256) for cut in sorted(cuts, key=lambda item: item.group)),
+        StorageFootprint(**physical["storage"]),
+        queue_count,
+        oldest_queue_age_seconds,
+        (SizeDistribution("accepted_operation_bytes", count, ordered[0], quantile(50), quantile(95), ordered[-1]),),
+        tuple(
+            RecoverySource(
+                member.name,
+                member.region,
+                "database",
+                cuts_by_group[group.name].journal_sha256,
+                cuts_by_group[group.name].operations,
+                True,
+            )
+            for group in databases
+            for member in group.members
+        ),
+        tuple(mix),
+    )
+
+
 def build_receipt_cuts(ledger, routing):
     """Copy one coherent closed watermark without copying large effect payloads."""
     if type(ledger) is not ReceiptLedger:
@@ -113,13 +216,36 @@ def build_receipt_cuts(ledger, routing):
 
 def _effect_cuts(ledger, routes, cuts):
     accepted, kinds = Counter(), {group: set() for group in routes.values()}
-    with TemporaryDirectory(prefix="private-effects-") as temporary:
+    byte_budget = min(8 * 1024**3, ledger._byte_budget // 4)
+    guard = getattr(ledger, "_snapshot_guard", lambda: 0)
+    if guard() or shutil.disk_usage(ledger._path.parent).free < byte_budget + 256 * 1024**2:
+        raise RuntimeError("Private effect snapshot capacity or cancellation unavailable")
+    with TemporaryDirectory(prefix="private-effects-", dir=ledger._path.parent) as temporary:
         path = Path(temporary) / "effects.sqlite3"
         db = sqlite3.connect(path)
         try:
             path.chmod(0o600)
+            last_check, interrupted = 0.0, False
+
+            def progress():
+                nonlocal last_check, interrupted
+                now = time.monotonic()
+                if guard():
+                    interrupted = True
+                    return 1
+                if now >= last_check:
+                    last_check = now + 1
+                    used = sum(item.stat().st_size for item in Path(temporary).iterdir() if item.is_file())
+                    if used >= byte_budget or shutil.disk_usage(temporary).free < 256 * 1024**2:
+                        interrupted = True
+                        return 1
+                return 0
+
+            db.set_progress_handler(progress, 1000)
+            page_size = db.execute("PRAGMA page_size").fetchone()[0]
+            db.execute(f"PRAGMA max_page_count={byte_budget // (2 * page_size)}")
             db.executescript(
-                "PRAGMA temp_store=FILE; PRAGMA cache_size=-16384; CREATE TABLE effects(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,body TEXT NOT NULL); CREATE INDEX sorted_effects ON effects(group_id,id);"
+                "PRAGMA temp_store=MEMORY; PRAGMA cache_size=-16384; CREATE TABLE effects(id TEXT PRIMARY KEY,group_id TEXT NOT NULL,body TEXT NOT NULL); CREATE INDEX sorted_effects ON effects(group_id,id);"
             )
             rows = ledger._db.execute(
                 "SELECT r.tenant_id,r.body,x.effects FROM requests r JOIN epochs e ON e.id=r.epoch "
@@ -162,6 +288,10 @@ def _effect_cuts(ledger, routes, cuts):
                     count += 1
                 result.append(EffectReceiptCut(group, count, checksum.hexdigest()))
             return tuple(result)
+        except sqlite3.OperationalError as error:
+            if interrupted or "full" in str(error).lower():
+                raise RuntimeError("Private effect snapshot capacity or cancellation unavailable") from error
+            raise
         finally:
             db.close()
 
@@ -322,11 +452,12 @@ class RegionReplicaRequirement:
     api_replicas: int
     search_replicas: int
     repository_replicas: int
+    gateway_replicas: int = 2
 
     def __post_init__(self):
         _label(self.region)
         _label(self.namespace)
-        for value in (self.api_replicas, self.search_replicas, self.repository_replicas):
+        for value in (self.api_replicas, self.search_replicas, self.repository_replicas, self.gateway_replicas):
             if type(value) is not int or value < 1:
                 raise ValueError("Every declared region needs positive replica counts")
 
@@ -339,6 +470,7 @@ class RegionalTargetInventory:
     repository_targets: tuple[HTTPServiceTarget, ...]
     expected_sql: tuple[DatabaseMemberRequirement, ...]
     regions: tuple[RegionReplicaRequirement, ...]
+    gateway_targets: tuple[HTTPServiceTarget, ...] = ()
 
     def __post_init__(self):
         for name, kind in (
@@ -372,8 +504,14 @@ class RegionalTargetInventory:
             members = [item for item in self.databases if item.group == group]
             if len(members) < 4 or len({item.region for item in members}) < 2:
                 raise ValueError("Each group needs four independent members across two regions")
-        for role in ("api", "search", "repository"):
+        if type(self.gateway_targets) is not tuple or any(
+            type(t) is not HTTPServiceTarget for t in self.gateway_targets
+        ):
+            raise ValueError("Gateway targets must be immutable typed observations")
+        for role in ("api", "search", "repository", "gateway"):
             targets = getattr(self, f"{role}_targets")
+            if role == "gateway" and not targets:
+                continue
             if len({(item.namespace, item.service, item.port) for item in targets}) != len(targets):
                 raise ValueError("A shared endpoint cannot stand in for multiple replicas")
             counts = Counter()
@@ -451,4 +589,5 @@ def build_recovery_outcomes(
         challenges,
         observer,
         service_token,
+        inventory.gateway_targets,
     )

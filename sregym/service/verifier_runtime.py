@@ -40,6 +40,18 @@ def _scratch_budget(value):
     return value
 
 
+def _process_budget(value):
+    if type(value) is not int or not 256 <= value <= 2048:
+        raise VerifierError("Verifier process budget must be an integer between 256 and 2048")
+    return value
+
+
+def _worker_capacity(value, resource):
+    if type(value) is not int or not 1 <= value <= 8:
+        raise VerifierError(f"Verifier {resource} budget must be an integer between 1 and 8")
+    return value
+
+
 @dataclasses.dataclass
 class _ScratchVolume:
     name: str
@@ -294,7 +306,9 @@ class VerifierRuntime:
             raise VerifierError("Verifier invocation was cancelled")
         self.image, self.kubeconfig, self.network = image, kubeconfig, network
 
-    def docker_command(self, name, *, scratch_volume=None, scratch_bytes=0):
+    def docker_command(
+        self, name, *, scratch_volume=None, scratch_bytes=0, process_limit=256, cpu_limit=2, memory_gib_limit=2
+    ):
         if not self.image or not self.network:
             raise VerifierError("Verifier has not been prepared")
         arguments = [
@@ -307,9 +321,10 @@ class VerifierRuntime:
             "--read-only",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
-            "--cpus=2",
-            "--memory=2g",
-            "--pids-limit=256",
+            f"--cpus={_worker_capacity(cpu_limit, 'CPU')}",
+            f"--memory={_worker_capacity(memory_gib_limit, 'memory')}g",
+            f"--pids-limit={_process_budget(process_limit)}",
+            "--env=GOMAXPROCS=2",
             "--log-driver=none",
             "--tmpfs=/tmp:rw,nosuid,nodev,size=256m,mode=1777",
             f"--network={self.network}",
@@ -496,6 +511,9 @@ class VerifierRuntime:
 
     def evaluate(self, oracle, *args) -> dict:
         scratch_bytes = _scratch_budget(getattr(oracle, "verification_scratch_bytes", 0))
+        process_limit = _process_budget(getattr(oracle, "verification_process_limit", 256))
+        _worker_capacity(getattr(oracle, "verification_cpu_limit", 2), "CPU")
+        _worker_capacity(getattr(oracle, "verification_memory_gib_limit", 2), "memory")
         if self._cancelled.is_set():
             raise VerifierError("Verifier invocation was cancelled")
         if self.kubeconfig is None:
@@ -510,6 +528,7 @@ class VerifierRuntime:
         prepare = getattr(oracle.problem, "prepare_verification", None)
         if prepare is not None and not args:
             prepare()
+        process_limit = _process_budget(getattr(oracle, "verification_process_limit", 256))
         payload, workloads = snapshot_oracle(oracle, Path(__file__).resolve().parents[2])
         return self.evaluate_snapshot(
             payload,
@@ -517,10 +536,27 @@ class VerifierRuntime:
             getattr(oracle, "evaluation_timeout_seconds", None),
             args=args,
             scratch_bytes=scratch_bytes,
+            process_limit=process_limit,
+            cpu_limit=_worker_capacity(getattr(oracle, "verification_cpu_limit", 2), "CPU"),
+            memory_gib_limit=_worker_capacity(getattr(oracle, "verification_memory_gib_limit", 2), "memory"),
         )
 
-    def evaluate_snapshot(self, payload, workloads=(), oracle_timeout=None, *, args=(), scratch_bytes=0) -> dict:
+    def evaluate_snapshot(
+        self,
+        payload,
+        workloads=(),
+        oracle_timeout=None,
+        *,
+        args=(),
+        scratch_bytes=0,
+        process_limit=256,
+        cpu_limit=2,
+        memory_gib_limit=2,
+    ) -> dict:
         scratch_bytes = _scratch_budget(scratch_bytes)
+        process_limit = _process_budget(process_limit)
+        cpu_limit = _worker_capacity(cpu_limit, "CPU")
+        memory_gib_limit = _worker_capacity(memory_gib_limit, "memory")
         if self._cancelled.is_set():
             raise VerifierError("Verifier invocation was cancelled")
         if self.kubeconfig is None:
@@ -617,10 +653,17 @@ class VerifierRuntime:
                 if self._active_process is not None:
                     raise VerifierError("A verifier invocation is already active")
                 self.last_log_path = log_path
+                worker_options = {}
+                if scratch_volume is not None:
+                    worker_options.update(scratch_volume=scratch_volume, scratch_bytes=scratch_bytes)
+                if process_limit != 256:
+                    worker_options["process_limit"] = process_limit
+                if cpu_limit != 2:
+                    worker_options["cpu_limit"] = cpu_limit
+                if memory_gib_limit != 2:
+                    worker_options["memory_gib_limit"] = memory_gib_limit
                 process = subprocess.Popen(
-                    self.docker_command(name, scratch_volume=scratch_volume, scratch_bytes=scratch_bytes)
-                    if scratch_volume
-                    else self.docker_command(name),
+                    self.docker_command(name, **worker_options),
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,

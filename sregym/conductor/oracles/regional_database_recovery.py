@@ -8,15 +8,19 @@ immutable endpoint/credential/receipt DTOs.
 import hashlib
 import io
 import json
+import logging
+import math
 import os
 import re
 import secrets
+import signal
 import socket
 import subprocess
+import sys
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory, TemporaryFile
@@ -51,6 +55,60 @@ BATCH_DOCUMENT_BYTES = 256 * 1024
 
 class EvidenceUnavailable(RuntimeError):
     """The trusted receipt owner cannot establish a complete mutation history."""
+
+
+class VerificationCapacityUnavailable(EvidenceUnavailable):
+    """A kernel-observed private verifier limit prevented an observation."""
+
+    def __init__(self, message, *, resource="processes"):
+        super().__init__(message)
+        self.resource = resource
+
+
+def _check_process_capacity():
+    if os.environ.get("SREGYM_VERIFIER_CONTAINER") == "1":
+        try:
+            payload = Path("/sys/fs/cgroup/pids.events").read_text()
+            if len(payload) <= 8192:
+                events = dict(line.split() for line in payload.splitlines())
+                if int(events.get("max", "0")) > 0:
+                    raise VerificationCapacityUnavailable("Private verifier process capacity was exhausted")
+        except (OSError, ValueError):
+            pass
+
+
+def _owned_command_failure(message):
+    _check_process_capacity()
+    raise RuntimeError(message)
+
+
+@contextmanager
+def _observation_phase(name, *, operations=None, group=None, member=None, observation=None, replicas=None):
+    """Bounded private timing evidence for calibration, never a grading input."""
+    started, completed = time.monotonic(), False
+    try:
+        yield
+        completed = True
+    finally:
+        if os.environ.get("SREGYM_VERIFIER_CONTAINER") == "1":
+            print(
+                json.dumps(
+                    {
+                        "event": "recovery_observation_phase",
+                        "phase": name,
+                        "seconds": round(time.monotonic() - started, 3),
+                        "completed": completed,
+                        "operations": operations,
+                        "group": group,
+                        "member": member,
+                        "observation": observation,
+                        "replicas": replicas,
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
 
 
 def _label(value):
@@ -102,6 +160,9 @@ class HTTPServiceTarget:
     port: int = 8080
     resource_kind: str = "service"
     expected_replicas: int | None = None
+    scheme: str = "http"
+    ca_certificate: str | None = field(default=None, repr=False)
+    expected_uid: str | None = None
 
     def __post_init__(self):
         for name in ("region", "namespace", "service"):
@@ -118,6 +179,39 @@ class HTTPServiceTarget:
             raise ValueError("Grouped HTTP targets need an exact declared replica count")
         if self.resource_kind in {"service", "pod"} and self.expected_replicas not in {None, 1}:
             raise ValueError("A shared service cannot represent multiple replica observations")
+        if self.expected_uid is not None and (
+            type(self.expected_uid) is not str or not 1 <= len(self.expected_uid) <= 128
+        ):
+            raise ValueError("Captured controller identity must be bounded")
+        if self.scheme not in {"http", "https"} or (
+            self.scheme == "https"
+            and (type(self.ca_certificate) is not str or "-----BEGIN CERTIFICATE-----" not in self.ca_certificate)
+        ):
+            raise ValueError("HTTPS observations require their independently retained CA certificate")
+        if self.scheme == "http" and self.ca_certificate is not None:
+            raise ValueError("HTTP observations cannot declare an unused TLS trust root")
+
+
+@dataclass(frozen=True)
+class ProcessTarget:
+    region: str
+    namespace: str
+    name: str
+    kind: str
+    replicas: int
+    uid: str
+
+    def __post_init__(self):
+        for value in (self.region, self.namespace, self.name):
+            _label(value)
+        if (
+            self.kind not in {"deployment", "statefulset"}
+            or type(self.replicas) is not int
+            or not 1 <= self.replicas <= 64
+        ):
+            raise ValueError("Required process inventory must specify a bounded owned controller")
+        if type(self.uid) is not str or not 1 <= len(self.uid) <= 128:
+            raise ValueError("Required process inventory lacks captured controller identity")
 
 
 @dataclass(frozen=True)
@@ -274,6 +368,9 @@ class RecoveryOutcomePlan:
     fresh_challenges: tuple[FreshAPIChallenge, ...]
     observer: DeliveryObserverTarget
     service_token: str = field(repr=False)
+    gateway_targets: tuple[HTTPServiceTarget, ...] = ()
+    process_targets: tuple[ProcessTarget, ...] = ()
+    require_traffic: bool = False
 
     def __post_init__(self):
         for name, cls in (
@@ -294,6 +391,33 @@ class RecoveryOutcomePlan:
             raise ValueError("Outcome observation needs private read-only observer and normal service credentials")
         if len({project.project_id for project in self.projects}) != len(self.projects):
             raise ValueError("Outcome project identities must be unique")
+        if type(self.gateway_targets) is not tuple or any(
+            type(t) is not HTTPServiceTarget for t in self.gateway_targets
+        ):
+            raise ValueError("Gateway observations must be immutable typed targets")
+        if (
+            type(self.require_traffic) is not bool
+            or type(self.process_targets) is not tuple
+            or any(type(target) is not ProcessTarget for target in self.process_targets)
+        ):
+            raise ValueError("Required continuing work must use immutable private process targets")
+        if self.require_traffic and not self.process_targets:
+            raise ValueError("Continuing customer work requires complete private process inventory")
+        if self.process_targets:
+            regions = {target.region for target in self.api_targets}
+            for region in regions:
+                targets = [target for target in self.process_targets if target.region == region]
+                if len(targets) != 4 or {target.name for target in targets} != {
+                    "worker",
+                    "queue",
+                    "delivery",
+                    "topology",
+                }:
+                    raise ValueError("Every region requires complete worker, queue, delivery and topology inventory")
+            if {target.region for target in self.process_targets} != regions:
+                raise ValueError("Required processes differ from declared regions")
+        if self.gateway_targets and {t.region for t in self.gateway_targets} != {t.region for t in self.api_targets}:
+            raise ValueError("Customer gateways must cover every declared API region")
 
 
 @contextmanager
@@ -321,12 +445,17 @@ def port_forward(namespace, service, remote_port, *, deadline, resource_kind="se
             stdin=subprocess.DEVNULL,
             stdout=diagnostics,
             stderr=diagnostics,
+            env={**os.environ, "GOMAXPROCS": "2"},
         )
         try:
             startup_end = min(deadline, time.monotonic() + 10)
             while time.monotonic() < startup_end:
                 if process.poll() is not None:
-                    raise RuntimeError("Owned service port-forward exited before connecting")
+                    diagnostics.seek(0)
+                    detail = diagnostics.read(8192).decode("utf-8", errors="replace")
+                    _owned_command_failure(
+                        f"Owned service port-forward exited before connecting: {namespace}/{service}: {detail}"
+                    )
                 try:
                     with socket.create_connection(("127.0.0.1", local_port), timeout=0.2):
                         break
@@ -358,7 +487,7 @@ def _kube_json(namespace, arguments, *, deadline):
             timeout=remaining,
         )
         if result.returncode or output.tell() > 4 * 1024 * 1024 or errors.tell() > 1024 * 1024:
-            raise RuntimeError("Replica inventory API observation failed")
+            _owned_command_failure("Replica inventory API observation failed")
         output.seek(0)
         return json.load(output)
 
@@ -437,7 +566,7 @@ def resolve_http_replicas(target, *, deadline):
     if type(resource) is not dict or type(resource.get("metadata")) is not dict:
         raise StateMismatch("regional_replica_inventory_mismatch")
     uid = resource["metadata"].get("uid")
-    if type(uid) is not str or not uid:
+    if type(uid) is not str or not uid or (target.expected_uid is not None and uid != target.expected_uid):
         raise StateMismatch("regional_replica_inventory_mismatch")
     if target.resource_kind == "pod":
         if resource["metadata"].get("name") != target.service or not _ready_pod(resource):
@@ -525,7 +654,7 @@ class SQLObservation:
                 finally:
                     connection.close()
 
-    def rows(self, connection, table):
+    def rows(self, connection, table, *, record_keys=None):
         columns = {
             "journal": "event_id,record_key,tenant_id,entity_id,project_id,client_revision,kind,CASE WHEN OCTET_LENGTH(payload)<=131072 THEN payload ELSE NULL END AS payload,actor_id,payload_sha256",
             "entities": "tenant_id,id,project_id,entity_type,revision,CASE WHEN OCTET_LENGTH(document)<=131072 THEN document ELSE NULL END AS document",
@@ -534,8 +663,34 @@ class SQLObservation:
         }
         if table not in columns and table not in DOMAIN_TABLES.values():
             raise ValueError("SQL observation table is not allowlisted")
+        parameters, clause = (), ""
+        if record_keys is not None:
+            if type(record_keys) is not tuple or not 1 <= len(record_keys) <= 1024:
+                raise ValueError("Recent SQL scope must contain bounded private record identities")
+            pairs = tuple(tuple(key.split("/")) for key in record_keys)
+            for tenant, entity in pairs:
+                _uuid(tenant)
+                _uuid(entity)
+            placeholders = ",".join("(%s,%s)" for _ in pairs)
+            flattened = tuple(value for pair in pairs for value in pair)
+            journal_scope = (
+                f"(tenant_id,entity_id) IN ({placeholders}) OR record_key IN ({','.join('%s' for _ in pairs)})"
+            )
+            if table == "journal":
+                clause, parameters = " WHERE " + journal_scope, flattened + record_keys
+            elif table in {"outbox", "builds"}:
+                clause = f" WHERE event_id IN (SELECT event_id FROM journal WHERE {journal_scope})"
+                parameters = flattened + record_keys
+            elif table == "organizations":
+                clause, parameters = (
+                    " WHERE id IN (" + ",".join("%s" for _ in pairs) + ")",
+                    tuple(pair[1] for pair in pairs),
+                )
+            else:
+                entity_column = "user_id" if table == "memberships" else "id"
+                clause, parameters = f" WHERE (tenant_id,{entity_column}) IN ({placeholders})", flattened
         with connection.cursor() as cursor:
-            cursor.execute(f"SELECT {columns.get(table, '*')} FROM `{table}`")
+            cursor.execute(f"SELECT {columns.get(table, '*')} FROM `{table}`" + clause, parameters)
             for row in cursor:
                 if time.monotonic() >= self.deadline:
                     raise TimeoutError("Independent SQL observation deadline exceeded")
@@ -584,6 +739,27 @@ class RegionalDatabaseRecoveryOracle(Oracle):
         "recovery_container_required": FailureClass.HARNESS_ERROR,
         "recovery_verification_capacity_unavailable": FailureClass.HARNESS_ERROR,
     }
+
+    @property
+    def verification_process_limit(self):
+        # Each exact HTTP replica has one retained kubectl forward. Account for
+        # its Go threads plus one transient SQL/inventory process and Python IO.
+        if self.outcomes is None:
+            return 256
+        replicas = sum(
+            target.expected_replicas or 1
+            for targets in (
+                self.outcomes.api_targets,
+                self.outcomes.search_targets,
+                self.outcomes.repository_targets,
+                self.outcomes.gateway_targets,
+            )
+            for target in targets
+        )
+        budget = max(256, 64 + 16 * replicas)
+        if budget > 2048:
+            raise ValueError("Declared regional observations exceed the private verifier process budget")
+        return budget
 
     def __init__(
         self,
@@ -686,6 +862,11 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                 raise ValueError("Each group needs distinct real regional database members")
         if type(self.outcomes) is not RecoveryOutcomePlan:
             raise ValueError("Real API, search, Git, build and delivery inventory is required")
+        if (
+            self.outcomes.require_traffic
+            and {challenge.group for challenge in self.outcomes.fresh_challenges} != groups
+        ):
+            raise ValueError("Continuing work must exercise every frozen database group")
 
     def _check_sql(self, deadline, *, extra=()):
         cuts = {cut.group: cut for cut in self.cuts}
@@ -699,28 +880,46 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                     raise StateMismatch("regional_storage_not_independent")
                 seen_servers.add(facts["server_uuid"])
                 writers[target.group] += facts["read_only"] == 0
-                for baseline in self.baseline_cuts:
-                    if baseline.group == target.group:
-                        with self._protected_state(baseline) as original:
-                            original.load_journal(reader.rows(connection, "journal"))
-                state.load_journal(reader.rows(connection, "journal"))
-                state.check_entities(reader.rows(connection, "entities"))
-                for table in DOMAIN_TABLES.values():
-                    state.check_domain_rows(table, reader.rows(connection, table))
-                state.verify_domain()
-                state.load_effects(reader.rows(connection, "outbox"), effects[target.group])
-                state.check_build_rows(reader.rows(connection, "builds"))
+                with _observation_phase(
+                    "sql-full",
+                    operations=state.cut.operations,
+                    group=target.group,
+                    member=target.namespace + "/" + target.service,
+                    observation=getattr(self, "_observation_number", None),
+                ):
+                    for baseline in self.baseline_cuts:
+                        if baseline.group == target.group:
+                            with self._protected_state(baseline) as original:
+                                original.load_journal(reader.rows(connection, "journal"))
+                    state.load_journal(reader.rows(connection, "journal"))
+                    state.check_entities(reader.rows(connection, "entities"))
+                    for table in DOMAIN_TABLES.values():
+                        state.check_domain_rows(table, reader.rows(connection, table))
+                    state.verify_domain()
+                    state.load_effects(reader.rows(connection, "outbox"), effects[target.group])
+                    state.check_build_rows(reader.rows(connection, "builds"))
                 yield target, state
                 for cut, effect_cut in extra:
                     if cut.group == target.group:
                         with self._protected_state(cut, relationship_state=state) as fresh:
-                            fresh.load_journal(reader.rows(connection, "journal"))
-                            fresh.check_entities(reader.rows(connection, "entities"))
-                            for table in DOMAIN_TABLES.values():
-                                fresh.check_domain_rows(table, reader.rows(connection, table))
-                            fresh.verify_domain()
-                            fresh.load_effects(reader.rows(connection, "outbox"), effect_cut)
-                            fresh.check_build_rows(reader.rows(connection, "builds"))
+
+                            def rows(table, reader=reader, connection=connection, keys=cut.record_keys):
+                                return reader.rows(connection, table, record_keys=keys)
+
+                            with _observation_phase(
+                                "sql-cohort",
+                                operations=cut.operations,
+                                group=target.group,
+                                member=target.namespace + "/" + target.service,
+                                observation=getattr(self, "_observation_number", None),
+                            ):
+                                fresh.load_journal(rows("journal"))
+                                fresh.check_entities(rows("entities"))
+                                for table in DOMAIN_TABLES.values():
+                                    fresh.check_domain_rows(table, rows(table))
+                                fresh.verify_domain()
+                                fresh.load_effects(rows("outbox"), effect_cut)
+                                fresh.check_build_rows(rows("builds"))
                             yield target, fresh
         if any(count != 1 for count in writers.values()):
             raise StateMismatch("regional_writer_fencing_incomplete")
@@ -737,6 +936,7 @@ class RegionalDatabaseRecoveryOracle(Oracle):
 
         if deadline is not None:
             kwargs["timeout"] = remaining()
+        kwargs["extensions"] = {"absolute_deadline": time.monotonic() + remaining()}
         content = bytearray()
         with client.stream(method, url, **kwargs) as response:
             if deadline is not None:
@@ -755,17 +955,21 @@ class RegionalDatabaseRecoveryOracle(Oracle):
             remaining()
         return bytes(content)
 
-    def _delivery_receipts(self, state, client):
+    def _delivery_receipts(self, state, client, *, deadline=float("inf")):
         batch = []
         for effect in state.effect_rows("delivery"):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Delivery observation deadline exceeded")
             batch.append(effect["effect_id"])
             if len(batch) == 100:
-                yield from self._delivery_batch(batch, client)
+                yield from self._delivery_batch(batch, client, deadline=deadline)
                 batch = []
         if batch:
-            yield from self._delivery_batch(batch, client)
+            yield from self._delivery_batch(batch, client, deadline=deadline)
 
-    def _delivery_batch(self, batch, client):
+    def _delivery_batch(self, batch, client, *, deadline=float("inf")):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Delivery observation deadline exceeded")
         target = self.outcomes.observer
         if target.transport == "private_pipe":
             response = self._journal_call("delivery_receipts", batch)
@@ -777,6 +981,7 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                     target.read_url,
                     params=[("id", value) for value in batch],
                     headers={"Authorization": f"Bearer {target.token}"},
+                    deadline=deadline,
                 )
             )
         if (
@@ -927,8 +1132,36 @@ class RegionalDatabaseRecoveryOracle(Oracle):
     def _check_search(self, state, client, origins, *, deadline=float("inf")):
         self._check_projections(state, client, origins, search=True, deadline=deadline)
 
-    @staticmethod
-    def _git(args, *, token, deadline, maximum=64 * 1024 * 1024, input_bytes=None, environment_extra=None):
+    def _git_scratch_guard(self, unlinked_streams):
+        if os.environ.get("SREGYM_VERIFIER_CONTAINER") != "1":
+            return
+        root = Path(os.environ.get("TMPDIR", ""))
+        if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+            raise VerificationCapacityUnavailable("Private Git scratch ownership is unavailable", resource="storage")
+        used = sum(os.fstat(stream.fileno()).st_blocks * 512 for stream in unlinked_streams)
+        pending, seen, entries, until = [root], set(), 0, time.monotonic() + 2
+        device = root.stat().st_dev
+        while pending:
+            with os.scandir(pending.pop()) as directory:
+                for entry in directory:
+                    entries += 1
+                    facts = entry.stat(follow_symlinks=False)
+                    identity = (facts.st_dev, facts.st_ino)
+                    if entries > 20000 or time.monotonic() >= until or facts.st_dev != device:
+                        raise VerificationCapacityUnavailable(
+                            "Private Git scratch metadata capacity is unavailable", resource="storage"
+                        )
+                    if identity not in seen:
+                        seen.add(identity)
+                        used += facts.st_blocks * 512
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                    if used >= self.verification_scratch_bytes - 1024**2:
+                        raise VerificationCapacityUnavailable(
+                            "Private Git scratch allocation capacity is unavailable", resource="storage"
+                        )
+
+    def _git(self, args, *, token, deadline, maximum=64 * 1024 * 1024, input_bytes=None, environment_extra=None):
         remaining = min(30, deadline - time.monotonic())
         if remaining <= 0:
             raise TimeoutError("Git observation deadline exceeded")
@@ -942,28 +1175,70 @@ class RegionalDatabaseRecoveryOracle(Oracle):
             }
             | (environment_extra or {})
         )
-        with TemporaryFile() as output, TemporaryFile() as errors:
-            result = subprocess.run(
-                [
-                    "git",
+        with ExitStack() as files, TemporaryFile() as output, TemporaryFile() as errors, TemporaryFile() as request:
+            certificates = {t.ca_certificate for t in self.outcomes.gateway_targets if t.scheme == "https"}
+            if certificates:
+                from tempfile import NamedTemporaryFile
+
+                authority = files.enter_context(NamedTemporaryFile(mode="w", encoding="utf-8"))
+                authority.write("\n".join(sorted(certificates)))
+                authority.flush()
+                environment["GIT_SSL_CAINFO"] = authority.name
+            command = [
+                "git",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "credential.helper=",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "protocol.file.allow=never",
+                *args,
+            ]
+            if input_bytes is not None:
+                if len(input_bytes) > maximum:
+                    raise StateMismatch("git_transport_or_object_mismatch")
+                request.write(input_bytes)
+                request.seek(0)
+            if os.name == "posix":
+                # Each object/log file has a kernel ceiling, even between samples.
+                command = [
+                    sys.executable,
                     "-c",
-                    "commit.gpgsign=false",
-                    "-c",
-                    "credential.helper=",
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "-c",
-                    "protocol.file.allow=never",
-                    *args,
-                ],
-                input=input_bytes,
+                    "import os,resource,sys; resource.setrlimit(resource.RLIMIT_FSIZE,(int(sys.argv[1]),int(sys.argv[1]))); os.execvp(sys.argv[2],sys.argv[2:])",
+                    str(max(maximum, 1024 * 1024)),
+                    *command,
+                ]
+            self._git_scratch_guard((output, errors, request))
+            result = subprocess.Popen(
+                command,
+                stdin=request if input_bytes is not None else subprocess.DEVNULL,
                 stdout=output,
                 stderr=errors,
                 env=environment,
-                timeout=remaining,
+                start_new_session=os.name == "posix",
             )
-            if result.returncode or output.tell() > maximum or errors.tell() > 1024 * 1024:
-                raise StateMismatch("git_transport_or_object_mismatch")
+            try:
+                until = time.monotonic() + remaining
+                while result.poll() is None:
+                    if time.monotonic() >= until:
+                        raise TimeoutError("Git observation deadline exceeded")
+                    if os.fstat(output.fileno()).st_size > maximum or os.fstat(errors.fileno()).st_size > 1024 * 1024:
+                        raise StateMismatch("git_transport_or_object_mismatch")
+                    self._git_scratch_guard((output, errors, request))
+                    time.sleep(min(0.1, max(0, until - time.monotonic())))
+                _check_process_capacity()
+                self._git_scratch_guard((output, errors, request))
+                if result.returncode or output.tell() > maximum or errors.tell() > 1024 * 1024:
+                    raise StateMismatch("git_transport_or_object_mismatch")
+            finally:
+                if os.name == "posix":
+                    with suppress(ProcessLookupError):
+                        os.killpg(result.pid, signal.SIGKILL)
+                elif result.poll() is None:
+                    result.kill()
+                result.wait(timeout=2)
             output.seek(0)
             return output.read(maximum + 1)
 
@@ -1006,9 +1281,13 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                         if hashlib.sha256(content).hexdigest() != expected.sha256:
                             raise StateMismatch("git_content_mismatch")
 
-    def _check_artifacts(self, state, client, origins, *, project_expectations=None):
+    def _check_artifacts(self, state, client, origins, *, project_expectations=None, deadline=float("inf")):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Artifact observation deadline exceeded")
         projects = {project.project_id: project for project in project_expectations or self.outcomes.projects}
         for build in state.build_rows():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Artifact observation deadline exceeded")
             project = projects.get(build["project_id"])
             if project is None:
                 raise ValueError("Protected build has no independent repository expectation")
@@ -1029,6 +1308,7 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                     f"{origin}/v1/projects/{project.project_id}/artifacts/{build['artifact_sha256']}",
                     maximum=32 * 1024 * 1024,
                     headers={"Authorization": f"Bearer {project.token}"},
+                    deadline=deadline,
                 )
                 if hashlib.sha256(content).hexdigest() != build["artifact_sha256"]:
                     raise StateMismatch("artifact_content_mismatch")
@@ -1059,22 +1339,74 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                 except (zipfile.BadZipFile, KeyError, json.JSONDecodeError) as exc:
                     raise StateMismatch("artifact_content_mismatch") from exc
 
-    def _fresh_api(self, client, origins, repository_origins, deadline):
+    def _fresh_api(self, client, origins, repository_origins, deadline, *, issue_only=False):
         """Generate expected values in the verifier, then use ordinary product APIs."""
         epoch = self._journal_call("begin_epoch")
         if type(epoch) is not int or epoch < 0:
             raise EvidenceUnavailable("Fresh receipt owner returned an invalid mutation epoch")
         try:
-            return self._fresh_api_epoch(client, origins, repository_origins, deadline, epoch)
+            return self._fresh_api_epoch(client, origins, repository_origins, deadline, epoch, issue_only=issue_only)
         finally:
             # Benchmark-owned receipts survive failed attempts. Closing a resolved
             # partial epoch preserves its acknowledgments; unresolved IO fails closed.
             if self._journal_call("close_epoch", epoch) is not True:
                 raise EvidenceUnavailable("Fresh receipt epoch has unresolved request outcomes")
 
-    def _fresh_api_epoch(self, client, origins, repository_origins, deadline, epoch):
-        operations, effects = {}, {}
-        for challenge in self.outcomes.fresh_challenges:
+    def _fresh_api_epoch(self, client, origins, repository_origins, deadline, epoch, *, issue_only=False):
+        if not repository_origins or not origins or len(origins) % len(repository_origins):
+            raise EvidenceUnavailable("Fresh API and repository entry points cannot be paired by region")
+        operations, effects, parent_epochs = {}, {}, {}
+        challenges = self.outcomes.fresh_challenges
+        if issue_only:
+            selected = {}
+            for challenge in challenges:
+                selected.setdefault(challenge.group, challenge)
+            challenges = tuple(selected[group] for group in sorted(selected))
+            parents = self._journal_call(
+                "project_receipts", [[entry.tenant_id, entry.project_id] for entry in challenges]
+            )
+            if type(parents) is not list or len(parents) != len(challenges):
+                raise EvidenceUnavailable("Private parent provenance is incomplete")
+            from sregym.generators.workload.codehub import operation_from_row, validate_effects
+
+            for challenge, parent in zip(challenges, parents, strict=True):
+                if (
+                    type(parent) is not dict
+                    or set(parent) != {"group", "operations", "effects", "epochs"}
+                    or parent["group"] != challenge.group
+                ):
+                    raise EvidenceUnavailable("Private parent provenance differs from the selected group")
+                if type(parent["operations"]) is not list or not 1 <= len(parent["operations"]) <= 32:
+                    raise EvidenceUnavailable("Private parent history exceeds its bounded observation")
+                if (
+                    type(parent["effects"]) is not list
+                    or not 1 <= len(parent["effects"]) <= 512
+                    or any(type(effect) is not dict for effect in parent["effects"])
+                    or type(parent["epochs"]) is not list
+                    or not 1 <= len(parent["epochs"]) <= 32
+                    or any(type(value) is not int or value < 0 for value in parent["epochs"])
+                    or parent["epochs"] != sorted(set(parent["epochs"]))
+                ):
+                    raise EvidenceUnavailable("Malformed bounded private parent provenance")
+                parent_events = {row.get("event_id") for row in parent["operations"] if type(row) is dict}
+                if {effect.get("event_id") for effect in parent["effects"]} != parent_events:
+                    raise EvidenceUnavailable("Private parent effects differ from acknowledged history")
+                for row in parent["operations"]:
+                    operation = operation_from_row(row)
+                    if (
+                        operation.tenant_id != challenge.tenant_id
+                        or operation.entity_id != challenge.project_id
+                        or not operation.kind.startswith("project.")
+                    ):
+                        raise EvidenceUnavailable("Private parent provenance differs from the customer project")
+                    validate_effects(
+                        operation,
+                        [effect for effect in parent["effects"] if effect.get("event_id") == operation.event_id],
+                    )
+                operations[challenge.group] = list(parent["operations"])
+                effects[challenge.group] = list(parent["effects"])
+                parent_epochs[challenge.group] = tuple(sorted(set(parent["epochs"]) | {epoch}))
+        for challenge_index, challenge in enumerate(challenges):
             entity = str(uuid4())
             actor = challenge.actor_id
             payloads = (
@@ -1103,7 +1435,7 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                 self._journal_request(epoch, challenge, body)
                 response = self._fresh_post(
                     client,
-                    f"{origins[index % len(origins)]}/v1/operations",
+                    f"{origins[(2 * challenge_index + index) % len(origins)]}/v1/operations",
                     body,
                     challenge.token,
                     deadline,
@@ -1143,12 +1475,19 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                 actor_id=actor,
             )
             self._validate_fresh_ack(submitted[0], actor, response)
+            if issue_only:
+                continue
+            # A Git upload precedes its SQL metadata acknowledgment. The local
+            # repository must validate both through the same regional entry.
+            # Gateways pair one-to-one; internal APIs are grouped by region.
+            repository_index = challenge_index % len(repository_origins)
+            receipt_index = repository_index * (len(origins) // len(repository_origins))
             git_request, git_expectation = self._fresh_git(
-                challenge, repository_origins[0], deadline, journal_epoch=epoch
+                challenge, repository_origins[repository_index], deadline, journal_epoch=epoch
             )
             response = self._fresh_post(
                 client,
-                f"{origins[0]}/v1/operations",
+                f"{origins[receipt_index]}/v1/operations",
                 git_request,
                 challenge.token,
                 deadline,
@@ -1169,6 +1508,10 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                 else project
                 for project in getattr(self, "fresh_projects", self.outcomes.projects)
             )
+        return self._operation_cuts(operations, effects, parent_epochs if issue_only else epoch)
+
+    @staticmethod
+    def _operation_cuts(operations, effects, epoch):
         cuts = []
         for group, rows in operations.items():
             journal = hashlib.sha256()
@@ -1188,7 +1531,12 @@ class RegionalDatabaseRecoveryOracle(Oracle):
             cuts.append(
                 (
                     ProtectedReceiptCut(
-                        group, (epoch,), len(rows), tuple(sorted(latest)), journal.hexdigest(), current.hexdigest()
+                        group,
+                        (epoch,) if type(epoch) is int else epoch[group],
+                        len(rows),
+                        tuple(sorted(latest)),
+                        journal.hexdigest(),
+                        current.hexdigest(),
                     ),
                     EffectReceiptCut(group, len(effects[group]), checksum.hexdigest()),
                 )
@@ -1202,12 +1550,26 @@ class RegionalDatabaseRecoveryOracle(Oracle):
             try:
                 started = time.monotonic()
                 content = bytearray()
-                with client.stream("POST", url, json=body, headers={"Authorization": f"Bearer {token}"}) as response:
+                remaining = min(10, deadline - time.monotonic())
+                if remaining <= 0:
+                    raise TimeoutError("Fresh operation observation deadline exceeded")
+                with client.stream(
+                    "POST",
+                    url,
+                    json=body,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=remaining,
+                    extensions={"absolute_deadline": min(deadline, started + 10)},
+                ) as response:
                     status = response.status_code
                     for block in response.iter_bytes():
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Fresh operation observation deadline exceeded")
                         content.extend(block)
                         if len(content) > 256 * 1024:
                             raise StateMismatch("fresh_acknowledgment_oversized")
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Fresh operation observation deadline exceeded")
                 latency_ms = (time.monotonic() - started) * 1000
                 if status not in {200, 201}:
                     if journal_epoch is not None and status in {400, 401, 403, 404, 409, 422}:
@@ -1433,12 +1795,164 @@ class RegionalDatabaseRecoveryOracle(Oracle):
             ("api", self.outcomes.api_targets),
             ("search", self.outcomes.search_targets),
             ("repository", self.outcomes.repository_targets),
+            ("gateway", self.outcomes.gateway_targets),
         ):
+            if role == "gateway" and not targets:
+                continue
             observed = tuple(value for target in targets for value in resolve_http_replicas(target, deadline=deadline))
             if not observed or len({uid for _target, uid in observed}) != len(observed):
                 raise StateMismatch("regional_replica_inventory_mismatch")
             result[role] = observed
         return result
+
+    def _verify_recent_business(self, cuts, client, origins, deadline):
+        seen_servers, writers = set(), {target.group: 0 for target in self.databases}
+        if {cut.group for cut, _effects in cuts} != set(writers) or len(cuts) != len(writers):
+            raise EvidenceUnavailable("Final customer proof omits or repeats a database group")
+        for target in self.databases:
+            reader = SQLObservation(target, deadline=deadline)
+            with reader.connection() as connection:
+                facts = reader.health(connection)
+                if facts["server_uuid"] in seen_servers:
+                    raise StateMismatch("regional_storage_not_independent")
+                seen_servers.add(facts["server_uuid"])
+                writers[target.group] += facts["read_only"] == 0
+                for cut, effects in cuts:
+                    if cut.group != target.group:
+                        continue
+                    with self._protected_state(cut) as state:
+
+                        def rows(table, reader=reader, connection=connection, keys=cut.record_keys):
+                            return reader.rows(connection, table, record_keys=keys)
+
+                        state.load_journal(rows("journal"))
+                        state.check_entities(rows("entities"))
+                        for table in DOMAIN_TABLES.values():
+                            state.check_domain_rows(table, rows(table))
+                        state.verify_domain()
+                        state.load_effects(rows("outbox"), effects)
+                        state.check_build_rows(rows("builds"))
+                        self._check_api_current(
+                            state, client, origins["api"] + origins.get("gateway", ()), deadline=deadline
+                        )
+                        self._check_search(state, client, origins["search"], deadline=deadline)
+                        state.check_delivery_receipts(self._delivery_receipts(state, client, deadline=deadline))
+        if any(count != 1 for count in writers.values()):
+            raise StateMismatch("regional_writer_fencing_incomplete")
+
+    def _final_live_probe(self, client, origins, deadline):
+        self._final_probe_open = True
+        cuts = self._fresh_api(
+            client,
+            origins.get("gateway", origins["api"]),
+            origins.get("gateway", origins["repository"]),
+            deadline,
+            issue_only=True,
+        )
+        retained = getattr(self, "_retained_final_cuts", ())
+        if len(retained) >= 16:
+            raise EvidenceUnavailable("Final observation cohort budget exceeded")
+        self._retained_final_cuts = retained + (cuts,)
+        self._final_probe_open = False
+        settle_deadline = min(deadline, time.monotonic() + 90)
+        while True:
+            try:
+                for accepted in self._retained_final_cuts:
+                    self._verify_recent_business(accepted, client, origins, settle_deadline)
+                return
+            except StateMismatch:
+                if time.monotonic() >= settle_deadline:
+                    raise
+                time.sleep(min(1, max(0, settle_deadline - time.monotonic())))
+
+    def _process_inventory(self, deadline):
+        observed = []
+        for target in self.outcomes.process_targets:
+            replicas = resolve_http_replicas(
+                HTTPServiceTarget(
+                    target.region,
+                    target.namespace,
+                    target.name,
+                    resource_kind=target.kind,
+                    expected_replicas=target.replicas,
+                    expected_uid=target.uid,
+                ),
+                deadline=deadline,
+            )
+            if target.name == "worker":
+                # Redundant workers may legitimately recycle during a long
+                # business scan. Still validate every ready owned replica and
+                # the captured controller, then grade their actual outcomes.
+                observed.append((target.namespace, target.name, target.uid))
+            else:
+                observed.extend((target.namespace, target.name, uid) for _pod, uid in replicas)
+        return tuple(observed)
+
+    def _traffic_observations(self):
+        response = self._journal_call("traffic_progress")
+        if (
+            type(response) is not dict
+            or set(response) != {"running", "groups"}
+            or type(response["running"]) is not bool
+        ):
+            raise EvidenceUnavailable("Malformed private continuing traffic facts")
+        groups = {cut.group for cut in self.cuts}
+        entries = response["groups"]
+        if type(entries) is not list or len(entries) > len(groups):
+            raise EvidenceUnavailable("Private traffic observation exceeded its bounded group inventory")
+        if not response["running"] or {entry.get("group") for entry in entries if type(entry) is dict} != groups:
+            raise StateMismatch("continuing_customer_traffic_unavailable")
+        positions, cuts = {}, []
+        for entry in entries:
+            if type(entry) is not dict or set(entry) != {
+                "group",
+                "sequence",
+                "epoch",
+                "age_seconds",
+                "operations",
+                "effects",
+            }:
+                raise EvidenceUnavailable("Malformed private customer journey")
+            age, sequence, epoch = entry["age_seconds"], entry["sequence"], entry["epoch"]
+            if (
+                type(sequence) is not int
+                or sequence <= 0
+                or type(epoch) is not int
+                or epoch < 0
+                or type(age) not in {int, float}
+                or not math.isfinite(age)
+                or age < 0
+            ):
+                raise EvidenceUnavailable("Malformed private customer progress counters")
+            if age > 30:
+                raise StateMismatch("continuing_customer_traffic_stalled")
+            rows, effects = entry["operations"], entry["effects"]
+            if type(rows) is not list or len(rows) != 2 or type(effects) is not list or not 2 <= len(effects) <= 16:
+                raise EvidenceUnavailable("Malformed bounded customer journey expectations")
+            from sregym.generators.workload.codehub import operation_from_row, validate_effects
+
+            operations = tuple(operation_from_row(row) for row in rows)
+            first, final = operations
+            if (
+                first.kind != "issue.create"
+                or final.kind != "issue.update"
+                or first.client_revision != 1
+                or final.client_revision != 2
+                or first.record_key != final.record_key
+                or first.project_id != final.project_id
+                or first.actor_id != final.actor_id
+            ):
+                raise EvidenceUnavailable("Owner traffic journey lacks complete create/update provenance")
+            for operation in operations:
+                validate_effects(
+                    operation, [effect for effect in effects if effect.get("event_id") == operation.event_id]
+                )
+            group = entry["group"]
+            if group in positions:
+                raise EvidenceUnavailable("Private traffic observation repeated a database group")
+            positions[group] = sequence
+            cuts.extend(self._operation_cuts({group: rows}, {group: effects}, epoch))
+        return positions, tuple(cuts)
 
     def evaluate(self, solution=None, trace=None, duration=None):
         if os.environ.get("SREGYM_VERIFIER_CONTAINER") != "1":
@@ -1453,37 +1967,58 @@ class RegionalDatabaseRecoveryOracle(Oracle):
             return self.fail("recovery_evidence_unavailable", check="persistent_fresh_receipts")
         deadline, stable_since = time.monotonic() + self.deadline_seconds, None
         fresh, last_mismatch, last_transport_error = None, None, False
+        traffic_start = None
+        reported_mismatch = None
+        self._retained_final_cuts, self._final_probe_open = (), False
+        self._observation_number = 0
         try:
+            import ssl
+
+            from sregym.generators.workload.http_deadline import DeadlineTransport
+
+            tls = ssl.create_default_context()
+            for target in self.outcomes.gateway_targets:
+                if target.scheme == "https":
+                    tls.load_verify_locations(cadata=target.ca_certificate)
             with (
                 ExitStack() as stack,
                 httpx.Client(
                     timeout=10,
                     headers={"Authorization": f"Bearer {self.outcomes.service_token}"},
                     follow_redirects=False,
+                    verify=tls,
+                    transport=DeadlineTransport(verify=tls),
                 ) as client,
             ):
                 forwarding = stack.enter_context(ExitStack())
                 origins, inventory_signature = {}, None
                 while time.monotonic() < deadline:
+                    self._observation_number += 1
                     try:
+                        processes = self._process_inventory(deadline)
                         inventory = self._http_inventory(deadline)
                         signature = tuple(
                             (role, target.namespace, target.service, target.port, target.resource_kind, uid)
                             for role, replicas in inventory.items()
                             for target, uid in replicas
                         )
+                        signature += processes
                         if signature != inventory_signature:
                             forwarding.close()
                             origins = {
                                 role: tuple(
-                                    f"http://127.0.0.1:{forwarding.enter_context(port_forward(target.namespace, target.service, target.port, deadline=deadline, resource_kind=target.resource_kind))}"
+                                    f"{target.scheme}://127.0.0.1:{forwarding.enter_context(port_forward(target.namespace, target.service, target.port, deadline=deadline, resource_kind=target.resource_kind))}"
                                     for target, _uid in replicas
                                 )
                                 for role, replicas in inventory.items()
                             }
-                            inventory_signature, stable_since = signature, None
+                            inventory_signature, stable_since, traffic_start = signature, None, None
+                        continuing, traffic_positions = (), None
+                        if fresh is not None and self.outcomes.require_traffic:
+                            traffic_positions, continuing = self._traffic_observations()
                         builds, deliveries, observed_cuts = 0, 0, set()
-                        for _target, state in self._check_sql(deadline, extra=fresh or ()):
+                        retained = tuple(cut for cohort in self._retained_final_cuts for cut in cohort)
+                        for _target, state in self._check_sql(deadline, extra=(fresh or ()) + continuing + retained):
                             cut = state.cut
                             identity = (
                                 cut.group,
@@ -1493,15 +2028,47 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                                 cut.current_sha256,
                             )
                             if identity not in observed_cuts:
-                                self._check_api_current(state, client, origins["api"], deadline=deadline)
-                                self._check_search(state, client, origins["search"], deadline=deadline)
-                                state.check_delivery_receipts(self._delivery_receipts(state, client))
-                                self._check_artifacts(
-                                    state,
-                                    client,
-                                    origins["api"],
-                                    project_expectations=getattr(self, "fresh_projects", None),
-                                )
+                                with _observation_phase(
+                                    "api",
+                                    operations=cut.operations,
+                                    group=cut.group,
+                                    observation=self._observation_number,
+                                    replicas=len(origins["api"] + origins.get("gateway", ())),
+                                ):
+                                    self._check_api_current(
+                                        state, client, origins["api"] + origins.get("gateway", ()), deadline=deadline
+                                    )
+                                with _observation_phase(
+                                    "search",
+                                    operations=cut.operations,
+                                    group=cut.group,
+                                    observation=self._observation_number,
+                                    replicas=len(origins["search"]),
+                                ):
+                                    self._check_search(state, client, origins["search"], deadline=deadline)
+                                with _observation_phase(
+                                    "delivery",
+                                    operations=cut.operations,
+                                    group=cut.group,
+                                    observation=self._observation_number,
+                                ):
+                                    state.check_delivery_receipts(
+                                        self._delivery_receipts(state, client, deadline=deadline)
+                                    )
+                                with _observation_phase(
+                                    "artifacts",
+                                    operations=cut.operations,
+                                    group=cut.group,
+                                    observation=self._observation_number,
+                                    replicas=len(origins["api"]),
+                                ):
+                                    self._check_artifacts(
+                                        state,
+                                        client,
+                                        origins["api"],
+                                        project_expectations=getattr(self, "fresh_projects", None),
+                                        deadline=deadline,
+                                    )
                                 observed_cuts.add(identity)
                             builds += state.db.execute("SELECT COUNT(*) FROM builds").fetchone()[0]
                             deliveries += state.db.execute(
@@ -1509,10 +2076,21 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                             ).fetchone()[0]
                         if not builds or not deliveries:
                             return self.fail("recovery_evidence_unavailable", check="complete_business_baseline")
-                        self._check_git(origins["repository"], deadline, projects=getattr(self, "fresh_projects", None))
+                        with _observation_phase(
+                            "git", observation=self._observation_number, replicas=len(origins["repository"])
+                        ):
+                            self._check_git(
+                                origins["repository"], deadline, projects=getattr(self, "fresh_projects", None)
+                            )
+                        last_mismatch, last_transport_error = None, False
                         if fresh is None:
                             try:
-                                fresh = self._fresh_api(client, origins["api"], origins["repository"], deadline)
+                                fresh = self._fresh_api(
+                                    client,
+                                    origins.get("gateway", origins["api"]),
+                                    origins.get("gateway", origins["repository"]),
+                                    deadline,
+                                )
                             except StateMismatch as exc:
                                 return self.fail("recovery_state_mismatch", check=exc.reason, **exc.detail)
                             except (httpx.HTTPError, TimeoutError):
@@ -1520,27 +2098,76 @@ class RegionalDatabaseRecoveryOracle(Oracle):
                                     "recovery_observation_unavailable", check="fresh_request_outcome_unresolved"
                                 )
                             continue
-                        last_mismatch, last_transport_error = None, False
                         if stable_since is None:
                             stable_since = time.monotonic()
+                            traffic_start = traffic_positions
+                        if self.outcomes.require_traffic:
+                            self._traffic_observations()  # Recheck actual owner progress after long business reads.
+                        final_inventory = self._http_inventory(deadline)
+                        final_signature = tuple(
+                            (role, target.namespace, target.service, target.port, target.resource_kind, uid)
+                            for role, replicas in final_inventory.items()
+                            for target, uid in replicas
+                        ) + self._process_inventory(deadline)
+                        if final_signature != inventory_signature:
+                            stable_since, traffic_start = None, None
+                            continue
                         observed_at = time.monotonic()
                         if observed_at >= deadline:
                             raise TimeoutError("Business observation deadline exceeded")
+                        if self.outcomes.require_traffic and not all(
+                            traffic_positions[group] > traffic_start[group] for group in traffic_start
+                        ):
+                            last_mismatch = StateMismatch("continuing_customer_traffic_stalled")
                         if observed_at - stable_since >= self.stable_seconds:
+                            if self.outcomes.require_traffic and not all(
+                                traffic_positions[group] > traffic_start[group] for group in traffic_start
+                            ):
+                                raise StateMismatch("continuing_customer_traffic_stalled")
+                            if self.outcomes.require_traffic:
+                                self._final_live_probe(client, origins, deadline)
+                                self._traffic_observations()
+                                final_inventory = self._http_inventory(deadline)
+                                final_signature = tuple(
+                                    (role, target.namespace, target.service, target.port, target.resource_kind, uid)
+                                    for role, replicas in final_inventory.items()
+                                    for target, uid in replicas
+                                ) + self._process_inventory(deadline)
+                                if final_signature != inventory_signature:
+                                    stable_since, traffic_start = None, None
+                                    continue
                             return {"success": True}
                     except StateMismatch as exc:
+                        _check_process_capacity()
+                        if reported_mismatch != exc.reason:
+                            logging.warning("Private recovery observation mismatch: %s", exc.reason)
+                            reported_mismatch = exc.reason
+                        if self._final_probe_open:
+                            return self.fail("recovery_state_mismatch", check=exc.reason, **exc.detail)
                         if exc.reason == "verification_spool_capacity_exceeded":
                             return self.fail("recovery_verification_capacity_unavailable")
-                        last_mismatch, stable_since = exc, None
+                        last_mismatch, last_transport_error, stable_since, traffic_start = exc, False, None, None
                     except (httpx.HTTPError, OSError, TimeoutError):
-                        last_transport_error, stable_since = True, None
+                        _check_process_capacity()
+                        if self._final_probe_open:
+                            return self.fail(
+                                "recovery_observation_unavailable", check="final_request_outcome_unresolved"
+                            )
+                        last_mismatch, last_transport_error, stable_since, traffic_start = None, True, None, None
                     time.sleep(min(2, max(0, deadline - time.monotonic())))
                 if last_mismatch is not None:
                     return self.fail("recovery_state_mismatch", check=last_mismatch.reason, **last_mismatch.detail)
                 return self.fail("recovery_observation_unavailable", transport_unavailable=last_transport_error)
+        except VerificationCapacityUnavailable as error:
+            return self.fail("recovery_verification_capacity_unavailable", resource=error.resource)
         except EvidenceUnavailable:
             return self.fail("recovery_evidence_unavailable", check="persistent_fresh_receipts")
         except ValueError:
             return self.fail("recovery_evidence_unavailable", check="independent_business_expectations")
         except (OSError, RuntimeError, TimeoutError, subprocess.SubprocessError, httpx.HTTPError):
+            try:
+                _check_process_capacity()
+            except VerificationCapacityUnavailable:
+                return self.fail("recovery_verification_capacity_unavailable", resource="processes")
+            logging.exception("Private recovery observation failed")
             return self.fail("recovery_observation_unavailable")

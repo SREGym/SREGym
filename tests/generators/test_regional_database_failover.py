@@ -1,10 +1,13 @@
 """Causal controller checks; live TCP/GTID qualification is a separate gate."""
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from sregym.generators.fault.regional_database_failover import RegionalFailoverFault
@@ -79,7 +82,7 @@ class IncidentModel:
             def __exit__(self, *_args):
                 pass
 
-            def get(self, _url):
+            def get(self, _url, **_kwargs):
                 return Response()
 
         return Client()
@@ -125,6 +128,42 @@ def test_both_histories_backlog_and_restoration_precede_closed_handoff(tmp_path,
     ledger.close()
 
 
+def test_fault_topology_uses_real_socket_transport_and_cancel_callback(tmp_path, monkeypatch):
+    real_client = httpx.Client
+    instance, model, ledger = fault(tmp_path, monkeypatch)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if model.partition:
+                model.promoted = True
+            payload = json.dumps({"promoted": model.promoted}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    monkeypatch.setattr("sregym.generators.fault.regional_database_failover.httpx.Client", real_client)
+    instance.endpoints[model.candidate.region] = RegionEndpoints(
+        "http://api-b", "http://git-b", f"http://127.0.0.1:{server.server_address[1]}"
+    )
+    try:
+        evidence = instance.inject(suffix_operations=2)
+        assert evidence.old_writer_retains_suffix and evidence.new_writer_retains_suffix and model.restored
+        assert ledger.cut().operations == 5
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        ledger.close()
+
+
 @pytest.mark.parametrize(
     "settings,message", [({"leak": True}, "partition did not halt"), ({"pending": 0}, "actual unprocessed")]
 )
@@ -134,4 +173,44 @@ def test_false_partition_or_empty_backlog_never_qualifies(tmp_path, monkeypatch,
         instance.inject(suffix_operations=1)
     assert model.restored and not model.partition
     assert instance.evidence is None and ledger.cut().operations == 0
+    ledger.close()
+
+
+@pytest.mark.parametrize("trip", ["cancel", "capacity"])
+def test_injection_stops_mid_suffix_and_restores_owned_link_without_more_writes(tmp_path, monkeypatch, trip):
+    instance, model, ledger = fault(tmp_path, monkeypatch)
+    original = instance.client_factory
+    count = [0]
+    unavailable = [False]
+
+    def available():
+        if unavailable[0]:
+            raise RuntimeError("Native capacity stopped")
+
+    if trip == "capacity":
+        model._capacity_monitor = SimpleNamespace(assert_available=available)
+
+    def factory(*args):
+        client = original(*args)
+        submit = client.submit
+
+        def invoke(*args, **kwargs):
+            result = submit(*args, **kwargs)
+            count[0] += 1
+            if count[0] == 4:
+                if trip == "cancel":
+                    instance.cancel.set()
+                else:
+                    unavailable[0] = True
+            return result
+
+        client.submit = invoke
+        return client
+
+    instance.client_factory = factory
+    with pytest.raises(RuntimeError, match="cancelled|capacity"):
+        instance.inject(suffix_operations=32)
+    assert count == [4] and model.restored and not model.partition
+    assert instance.evidence is None and ledger.cut().operations == 0
+    assert ledger._db.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 4
     ledger.close()

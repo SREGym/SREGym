@@ -6,6 +6,8 @@ import os
 import shlex
 import threading
 import time
+from collections import deque
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -15,7 +17,14 @@ from sregym.conductor.scenarios.codehub_reference_repair import DatabaseReferenc
 from sregym.conductor.scenarios.database_recovery import SeedStreams, plan_noise
 from sregym.generators.fault.regional_database_failover import RegionalFailoverFault
 from sregym.generators.noise.codehub import NoiseExecutor
-from sregym.generators.workload.codehub import Operation, ReceiptLedger, WorkloadClient, canonical, operation_from_row
+from sregym.generators.workload.codehub import (
+    InvalidApplicationReceipt,
+    Operation,
+    ReceiptLedger,
+    WorkloadClient,
+    canonical,
+    operation_from_row,
+)
 from sregym.generators.workload.codehub_seed import CustomerSeeder, account_subscriptions, expected_effects
 
 
@@ -46,6 +55,20 @@ class OwnerLease:
         if self.handle:
             self.handle.close()
             self.handle = None
+
+
+class BorrowedOwnerLease:
+    """Controller uses application ownership; only application cleanup releases it."""
+
+    def __init__(self, lease):
+        self.lease = lease
+
+    def acquire(self):
+        if self.lease.handle is None:
+            raise RuntimeError("Application capacity lease must be held before customer preparation")
+
+    def close(self):
+        pass
 
 
 @dataclass(frozen=True)
@@ -100,7 +123,10 @@ class RecoveryController:
             raise ValueError("Managed endpoints must cover every actual application region")
         self.app, self.private_dir, self.endpoints = app, Path(private_dir), endpoints
         self.private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.ledger = ledger or ReceiptLedger(self.private_dir / "receipts.sqlite")
+        self.ledger = ledger or ReceiptLedger(
+            self.private_dir / "receipts.sqlite",
+            byte_budget={"small": 512 * 1024**2, "medium": 4 * 1024**3, "large": 32 * 1024**3}[app.tier.name],
+        )
         self.client_factory, self.network_factory = client_factory, network_factory
         self._tenant_routes = {}
         self._route_tenant_writer = route_tenant or getattr(app, "configure_tenant_route", None)
@@ -131,15 +157,27 @@ class RecoveryController:
         self._epoch_events, self._pending, self._clients = {}, {}, {}
         self.seed_result, self.fault, self.noise = None, None, None
         self.workload_error = None
+        self._traffic_history, self._traffic_sequences = {}, {}
+        self._traffic_by_epoch, self._traffic_closed = {}, {}
         self._stopped = False
+        self._prepare_done = threading.Event()
+        self._prepare_done.set()
+        self._prepare_thread = None
+        self._seeder = None
+        self._stop_lock = threading.Lock()
 
     def prepare(self, *, enable_noise=True, noise_horizon_seconds=7200):
         if self.seed_result is not None or self._stopped:
             raise RuntimeError("Recovery controllers are single-deployment owners")
         if self.app.inventory.phase != LifecyclePhase.HEALTHY:
             raise RuntimeError("Application must deploy and report its real healthy lifecycle first")
-        self.lease.acquire()
+        with self._lock:
+            if self._prepare_thread is not None or self.cancel.is_set():
+                raise RuntimeError("Customer preparation is already active or cancelled")
+            self._prepare_thread = threading.current_thread()
+            self._prepare_done.clear()
         try:
+            self.lease.acquire()
             # Declare the independent worker routing before seed/baseline observation.
             first_group = self.app.database_groups[0]
             writer = next(member for member in first_group.members if member.role == "writer")
@@ -153,7 +191,9 @@ class RecoveryController:
                 route_tenant=self.route_tenant,
                 routes_ready=lambda: self._routes_ready(writer),
                 fill_workers=self._seed_fill_workers(),
+                cancel=self.cancel,
             )
+            self._seeder = seeder
             self.seed_result = seeder.seed(self.app.tier)
             account = next(account for account in self.seed_result.tenants if account.group == "group-0")
             network = self.network_factory(self.app, first_group) if self.network_factory else None
@@ -167,6 +207,7 @@ class RecoveryController:
                 network=network,
                 delivery_url=self.delivery_url,
                 client_factory=self.client_factory,
+                cancel=self.cancel,
             )
             for tenant in self.seed_result.tenants:
                 self._clients[tenant.tenant_id] = self.client_factory(
@@ -175,13 +216,18 @@ class RecoveryController:
             plan = plan_noise(
                 self.app.tier, self.seeds.noise, horizon_seconds=noise_horizon_seconds, enabled=enable_noise
             )
-            self.noise = NoiseExecutor(plan, self.execute_noise, self.private_dir / "noise.jsonl")
+            self.noise = NoiseExecutor(
+                plan, self.execute_noise, self.private_dir / "noise.jsonl", horizon_seconds=noise_horizon_seconds
+            )
             self.start_workload()
             self.noise.start()
             return self.seed_result
         except BaseException:
             self.stop()
             raise
+        finally:
+            self._prepare_thread = None
+            self._prepare_done.set()
 
     def _configure_tenant_route(self, tenant_id, group_name):
         self._route_tenant_writer(tenant_id, group_name)
@@ -190,23 +236,29 @@ class RecoveryController:
     def _seed_fill_workers(self):
         """Bound preparation by the deployed API replicas and legitimate tenants."""
         regions = len(self.app.regions)
-        return min(16, regions * self.app.tier.api_per_zone * 2, regions * self.app.tier.tenants_per_zone)
+        return min(64, regions * self.app.tier.api_per_zone * 2, regions * self.app.tier.tenants_per_zone)
 
     def _routes_ready(self, writer):
+        deadline = time.monotonic() + 300
+        self._prepare_worker_route(writer, timeout=300)
         wait = getattr(self.app, "await_database_routes", None)
         if callable(wait):
-            wait(dict(self._tenant_routes), timeout_seconds=120)
+            remaining = int(deadline - time.monotonic())
+            if remaining < 1:
+                raise TimeoutError("Normal route preparation exceeded its shared deadline")
+            wait(dict(self._tenant_routes), timeout_seconds=remaining, cancel=self.cancel)
         elif len(self.app.database_groups) > 1:
             raise RuntimeError("Multiple groups require proof of actual mounted tenant routes before seeding")
-        self._prepare_worker_route(writer)
 
-    def _prepare_worker_route(self, writer):
+    def _prepare_worker_route(self, writer, *, timeout=90):
         from urllib.parse import urlsplit
 
         group = next(group for group in self.app.database_groups if writer in group.members)
         candidate = next(member for member in group.members if member.role == "candidate")
         host, port = self.writer_endpoint or (urlsplit(writer.origin).hostname, urlsplit(writer.origin).port or 3306)
-        rewrite_worker_group_route(self.app, candidate.region, group.name, host, port)
+        rewrite_worker_group_route(
+            self.app, candidate.region, group.name, host, port, timeout=timeout, cancel=self.cancel, await_projection=False
+        )
 
     def _assert_namespace(self, namespace):
         result = self.app._client().core_v1_api.read_namespace(namespace, _request_timeout=5)
@@ -222,17 +274,30 @@ class RecoveryController:
         with self._lock:
             self._epoch_events.setdefault(epoch, set()).add(operation.event_id)
             self.ledger.request(operation, epoch, effects=effects)
-        succeeded = client.submit(operation, epoch=epoch, attempts=1, effects=effects)
+        succeeded = self._submit_customer(client, operation, epoch, effects)
         with self._lock:
             if not succeeded and any(row["event_id"] == operation.event_id for row in self.ledger.unresolved()):
                 self._pending[operation.event_id] = (operation, epoch, client, effects)
         return succeeded
 
+    @staticmethod
+    def _submit_customer(client, operation, epoch, effects):
+        try:
+            return client.submit(operation, epoch=epoch, attempts=1, effects=effects)
+        except InvalidApplicationReceipt:
+            # An app-caused invalid response leaves the owner intent unresolved;
+            # continue independent tenants without inventing an acknowledgment.
+            return False
+
     def _close_resolved_epochs(self):
-        pending = {row["epoch"] for row in self.ledger.pending_requests()}
+        pending = self.ledger.pending_epochs()
         for epoch in tuple(self._epoch_events):
             if epoch < self._epoch and epoch not in pending and not self._inflight_epochs.get(epoch, 0):
                 self.ledger.close_epoch(epoch)
+                for group, journey in self._traffic_by_epoch.pop(epoch, {}).items():
+                    previous = self._traffic_closed.get(group)
+                    if previous is None or journey[0] > previous[0]:
+                        self._traffic_closed[group] = journey
                 del self._epoch_events[epoch]
 
     def traffic_step(self, *, tenant=None, group_name=None):
@@ -275,7 +340,7 @@ class RecoveryController:
             if retry:
                 identity, (operation, retry_epoch, retry_client, effects) = retry
                 requests += 1
-                success = retry_client.submit(operation, epoch=retry_epoch, attempts=1, effects=effects)
+                success = self._submit_customer(retry_client, operation, retry_epoch, effects)
                 acknowledged += int(success)
                 with self._lock:
                     if success or not any(row["event_id"] == identity for row in self.ledger.unresolved()):
@@ -316,7 +381,16 @@ class RecoveryController:
                     account.owner_id,
                 )
                 requests += 1
-                acknowledged += int(self._remember(final, epoch, client))
+                completed = self._remember(final, epoch, client)
+                acknowledged += int(completed)
+                if completed:
+                    with self._lock:
+                        sequence = self._traffic_sequences.get(account.group, 0) + 1
+                        self._traffic_sequences[account.group] = sequence
+                        history = self._traffic_history.setdefault(account.group, deque(maxlen=64))
+                        journey = (sequence, epoch, (first.event_id, final.event_id), time.monotonic())
+                        history.append(journey)
+                        self._traffic_by_epoch.setdefault(epoch, {})[account.group] = journey
             return {"requests": requests, "acknowledged": acknowledged}
         finally:
             with self._lock:
@@ -326,6 +400,37 @@ class RecoveryController:
                     self._inflight_epochs[epoch] -= 1
                     self._inflight_groups[account.group] -= 1
                 self._close_resolved_epochs()
+
+    def traffic_facts(self):
+        """Private owner progress, never a workload-reported health or verdict."""
+        with self._lock:
+            if self.noise:
+                self.noise.assert_available()
+                self.noise.coverage_facts()
+            capacity = getattr(self.app, "_capacity_monitor", None)
+            if capacity is not None:
+                capacity.assert_available()
+            if self.workload_error is not None or self.cancel.is_set():
+                raise RuntimeError("Private customer traffic owner is unavailable")
+            if self._threads and not all(thread.is_alive() for thread in self._threads):
+                raise RuntimeError("Private customer traffic worker exited unexpectedly")
+            now = time.monotonic()
+            groups = sorted({account.group for account in self.seed_result.tenants})
+            return {
+                "running": bool(self._threads)
+                and all(thread.is_alive() for thread in self._threads)
+                and not self.cancel.is_set()
+                and self.workload_error is None,
+                "groups": {
+                    group: {
+                        "age_seconds": now - self._traffic_history[group][-1][3]
+                        if self._traffic_history.get(group)
+                        else None,
+                        "journeys": [list(self._traffic_closed[group][:3])] if group in self._traffic_closed else [],
+                    }
+                    for group in groups
+                },
+            }
 
     def _workload(self, group_name):
         groups = {account.group for account in self.seed_result.tenants}
@@ -351,7 +456,10 @@ class RecoveryController:
             thread.start()
 
     def inject_fault(self):
-        if not self.fault or self.workload_error:
+        capacity = getattr(self.app, "_capacity_monitor", None)
+        if capacity is not None:
+            capacity.assert_available()
+        if not self.fault or self.workload_error or self.cancel.is_set():
             raise RuntimeError("Real prepared workload is unavailable")
         if self.app.inventory.phase == LifecyclePhase.HEALTHY:
             self.app.inventory = self.app.inventory.transition(LifecyclePhase.BASELINE)
@@ -363,12 +471,13 @@ class RecoveryController:
 
     def verification_inputs(self, *, compact=False):
         with self._lock:
+            capacity = getattr(self.app, "_capacity_monitor", None)
+            if capacity is not None:
+                capacity.assert_available()
             if not self.seed_result or self.workload_error:
                 raise RuntimeError("Cannot verify incomplete or failed customer traffic")
-            if self.noise and any(
-                receipt.admitted and receipt.status in {"failed", "not-executed"} for receipt in self.noise.receipts
-            ):
-                raise RuntimeError("A required real-noise action failed or exceeded its execution budget")
+            if self.noise:
+                self.noise.assert_available()
             self._close_resolved_epochs()
             if compact:
                 return CompactVerificationInputs(
@@ -389,8 +498,13 @@ class RecoveryController:
 
     def verification_snapshot(self, builder):
         """Copy a consistent private snapshot while serving traffic continues."""
-        with self._lock, self.ledger._lock:
-            return builder(self.verification_inputs(compact=True), self.ledger)
+        with ExitStack() as snapshots:
+            with self._lock:
+                inputs = self.verification_inputs(compact=True)
+                ledger = snapshots.enter_context(self.ledger.read_snapshot(cancel=self.cancel))
+            # Large receipt/effect scans use their own immutable WAL view.
+            # Admissions, acknowledgments and noise never wait for the builder.
+            return builder(inputs, ledger)
 
     def resolve_pending(self, *, deadline_seconds=30):
         """Retry exact original unknown outcomes without pausing other group traffic."""
@@ -413,8 +527,10 @@ class RecoveryController:
                 self._pending.pop(identity, None)
         return not (original & remaining)
 
-    def reference_repair(self):
-        return DatabaseReferenceRepair(self.app, self.private_dir / "normal-recovery").run()
+    def reference_repair(self, *, timeout=600):
+        return DatabaseReferenceRepair(self.app, self.private_dir / "normal-recovery", cancel=self.cancel).run(
+            timeout=timeout
+        )
 
     def _account(self, target):
         region, index = target.split("/")
@@ -483,8 +599,8 @@ class RecoveryController:
                     for owner in (replica.metadata.owner_references or [])
                 ):
                     owned.append(pod)
-        if not owned:
-            raise RuntimeError("No serving worker belongs to the captured deployment")
+        if len(owned) < 2:
+            raise RuntimeError("Worker recycle requires redundant captured serving workers")
         pod = owned[0]
         core.delete_namespaced_pod(
             pod.metadata.name, region.namespace, body={"preconditions": {"uid": pod.metadata.uid}}, _request_timeout=5
@@ -524,29 +640,40 @@ print(json.dumps({'indexed_copies':count,'source_events':len(rows)}))
         return result
 
     def stop(self, *, timeout=60):
-        if self._stopped:
-            return
         self.cancel.set()
         deadline = time.monotonic() + timeout
-        errors = []
-        if self.noise:
-            try:
-                self.noise.stop(timeout=max(0, deadline - time.monotonic()))
-            except Exception as exc:
-                errors.append(exc)
-        for thread in self._threads or ([self._thread] if self._thread else []):
-            thread.join(timeout=max(0, deadline - time.monotonic()))
-            if thread.is_alive():
-                errors.append(RuntimeError("Owned customer traffic exceeded its stop deadline"))
-        if self.fault:
-            try:
-                self.fault.stop()
-            except Exception as exc:
-                errors.append(exc)
-        if errors:
-            raise RuntimeError("Owned lifecycle cleanup incomplete") from errors[0]
-        for client in self._clients.values():
-            client.close()
-        self.ledger.close()
-        self.lease.close()
-        self._stopped = True
+        if self._prepare_thread is not threading.current_thread() and not self._prepare_done.wait(
+            timeout=max(0, deadline - time.monotonic())
+        ):
+            raise RuntimeError("Owned customer preparation exceeded its stop deadline")
+        with self._stop_lock:
+            if self._stopped:
+                return
+            errors = []
+            drain = getattr(self._seeder, "drain", None)
+            if callable(drain):
+                try:
+                    drain(timeout=max(0, deadline - time.monotonic()))
+                except Exception as exc:
+                    errors.append(exc)
+            if self.noise:
+                try:
+                    self.noise.stop(timeout=max(0, deadline - time.monotonic()))
+                except Exception as exc:
+                    errors.append(exc)
+            for thread in self._threads or ([self._thread] if self._thread else []):
+                thread.join(timeout=max(0, deadline - time.monotonic()))
+                if thread.is_alive():
+                    errors.append(RuntimeError("Owned customer traffic exceeded its stop deadline"))
+            if self.fault:
+                try:
+                    self.fault.stop()
+                except Exception as exc:
+                    errors.append(exc)
+            if errors:
+                raise RuntimeError("Owned lifecycle cleanup incomplete") from errors[0]
+            for client in self._clients.values():
+                client.close()
+            self.ledger.close()
+            self.lease.close()
+            self._stopped = True

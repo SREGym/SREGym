@@ -52,6 +52,44 @@ def receipt(operation):
     }
 
 
+def test_parent_receipt_rpc_preserves_closed_provenance_and_rejects_open_history(state, tmp_path):
+    ledger, original, journal = state
+    project = replace(
+        original,
+        entity_id=original.project_id,
+        kind="project.create",
+        payload_json=canonical({"slug": "router", "name": "Router", "default_ref": "refs/heads/main"}),
+    )
+    epoch = journal.begin_epoch()
+    journal.request(epoch, "group-0", project.observed_row(), effects(project))
+    journal.acknowledge(epoch, project.event_id, "http://api", 1, 201, receipt(project))
+    with pytest.raises(ValueError, match="absent"):
+        journal.project_receipts([[project.tenant_id, project.project_id]])
+    journal.close_epoch(epoch)
+    payload, resources = snapshot_oracle(SimpleNamespace(journal=journal), tmp_path)
+    restored = restore_oracle(
+        payload,
+        lambda index: RemoteWorkload(
+            index, lambda i, op, args: _resource_call(resources, {"index": i, "op": op, "args": args})
+        ),
+    ).journal
+    assert restored.project_receipts([[project.tenant_id, project.project_id]]) == [
+        {
+            "group": "group-0",
+            "operations": [project.observed_row()],
+            "effects": effects(project),
+            "epochs": [epoch],
+        }
+    ]
+    for invalid in (
+        [[project.tenant_id]],
+        [[project.tenant_id, "bad-id"]],
+        [[project.tenant_id, project.project_id]] * 2,
+    ):
+        with pytest.raises(ValueError):
+            journal.project_receipts(invalid)
+
+
 def test_private_handle_roundtrip_keeps_database_and_path_outside_snapshot(state, tmp_path):
     ledger, operation, journal = state
     payload, resources = snapshot_oracle(SimpleNamespace(journal=journal), tmp_path)
@@ -174,5 +212,50 @@ def test_receiver_pipe_transports_only_actual_facts_not_listener_or_database(sta
         assert facts["receipts"][0]["application_count"] == 1
         with pytest.raises(ValueError, match="bounded"):
             restored.delivery_receipts([identity] * 101)
+    finally:
+        observer.close()
+
+
+def test_continuing_progress_only_returns_closed_actual_acknowledgments_over_private_handle(state, tmp_path):
+    ledger, first, journal = state
+    final = replace(first, event_id=str(uuid4()), client_revision=2, kind="issue.update")
+    epoch = ledger.begin_epoch()
+    for operation in (first, final):
+        ledger.request(operation, epoch, effects=effects(operation))
+        ledger.acknowledge(operation.event_id, "http://api", 1, 201)
+    journal.traffic_source = lambda: {
+        "running": True,
+        "groups": {"group-0": {"age_seconds": 0.1, "journeys": [[1, epoch, [first.event_id, final.event_id]]]}},
+    }
+    assert journal.traffic_progress()["groups"] == []
+    ledger.close_epoch(epoch)
+    payload, resources = snapshot_oracle(SimpleNamespace(journal=journal), tmp_path)
+    assert first.event_id.encode() not in payload and b"traffic_source" not in payload
+    restored = restore_oracle(
+        payload,
+        lambda index: RemoteWorkload(
+            index, lambda i, op, args: _resource_call(resources, {"index": i, "op": op, "args": args})
+        ),
+    ).journal
+    observed = restored.traffic_progress()
+    assert observed["running"] and observed["groups"][0]["operations"] == [first.observed_row(), final.observed_row()]
+    assert observed["groups"][0]["effects"] == effects(first) + effects(final)
+
+
+def test_receiver_capacity_failure_after_snapshot_remains_harness_failure(state, tmp_path):
+    _ledger, _operation, journal = state
+    observer = DeliveryObserver(tmp_path / "receiver.sqlite", delivery_address="127.0.0.1")
+    journal.observer = observer
+    try:
+        payload, resources = snapshot_oracle(SimpleNamespace(journal=journal), tmp_path)
+        restored = restore_oracle(
+            payload,
+            lambda index: RemoteWorkload(
+                index, lambda i, op, args: _resource_call(resources, {"index": i, "op": op, "args": args})
+            ),
+        ).journal
+        observer.capacity_error = "storage full"
+        with pytest.raises((RuntimeError, VerifierError), match="capacity"):
+            restored.delivery_receipts(["a" * 64])
     finally:
         observer.close()

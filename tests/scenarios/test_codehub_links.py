@@ -214,6 +214,7 @@ def test_trusted_container_uses_actual_separate_listeners_and_strict_resources(r
     assert kwargs["nano_cpus"] == 1_000_000_000
     assert kwargs["mem_limit"] == kwargs["memswap_limit"] == 256 * 1024 * 1024
     assert kwargs["pids_limit"] == 64
+    assert kwargs["environment"]["GOMAXPROCS"] == "1"
     assert kwargs["restart_policy"] == {"Name": "no"}
     assert not {"volumes", "mounts", "ports", "pid_mode", "devices"}.intersection(kwargs)
     proxy = next(iter(rig.api.proxies.values()))

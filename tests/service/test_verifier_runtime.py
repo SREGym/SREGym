@@ -772,6 +772,85 @@ def test_owner_oracle_declares_the_scratch_budget_without_host_grading(monkeypat
     oracle.evaluate.assert_not_called()
 
 
+@pytest.mark.parametrize("value", [True, 0, 255, 2049, 512.0, "512"])
+def test_invalid_process_budget_refuses_before_any_verifier_preparation(monkeypatch, value):
+    runtime = VerifierRuntime()
+    prepare = Mock()
+    monkeypatch.setattr(runtime, "prepare", prepare)
+    with pytest.raises(VerifierError, match="process budget"):
+        runtime.evaluate_snapshot(b"trusted", process_limit=value)
+    prepare.assert_not_called()
+
+
+def test_private_process_budget_preserves_container_isolation_and_cpu_memory_limits():
+    runtime = VerifierRuntime()
+    runtime.image, runtime.network = "sha256:" + "a" * 64, "bridge"
+    command = runtime.docker_command("owned", process_limit=784)
+    assert "--pids-limit=784" in command and "--env=GOMAXPROCS=2" in command
+    assert {"--cpus=2", "--memory=2g", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges"} <= set(
+        command
+    )
+    assert not any("privileged" in argument or "docker.sock" in argument for argument in command)
+
+
+@pytest.mark.parametrize("resource", ["cpu_limit", "memory_gib_limit"])
+@pytest.mark.parametrize("value", [True, 0, 9, -1, 4.0, "4"])
+def test_invalid_worker_capacity_refuses_before_any_preparation(monkeypatch, resource, value):
+    runtime = VerifierRuntime()
+    prepare = Mock()
+    monkeypatch.setattr(runtime, "prepare", prepare)
+    with pytest.raises(VerifierError, match="budget"):
+        runtime.evaluate_snapshot(b"trusted", **{resource: value})
+    prepare.assert_not_called()
+
+
+@pytest.mark.parametrize("capacity", [2, 4, 8])
+def test_larger_trusted_worker_capacity_retains_all_isolation_controls(capacity):
+    runtime = VerifierRuntime()
+    runtime.image, runtime.network = "sha256:" + "a" * 64, "bridge"
+    command = runtime.docker_command("owned", process_limit=784, cpu_limit=capacity, memory_gib_limit=capacity)
+    assert {
+        f"--cpus={capacity}",
+        f"--memory={capacity}g",
+        "--user=10001:10001",
+        "--pids-limit=784",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--env=GOMAXPROCS=2",
+    } <= set(command)
+    assert not any("privileged" in option or "docker.sock" in option for option in command)
+
+
+def test_frozen_oracle_capacity_reaches_worker_launch_without_host_evaluation(monkeypatch):
+    runtime = VerifierRuntime()
+    runtime.kubeconfig, runtime.network = {}, "bridge"
+    oracle = SimpleNamespace(
+        verification_cpu_limit=8, verification_memory_gib_limit=8, problem=SimpleNamespace(), evaluate=Mock()
+    )
+    monkeypatch.setattr(verifier_runtime, "verifier_connection", lambda *a, **kw: ({}, "bridge"))
+    monkeypatch.setattr(verifier_runtime, "snapshot_oracle", lambda *a: (b"trusted", []))
+    snapshot = Mock(return_value={"success": True})
+    monkeypatch.setattr(runtime, "evaluate_snapshot", snapshot)
+    assert runtime.evaluate(oracle) == {"success": True}
+    assert snapshot.call_args.kwargs["cpu_limit"] == snapshot.call_args.kwargs["memory_gib_limit"] == 8
+    oracle.evaluate.assert_not_called()
+
+
+def test_preparation_refreshes_process_budget_before_serializing_verification(monkeypatch):
+    runtime = VerifierRuntime()
+    runtime.kubeconfig, runtime.network = {}, "bridge"
+    oracle = SimpleNamespace(verification_process_limit=256, evaluate=Mock())
+    oracle.problem = SimpleNamespace(prepare_verification=lambda: setattr(oracle, "verification_process_limit", 784))
+    monkeypatch.setattr(verifier_runtime, "verifier_connection", lambda *a, **kw: ({}, "bridge"))
+    monkeypatch.setattr(verifier_runtime, "snapshot_oracle", lambda *a: (b"trusted", []))
+    snapshot = Mock(return_value={"success": True})
+    monkeypatch.setattr(runtime, "evaluate_snapshot", snapshot)
+    assert runtime.evaluate(oracle) == {"success": True}
+    assert snapshot.call_args.kwargs["process_limit"] == 784
+    oracle.evaluate.assert_not_called()
+
+
 def test_scratch_initializer_and_grader_mount_only_a_private_named_volume(monkeypatch):
     runtime, commands, _state = _scratch_protocol_runtime(monkeypatch)
     assert runtime.evaluate_snapshot(b"trusted", scratch_bytes=1024**3) == {"success": True}

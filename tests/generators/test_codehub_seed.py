@@ -190,7 +190,7 @@ def test_all_legitimate_group_routes_exist_before_identity_or_create(tmp_path):
 
 @pytest.mark.parametrize("account_count", [6, 96])
 @pytest.mark.parametrize("remaining", [0, 1, 2])
-@pytest.mark.parametrize("workers", [1, 4, 16])
+@pytest.mark.parametrize("workers", [1, 4, 16, 48, 64])
 def test_bulk_customer_journeys_visit_every_tenant_and_preserve_exact_tail(tmp_path, account_count, remaining, workers):
     tenants = tuple(account() for _ in range(account_count))
     clients = []
@@ -259,9 +259,9 @@ def history_seeder(ledger, factory, *, workers=2):
     )
 
 
-@pytest.mark.parametrize("workers", [True, 0, -1, 17, 1.5])
+@pytest.mark.parametrize("workers", [True, 0, -1, 65, 1.5])
 def test_bulk_worker_count_is_explicitly_bounded_before_any_network(workers):
-    with pytest.raises(ValueError, match="1..16 workers"):
+    with pytest.raises(ValueError, match="1..64 workers"):
         history_seeder(None, lambda *_args: pytest.fail("No client should be created"), workers=workers)
 
 
@@ -448,6 +448,62 @@ def test_partial_client_creation_closes_existing_clients_before_failure(tmp_path
         seeder.fill_customer_history((account(), account()), 6, epoch=ledger.begin_epoch())
     assert clients[0].closed and seeder.accepted == 0
     ledger.close()
+
+
+def test_expired_worker_join_preserves_client_and_ledger_until_retry(tmp_path):
+    ledger = ReceiptLedger(tmp_path / "receipts.sqlite")
+    entered, release = threading.Event(), threading.Event()
+    clients, errors = [], []
+
+    class DelayedClient(AcknowledgingClient):
+        closed = False
+
+        def submit(self, operation, *, epoch, effects=(), **kwargs):
+            self.ledger.request(operation, epoch, effects=effects)
+            entered.set()
+            assert release.wait(3)
+            assert not self.closed
+            self.ledger._db.execute("SELECT COUNT(*) FROM requests").fetchone()
+            return False
+
+        def close(self):
+            self.closed = True
+
+    def factory(_origin, _token, source):
+        client = DelayedClient(source)
+        clients.append(client)
+        return client
+
+    seeder = history_seeder(ledger, factory, workers=2)
+    seeder.WORKER_STOP_SECONDS = 0.02
+    epoch = ledger.begin_epoch()
+
+    def prepare():
+        try:
+            seeder.fill_customer_history((account(), account()), 6, epoch=epoch)
+        except RuntimeError as error:
+            errors.append(str(error))
+
+    thread = threading.Thread(target=prepare)
+    try:
+        thread.start()
+        assert entered.wait(2)
+        seeder.cancel.set()
+        thread.join(1)
+        assert not thread.is_alive() and errors and seeder._workers
+        assert all(not client.closed for client in clients)
+        with pytest.raises(RuntimeError, match="workers did not stop"):
+            seeder.drain(timeout=0.01)
+        assert ledger.pending_requests() and all(not client.closed for client in clients)
+        release.set()
+        seeder.drain(timeout=2)
+        assert not seeder._workers and not seeder._fill_clients and all(client.closed for client in clients)
+        assert ledger.cut().operations == 0
+    finally:
+        release.set()
+        thread.join(2)
+        seeder.drain(timeout=2)
+        ledger.close()
 
 
 def test_partial_worker_start_joins_started_thread_and_closes_clients(tmp_path, monkeypatch):

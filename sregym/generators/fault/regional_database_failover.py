@@ -2,6 +2,7 @@
 
 import copy
 import json
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ import httpx
 
 from sregym.generators.workload.codehub import Operation, WorkloadClient, canonical
 from sregym.generators.workload.codehub_seed import account_subscriptions, expected_effects
+from sregym.generators.workload.http_deadline import DeadlineTransport
 
 
 def service_name(member):
@@ -175,6 +177,7 @@ class RegionalFailoverFault:
         network=None,
         client_factory=WorkloadClient,
         promotion_timeout=60,
+        cancel=None,
     ):
         self.app, self.endpoints, self.account, self.ledger = app, endpoints, account, ledger
         self.private_dir, self.service_token = private_dir, service_token
@@ -185,6 +188,33 @@ class RegionalFailoverFault:
         self.client_factory, self.promotion_timeout = client_factory, promotion_timeout
         self.evidence = None
         self.subscriptions = account_subscriptions(account, delivery_url)
+        self.cancel = cancel if cancel is not None else threading.Event()
+        self._deadline = None
+
+    def _remaining(self, maximum=30):
+        if self.cancel.is_set():
+            raise RuntimeError("Regional incident preparation cancelled")
+        capacity = getattr(self.app, "_capacity_monitor", None)
+        if capacity is not None:
+            capacity.assert_available()
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Regional incident preparation deadline expired")
+        return min(maximum, remaining)
+
+    def _sql(self, member, query):
+        self._remaining()
+        from sregym.conductor.scenarios.codehub_reference_repair import DatabaseReferenceRepair
+        from sregym.service.apps.codehub import CodeHub
+
+        if isinstance(self.app, CodeHub):
+            repair = DatabaseReferenceRepair(self.app, self.private_dir, cancel=self.cancel)
+            repair._deadline = self._deadline
+            return repair._sql(member, query)
+        return self.app.mysql_command(member, query)
+
+    def _json(self, member, query):
+        return [json.loads(line) for line in self._sql(member, query).splitlines() if line.startswith("{")]
 
     def prepare_worker_routing(self):
         """Pin only the selected ordinary group before healthy baseline observations."""
@@ -196,8 +226,7 @@ class RegionalFailoverFault:
         )
 
     def present(self, member, event_id):
-        rows = sql_json(
-            self.app,
+        rows = self._json(
             member,
             f"SELECT JSON_OBJECT('present',COUNT(*)) FROM codehub.journal WHERE event_id='{event_id}';",
         )
@@ -207,7 +236,7 @@ class RegionalFailoverFault:
         while time.monotonic() < deadline:
             if self.present(member, event_id):
                 return
-            time.sleep(0.25)
+            self.cancel.wait(min(0.25, self._remaining()))
         raise RuntimeError("The real regional replica did not receive the required baseline operation")
 
     def _operation(self, issue, revision, payload):
@@ -225,10 +254,14 @@ class RegionalFailoverFault:
     def inject(self, *, epoch=None, suffix_operations=32):
         if self.evidence is not None or suffix_operations < 1:
             raise ValueError("Incident requires a fresh lifecycle and positive real suffix")
+        self._deadline = time.monotonic() + 2 * self.promotion_timeout + 120
+        self._remaining()
         self.private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         epoch = self.ledger.begin_epoch() if epoch is None else epoch
         original = self.client_factory(self.endpoints[self.writer.region].api, self.account.owner_token, self.ledger)
         promoted = self.client_factory(self.endpoints[self.candidate.region].api, self.account.owner_token, self.ledger)
+        for client in (original, promoted):
+            client.cancel, client.deadline = self.cancel, self._deadline
         issue = str(uuid4())
         base = self._operation(
             issue,
@@ -255,40 +288,55 @@ class RegionalFailoverFault:
         )
         restored_at = None
         try:
+            self._remaining()
             if not original.submit(base, epoch=epoch, effects=expected_effects(base, self.subscriptions)):
                 raise RuntimeError("Baseline request did not commit")
             self._wait_present(self.candidate, base.event_id, time.monotonic() + self.promotion_timeout)
-            with httpx.Client(headers={"Authorization": f"Bearer {self.service_token}"}, timeout=5) as topology:
-                response = topology.get(self.endpoints[self.candidate.region].topology + "/v1/topology")
+            with httpx.Client(
+                headers={"Authorization": f"Bearer {self.service_token}"},
+                timeout=5,
+                transport=DeadlineTransport(cancelled=self.cancel.is_set),
+            ) as topology:
+                response = topology.get(
+                    self.endpoints[self.candidate.region].topology + "/v1/topology",
+                    extensions={"absolute_deadline": time.monotonic() + self._remaining(5)},
+                )
                 response.raise_for_status()
                 if response.json().get("promoted"):
                     raise RuntimeError("Candidate was already promoted before the incident")
                 # Allow an actual manager probe after replica synchronization; no direct promotion call.
-                time.sleep(2.5)
+                self.cancel.wait(min(2.5, self._remaining()))
+                self._remaining()
                 self.network.apply()
-                output = self.app.mysql_command(
+                output = self._sql(
                     self.writer, "SELECT ID FROM information_schema.PROCESSLIST WHERE USER='replication';"
                 )
                 for line in output.splitlines():
                     if line.isdecimal():
-                        self.app.mysql_command(self.writer, f"KILL CONNECTION {int(line)};")
+                        self._sql(self.writer, f"KILL CONNECTION {int(line)};")
+                self._remaining()
                 if not original.submit(old, epoch=epoch, effects=expected_effects(old, self.subscriptions)):
                     raise RuntimeError("Original writer's unreplicated suffix did not commit")
                 deadline = time.monotonic() + self.promotion_timeout
                 while time.monotonic() < deadline:
-                    response = topology.get(self.endpoints[self.candidate.region].topology + "/v1/topology")
+                    response = topology.get(
+                        self.endpoints[self.candidate.region].topology + "/v1/topology",
+                        extensions={"absolute_deadline": time.monotonic() + self._remaining(5)},
+                    )
                     response.raise_for_status()
                     if response.json().get("promoted"):
                         break
-                    time.sleep(0.25)
+                    self.cancel.wait(min(0.25, self._remaining()))
                 else:
                     raise RuntimeError("Real database probe failure did not trigger configured regional promotion")
             promoted_at = time.time_ns()
             if self.present(self.candidate, old.event_id):
                 raise RuntimeError("The claimed partition did not halt the established replication path")
+            self._remaining()
             if not promoted.submit(new, epoch=epoch, effects=expected_effects(new, self.subscriptions)):
                 raise RuntimeError("Promoted writer's divergent revision did not commit")
             for index in range(suffix_operations):
+                self._remaining()
                 payload = {
                     "title": f"Connection reuse review {index + 1}",
                     "body": "Track connection reuse and bounded retry behavior for gateway requests",
@@ -313,8 +361,7 @@ class RegionalFailoverFault:
             new_retained = self.present(self.candidate, new.event_id) and not self.present(self.candidate, old.event_id)
             if not old_retained or not new_retained:
                 raise RuntimeError("Both actual accepted histories were not retained at handoff")
-            rows = sql_json(
-                self.app,
+            rows = self._json(
                 self.candidate,
                 "SELECT JSON_OBJECT('count',COUNT(*)) FROM codehub.outbox WHERE state!='done';",
             )

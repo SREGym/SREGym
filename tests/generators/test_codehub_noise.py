@@ -3,6 +3,8 @@
 import json
 import threading
 
+import pytest
+
 from sregym.conductor.scenarios.database_recovery import NoiseDecision, NoiseEvent, NoisePlan
 from sregym.generators.noise.codehub import NoiseExecutor
 
@@ -40,6 +42,29 @@ def test_empty_or_failed_execution_is_not_success(tmp_path):
     assert executor.receipts[0].reason == "RuntimeError"
 
 
+@pytest.mark.parametrize("elapsed,covered", [(50, True), (61, False)])
+def test_completed_schedule_only_claims_noisy_windows_inside_its_finite_policy(tmp_path, monkeypatch, elapsed, covered):
+    from sregym.generators.noise import codehub as module
+
+    clock = [0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    executor = NoiseExecutor(
+        NoisePlan("recovery-noise-v2", (decision("real"),)),
+        lambda *_: {"requests": 2}, tmp_path / "noise.jsonl", horizon_seconds=60,
+    )
+    executor.run()
+    clock[0] = elapsed
+    executor.assert_available()
+    assert executor.completed.is_set() and executor.runner_error is None
+    if covered:
+        facts = executor.coverage_facts()
+        assert facts["enabled"] is True and facts["executed_events"] == 1
+    else:
+        with pytest.raises(RuntimeError, match="does not cover"):
+            executor.coverage_facts()
+        assert executor.runner_error is None
+
+
 def test_runtime_cap_and_cancellation_are_measured(tmp_path):
     started = threading.Event()
 
@@ -58,3 +83,57 @@ def test_runtime_cap_and_cancellation_are_measured(tmp_path):
     assert receipts["over-cap"].status in {"not-executed", "cancelled"}
     assert receipts["future"].status == "cancelled"
     assert all(row.status != "executed" for row in receipts.values())
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_completed_noise_is_valid_but_private_evidence_write_failure_is_retained(tmp_path, failure):
+    executor = NoiseExecutor(
+        NoisePlan("recovery-noise-v2", (decision("real"),)), lambda *_: {"requests": 2}, tmp_path / "noise.jsonl"
+    )
+    if failure:
+        executor.evidence_path.mkdir()
+        with pytest.raises(IsADirectoryError):
+            executor.run()
+        assert executor.runner_error == "IsADirectoryError" and not executor.completed.is_set()
+        with pytest.raises(RuntimeError, match="owner is unavailable"):
+            executor.assert_available()
+    else:
+        executor.run()
+        executor.assert_available()
+        assert executor.completed.is_set()
+
+
+@pytest.mark.parametrize("failure", [None, "action", "persistence"])
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_late_noise_failure_survives_stop_but_cooperative_cancel_is_valid(tmp_path, failure):
+    entered = threading.Event()
+    path = tmp_path / "noise.jsonl"
+
+    def execute(_event, cancel):
+        entered.set()
+        assert cancel.wait(3)
+        if failure == "action":
+            raise RuntimeError("Late real execution failure")
+        return {"requests": 0}
+
+    executor = NoiseExecutor(
+        NoisePlan("recovery-noise-v2", (decision("active"), decision("future", at=10))),
+        execute, path, horizon_seconds=60,
+    )
+    executor.start()
+    assert entered.wait(2)
+    assert executor.coverage_facts()["enabled"] is True
+    if failure == "persistence":
+        path.mkdir()
+    executor.stop(timeout=3)
+    assert not executor._thread.is_alive()
+    if failure is None:
+        executor.assert_completed()
+        assert all(row.status == "cancelled" for row in executor.receipts)
+    else:
+        with pytest.raises(RuntimeError, match="execution or evidence failed"):
+            executor.assert_completed()
+        if failure == "action":
+            assert executor.receipts[0].status == "failed"
+        else:
+            assert executor.runner_error == "IsADirectoryError"

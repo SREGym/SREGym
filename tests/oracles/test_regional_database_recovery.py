@@ -3,13 +3,16 @@
 import hashlib
 import io
 import json
+import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import zipfile
 from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -34,6 +37,7 @@ from sregym.conductor.oracles.regional_database_recovery import (
     GitProjectExpectation,
     GitRefExpectation,
     HTTPServiceTarget,
+    ProcessTarget,
     RecoveryOutcomePlan,
     RegionalDatabaseRecoveryOracle,
     SQLTarget,
@@ -70,6 +74,21 @@ def plan():
     )
 
 
+def process_targets(outcomes):
+    return tuple(
+        ProcessTarget(target.region, target.namespace, name, kind, replicas, uid(5000 + index * 10 + role))
+        for index, target in enumerate(outcomes.api_targets)
+        for role, (name, kind, replicas) in enumerate(
+            (
+                ("worker", "deployment", 2),
+                ("queue", "statefulset", 3),
+                ("delivery", "statefulset", 1),
+                ("topology", "deployment", 1),
+            )
+        )
+    )
+
+
 def oracle():
     databases = tuple(
         SQLTarget(
@@ -101,6 +120,26 @@ def test_live_evaluation_has_no_host_fallback(monkeypatch):
     assert verdict["success"] is False
     assert verdict["reason"] == "recovery_container_required"
     assert verdict["failure_class"] == "harness_error"
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_private_pid_exhaustion_uses_kernel_evidence_without_classifying_product_errors(monkeypatch, exhausted):
+    from sregym.conductor.oracles import regional_database_recovery as module
+
+    value = oracle()
+    value.capture_baseline()
+    value.fresh_journal = object()
+    monkeypatch.setenv("SREGYM_VERIFIER_CONTAINER", "1")
+    monkeypatch.setattr(module.Path, "read_text", lambda _: "max " + str(int(exhausted)) + "\n")
+    monkeypatch.setattr(
+        value, "_http_inventory", lambda _: module._owned_command_failure("Owned kubectl startup failed")
+    )
+    verdict = value.evaluate()
+    assert verdict["success"] is False
+    assert verdict["failure_class"] == ("harness_error" if exhausted else "ambiguous")
+    assert verdict["reason"] == (
+        "recovery_verification_capacity_unavailable" if exhausted else "recovery_observation_unavailable"
+    )
 
 
 def test_missing_independent_business_inventory_cannot_become_an_expected_solver_failure(monkeypatch):
@@ -364,6 +403,76 @@ def test_fresh_requests_and_exact_receipts_are_persisted_before_the_next_busines
     assert {effect["effect_kind"] for effect in owner.calls[0][4]} == {"search", "delivery"}
     assert owner.calls[0][5] is None
     assert owner.calls[1][4] >= 0 and owner.calls[1][5] == 201
+
+
+def test_new_writes_and_git_pushes_cover_all_regional_entry_points(monkeypatch):
+    value, owner = oracle(), ReceiptOwner()
+    base = value.outcomes.fresh_challenges[0]
+    challenges = tuple(replace(base, tenant_id=uid(100 + i), project_id=uid(200 + i)) for i in range(3))
+    value.outcomes = replace(
+        value.outcomes,
+        fresh_challenges=challenges,
+        projects=tuple(replace(value.outcomes.projects[0], project_id=c.project_id) for c in challenges),
+    )
+    value.fresh_journal = owner
+    writes, pushes, events, git_receipts = set(), [], set(), []
+
+    def handle(request):
+        body = json.loads(request.content)
+        if body["kind"] == "repository.push":
+            git_receipts.append(str(request.url).removesuffix("/v1/operations"))
+            if git_receipts[-1] != pushes[-1]:
+                return httpx.Response(422, json={"detail": "Push receipt must match the actual repository branch"})
+        if body["event_id"] not in events:
+            writes.add(request.url.host)
+            events.add(body["event_id"])
+        return httpx.Response(201, json=fresh_ack(body))
+
+    def push(challenge, origin, _deadline, *, journal_epoch):
+        pushes.append(origin)
+        body = {
+            "event_id": str(UUID(int=400 + len(pushes))),
+            "tenant_id": challenge.tenant_id,
+            "entity_id": str(UUID(int=500 + len(pushes))),
+            "project_id": challenge.project_id,
+            "client_revision": 1,
+            "kind": "repository.push",
+            "payload": {"commit_sha": "d" * 40, "ref": "refs/heads/feature"},
+        }
+        value._journal_request(journal_epoch, challenge, body)
+        project = GitProjectExpectation(
+            challenge.project_id,
+            challenge.token,
+            (GitRefExpectation("refs/heads/feature", "d" * 40),),
+            (GitFileExpectation("d" * 40, "app.py", "e" * 64),),
+            (GitBundleExpectation("d" * 40, "f" * 64),),
+        )
+        return body, project
+
+    monkeypatch.setattr(value, "_fresh_git", push)
+    origins = ("http://gateway-a", "http://gateway-b", "http://gateway-c")
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        result = value._fresh_api(client, origins, origins, float("inf"))
+    assert writes == {"gateway-a", "gateway-b", "gateway-c"}
+    assert pushes == list(origins) and result[0][0].operations == 9 and not owner.pending
+    assert git_receipts == pushes
+
+
+def test_fresh_stream_cannot_run_past_absolute_observation_deadline(monkeypatch):
+    clock = [0.0]
+
+    class SlowBody(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"{"
+            clock[0] = 2
+            yield b"}"
+
+    monkeypatch.setattr("sregym.conductor.oracles.regional_database_recovery.time.monotonic", lambda: clock[0])
+    with (
+        httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, stream=SlowBody()))) as client,
+        pytest.raises(TimeoutError, match="deadline"),
+    ):
+        oracle()._fresh_post(client, "http://api", {}, "token", 1)
 
 
 def test_malformed_acknowledgment_cannot_be_saved_as_a_committed_fresh_write():
@@ -1054,8 +1163,12 @@ def observation_loop_fixture(monkeypatch, *, failed_last_member=False, two_group
 
     monkeypatch.setattr(module.time, "sleep", sleep)
 
+    inventory_calls = [0]
+
     def inventory(_deadline):
-        iterations.append(len(iterations) + 1)
+        inventory_calls[0] += 1
+        if inventory_calls[0] == 1 or inventory_calls[0] % 2 == 0:
+            iterations.append(len(iterations) + 1)
         uid_prefix = "new" if len(iterations) >= 3 else "old"
         return {
             role: ((value.outcomes.api_targets[0], f"{role}-{uid_prefix}"),) for role in ("api", "search", "repository")
@@ -1097,7 +1210,7 @@ def observation_loop_fixture(monkeypatch, *, failed_last_member=False, two_group
                 (len(iterations), state.cut.current_sha256)
             ),
         )
-    monkeypatch.setattr(value, "_delivery_receipts", lambda *_args: iter(()))
+    monkeypatch.setattr(value, "_delivery_receipts", lambda *_args, **_kwargs: iter(()))
     monkeypatch.setattr(value, "_check_git", lambda *_args, **_kwargs: calls["git"].append(len(iterations)))
     monkeypatch.setattr(value, "_fresh_api", lambda *_args: fresh)
     return value, calls, iterations, fresh_cut
@@ -1132,6 +1245,55 @@ def test_last_sql_member_mismatch_cannot_pass_after_prior_exact_business_reads(m
     assert not calls["git"]
 
 
+@pytest.mark.parametrize("later_unavailable", [False, True])
+def test_latest_observation_supersedes_stale_mismatch_classification(monkeypatch, later_unavailable):
+    value, _calls, _iterations, _fresh = observation_loop_fixture(monkeypatch)
+    value.deadline_seconds = 4
+    observations = []
+
+    def sql(*_args, **_kwargs):
+        observations.append(1)
+        if len(observations) > 1 and later_unavailable:
+            raise TimeoutError("Latest observation unavailable")
+        raise StateMismatch("accepted_history_mismatch")
+
+    monkeypatch.setattr(value, "_check_sql", sql)
+    verdict = value.evaluate()
+    assert len(observations) > 1
+    assert verdict["success"] is False
+    assert verdict["failure_class"] == ("ambiguous" if later_unavailable else "agent_error")
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_private_phase_evidence_ignores_root_logger_level(monkeypatch, capsys, interrupted):
+    import logging
+
+    import sregym.conductor.oracles.regional_database_recovery as module
+
+    monkeypatch.setenv("SREGYM_VERIFIER_CONTAINER", "1")
+    monkeypatch.setattr(logging.getLogger(), "level", logging.CRITICAL)
+    try:
+        with module._observation_phase(
+            "sql-full", operations=400, group="group-a", member="region-a/database", observation=2
+        ):
+            if interrupted:
+                raise TimeoutError("Interrupted real observation")
+    except TimeoutError:
+        pass
+    output = capsys.readouterr()
+    assert not output.out
+    record = json.loads(output.err)
+    assert record["event"] == "recovery_observation_phase"
+    assert record["completed"] is not interrupted
+    assert (record["group"], record["member"], record["observation"], record["operations"]) == (
+        "group-a",
+        "region-a/database",
+        2,
+        400,
+    )
+    assert record["seconds"] >= 0
+
+
 def test_distinct_database_groups_never_share_a_business_observation_cache(monkeypatch):
     value, calls, iterations, _fresh = observation_loop_fixture(monkeypatch, two_groups=True)
     assert value.evaluate() == {"success": True}
@@ -1140,3 +1302,360 @@ def test_distinct_database_groups_never_share_a_business_observation_cache(monke
         assert len([entry for entry in calls["sql"] if entry[0] == iteration]) == 8
         for role in ("api", "search", "artifacts", "delivery"):
             assert len([entry for entry in calls[role] if entry[0] == iteration]) == (2 if iteration == 1 else 3)
+
+
+@pytest.mark.parametrize("stalled", [False, True])
+def test_continuing_customer_journeys_must_advance_during_stability(monkeypatch, stalled):
+    value, _calls, iterations, fresh_cut = observation_loop_fixture(monkeypatch)
+    value.outcomes = replace(value.outcomes, require_traffic=True, process_targets=process_targets(value.outcomes))
+    monkeypatch.setattr(value, "_process_inventory", lambda _deadline: ())
+    monkeypatch.setattr(value, "_final_live_probe", lambda *_args: None)
+
+    def progress():
+        position = 1 if stalled else len(iterations)
+        return {"group-a": position}, ((fresh_cut, EffectReceiptCut("group-a", 1, "f" * 64)),)
+
+    monkeypatch.setattr(value, "_traffic_observations", progress)
+    verdict = value.evaluate()
+    assert verdict["success"] is not stalled
+    if stalled:
+        assert verdict["detail"]["check"] == "continuing_customer_traffic_stalled"
+
+
+def test_stopping_required_process_after_fresh_effects_settle_cannot_pass(monkeypatch):
+    value, _calls, iterations, _fresh = observation_loop_fixture(monkeypatch)
+
+    def processes(_deadline):
+        if len(iterations) >= 2:
+            raise StateMismatch("regional_replica_inventory_mismatch")
+        return ()
+
+    monkeypatch.setattr(value, "_process_inventory", processes)
+    verdict = value.evaluate()
+    assert verdict["success"] is False
+    assert verdict["detail"]["check"] == "regional_replica_inventory_mismatch"
+
+
+def test_owned_worker_recycling_preserves_completed_business_observations(monkeypatch):
+    import sregym.conductor.oracles.regional_database_recovery as module
+
+    value, _calls, iterations, _fresh = observation_loop_fixture(monkeypatch)
+    value.outcomes = replace(value.outcomes, process_targets=process_targets(value.outcomes))
+    resolved = []
+
+    def resolve(target, *, deadline):
+        assert target.expected_uid is not None
+        resolved.append(target.service)
+        generation = len(resolved) if target.service == "worker" else 0
+        return tuple((target, f"{target.service}-{generation}-{index}") for index in range(target.expected_replicas))
+
+    monkeypatch.setattr(module, "resolve_http_replicas", resolve)
+    assert value.evaluate() == {"success": True}
+    # HTTP read-replica turnover still resets the window in this fixture;
+    # changing every worker pod UID does not prevent eventual real checks.
+    assert iterations == [1, 2, 3, 4, 5]
+    assert resolved.count("worker") >= 2 * len(iterations)
+
+
+def test_continuing_work_contract_cannot_omit_or_truncate_process_inventory():
+    outcomes = plan()
+    with pytest.raises(ValueError, match="complete private process inventory"):
+        replace(outcomes, require_traffic=True)
+    with pytest.raises(ValueError, match="Every region"):
+        replace(outcomes, require_traffic=True, process_targets=process_targets(outcomes)[:-1])
+    assert replace(outcomes, require_traffic=True, process_targets=process_targets(outcomes)).require_traffic
+
+
+@pytest.mark.parametrize("publication_stopped", [False, True])
+def test_final_new_work_requires_actual_effects_despite_ready_processes(monkeypatch, publication_stopped):
+    value = oracle()
+    clock, mutations, observations = [0.0], [], []
+    monkeypatch.setattr("sregym.conductor.oracles.regional_database_recovery.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "sregym.conductor.oracles.regional_database_recovery.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    cuts = ((value.cuts[0], value.effect_cuts[0]),)
+
+    def fresh(_client, _api, _repository, _deadline, *, issue_only):
+        assert issue_only
+        mutations.append("new issue acknowledgment")
+        return cuts
+
+    def observe(observed, _client, _origins, _deadline):
+        assert observed == cuts and mutations
+        observations.append(clock[0])
+        if publication_stopped or len(observations) == 1:
+            raise StateMismatch("effect_completion_mismatch")
+
+    monkeypatch.setattr(value, "_fresh_api", fresh)
+    monkeypatch.setattr(value, "_verify_recent_business", observe)
+    origins = {role: ("http://127.0.0.1:12345",) for role in ("api", "repository", "search")}
+    if publication_stopped:
+        with pytest.raises(StateMismatch, match="effect_completion_mismatch"):
+            value._final_live_probe(None, origins, 5)
+    else:
+        value._final_live_probe(None, origins, 5)
+    assert mutations == ["new issue acknowledgment"] and len(observations) > 1
+
+
+@pytest.mark.parametrize("late_change", ["healthy", "redirect", "two-writers"])
+def test_final_scoped_sql_rechecks_independent_members_and_writer_fencing(monkeypatch, late_change):
+    from sregym.conductor.oracles import regional_database_recovery as module
+
+    value = oracle()
+
+    class Reader:
+        def __init__(self, target, **_kwargs):
+            self.index = value.databases.index(target)
+
+        @contextmanager
+        def connection(self):
+            yield None
+
+        def health(self, _connection):
+            index = 0 if late_change == "redirect" and self.index == 1 else self.index
+            return {
+                "server_uuid": uid(700 + index),
+                "read_only": 0 if self.index == 0 or late_change == "two-writers" and self.index == 1 else 1,
+            }
+
+        def rows(self, _connection, _table, *, record_keys):
+            assert record_keys == value.cuts[0].record_keys
+            return ()
+
+    @contextmanager
+    def state(_cut):
+        yield SimpleNamespace(
+            **{
+                name: lambda *_args: None
+                for name in (
+                    "load_journal",
+                    "check_entities",
+                    "check_domain_rows",
+                    "verify_domain",
+                    "load_effects",
+                    "check_build_rows",
+                    "check_delivery_receipts",
+                )
+            }
+        )
+
+    monkeypatch.setattr(module, "SQLObservation", Reader)
+    monkeypatch.setattr(value, "_protected_state", state)
+    monkeypatch.setattr(value, "_check_api_current", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(value, "_check_search", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(value, "_delivery_receipts", lambda *_args, **_kwargs: ())
+    cuts = ((value.cuts[0], value.effect_cuts[0]),)
+    origins = {"api": (), "search": ()}
+    if late_change == "healthy":
+        value._verify_recent_business(cuts, None, origins, time.monotonic() + 5)
+    else:
+        reason = (
+            "regional_storage_not_independent" if late_change == "redirect" else "regional_writer_fencing_incomplete"
+        )
+        with pytest.raises(StateMismatch, match=reason):
+            value._verify_recent_business(cuts, None, origins, time.monotonic() + 5)
+
+
+def test_final_issue_probe_uses_closed_owner_parent_and_actual_acknowledgments(tmp_path):
+    from sregym.generators.workload.codehub import Operation, ReceiptLedger, canonical
+    from sregym.service.codehub_verification_journal import CodeHubVerificationJournal
+
+    value = oracle()
+    challenge = value.outcomes.fresh_challenges[0]
+    parent = Operation(
+        uid(80),
+        challenge.tenant_id,
+        challenge.project_id,
+        challenge.project_id,
+        1,
+        "project.create",
+        canonical({"slug": "router", "name": "Router", "default_ref": "refs/heads/main"}),
+        challenge.actor_id,
+    )
+    ledger = ReceiptLedger(tmp_path / "private.sqlite")
+    journal = CodeHubVerificationJournal(ledger, {challenge.tenant_id: challenge.group})
+    value.fresh_journal = journal
+    epoch = journal.begin_epoch()
+    journal.request(epoch, challenge.group, parent.observed_row(), value._fresh_effects(parent.request(), challenge))
+    journal.acknowledge(
+        epoch,
+        parent.event_id,
+        "http://127.0.0.1:12345",
+        1,
+        201,
+        fresh_ack(parent.request()) | {"region": "region-a", "replayed": False},
+    )
+    journal.close_epoch(epoch)
+    submitted = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        assert body["kind"] in {"issue.create", "issue.update"}
+        assert ledger.requested_operation(body["event_id"], epoch + 1).request() == body
+        submitted.append(body)
+        return httpx.Response(201, json=fresh_ack(body) | {"region": "region-a", "replayed": False})
+
+    try:
+        with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+            cuts = value._fresh_api(
+                client, ("http://127.0.0.1:12345",), ("http://127.0.0.1:12345",), time.monotonic() + 10, issue_only=True
+            )
+        assert len(submitted) == 3 and submitted[0] == submitted[2]
+        assert len(cuts) == 1 and cuts[0][0].operations == 3 and cuts[0][0].closed_epochs == (epoch, epoch + 1)
+        assert cuts[0][0].record_keys == tuple(
+            sorted({parent.record_key, f"{challenge.tenant_id}/{submitted[0]['entity_id']}"})
+        )
+        assert ledger.cut().operations == 3 and not ledger.pending_requests()
+        with ProtectedState(cuts[0][0]) as protected:
+            protected.load_journal(
+                [parent.observed_row(), *(body | {"actor_id": challenge.actor_id} for body in submitted[:2])]
+            )
+            assert protected.history_anchored
+    finally:
+        ledger.close()
+
+
+def test_later_final_cohort_cannot_hide_loss_of_previously_acknowledged_cohort(monkeypatch):
+    from sregym.conductor.oracles import regional_database_recovery as module
+
+    value = oracle()
+    clock, issued, checked = [0.0], [], []
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+
+    def fresh(*_args, **_kwargs):
+        cohort = ((replace(value.cuts[0], current_sha256=str(len(issued) + 1) * 64), value.effect_cuts[0]),)
+        issued.append(cohort)
+        return cohort
+
+    def observe(cohort, *_args):
+        checked.append(cohort)
+        if len(issued) > 1 and cohort == issued[0]:
+            raise StateMismatch("accepted_history_mismatch")
+
+    monkeypatch.setattr(value, "_fresh_api", fresh)
+    monkeypatch.setattr(value, "_verify_recent_business", observe)
+    origins = {"api": (), "repository": ()}
+    value._final_live_probe(None, origins, 5)
+    with pytest.raises(StateMismatch, match="accepted_history_mismatch"):
+        value._final_live_probe(None, origins, 5)
+    assert value._retained_final_cuts == tuple(issued) and len(issued) == 2
+    assert checked[-1] == issued[0]
+
+
+@pytest.mark.parametrize("response_lost", [False, True])
+def test_final_accepted_request_with_lost_response_cannot_be_forgotten_by_retry(monkeypatch, response_lost):
+    value, _calls, iterations, fresh_cut = observation_loop_fixture(monkeypatch)
+    value.outcomes = replace(value.outcomes, require_traffic=True, process_targets=process_targets(value.outcomes))
+    monkeypatch.setattr(value, "_process_inventory", lambda _deadline: ())
+    monkeypatch.setattr(
+        value,
+        "_traffic_observations",
+        lambda: ({"group-a": len(iterations)}, ((fresh_cut, EffectReceiptCut("group-a", 1, "f" * 64)),)),
+    )
+    attempts = []
+
+    def final(*_args):
+        value._final_probe_open = True
+        attempts.append("application accepted request")
+        if response_lost:
+            raise httpx.ReadError("The accepted replay response was lost")
+        value._final_probe_open = False
+
+    monkeypatch.setattr(value, "_final_live_probe", final)
+    verdict = value.evaluate()
+    assert attempts == ["application accepted request"]
+    if response_lost:
+        assert verdict["success"] is False and verdict["failure_class"] == "ambiguous"
+        assert verdict["detail"]["check"] == "final_request_outcome_unresolved"
+    else:
+        assert verdict == {"success": True}
+
+
+@pytest.mark.parametrize("failure", ["spawn", "thread"])
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_actual_owned_spawn_and_thread_errors_use_private_kernel_evidence(monkeypatch, failure, exhausted):
+    from sregym.conductor.oracles import regional_database_recovery as module
+
+    value = oracle()
+    value.deadline_seconds, value.stable_seconds = 2, 1
+    value.capture_baseline()
+    value.fresh_journal = object()
+    monkeypatch.setenv("SREGYM_VERIFIER_CONTAINER", "1")
+    monkeypatch.setattr(module.Path, "read_text", lambda _: "max " + str(int(exhausted)) + "\n")
+    if failure == "spawn":
+        monkeypatch.setattr(
+            module.subprocess,
+            "Popen",
+            lambda *a, **k: (_ for _ in ()).throw(OSError(11, "Resource temporarily unavailable")),
+        )
+        monkeypatch.setattr(value, "_http_inventory", lambda _: module.subprocess.Popen(["kubectl"]))
+    else:
+        monkeypatch.setattr(
+            threading.Thread, "start", lambda _: (_ for _ in ()).throw(RuntimeError("can't start new thread"))
+        )
+
+        def inventory(_):
+            with module.ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(lambda: None)
+
+        monkeypatch.setattr(value, "_http_inventory", inventory)
+    verdict = value.evaluate()
+    assert verdict["success"] is False
+    assert verdict["failure_class"] == ("harness_error" if exhausted else "ambiguous")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Owned process group and file resource limit control requires Linux")
+@pytest.mark.parametrize("failure", ["none", "output", "scratch"])
+def test_real_git_child_growth_is_bounded_and_owned_descendants_are_reaped(tmp_path, monkeypatch, failure):
+    from sregym.conductor.oracles import regional_database_recovery as module
+
+    executable = tmp_path / "bin"
+    executable.mkdir()
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    pid_path = tmp_path / "child.pid"
+    script = executable / "git"
+    program = (
+        f"#!{sys.executable}\nimport os,sys,time,subprocess\n"
+        f"p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])\nopen({str(pid_path)!r},'w').write(str(p.pid))\n"
+    )
+    if failure == "output":
+        program += "os.write(1,b'x'*(2*1024**2))\ntime.sleep(30)\n"
+    elif failure == "scratch":
+        program += f"from pathlib import Path\nroot=Path({str(scratch)!r})\nfor i in range(64): (root/str(i)).write_bytes(b'x'*65536)\ntime.sleep(30)\n"
+    else:
+        program += "print('ordinary object output')\n"
+    script.write_text(program)
+    script.chmod(0o700)
+    monkeypatch.setenv("PATH", str(executable) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("TMPDIR", str(scratch))
+    monkeypatch.setenv("SREGYM_VERIFIER_CONTAINER", "1")
+    monkeypatch.setattr(module, "_check_process_capacity", lambda: None)
+    value = oracle()
+    value.verification_scratch_bytes = 2 * 1024**2
+    started = time.monotonic()
+    if failure == "none":
+        assert (
+            value._git(["read"], token="ordinary", deadline=started + 5, maximum=4096).strip()
+            == b"ordinary object output"
+        )
+    else:
+        with pytest.raises((StateMismatch, module.VerificationCapacityUnavailable)):
+            value._git(["read"], token="ordinary", deadline=started + 5, maximum=4096)
+    assert time.monotonic() - started < 5
+    child = int(pid_path.read_text())
+    state = Path(f"/proc/{child}/stat")
+
+    def child_stopped():
+        try:
+            return state.read_text().split()[2] == "Z"
+        except (FileNotFoundError, ProcessLookupError):
+            return True
+
+    until = time.monotonic() + 1
+    while not child_stopped() and time.monotonic() < until:
+        time.sleep(0.01)
+    assert child_stopped()

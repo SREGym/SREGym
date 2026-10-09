@@ -64,8 +64,76 @@ def _problem(events):
 def test_problem_defaults_preserve_existing_workload_and_noise():
     assert Problem.run_default_workload is True
     assert Problem.run_default_noise is True
+    assert Problem.requires_healthy_verification is False
     assert Problem.prepare_environment(object(), enable_noise=True) is None
     assert Problem.stop_environment(object()) is None
+
+
+@pytest.mark.parametrize("required", [False, True])
+def test_healthy_preflight_precedes_injection_and_preserves_legacy_tasks(conductor, required):
+    events = []
+    oracle = SimpleNamespace(capture_baseline=lambda: events.append("capture"))
+    conductor.problem = SimpleNamespace(
+        requires_healthy_verification=required,
+        mitigation_oracle=oracle,
+        inject_fault=lambda: events.append("inject"),
+    )
+    runtime = Mock()
+    runtime.prepare.side_effect = lambda: events.append("prepare")
+    runtime.evaluate.side_effect = lambda value: events.append("healthy") or {"success": True}
+    conductor._verifier_runtime = runtime
+    conductor._inject_fault()
+    assert events == ["prepare", "capture", *(["healthy"] if required else []), "inject"]
+    assert conductor.fault_injected is True
+    runtime.cancel.assert_not_called()
+
+
+@pytest.mark.parametrize("verdict", [{"success": False}, {"success": 1}, {}, None])
+def test_invalid_healthy_preflight_refuses_fault_handoff(conductor, verdict):
+    inject = Mock()
+    conductor.problem = SimpleNamespace(
+        requires_healthy_verification=True,
+        mitigation_oracle=Mock(),
+        inject_fault=inject,
+    )
+    conductor.fault_injected = False
+    runtime = conductor._verifier_runtime = Mock()
+    runtime.evaluate.return_value = verdict
+    with pytest.raises(RuntimeError, match="isolated healthy"):
+        conductor._inject_fault()
+    inject.assert_not_called()
+    runtime.cancel.assert_called_once()
+    assert conductor.fault_injected is False
+
+
+def test_healthy_preflight_execution_failure_stops_owned_environment(conductor, monkeypatch):
+    events = []
+    problem = _configure_start(conductor, monkeypatch, events)
+    problem.requires_healthy_verification = True
+    problem.mitigation_oracle = Mock()
+    problem.inject_fault = Mock()
+    runtime = Mock()
+    runtime.evaluate.side_effect = RuntimeError("trusted container unavailable")
+    conductor._get_verifier_runtime = Mock(return_value=runtime)
+
+    async def advance(**_):
+        conductor._inject_fault()
+
+    conductor._advance_to_next_stage = advance
+    with pytest.raises(RuntimeError, match="trusted container unavailable"):
+        asyncio.run(conductor.start_problem())
+    assert events == [("prepare", True), "stop"]
+    runtime.cancel.assert_called_once()
+    problem.inject_fault.assert_not_called()
+
+
+def test_missing_healthy_oracle_refuses_before_verifier_start(conductor):
+    conductor.problem = SimpleNamespace(requires_healthy_verification=True, mitigation_oracle=None, inject_fault=Mock())
+    runtime = conductor._verifier_runtime = Mock()
+    with pytest.raises(RuntimeError, match="requires an isolated healthy"):
+        conductor._inject_fault()
+    runtime.prepare.assert_not_called()
+    conductor.problem.inject_fault.assert_not_called()
 
 
 @pytest.mark.parametrize("enabled", [False, True])

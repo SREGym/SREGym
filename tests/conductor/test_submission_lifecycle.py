@@ -963,6 +963,19 @@ def test_cleanup_failure_makes_a_fully_graded_attempt_incomplete():
     assert conductor.results["incomplete_reason"] == "cleanup_failed"
 
 
+@pytest.mark.parametrize("failure", [None, "native_capacity_observation_failed"])
+def test_retained_owner_failure_invalidates_a_graded_attempt_without_claiming_agent_failure(failure):
+    conductor = _conductor()
+    conductor.problem = SimpleNamespace(environment_failure=failure)
+    conductor.results["Diagnosis"] = {"success": True}
+    conductor.results["Mitigation"] = {"success": True}
+    assert conductor.finalize_attempt_status() == ("complete" if failure is None else "incomplete")
+    if failure is not None:
+        assert conductor.results["incomplete_reason"] == "owner_environment_failed"
+        assert conductor.results["environment_failure"] == failure
+        assert conductor.results["Mitigation"] == {"success": True}
+
+
 def test_cleanup_continues_after_recovery_error_and_reaches_terminal_state():
     conductor = _conductor()
     app_cleaned = threading.Event()
@@ -1121,3 +1134,25 @@ def test_teardown_failure_stays_incomplete_even_when_stage_results_exist():
     assert conductor.finalize_attempt_status() == "incomplete"
     assert conductor.results["incomplete_stage"] == "tearing_down"
     assert conductor.results["missing_stages"] == ""
+
+
+@pytest.mark.parametrize(
+    "classification", ["agent_error", "harness_error", "environment_error", "ambiguous", "unknown"]
+)
+def test_classified_verification_failure_controls_attempt_validity(classification):
+    conductor = _conductor()
+    conductor.results["Diagnosis"] = {"success": True, "failure_class": "harness_error"}
+    conductor.results["Mitigation"] = {"success": False, "failure_class": classification}
+    assert conductor.finalize_attempt_status() == ("complete" if classification == "agent_error" else "incomplete")
+    if classification != "agent_error":
+        assert conductor.results["incomplete_reason"] == "non_agent_verification_failure"
+
+
+def test_outer_stage_execution_failure_is_explicitly_invalid():
+    conductor = _conductor()
+    conductor.results["Mitigation"] = {"success": True}
+    conductor.stage_sequence[0]["evaluation"] = Mock(side_effect=RuntimeError("wrapper failed"))
+    conductor._submit_evaluate_and_advance("answer", conductor.stage_sequence[0], 1)
+    assert conductor.results["Diagnosis"]["failure_class"] == "harness_error"
+    assert conductor.finalize_attempt_status() == "incomplete"
+    assert conductor.results["incomplete_reason"] == "non_agent_verification_failure"

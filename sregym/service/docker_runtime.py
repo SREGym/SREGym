@@ -154,4 +154,6 @@ def validate_rootless_boundary() -> dict:
         "runner_address": address,
         "nodes": nodes,
         "inotify_max_user_instances": inotify_instances,
+        "workload_storage_root": workload.get("DockerRootDir"),
+        "trusted_storage_root": trusted.get("DockerRootDir"),
     }

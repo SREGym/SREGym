@@ -2,17 +2,39 @@
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from sregym.conductor.scenarios.database_recovery import (
     TIERS,
+    HostCapacity,
     NoiseDecision,
     NoiseEvent,
     SeedStreams,
     noise_schedule,
     plan_noise,
 )
+
+
+def test_capacity_observation_counts_physical_cores_and_available_resources(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    (proc / "cpuinfo").write_text(
+        "physical id : 0\ncore id : 0\n\nphysical id : 0\ncore id : 0\n\nphysical id : 0\ncore id : 1\n"
+    )
+    (proc / "meminfo").write_text("MemTotal: 999999999 kB\nMemAvailable: 50331648 kB\n")
+    monkeypatch.setattr(
+        "sregym.conductor.scenarios.database_recovery.shutil.disk_usage",
+        lambda _path: SimpleNamespace(free=60 * 1024**3),
+    )
+    capacity = HostCapacity.observe(tmp_path, proc_root=proc)
+    assert capacity == HostCapacity(2, 48, 60)
+    with pytest.raises(ValueError, match="CPU headroom"):
+        capacity.admit(TIERS["small"])
+    (proc / "meminfo").write_text("MemTotal: 999999999 kB\n")
+    with pytest.raises(ValueError, match="currently available"):
+        HostCapacity.observe(tmp_path, proc_root=proc)
 
 
 def test_tiers_expand_actual_roles_tenants_and_state_within_lab_budget():
@@ -22,6 +44,39 @@ def test_tiers_expand_actual_roles_tenants_and_state_within_lab_budget():
         actual = (sum(count for _, _, count in tier.public_topology()), len(tier.noise_targets()), tier.records)
         assert all(new > old for old, new in zip(previous, actual, strict=True))
         previous = actual
+
+
+def test_private_engine_capacity_uses_verified_kernel_filesystem_not_parent(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import sregym.conductor.scenarios.database_recovery as module
+
+    proc = tmp_path / "proc"
+    (proc / "self").mkdir(parents=True)
+    protected, accessible = Path("/private"), Path("/storage")
+    (proc / "self/mountinfo").write_text(
+        "1 0 8:1 / / rw - ext4 /dev/system rw\n"
+        "2 1 259:0 / /private rw - ext4 /dev/ssd rw\n"
+        "3 1 259:0 / /storage rw - ext4 /dev/ssd rw\n"
+    )
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path: (SimpleNamespace(st_dev=259) if path == accessible else (_ for _ in ()).throw(PermissionError())),
+    )
+    monkeypatch.setattr(module.os, "major", lambda device: 259)
+    monkeypatch.setattr(module.os, "minor", lambda device: 0)
+    observed = []
+    monkeypatch.setattr(
+        module.shutil, "disk_usage", lambda path: (observed.append(path) or SimpleNamespace(free=800 * 1024**3))
+    )
+    assert HostCapacity._private_filesystem_free(protected, proc) == 800 * 1024**3
+    assert observed == [accessible]
+    with pytest.raises(ValueError, match="exact kernel-observed"):
+        HostCapacity._private_filesystem_free(protected / "unqualified-alias", proc)
+    (proc / "self/mountinfo").write_text("2 1 259:0 / /private rw - overlay overlay rw\n")
+    with pytest.raises(ValueError, match="supported writable"):
+        HostCapacity._private_filesystem_free(protected, proc)
 
 
 @pytest.mark.parametrize(

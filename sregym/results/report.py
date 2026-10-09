@@ -5,6 +5,9 @@ import csv
 import os
 from pathlib import Path
 
+from sregym.results.resume import resume_row_is_complete
+from sregym.results.validity import non_agent_failure_classes
+
 
 def _as_bool(value: object) -> bool | None:
     if isinstance(value, bool):
@@ -38,7 +41,9 @@ def build_report(
             attempt = int(row.get("attempt", ""))
         except (TypeError, ValueError):
             attempt = fallback_attempt
-        attempts[attempt] = row
+        previous = attempts.get(attempt)
+        if previous is None or resume_row_is_complete(row) or not resume_row_is_complete(previous):
+            attempts[attempt] = row
 
     diagnosis_evaluated = 0
     diagnosis_passes = 0
@@ -56,7 +61,14 @@ def build_report(
 
         diagnosis = _as_bool(row.get("Diagnosis.success"))
         mitigation = _as_bool(row.get("Mitigation.success"))
-        attempt_incomplete = row.get("run_status") == "incomplete" or diagnosis is None or mitigation is None
+        invalid_classes = non_agent_failure_classes(row)
+        attempt_incomplete = (
+            row.get("run_status") == "incomplete"
+            or _as_bool(row.get("deploy_failed")) is True
+            or diagnosis is None
+            or mitigation is None
+            or bool(invalid_classes)
+        )
         if not attempt_incomplete and diagnosis is not None:
             diagnosis_evaluated += 1
             diagnosis_passes += int(diagnosis)
@@ -67,6 +79,10 @@ def build_report(
         detail = ""
         if _as_bool(row.get("deploy_failed")):
             detail = "deployment failed"
+        elif invalid_classes:
+            detail = "; ".join(
+                f"{stage.lower()}: {classification}" for stage, classification in invalid_classes.items()
+            )
         elif row.get("run_status") == "incomplete":
             reason = row.get("incomplete_reason") or "missing stage results"
             stage = row.get("incomplete_stage")
@@ -95,7 +111,7 @@ def build_report(
         table_rows.append(f"| {attempt} | {diagnosis_text} | {mitigation_text} | {overall_text} | {detail or '—'} |")
 
     if complete_attempts != requested_attempts:
-        decision = "⚠️ **Inconclusive** — one or more requested attempts did not produce both stage results; rerun it."
+        decision = "⚠️ **Inconclusive** — one or more requested attempts did not produce valid stage results; rerun it."
     elif overall_passes == requested_attempts:
         decision = "🔴 **Saturated** — every requested attempt passed; do not keep it as a difficulty candidate."
     elif overall_passes == 0:

@@ -4,6 +4,7 @@ import hashlib
 import json
 from copy import deepcopy
 from dataclasses import replace
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -21,6 +22,7 @@ from sregym.conductor.scenarios.codehub_expectations import (
     RegionalTargetInventory,
     RegionReplicaRequirement,
     WebhookSubscription,
+    build_dataset_manifest,
     build_receipt_cuts,
     build_recovery_outcomes,
     compile_seed_git_inventory,
@@ -211,6 +213,58 @@ def test_open_live_traffic_does_not_replace_the_closed_cut(seeded):
     assert build_receipt_cuts(ledger, routing) == original
 
 
+def test_dataset_manifest_keeps_original_owner_cut_after_later_traffic_and_refuses_wrong_digest(seeded):
+    ledger, tenants, routing = seeded
+    cuts, _effects = build_receipt_cuts(ledger, routing)
+    physical = {
+        "storage": {
+            name: index
+            for index, name in enumerate(
+                (
+                    "sql_bytes",
+                    "index_bytes",
+                    "git_bytes",
+                    "artifact_bytes",
+                    "retained_log_bytes",
+                    "temporary_restore_bytes",
+                )
+            )
+        }
+    }
+    groups = tuple(
+        SimpleNamespace(name=tenant.group, members=(SimpleNamespace(name="db-" + tenant.group, region=tenant.region),))
+        for tenant in tenants
+    )
+    manifest = build_dataset_manifest(
+        ledger, tenants, cuts, groups, physical, queue_count=3, oldest_queue_age_seconds=10
+    )
+    assert manifest.operation_count == 8 and manifest.queue_count == 3
+    assert manifest.schema_version == 2 and sum(item.count for item in manifest.operation_mix) == 8
+    assert {item.kind for item in manifest.operation_mix} == {"repository.push", "issue.create"}
+    assert all(item.project in {tenant.project_id for tenant in tenants} for item in manifest.operation_mix)
+    assert all(item.group == dict(routing)[item.tenant] for item in manifest.operation_mix)
+    with pytest.raises(ValueError, match="complete accepted operation count"):
+        replace(manifest, operation_mix=manifest.operation_mix[:-1])
+    with pytest.raises(ValueError, match="unique"):
+        replace(manifest, operation_mix=manifest.operation_mix + manifest.operation_mix[:1])
+    assert sum(item.count for item in manifest.entity_counts if item.entity == "repository") == 4
+    assert sum(item.count for item in manifest.entity_counts if item.entity == "issue") == 2
+    assert manifest.distributions[0].samples == 8 and manifest.storage.retained_log_bytes == 4
+    assert {item.sha256 for item in manifest.recovery_sources} == {cut.journal_sha256 for cut in cuts}
+    epoch = ledger.begin_epoch()
+    op = operation(tenants[0], 999, 1, "issue.create", {"title": "Later accepted traffic", "state": "open"}, 999)
+    ledger.request(op, epoch, effects=effects(op, tenants[0]))
+    ledger.acknowledge(op.event_id, "http://api", 1, 201)
+    ledger.close_epoch(epoch)
+    assert (
+        build_dataset_manifest(ledger, tenants, cuts, groups, physical, queue_count=3, oldest_queue_age_seconds=10)
+        == manifest
+    )
+    wrong = (replace(cuts[0], journal_sha256="0" * 64), *cuts[1:])
+    with pytest.raises(ValueError, match="original protected receipt watermark"):
+        build_dataset_manifest(ledger, tenants, wrong, groups, physical, queue_count=3, oldest_queue_age_seconds=10)
+
+
 def test_compiler_uses_revisions_not_random_event_order_and_keeps_historical_source(seeded):
     ledger, tenants, _routing = seeded
     entries = tuple(reversed(ledger.git_provenance_entries()))
@@ -330,3 +384,32 @@ def test_complete_outcomes_use_customer_metadata_private_pipe_and_all_replica_ta
             service_token="s" * 32,
             webhooks=hooks[:1],
         )
+
+
+@pytest.mark.parametrize("failure", ["none", "cancel", "pages"])
+def test_effect_sorting_uses_owner_scratch_and_bounded_cleanup(seeded, monkeypatch, failure):
+    from sregym.conductor.scenarios import codehub_expectations as module
+
+    ledger, _tenants, routing = seeded
+    observed = []
+    real = module.sqlite3.connect
+
+    def connect(path, *args, **kwargs):
+        observed.append(path)
+        assert Path(path).parent.parent == ledger._path.parent
+        return real(path, *args, **kwargs)
+
+    from pathlib import Path
+
+    monkeypatch.setattr(module.sqlite3, "connect", connect)
+    ledger._snapshot_guard = lambda: int(failure == "cancel")
+    if failure == "pages":
+        ledger._byte_budget = 32768
+    if failure == "none":
+        assert build_receipt_cuts(ledger, routing)[1]
+        assert observed
+    else:
+        with pytest.raises((RuntimeError, module.sqlite3.OperationalError)):
+            build_receipt_cuts(ledger, routing)
+    assert not list(ledger._path.parent.glob("private-effects-*"))
+    assert ledger._db.execute("SELECT COUNT(*) FROM requests").fetchone()[0] > 0

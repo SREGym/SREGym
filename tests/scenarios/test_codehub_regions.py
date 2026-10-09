@@ -1,4 +1,7 @@
 import json
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -76,3 +79,105 @@ def test_public_values_have_unique_server_ids_and_no_private_scenario_fields(nam
     encoded = json.dumps(values)
     assert all(private not in encoded for private in ("task_id", "family", "seed", "fault", "verification", "tier"))
     assert all(region["mysql"]["primaryHost"].startswith("mysql-g0-writer.") for region in values)
+
+
+@pytest.mark.parametrize("name", ["small", "medium", "large"])
+def test_rendered_replica_placement_is_independent_of_unrelated_service_load(name, tmp_path):
+    import yaml
+
+    if shutil.which("helm") is None:
+        pytest.skip("Actual Helm renderer is required")
+    tier = TIERS[name]
+    regions = regional_inventory(tier, node_labels(tier))
+    groups = mysql_groups(tier, regions)
+    chart = Path(__file__).resolve().parents[2] / "SREGym-applications/codehub/helm"
+    for region in regions:
+        values = tmp_path / "values.yaml"
+        values.write_text(yaml.safe_dump(region_values(tier, region, groups)), encoding="utf-8")
+        rendered = subprocess.check_output(
+            ["helm", "template", "customer-services", str(chart), "-f", str(values)], text=True, timeout=20
+        )
+        controllers = [
+            item for item in yaml.safe_load_all(rendered) if item and item["kind"] in {"Deployment", "StatefulSet"}
+        ]
+        for controller in controllers:
+            pod = controller["spec"]["template"]
+            labels, spec = pod["metadata"]["labels"], pod["spec"]
+            if labels["app.kubernetes.io/component"] in {"api", "repository"}:
+                (container,) = spec["containers"]
+                assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
+                assert 1 < container["readinessProbe"]["timeoutSeconds"] <= 5
+                assert container["livenessProbe"]["httpGet"]["path"] == "/healthz"
+                assert container["livenessProbe"].get("timeoutSeconds", 1) == 1
+            assert spec["nodeSelector"] == {REGION_LABEL: region.name}
+            (constraint,) = spec["topologySpreadConstraints"]
+            assert constraint["whenUnsatisfiable"] == "DoNotSchedule"
+            assert constraint["topologyKey"] == "kubernetes.io/hostname" and constraint["maxSkew"] == 1
+            selector = constraint["labelSelector"]["matchLabels"]
+
+            def matches(candidate, selector=selector):
+                return all(candidate.get(key) == value for key, value in selector.items())
+
+            assert matches(labels)
+            assert not matches({**labels, "app.kubernetes.io/instance": "another-release"})
+            assert not matches({**labels, "app.kubernetes.io/component": "another-service"})
+            if labels["app.kubernetes.io/component"] not in {"queue", "mysql"}:
+                continue
+            (anti,) = spec["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
+            anti_selector = anti["labelSelector"]["matchLabels"]
+            assert anti["topologyKey"] == "kubernetes.io/hostname"
+            if labels["app.kubernetes.io/component"] == "mysql":
+                assert not matches({**labels, "database-group": "another-group"})
+                assert not matches({**labels, "database-group": "another-group"}, anti_selector)
+
+            # Reproduce the observed deadlock: unrelated services fill node 0,
+            # while existing replicas occupy the other eligible nodes. The
+            # final replica must still be admitted on its distinct free node.
+            occupied = [(0, {**labels, "app.kubernetes.io/component": "another-service"})] * 2
+            occupied += [(1, labels)]
+            if labels["app.kubernetes.io/component"] == "queue":
+                occupied += [(2, labels)]
+            else:
+                occupied += [
+                    (2, {**labels, "database-group": "another-group"}),
+                    (2, {**labels, "app.kubernetes.io/component": "another-service"}),
+                ]
+            free = [
+                node
+                for node in range(3)
+                if not any(
+                    existing_node == node and all(existing.get(key) == value for key, value in anti_selector.items())
+                    for existing_node, existing in occupied
+                )
+            ]
+            counts = [
+                sum(node == existing_node and matches(existing) for existing_node, existing in occupied)
+                for node in range(3)
+            ]
+            assert 0 in free and counts[0] + 1 - min(counts) <= constraint["maxSkew"]
+            original_counts = [
+                sum(
+                    node == existing_node and existing.get("app.kubernetes.io/name") == "codehub"
+                    for existing_node, existing in occupied
+                )
+                for node in range(3)
+            ]
+            assert not any(original_counts[node] + 1 - min(original_counts) <= constraint["maxSkew"] for node in free)
+
+
+def test_worker_probes_allow_bounded_python_startup_without_relaxing_heartbeat_age(tmp_path):
+    import yaml
+
+    if shutil.which("helm") is None:
+        pytest.skip("Actual Helm renderer is required")
+    chart = Path(__file__).resolve().parents[2] / "SREGym-applications/codehub/helm"
+    rendered = subprocess.check_output(["helm", "template", "codehub", str(chart)], text=True, timeout=20)
+    worker = next(
+        item
+        for item in yaml.safe_load_all(rendered)
+        if item and item["kind"] == "Deployment" and item["metadata"]["name"] == "worker"
+    )
+    (container,) = worker["spec"]["template"]["spec"]["containers"]
+    for probe, maximum_age in (("readinessProbe", 60), ("livenessProbe", 90)):
+        assert 1 < container[probe]["timeoutSeconds"] <= 5
+        assert f"< {maximum_age}" in container[probe]["exec"]["command"][-1]

@@ -3,16 +3,18 @@
 import base64
 import hashlib
 import io
+import json
+import logging
 import os
 import random
 import secrets
 import ssl
 import subprocess
+import time
 import zipfile
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from queue import Full, Queue
+from queue import Empty, Full, Queue
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
 from uuid import uuid4
@@ -20,6 +22,7 @@ from uuid import uuid4
 import httpx
 
 from sregym.generators.workload.codehub import Operation, WorkloadClient, canonical
+from sregym.generators.workload.http_deadline import DeadlineTransport
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,8 @@ def source_provenance(root, project_id, commit, ref):
 
 
 class CustomerSeeder:
+    WORKER_STOP_SECONDS = 35
+
     def __init__(
         self,
         *,
@@ -127,9 +132,11 @@ class CustomerSeeder:
         route_tenant=None,
         routes_ready=None,
         fill_workers=1,
+        cancel=None,
+        deadline_seconds=86400,
     ):
-        if type(fill_workers) is not int or not 1 <= fill_workers <= 16:
-            raise ValueError("Bulk customer history requires 1..16 workers")
+        if type(fill_workers) is not int or not 1 <= fill_workers <= 64:
+            raise ValueError("Bulk customer history requires 1..64 workers")
         self.endpoints = endpoints
         self.ledger = ledger
         self.bootstrap_token = bootstrap_token
@@ -143,17 +150,69 @@ class CustomerSeeder:
         self.routes_ready = routes_ready
         self.subscriptions = {}
         self.git_cas = {}
+        if type(deadline_seconds) is not int or not 1 <= deadline_seconds <= 86400:
+            raise ValueError("Customer preparation requires a bounded deadline of at most one day")
+        self.cancel = cancel if cancel is not None else Event()
+        self.deadline = time.monotonic() + deadline_seconds
+        self._started = time.monotonic()
+        self._workers, self._fill_clients = [], []
+
+    def drain(self, timeout=35, *, cancel=True):
+        """Keep clients and evidence owned until every preparation worker exits."""
+        if cancel:
+            self.cancel.set()
+        deadline = time.monotonic() + max(0, timeout)
+        for thread in self._workers:
+            thread.join(timeout=max(0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in self._workers):
+            raise RuntimeError("Customer preparation workers did not stop within their shared deadline")
+        self._workers.clear()
+        while self._fill_clients:
+            self._fill_clients[-1].close()
+            self._fill_clients.pop()
+
+    def _check_active(self):
+        if self.cancel.is_set():
+            raise RuntimeError("Customer preparation cancelled")
+        if time.monotonic() >= self.deadline:
+            self.cancel.set()
+            raise TimeoutError("Customer preparation deadline exceeded")
+
+    def client(self, origin, token):
+        self._check_active()
+        client = self.client_factory(origin, token, self.ledger)
+        if isinstance(client, WorkloadClient):
+            client.cancel, client.deadline = self.cancel, self.deadline
+        return client
 
     def provision_user(self, endpoints, user_id, username, token):
+        self._check_active()
         verify = ssl.create_default_context(cafile=endpoints.ca_file) if endpoints.ca_file else True
-        with httpx.Client(base_url=endpoints.api, timeout=10, verify=verify) as client:
-            response = client.post(
+        with httpx.Client(
+            base_url=endpoints.api,
+            timeout=10,
+            verify=verify,
+            transport=DeadlineTransport(verify=verify, cancelled=self.cancel.is_set),
+        ) as client:
+            deadline = min(self.deadline, time.monotonic() + 10)
+            content = bytearray()
+            with client.stream(
+                "POST",
                 "/v1/identity/users",
-                headers={"Authorization": f"Bearer {self.bootstrap_token}"},
+                headers={"Authorization": f"Bearer {self.bootstrap_token}", "Accept-Encoding": "identity"},
                 json={"user_id": user_id, "username": username, "api_token": token},
-            )
-            response.raise_for_status()
-            if response.json().get("id") != user_id:
+                timeout=max(0.01, deadline - time.monotonic()),
+                extensions={"absolute_deadline": deadline},
+            ) as response:
+                response.raise_for_status()
+                if response.headers.get("Content-Encoding", "identity") != "identity":
+                    raise RuntimeError("Identity response uses an unsupported content encoding")
+                for block in response.iter_bytes():
+                    self._check_active()
+                    if time.monotonic() >= deadline or len(content) + len(block) > 4096:
+                        raise RuntimeError("Identity response exceeded its bounded preparation capacity")
+                    content.extend(block)
+            if time.monotonic() >= deadline or json.loads(content).get("id") != user_id:
                 raise RuntimeError("Identity provisioning returned a different user")
 
     @staticmethod
@@ -170,11 +229,20 @@ class CustomerSeeder:
         )
 
     def submit(self, client, operation, *, epoch, provenance=None):
+        self._check_active()
         effects = expected_effects(operation, self.subscriptions.get((operation.tenant_id, operation.project_id), ()))
         if not client.submit(operation, epoch=epoch, effects=effects, provenance=provenance):
-            raise RuntimeError("A customer seed operation was not acknowledged")
+            rejection = getattr(client, "last_rejection", None)
+            raise RuntimeError(f"A customer seed operation was not acknowledged: {operation.kind}; {rejection}")
         with self._accepted_lock:
             self.accepted += 1
+            if self.accepted % 10000 == 0:
+                logging.info(
+                    "Private customer preparation: acknowledged=%d seconds=%.3f workers=%d",
+                    self.accepted,
+                    time.monotonic() - self._started,
+                    self.fill_workers,
+                )
         if operation.kind == "webhook.create":
             payload = operation.request()["payload"]
             self.subscriptions.setdefault((operation.tenant_id, operation.project_id), []).append(
@@ -332,8 +400,8 @@ class CustomerSeeder:
                     self.provision_user(
                         endpoint, account.reviewer_id, f"jamie-{account.reviewer_id[:8]}", account.reviewer_token
                     )
-                    owner = self.client_factory(endpoint.api, account.owner_token, self.ledger)
-                    reviewer = self.client_factory(endpoint.api, account.reviewer_token, self.ledger)
+                    owner = self.client(endpoint.api, account.owner_token)
+                    reviewer = self.client(endpoint.api, account.reviewer_token)
                     try:
                         self.submit(
                             owner,
@@ -437,6 +505,9 @@ class CustomerSeeder:
                         reviewer.close()
                     accounts.append(account)
             self.fill_customer_history(tuple(accounts), tier.records - self.accepted, epoch=epoch)
+            self._check_active()
+            if self.accepted != tier.records:
+                raise RuntimeError("Customer seed did not complete its declared accepted-operation count")
             self.ledger.close_epoch(epoch)
         except Exception:
             # An incomplete seed is a setup failure; no partial data claims are emitted.
@@ -505,7 +576,12 @@ class CustomerSeeder:
 
         def work(queue):
             while True:
-                journey = queue.get()
+                if cancelled.is_set() or self.cancel.is_set():
+                    return
+                try:
+                    journey = queue.get(timeout=0.1)
+                except Empty:
+                    continue
                 try:
                     if journey is None:
                         return
@@ -519,6 +595,7 @@ class CustomerSeeder:
                             with error_lock:
                                 errors.append(exc)
                             cancelled.set()
+                            self.cancel.set()
                             break
                 finally:
                     queue.task_done()
@@ -528,11 +605,13 @@ class CustomerSeeder:
                 thread = Thread(target=work, args=(queue,), name=f"customer-history-{index}", daemon=False)
                 thread.start()
                 started.append(thread)
+                self._workers.append(thread)
             for ordinal, operations in self._history_journeys(accounts, operation_count):
                 queue = queues[ordinal % worker_count]
                 # A tenant always uses one lane/client. Only independent tenants
                 # overlap; no mutable journey or random stream lives in a worker.
                 while not cancelled.is_set():
+                    self._check_active()
                     try:
                         queue.put((clients[accounts[ordinal].tenant_id], operations), timeout=0.1)
                         break
@@ -542,16 +621,30 @@ class CustomerSeeder:
                     break
         except BaseException:
             cancelled.set()
+            self.cancel.set()
             raise
         finally:
             # All started workers drain cancelled plans and exit before clients
             # close or any seed epoch can close, including partial start failure.
-            for queue in queues[: len(started)]:
-                queue.put(None)
+            for queue, thread in zip(queues, started, strict=False):
+                while thread.is_alive() and not cancelled.is_set() and not self.cancel.is_set():
+                    try:
+                        self._check_active()
+                        queue.put(None, timeout=0.1)
+                        break
+                    except Full:
+                        continue
+                    except (RuntimeError, TimeoutError):
+                        cancelled.set()
+                        break
+            cleanup_deadline = time.monotonic() + self.WORKER_STOP_SECONDS
             for thread in started:
-                thread.join()
+                thread.join(timeout=max(0, cleanup_deadline - time.monotonic()))
+            if any(thread.is_alive() for thread in started):
+                raise RuntimeError("Customer preparation workers did not stop within their shared deadline")
         if errors:
             raise errors[0]
+        self._check_active()
 
     def fill_customer_history(self, accounts, operation_count, *, epoch):
         accounts = tuple(accounts)
@@ -562,11 +655,13 @@ class CustomerSeeder:
             or len({account.tenant_id for account in accounts}) != len(accounts)
         ):
             raise ValueError("Bulk customer history requires a nonnegative budget and unique tenants")
-        with ExitStack() as cleanup:
+        if self._workers or self._fill_clients:
+            raise RuntimeError("Previous customer preparation ownership has not drained")
+        try:
             clients = {}
             for account in accounts:
-                client = self.client_factory(self.endpoints[account.region].api, account.owner_token, self.ledger)
-                cleanup.callback(client.close)
+                client = self.client(self.endpoints[account.region].api, account.owner_token)
+                self._fill_clients.append(client)
                 clients[account.tenant_id] = client
             if self.fill_workers == 1:
                 for ordinal, operations in self._history_journeys(accounts, operation_count):
@@ -575,3 +670,7 @@ class CustomerSeeder:
                         self.submit(client, operation, epoch=epoch)
             elif operation_count:
                 self._fill_independent_tenants(accounts, clients, operation_count, epoch)
+        finally:
+            # An expired join retains all live workers and their clients. The
+            # controller can retry draining without closing their receipt DB.
+            self.drain(timeout=0, cancel=False)

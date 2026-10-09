@@ -62,6 +62,12 @@ class RemoteWorkload:
     def close_epoch(self, epoch):
         return self.call(self.index, "journal_close_epoch", [epoch])
 
+    def project_receipts(self, identities):
+        return self.call(self.index, "journal_project_receipts", [identities])
+
+    def traffic_progress(self):
+        return self.call(self.index, "journal_traffic_progress", [])
+
     def delivery_receipts(self, identities):
         return self.call(self.index, "journal_delivery_receipts", [identities])
 

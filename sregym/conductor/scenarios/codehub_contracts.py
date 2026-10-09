@@ -543,6 +543,23 @@ class RecoverySource:
 
 
 @dataclass(frozen=True)
+class OperationCount:
+    kind: str
+    tenant: str
+    project: str | None
+    group: str
+    region: str
+    count: int
+
+    def __post_init__(self):
+        for name in ("kind", "tenant", "group", "region"):
+            _text(getattr(self, name), name)
+        if self.project is not None:
+            _text(self.project, "project")
+        _integer(self.count, "operation count", minimum=1)
+
+
+@dataclass(frozen=True)
 class DatasetManifest:
     schema_version: int
     entity_counts: tuple[EntityCount, ...]
@@ -553,6 +570,7 @@ class DatasetManifest:
     oldest_queue_age_seconds: int
     distributions: tuple[SizeDistribution, ...]
     recovery_sources: tuple[RecoverySource, ...]
+    operation_mix: tuple[OperationCount, ...] = ()
 
     def __post_init__(self):
         _integer(self.schema_version, "manifest schema version", minimum=1)
@@ -570,6 +588,10 @@ class DatasetManifest:
             raise ValueError("storage must be a measured StorageFootprint")
         if not self.queue_count and self.oldest_queue_age_seconds:
             raise ValueError("An empty queue cannot have an oldest message age")
+        _tuple(self.operation_mix, OperationCount, "operation_mix", nonempty=self.schema_version >= 2)
+        _unique(tuple((item.kind, item.tenant, item.project) for item in self.operation_mix), "operation mix buckets")
+        if self.operation_mix and sum(item.count for item in self.operation_mix) != self.operation_count:
+            raise ValueError("Operation mix must account for the complete accepted operation count")
 
 
 @dataclass(frozen=True)

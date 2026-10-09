@@ -319,8 +319,12 @@ class Conductor:
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
+        requires_healthy = getattr(problem, "requires_healthy_verification", False) is True
+        mitigation_oracle = getattr(problem, "mitigation_oracle", None)
+        if requires_healthy and mitigation_oracle is None:
+            raise RuntimeError("Task requires an isolated healthy verification oracle")
 
-        if self.stage_sequence:
+        if self.stage_sequence or requires_healthy:
             # Build and validate connectivity before fault injection and before
             # the agent clock starts. Image build time is not grading time.
             self._get_verifier_runtime().prepare()
@@ -331,9 +335,22 @@ class Conductor:
         # oracle ignore chronic pre-existing noise (e.g. ContainerCPUThrottling
         # from the astronomy-shop Grafana sidecar, SREGym#745) and grade only
         # the injected fault.
-        mitigation_oracle = getattr(problem, "mitigation_oracle", None)
         if mitigation_oracle is not None:
             mitigation_oracle.capture_baseline()
+
+        if requires_healthy:
+            runtime = self._get_verifier_runtime()
+            try:
+                healthy = runtime.evaluate(mitigation_oracle)
+                if type(healthy) is not dict or healthy.get("success") is not True:
+                    raise RuntimeError("Initial application failed isolated healthy verification")
+            except BaseException:
+                try:
+                    runtime.cancel()
+                except Exception:
+                    self.logger.exception("Failed to cancel verifier after healthy setup failure")
+                raise
+            self.logger.info("Initial application passed isolated healthy verification")
 
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
@@ -860,7 +877,13 @@ class Conductor:
                 f"Stage '{stage_name}' evaluation raised unexpectedly; advancing anyway "
                 "so the conductor doesn't get stuck waiting on a dead stage."
             )
-            outcome = {"success": False, "error": "stage evaluation raised", "submission": sol}
+            outcome = {
+                "success": False,
+                "reason": "stage_evaluation_failed",
+                "failure_class": "harness_error",
+                "error": "stage evaluation raised",
+                "submission": sol,
+            }
 
         next_index = self.current_stage_index + 1
         next_stage_name: str | None = None
@@ -1266,6 +1289,24 @@ class Conductor:
             return "incomplete"
         if self.results.get("cleanup_failed"):
             self.record_incomplete_attempt("cleanup_failed")
+            return "incomplete"
+        environment_failure = getattr(getattr(self, "problem", None), "environment_failure", None)
+        if environment_failure is not None:
+            self.results["environment_failure"] = environment_failure
+            self.record_incomplete_attempt("owner_environment_failed")
+            return "incomplete"
+        from sregym.results.validity import non_agent_failure_classes
+
+        stage_results = {
+            stage + "." + key: value
+            for stage in ("Diagnosis", "Mitigation")
+            for result in (self.results.get(stage),)
+            if isinstance(result, dict)
+            for key, value in result.items()
+            if key in {"success", "failure_class"}
+        }
+        if non_agent_failure_classes(stage_results):
+            self.record_incomplete_attempt("non_agent_verification_failure")
             return "incomplete"
         if self.missing_submission_stages():
             self.record_incomplete_attempt("missing_stage_results")

@@ -1,3 +1,5 @@
+import pytest
+
 from sregym.results.resume import complete_resume_rows, resume_row_is_complete
 
 
@@ -31,3 +33,29 @@ def test_legacy_diagnosis_only_row_is_rerun():
 
     assert resume_row_is_complete(diagnosis_only) is False
     assert resume_row_is_complete(both_stages) is True
+
+
+@pytest.mark.parametrize(
+    "classification", ["harness_error", "environment_error", "ambiguous", "unknown", " HARNESS_ERROR "]
+)
+@pytest.mark.parametrize("stage", ["Diagnosis", "Mitigation"])
+def test_explicit_non_agent_result_never_satisfies_resume(classification, stage):
+    row = _row(1, run_status="complete", **{stage + ".success": "False", stage + ".failure_class": classification})
+    assert not resume_row_is_complete(row)
+    assert complete_resume_rows([row], requested_attempts=1) == {}
+
+
+def test_resume_retains_valid_retry_and_ignores_stale_class_on_success():
+    valid = _row(
+        1,
+        run_status="complete",
+        **{
+            "Diagnosis.success": "True",
+            "Diagnosis.failure_class": "harness_error",
+            "Mitigation.success": "False",
+            "Mitigation.failure_class": "agent_error",
+        },
+    )
+    invalid = _row(1, run_status="complete", **{"Mitigation.success": "False", "Mitigation.failure_class": "ambiguous"})
+    for rows in ([valid, invalid], [invalid, valid]):
+        assert complete_resume_rows(rows, requested_attempts=1) == {("problem", 1): valid}

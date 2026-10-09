@@ -1,6 +1,7 @@
 """Owned multi-region application deployment; construction never touches a cluster."""
 
 import base64
+import copy
 import datetime
 import hashlib
 import ipaddress
@@ -10,14 +11,17 @@ import secrets
 import shlex
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from pathlib import Path
+from threading import Event
 from uuid import UUID, uuid4
 
 import yaml
 
 from sregym.conductor.scenarios.codehub_contracts import LifecyclePhase, OwnedResource, RunInventory
 from sregym.conductor.scenarios.codehub_regions import mysql_groups, region_values, regional_inventory
-from sregym.conductor.scenarios.database_recovery import TIERS, ScaleTier
+from sregym.conductor.scenarios.database_recovery import TIERS, HostCapacity, ScaleTier
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 
@@ -25,6 +29,10 @@ MYSQL_BOOTSTRAP_IMAGE = (
     "docker.io/library/mysql:8.4.6@sha256:869218921e61d6c3c89820955d63cca42971f0e3e6c1e2792247bbd944ebc6e9"
 )
 DATABASE_LINK_SLICE_MAX_BYTES = 64 * 1024
+
+
+class RouteReplicasUnavailable(RuntimeError):
+    """The owned serving cohort has not reached its declared Ready count."""
 
 
 class CodeHub(Application):
@@ -42,10 +50,20 @@ class CodeHub(Application):
         webhook_egress: tuple[tuple[str, int], ...] = (),
         database_links: dict[tuple[str, str, str], int] | None = None,
         storage_class: str | None = None,
+        lease_path: Path | None = None,
+        owner_storage_root: Path | None = None,
+        native_memory_admission: bool = False,
+        foreign_memory_reserve_gib: int = 8,
     ):
         super().__init__(Path(__file__).resolve().parents[1] / "metadata" / "codehub.json")
         self.load_app_json()
         self.tier = tier or TIERS["small"]
+        if type(native_memory_admission) is not bool:
+            raise ValueError("Native memory admission must be an explicit boolean")
+        if type(foreign_memory_reserve_gib) is not int or not 0 <= foreign_memory_reserve_gib <= 1024:
+            raise ValueError("Foreign memory reservation must be bounded to 0..1024 GiB")
+        self.native_memory_admission = native_memory_admission
+        self.foreign_memory_reserve_gib = foreign_memory_reserve_gib
         self.database_links = dict(database_links or {})
         self._database_links_installed = False
         self._validate_database_links(self.database_links)
@@ -79,6 +97,19 @@ class CodeHub(Application):
         self.frontend_port = 8080
         self._credentials: dict[str, str] | None = None
         self.gateway_certificates: dict[str, str] = {}
+        self.lease_path = (
+            Path(lease_path) if lease_path is not None else Path(tempfile.gettempdir()) / "codehub-runs/campaign.lock"
+        )
+        self.owner_storage_root = Path(owner_storage_root) if owner_storage_root is not None else self.lease_path.parent
+        self._environment_lease = None
+        self.capacity_observation = None
+        self._capacity_monitor = None
+
+    def __getstate__(self):
+        state = dict(vars(self))
+        state["_environment_lease"] = None
+        state["_capacity_monitor"] = None
+        return state
 
     def _client(self):
         if self.kubectl is None:
@@ -87,12 +118,65 @@ class CodeHub(Application):
             self.kubectl = KubeCtl()
         return self.kubectl
 
-    def _validate_boundary(self) -> None:
+    def _validate_boundary(self) -> dict:
         from sregym.service.docker_runtime import rootless_workload_enabled, validate_rootless_boundary
 
         if not rootless_workload_enabled():
             raise RuntimeError("CodeHub requires the qualified rootless workload boundary")
-        validate_rootless_boundary()
+        return validate_rootless_boundary()
+
+    def _admit_capacity(self):
+        from sregym.conductor.scenarios.codehub_controller import OwnerLease
+
+        lease = OwnerLease(self.lease_path)
+        lease.acquire()
+        self._environment_lease = lease
+        try:
+            boundary = self._validate_boundary()
+            roots = tuple(Path(boundary[name]) for name in ("workload_storage_root", "trusted_storage_root"))
+            workload, trusted = (HostCapacity.observe(root) for root in roots)
+            self.owner_storage_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            owner = HostCapacity.observe(self.owner_storage_root.resolve(strict=True))
+            from sregym.conductor.scenarios.codehub_capacity import admit_native_memory, capture_kernel_baseline
+
+            baseline = capture_kernel_baseline(boundary)
+            admission = None
+            if self.native_memory_admission:
+                admission = admit_native_memory(
+                    workload,
+                    self.tier,
+                    foreign_reserve_gib=self.foreign_memory_reserve_gib,
+                    baseline=baseline,
+                    boundary=boundary,
+                )
+            else:
+                workload.admit(self.tier)
+            # Receipt/receiver files, recovery merge copies and verifier scratch
+            # need a separate control-storage reserve, not PVC request totals.
+            required_trusted_gib = {"small": 8, "medium": 20, "large": 44}[self.tier.name]
+            if min(trusted.available_disk_gib, owner.available_disk_gib) < required_trusted_gib:
+                raise ValueError("Trusted control storage lacks the measured preparation and recovery reserve")
+            self.capacity_observation = {
+                "boundary": boundary,
+                "workload": vars(workload),
+                "trusted": vars(trusted),
+                "owner": vars(owner),
+                "owner_storage_root": str(self.owner_storage_root.resolve()),
+                "workload_storage_root": str(roots[0]),
+                "trusted_storage_root": str(roots[1]),
+                "trusted_reserve_gib": required_trusted_gib,
+                "native_memory_admission": admission,
+                "kernel_baseline": baseline,
+            }
+        except BaseException:
+            lease.close()
+            self._environment_lease = None
+            raise
+
+    def _release_capacity_lease(self):
+        if self._environment_lease is not None:
+            self._environment_lease.close()
+            self._environment_lease = None
 
     def _record(self, kind: str, namespace: str, name: str, uid: str) -> None:
         resource = OwnedResource(self.inventory.run_id, kind, namespace, name, uid)
@@ -212,37 +296,38 @@ class CodeHub(Application):
             raise RuntimeError("Create a new application owner for each deployment attempt")
         if not self.chart_path.is_dir():
             raise FileNotFoundError(f"Application chart not found: {self.chart_path}")
-        self._validate_boundary()
-        client = self._client()
-        nodes = client.core_v1_api.list_node().items
-        node_labels = {
-            node.metadata.name: node.metadata.labels or {}
-            for node in nodes
-            if not any(
-                key in (node.metadata.labels or {})
-                for key in ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")
-            )
-            and any(
-                condition.type == "Ready" and condition.status == "True" for condition in (node.status.conditions or [])
-            )
-        }
-        self.regions = regional_inventory(self.tier, node_labels)
-        self.database_groups = mysql_groups(self.tier, self.regions)
-        self.inventory = self.inventory.transition(LifecyclePhase.PROVISIONING)
-        self._credentials = {
-            key: secrets.token_hex(16 if key == "replication-password" else 24)
-            for key in (
-                "mysql-password",
-                "mysql-root-password",
-                "mysql-observer-password",
-                "replication-password",
-                "service-token",
-                "bootstrap-token",
-                "broker-password",
-                "broker-cookie",
-            )
-        }
+        self._admit_capacity()
         try:
+            client = self._client()
+            nodes = client.core_v1_api.list_node().items
+            node_labels = {
+                node.metadata.name: node.metadata.labels or {}
+                for node in nodes
+                if not any(
+                    key in (node.metadata.labels or {})
+                    for key in ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")
+                )
+                and any(
+                    condition.type == "Ready" and condition.status == "True"
+                    for condition in (node.status.conditions or [])
+                )
+            }
+            self.regions = regional_inventory(self.tier, node_labels)
+            self.database_groups = mysql_groups(self.tier, self.regions)
+            self.inventory = self.inventory.transition(LifecyclePhase.PROVISIONING)
+            self._credentials = {
+                key: secrets.token_hex(16 if key == "replication-password" else 24)
+                for key in (
+                    "mysql-password",
+                    "mysql-root-password",
+                    "mysql-observer-password",
+                    "replication-password",
+                    "service-token",
+                    "bootstrap-token",
+                    "broker-password",
+                    "broker-cookie",
+                )
+            }
             for region in self.regions:
                 self._create_namespace(region.namespace)
                 self._create_credentials(region.namespace)
@@ -315,6 +400,48 @@ class CodeHub(Application):
             'MYSQL_PWD="$(cat /run/credentials/mysql-root-password)" exec mysql -uroot --batch --raw'
         )
         return self._client().exec_command_checked(command, input_data=sql, timeout=timeout)
+
+    def assert_database_forward_owner(self, member, *, deadline=None, cancelled=None, checked_service=None):
+        """A stable member service must still select its captured controller."""
+        from kubernetes.client import AppsV1Api
+
+        if not any(member in group.members for group in self.database_groups):
+            raise ValueError("Database forward member is outside the captured inventory")
+        namespace = next(region.namespace for region in self.regions if region.name == member.region)
+        name = member.origin.removeprefix("mysql://").split(".", 1)[0]
+        deadline = deadline if deadline is not None else time.monotonic() + 10
+
+        def timeout():
+            if cancelled is not None and cancelled.is_set():
+                raise RuntimeError("Database forward validation cancelled")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Database forward ownership deadline exceeded")
+            return min(5, remaining)
+
+        core = self._client().core_v1_api
+        if checked_service is None:
+            resource = self._owned_resource("Namespace", "", namespace)
+            current_namespace = core.read_namespace(namespace, _request_timeout=timeout())
+            if (
+                current_namespace.metadata.uid != resource.uid
+                or (current_namespace.metadata.labels or {}).get("codehub.local/deployment") != self.deployment_owner
+            ):
+                raise RuntimeError("Database forward namespace ownership changed")
+        expected = self._owned_resource("StatefulSet", namespace, name)
+        current = AppsV1Api(core.api_client).read_namespaced_stateful_set(name, namespace, _request_timeout=timeout())
+        service = checked_service or core.read_namespaced_service(name, namespace, _request_timeout=timeout())
+        service_owner = self._owned_resource("Service", namespace, name)
+        if (
+            current.metadata.uid != expected.uid
+            or service.metadata.uid != service_owner.uid
+            or service.spec.selector
+            != {
+                "app.kubernetes.io/name": "codehub",
+                "database-member": name,
+            }
+        ):
+            raise RuntimeError("Database forward controller or member selection changed")
 
     def port_forward_command(
         self, region: str, role: str, local_port: int, *, address: str = "172.17.0.1", tls: bool = False
@@ -642,19 +769,23 @@ class CodeHub(Application):
             raise RuntimeError("Normal routing resource was not captured as owned")
         return resource
 
-    def _assert_owned_namespace(self, namespace):
+    def _assert_owned_namespace(self, namespace, *, request_timeout=None, core=None):
         resource = self._owned_resource("Namespace", "", namespace)
-        current = self._client().core_v1_api.read_namespace(namespace, _request_timeout=5)
+        core = core if core is not None else self._client().core_v1_api
+        current = core.read_namespace(namespace, _request_timeout=5 if request_timeout is None else request_timeout())
         if (
             current.metadata.uid != resource.uid
             or (current.metadata.labels or {}).get("codehub.local/deployment") != self.deployment_owner
         ):
             raise RuntimeError("Normal routing namespace ownership changed")
 
-    def _owned_route_map(self, namespace, name):
-        self._assert_owned_namespace(namespace)
+    def _owned_route_map(self, namespace, name, *, request_timeout=None, core=None):
+        core = core if core is not None else self._client().core_v1_api
+        self._assert_owned_namespace(namespace, request_timeout=request_timeout, core=core)
         resource = self._owned_resource("ConfigMap", namespace, name)
-        current = self._client().core_v1_api.read_namespaced_config_map(name, namespace, _request_timeout=5)
+        current = core.read_namespaced_config_map(
+            name, namespace, _request_timeout=5 if request_timeout is None else request_timeout()
+        )
         if current.metadata.uid != resource.uid:
             raise RuntimeError("Normal route ConfigMap ownership changed")
         if not current.data or "database-routes.json" not in current.data:
@@ -739,21 +870,22 @@ class CodeHub(Application):
                 raise ExceptionGroup("Normal routing update and guarded rollback failed", failures) from original
             raise
 
-    def _serving_route_pods(self, region, role):
+    def _serving_route_inventory(self, region, role, *, request_timeout=None, core=None):
         from kubernetes.client import AppsV1Api
 
-        self._assert_owned_namespace(region.namespace)
+        core = core if core is not None else self._client().core_v1_api
+        self._assert_owned_namespace(region.namespace, request_timeout=request_timeout, core=core)
         owner = self._owned_resource("StatefulSet" if role == "repository" else "Deployment", region.namespace, role)
-        client = self._client().core_v1_api
+        client = core
         apps = AppsV1Api(client.api_client)
         pods = client.list_namespaced_pod(
-            region.namespace, label_selector=f"app.kubernetes.io/component={role}", _request_timeout=5
+            region.namespace,
+            label_selector=f"app.kubernetes.io/component={role}",
+            _request_timeout=5 if request_timeout is None else request_timeout(),
         ).items
-        result = []
+        result, replicas = [], {}
         for pod in pods:
-            if pod.metadata.deletion_timestamp or not any(
-                condition.type == "Ready" and condition.status == "True" for condition in pod.status.conditions or ()
-            ):
+            if pod.metadata.deletion_timestamp:
                 continue
             refs = [ref for ref in pod.metadata.owner_references or () if ref.controller]
             if len(refs) != 1:
@@ -762,7 +894,12 @@ class CodeHub(Application):
             if owner.kind == "StatefulSet":
                 matches = ref.kind == owner.kind and ref.uid == owner.uid and ref.name == owner.name
             else:
-                replica = apps.read_namespaced_replica_set(ref.name, region.namespace, _request_timeout=5)
+                key = (ref.name, ref.uid)
+                if key not in replicas:
+                    replicas[key] = apps.read_namespaced_replica_set(
+                        ref.name, region.namespace, _request_timeout=5 if request_timeout is None else request_timeout()
+                    )
+                replica = replicas[key]
                 matches = (
                     ref.kind == "ReplicaSet"
                     and replica.metadata.uid == ref.uid
@@ -776,47 +913,171 @@ class CodeHub(Application):
                 )
             if not matches:
                 raise RuntimeError("Serving route pod differs from its captured controller")
-            result.append(pod.metadata.name)
+            if not pod.metadata.uid:
+                raise RuntimeError("Serving route pod lacks its incarnation identity")
+            if any(
+                condition.type == "Ready" and condition.status == "True" for condition in pod.status.conditions or ()
+            ):
+                result.append((pod.metadata.name, pod.metadata.uid))
         expected = (
             1
             if role in {"repository", "topology"}
             else getattr(self.tier, f"{'workers' if role == 'worker' else 'api'}_per_zone")
         )
         if len(result) != expected:
-            raise RuntimeError("Serving normal route replicas are incomplete")
-        return tuple(result)
+            raise RouteReplicasUnavailable(
+                f"Serving normal route replicas are incomplete: {region.namespace}/{role} "
+                f"has {len(result)} Ready, requires {expected}"
+            )
+        return tuple(sorted(result))
 
-    def await_database_routes(self, tenant_groups: dict[str, str], *, timeout_seconds: int = 120) -> None:
+    def _serving_route_pods(self, region, role):
+        return tuple(name for name, _ in self._serving_route_inventory(region, role))
+
+    def await_database_routes(self, tenant_groups: dict[str, str], *, timeout_seconds: int = 300, cancel=None) -> None:
         """Prove normal ConfigMap propagation before the first customer identity."""
         if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 300 or not tenant_groups:
             raise ValueError("Normal route propagation needs bounded time and declared tenants")
+
+        def check(routes):
+            if any(
+                not isinstance(routes.get(tenant), dict) or routes[tenant].get("group") != group
+                for tenant, group in tenant_groups.items()
+            ):
+                raise RuntimeError("Normal configuration omits declared tenant routing")
+
+        self._await_route_files(self.regions, ("api", "repository", "worker"), check, timeout_seconds, cancel)
+
+    def await_worker_group_route(self, region_name, group_name, host, port, *, timeout_seconds=90, cancel=None):
+        """Prove selected-group configuration on every current owned worker."""
+        if (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not 0 < timeout_seconds <= 300
+        ):
+            raise ValueError("Worker route propagation needs a bounded deadline")
+        region = next(region for region in self.regions if region.name == region_name)
+
+        def check(routes):
+            selected = [route for route in routes.values() if route.get("group", "group-0") == group_name]
+            if not selected or any(
+                route.get("writer_host") != host or route.get("port", 3306) != port for route in selected
+            ):
+                raise RuntimeError("Normal configuration omits the intended worker group route")
+
+        self._await_route_files((region,), ("worker",), check, timeout_seconds, cancel)
+
+    def _await_route_files(self, regions, roles, check_routes, timeout_seconds, cancel):
+        from kubernetes.client import ApiClient, CoreV1Api
+
         deadline = time.monotonic() + timeout_seconds
         program = "import hashlib,pathlib;print(hashlib.sha256(pathlib.Path('/etc/codehub/database-routes.json').read_bytes()).hexdigest())"
-        while time.monotonic() < deadline:
-            complete = True
-            for region in self.regions:
-                for role in ("api", "repository", "worker"):
-                    name = "worker-database-routes" if role == "worker" else "database-routes"
-                    current, routes = self._owned_route_map(region.namespace, name)
-                    if any(
-                        not isinstance(routes.get(tenant), dict) or routes[tenant].get("group") != group
-                        for tenant, group in tenant_groups.items()
-                    ):
-                        raise RuntimeError("Normal configuration omits declared tenant routing")
-                    expected = hashlib.sha256(current.data["database-routes.json"].encode()).hexdigest()
-                    for pod in self._serving_route_pods(region, role):
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise TimeoutError("Normal database routes did not propagate to every serving replica")
-                        self._assert_owned_namespace(region.namespace)
-                        output = self._client().exec_command_checked(
-                            f"kubectl -n {region.namespace} exec {pod} -- python -c {shlex.quote(program)}",
-                            timeout=min(5, remaining),
-                        )
-                        complete &= output.strip() == expected
-            if complete:
-                return
-            time.sleep(0.2)
+        aborted = Event()
+
+        def remaining_seconds():
+            if aborted.is_set() or (cancel is not None and cancel.is_set()):
+                raise RuntimeError("Normal database route propagation cancelled")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Normal database routes did not propagate to every serving replica")
+            return remaining
+
+        def request_timeout():
+            remaining = remaining_seconds()
+            # Kubernetes 30 accepts integer totals or (connect, read) pairs;
+            # fractional scalar values silently disable its socket timeout.
+            return min(5, int(remaining)) if remaining >= 1 else (remaining / 2, remaining / 2)
+
+        def pause():
+            delay = min(0.2, remaining_seconds())
+            if cancel is None:
+                time.sleep(delay)
+            else:
+                cancel.wait(delay)
+
+        def projected(task):
+            namespace, pod, uid, expected = task
+            remaining_seconds()
+            self._assert_owned_namespace(namespace, request_timeout=request_timeout, core=core)
+            current = core.read_namespaced_pod(pod, namespace, _request_timeout=request_timeout())
+            if current.metadata.uid != uid:
+                raise RuntimeError("Serving route pod changed during projection check")
+            try:
+                output = self._client().exec_command_checked(
+                    # Replace the POSIX shell so timeout reaps kubectl itself.
+                    f"exec kubectl -n {namespace} exec {pod} -- python -c {shlex.quote(program)}",
+                    timeout=min(5, remaining_seconds()),
+                )
+            except RuntimeError:
+                remaining_seconds()
+                raise
+            return output.strip() == expected
+
+        # A Large inventory has 51 serving replicas. Serial execs can consume
+        # the propagation deadline even when kubelet has already updated them.
+        # Keep exec concurrency bounded and drain it before returning or raising.
+        with ExitStack() as stack:
+            core = self._client().core_v1_api
+            if isinstance(core, CoreV1Api):
+                configuration = copy.deepcopy(core.api_client.configuration)
+                configuration.retries = 0
+                core = CoreV1Api(stack.enter_context(ApiClient(configuration)))
+            executor = stack.enter_context(ThreadPoolExecutor(max_workers=8, thread_name_prefix="codehub-routes"))
+            while time.monotonic() < deadline:
+                snapshots, tasks = [], []
+                try:
+                    for region in regions:
+                        for role in roles:
+                            remaining_seconds()
+                            name = "worker-database-routes" if role == "worker" else "database-routes"
+                            current, routes = self._owned_route_map(
+                                region.namespace, name, request_timeout=request_timeout, core=core
+                            )
+                            check_routes(routes)
+                            expected = hashlib.sha256(current.data["database-routes.json"].encode()).hexdigest()
+                            pods = self._serving_route_inventory(
+                                region, role, request_timeout=request_timeout, core=core
+                            )
+                            snapshots.append(
+                                (region, role, name, current.metadata.resource_version, dict(current.data), pods)
+                            )
+                            tasks.extend((region.namespace, pod, uid, expected) for pod, uid in pods)
+                except RouteReplicasUnavailable:
+                    pause()
+                    continue
+                # Consume every result, including errors after an earlier stale
+                # projection. No unchecked replica may qualify the inventory.
+                futures = [executor.submit(projected, task) for task in tasks]
+                try:
+                    results = tuple(future.result() for future in futures)
+                except BaseException:
+                    aborted.set()
+                    for future in futures:
+                        future.cancel()
+                    raise
+                remaining_seconds()
+                if all(results):
+                    stable = True
+                    try:
+                        for region, role, name, version, data, pods in snapshots:
+                            remaining_seconds()
+                            current, _ = self._owned_route_map(
+                                region.namespace, name, request_timeout=request_timeout, core=core
+                            )
+                            stable &= (
+                                current.metadata.resource_version == version
+                                and current.data == data
+                                and self._serving_route_inventory(
+                                    region, role, request_timeout=request_timeout, core=core
+                                )
+                                == pods
+                            )
+                    except RouteReplicasUnavailable:
+                        stable = False
+                    remaining_seconds()
+                    if stable:
+                        return
+                pause()
         raise TimeoutError("Normal database routes did not propagate to every serving replica")
 
     @property
@@ -1051,7 +1312,10 @@ class CodeHub(Application):
                         member,
                         f"CHANGE REPLICATION SOURCE TO SOURCE_HOST='{source}', SOURCE_PORT=3306, "
                         f"SOURCE_USER='replication', SOURCE_PASSWORD='{password}', SOURCE_AUTO_POSITION=1, "
-                        "GET_SOURCE_PUBLIC_KEY=1, SOURCE_CONNECT_RETRY=1; START REPLICA; SET GLOBAL super_read_only=ON;",
+                        # Preserve MySQL 8.4's ten-minute retry window while
+                        # checking restored connectivity once per second.
+                        "GET_SOURCE_PUBLIC_KEY=1, SOURCE_CONNECT_RETRY=1, SOURCE_RETRY_COUNT=600; "
+                        "START REPLICA; SET GLOBAL super_read_only=ON;",
                     )
                 except BaseException:
                     self._replication_diagnostics(member)
@@ -1087,6 +1351,15 @@ class CodeHub(Application):
                 if result.strip().splitlines()[-1] != "0":
                     details = self._replication_diagnostics(member)
                     raise RuntimeError(f"Initial replication did not converge: {member.name}; diagnostics={details}")
+                self.mysql_command(
+                    member,
+                    "SET PERSIST read_only=ON; SET PERSIST super_read_only=ON; "
+                    "SET PERSIST_ONLY skip_replica_start=OFF;",
+                )
+            self.mysql_command(
+                writer,
+                "SET PERSIST super_read_only=OFF; SET PERSIST read_only=OFF; SET PERSIST_ONLY skip_replica_start=ON;",
+            )
 
     def _await_queue_membership(self) -> None:
         for region in self.regions:
@@ -1120,9 +1393,13 @@ class CodeHub(Application):
         raise RuntimeError("CodeHub requires an owned workload controller")
 
     def cleanup(self):
+        if self._capacity_monitor is not None:
+            raise RuntimeError("Stop the owned regional environment before application cleanup")
         if self.inventory.phase == LifecyclePhase.CREATED and not self.inventory.resources:
+            self._release_capacity_lease()
             return
         if self.inventory.phase == LifecyclePhase.STOPPED:
+            self._release_capacity_lease()
             return
         self.inventory = self.inventory.transition(LifecyclePhase.STOPPING)
         errors = []
@@ -1174,3 +1451,4 @@ class CodeHub(Application):
             raise RuntimeError("; ".join(errors))
         self.inventory = self.inventory.transition(LifecyclePhase.STOPPED)
         self._credentials = None
+        self._release_capacity_lease()

@@ -18,7 +18,7 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -57,19 +57,62 @@ class _Forward:
     diagnostics: object
     origin: str
     closed: bool = False
+    supervisor_error: BaseException | None = None
+    _stop: object = field(default_factory=threading.Event, repr=False)
+    _thread: object = field(default=None, repr=False)
+
+    def supervise(self, relaunch, assert_owner):
+        """Reconnect the same owned service/port after an ordinary pod restart."""
+        if self._thread is not None or self.closed:
+            raise RuntimeError("Owned forward supervision already started or closed")
+
+        def work():
+            while not self._stop.wait(0.25):
+                if self.process.poll() is None:
+                    continue
+                try:
+                    assert_owner(deadline=time.monotonic() + 10, cancelled=self._stop)
+                    if self._stop.is_set():
+                        return
+                    child = relaunch()
+                    self.process = child
+                    if self._stop.is_set():
+                        self._reap(child)
+                        return
+                except BaseException as error:
+                    if not self._stop.is_set():
+                        self.supervisor_error = error
+                    return
+
+        self._thread = threading.Thread(target=work, name="owned-service-forward", daemon=False)
+        self._thread.start()
 
     def close(self):
         if self.closed:
             return
-        if self.process.poll() is None:
-            self.process.terminate()
+        self._stop.set()
+        shutdown_error = None
+        if self._thread is not None:
+            self._thread.join(timeout=15)
+            if self._thread.is_alive():
+                shutdown_error = RuntimeError("Owned forward supervisor did not stop")
+        try:
+            self._reap(self.process)
+        finally:
+            self.diagnostics.close()
+            self.closed = True
+        if shutdown_error is not None:
+            raise shutdown_error
+
+    @staticmethod
+    def _reap(process):
+        if process.poll() is None:
+            process.terminate()
             try:
-                self.process.wait(timeout=5)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5)
-        self.diagnostics.close()
-        self.closed = True
+                process.kill()
+                process.wait(timeout=5)
 
 
 class _RecoveryOracle(RegionalDatabaseRecoveryOracle):
@@ -80,12 +123,14 @@ class _RecoveryOracle(RegionalDatabaseRecoveryOracle):
 class RegionalDatabaseFailover(Problem):
     run_default_workload = False
     run_default_noise = False
+    requires_healthy_verification = True
     verifier_excluded_fields = (
         "_controller",
         "_observer",
         "_forwards",
         "_link_binding",
         "_runtime_lock",
+        "_environment_cancel",
         "_controller_factory",
         "_observer_factory",
         "_journal_factory",
@@ -106,6 +151,9 @@ class RegionalDatabaseFailover(Problem):
         readiness_seconds: int = 30,
         stable_seconds: int = 60,
         verification_seconds: int = 600,
+        reference_repair_seconds: int = 600,
+        noise_horizon_seconds: int | None = None,
+        foreign_memory_reserve_gib: int = 8,
         app_factory: Callable = CodeHub,
         controller_factory: Callable | None = None,
         observer_factory: Callable | None = None,
@@ -119,6 +167,18 @@ class RegionalDatabaseFailover(Problem):
             raise ValueError("Seed must be a nonnegative integer")
         if type(readiness_seconds) is not int or not 1 <= readiness_seconds <= 120:
             raise ValueError("Forward readiness must be bounded to 1..120 seconds")
+        if type(reference_repair_seconds) is not int or not 1 <= reference_repair_seconds <= 3600:
+            raise ValueError("Reference repair must be bounded to 1..3600 seconds")
+        self.reference_repair_seconds = reference_repair_seconds
+        if type(foreign_memory_reserve_gib) is not int or not 0 <= foreign_memory_reserve_gib <= 1024:
+            raise ValueError("Foreign memory reservation must be bounded to 0..1024 GiB")
+        self.noise_horizon_seconds = (
+            {"small": 7200, "medium": 14400, "large": 86400}[tier]
+            if noise_horizon_seconds is None
+            else noise_horizon_seconds
+        )
+        if type(self.noise_horizon_seconds) is not int or not 15 <= self.noise_horizon_seconds <= 86400:
+            raise ValueError("Noise horizon must be bounded to 15..86400 seconds")
         self.task_version, self.seed = TASK_VERSION, seed
         self.private_root = Path(private_root) if private_root is not None else None
         self.lease_path = Path(lease_path) if lease_path is not None else None
@@ -133,6 +193,11 @@ class RegionalDatabaseFailover(Problem):
             database_links=(
                 link_factory.database_links(TIERS[tier]) if hasattr(link_factory, "database_links") else {}
             ),
+            lease_path=self.lease_path
+            or (self.private_root or Path(tempfile.gettempdir()) / "codehub-runs") / "campaign.lock",
+            owner_storage_root=self.private_root or Path(tempfile.gettempdir()) / "codehub-runs",
+            native_memory_admission=tier == "large",
+            foreign_memory_reserve_gib=foreign_memory_reserve_gib,
         )
         super().__init__(app)
         self.root_cause = self.build_structured_root_cause(
@@ -144,6 +209,7 @@ class RegionalDatabaseFailover(Problem):
         self._controller_factory, self._observer_factory = controller_factory, observer_factory
         self._journal_factory, self._link_factory = journal_factory, link_factory
         self._popen_factory = popen_factory
+        self._environment_cancel = threading.Event()
         self._controller = self._observer = self._link_binding = self._fresh_journal = None
         self._forwards: list[_Forward] = []
         self._runtime_lock = threading.RLock()
@@ -159,6 +225,8 @@ class RegionalDatabaseFailover(Problem):
             deadline_seconds=verification_seconds,
             verification_scratch_bytes={"small": 1, "medium": 4, "large": 8}[tier] * 1024**3,
         )
+        self.mitigation_oracle.verification_cpu_limit = {"small": 2, "medium": 4, "large": 8}[tier]
+        self.mitigation_oracle.verification_memory_gib_limit = {"small": 2, "medium": 4, "large": 8}[tier]
 
     def _create_private_directory(self):
         root = self.private_root or Path(tempfile.gettempdir()) / "codehub-runs"
@@ -183,21 +251,34 @@ class RegionalDatabaseFailover(Problem):
             file.write(content)
         return path
 
-    def _assert_namespace(self, namespace):
+    @staticmethod
+    def _forward_timeout(deadline, cancelled):
+        if cancelled is not None and cancelled.is_set():
+            raise RuntimeError("Owned forward validation cancelled")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Owned forward validation deadline exceeded")
+        return min(5, remaining)
+
+    def _assert_namespace(self, namespace, *, deadline=None, cancelled=None):
         resource = next(
             (r for r in self.app.inventory.resources if r.kind == "Namespace" and r.name == namespace), None
         )
         if resource is None:
             raise RuntimeError("Forward namespace is absent from the owned inventory")
-        current = self.app._client().core_v1_api.read_namespace(namespace, _request_timeout=5)
+        deadline = deadline if deadline is not None else time.monotonic() + 10
+        current = self.app._client().core_v1_api.read_namespace(
+            namespace, _request_timeout=self._forward_timeout(deadline, cancelled)
+        )
         if (
             current.metadata.uid != resource.uid
             or (current.metadata.labels or {}).get("codehub.local/deployment") != self.app.deployment_owner
         ):
             raise RuntimeError("Forward namespace ownership changed")
 
-    def _assert_forward_resource(self, region, resource_kind, name):
-        self._assert_namespace(region.namespace)
+    def _assert_forward_resource(self, region, resource_kind, name, *, deadline=None, cancelled=None):
+        deadline = deadline if deadline is not None else time.monotonic() + 10
+        self._assert_namespace(region.namespace, deadline=deadline, cancelled=cancelled)
         core = self.app._client().core_v1_api
         if resource_kind == "pod":
             owner = next(
@@ -208,7 +289,9 @@ class RegionalDatabaseFailover(Problem):
                 ),
                 None,
             )
-            pod = core.read_namespaced_pod(name, region.namespace, _request_timeout=5)
+            pod = core.read_namespaced_pod(
+                name, region.namespace, _request_timeout=self._forward_timeout(deadline, cancelled)
+            )
             if owner is None or not any(
                 reference.kind == "StatefulSet"
                 and reference.name == "search"
@@ -228,9 +311,17 @@ class RegionalDatabaseFailover(Problem):
             ),
             None,
         )
-        current = core.read_namespaced_service(name, region.namespace, _request_timeout=5)
+        current = core.read_namespaced_service(
+            name, region.namespace, _request_timeout=self._forward_timeout(deadline, cancelled)
+        )
         if resource is None or current.metadata.uid != resource.uid:
             raise RuntimeError("Forward service ownership changed")
+        for group in self.app.database_groups:
+            for member in group.members:
+                if member.region == region.name and member.origin.removeprefix("mysql://").split(".", 1)[0] == name:
+                    self.app.assert_database_forward_owner(
+                        member, deadline=deadline, cancelled=cancelled, checked_service=current
+                    )
 
     def _start_forward(
         self,
@@ -261,32 +352,40 @@ class RegionalDatabaseFailover(Problem):
         path = self._private_dir / f"forward-{len(self._forwards)}.log"
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         diagnostics = os.fdopen(descriptor, "wb")
-        try:
-            process = self._popen_factory(
-                [
-                    "kubectl",
-                    "--request-timeout=10s",
-                    "-n",
-                    region.namespace,
-                    "port-forward",
-                    f"{resource_kind}/{name}",
-                    f"{port}:{remote_port}",
-                    "--address",
-                    bind_address,
-                ],
+        command = [
+            "kubectl",
+            "--request-timeout=10s",
+            "-n",
+            region.namespace,
+            "port-forward",
+            f"{resource_kind}/{name}",
+            f"{port}:{remote_port}",
+            "--address",
+            bind_address,
+        ]
+
+        def launch():
+            return self._popen_factory(
+                command,
                 stdin=subprocess.DEVNULL,
                 stdout=diagnostics,
                 stderr=diagnostics,
             )
+
+        try:
+            process = launch()
         except BaseException:
             diagnostics.close()
             raise
         origin = f"{'https' if ca_file else 'http'}://{bind_address}:{port}"
-        self._forwards.append(_Forward(process, diagnostics, origin))
+        forward = _Forward(process, diagnostics, origin)
+        self._forwards.append(forward)
         deadline = time.monotonic() + self.readiness_seconds
         context = ssl.create_default_context(cafile=str(ca_file)) if ca_file is not None else True
         with httpx.Client(verify=context, timeout=2, follow_redirects=False, trust_env=False) as client:
             while time.monotonic() < deadline:
+                if self._environment_cancel.is_set():
+                    raise RuntimeError("Owned preparation cancelled")
                 if process.poll() is not None:
                     raise RuntimeError(f"Owned {name} port-forward exited before readiness")
                 try:
@@ -296,6 +395,11 @@ class RegionalDatabaseFailover(Problem):
                     else:
                         with socket.create_connection((bind_address, port), timeout=0.2):
                             pass
+                    if resource_kind == "service":
+                        forward.supervise(
+                            launch,
+                            lambda **limits: self._assert_forward_resource(region, resource_kind, name, **limits),
+                        )
                     return origin
                 except (OSError, httpx.HTTPError):
                     time.sleep(0.1)
@@ -332,19 +436,40 @@ class RegionalDatabaseFailover(Problem):
 
     def prepare_environment(self, *, enable_noise: bool) -> None:
         with self._runtime_lock:
-            if self._prepared or self._controller is not None:
+            if self._prepared or self._controller is not None or self._environment_cancel.is_set():
                 raise RuntimeError("Regional problems prepare once per deployment")
             if type(enable_noise) is not bool or self.app.inventory.phase != LifecyclePhase.HEALTHY:
                 raise RuntimeError("Preparation requires healthy owned deployment and explicit noise policy")
             try:
                 self._create_private_directory()
-                from sregym.conductor.scenarios.codehub_controller import RecoveryController
+                if isinstance(self.app, CodeHub):
+                    from sregym.conductor.scenarios.codehub_capacity import CapacityMonitor, NativeStorageObserver
+
+                    def cancel_capacity():
+                        self._environment_cancel.set()
+                        if self._controller is not None:
+                            self._controller.cancel.set()
+
+                    observer = NativeStorageObserver(self.app, self._private_dir, cancel=self._environment_cancel)
+                    self.app._capacity_monitor = CapacityMonitor(
+                        observer,
+                        self._private_dir / "physical-resources.jsonl",
+                        cancel=cancel_capacity,
+                        disk_budget=self.app.tier.disk_gib_limit * 1024**3,
+                        reserve_gib=self.app.capacity_observation["trusted_reserve_gib"],
+                        verifier_reserve_bytes={"small": 1, "medium": 4, "large": 8}[self.app.tier.name] * 1024**3,
+                    )
+                    self.app._capacity_monitor.start()
+                from sregym.conductor.scenarios.codehub_controller import BorrowedOwnerLease, RecoveryController
                 from sregym.conductor.scenarios.codehub_observer import DeliveryObserver
                 from sregym.generators.workload.codehub import WorkloadClient
 
                 observer_factory = self._observer_factory or DeliveryObserver
                 self._observer = observer_factory(
-                    self._private_dir / "delivery.sqlite", delivery_address=RUNNER_ADDRESS, delivery_port=DELIVERY_PORT
+                    self._private_dir / "delivery.sqlite",
+                    delivery_address=RUNNER_ADDRESS,
+                    delivery_port=DELIVERY_PORT,
+                    byte_budget={"small": 256 * 1024**2, "medium": 1024**3, "large": 4 * 1024**3}[self.app.tier.name],
                 )
                 self._observer.start()
                 credentials = self.app._credentials
@@ -373,6 +498,8 @@ class RegionalDatabaseFailover(Problem):
                     return WorkloadClient(origin, token, ledger, verify=ca_contexts.get(origin, True))
 
                 controller_factory = self._controller_factory or RecoveryController
+                if getattr(self.app, "_environment_lease", None) is not None:
+                    extra["lease"] = BorrowedOwnerLease(self.app._environment_lease)
                 self._controller = controller_factory(
                     self.app,
                     self._private_dir,
@@ -385,7 +512,11 @@ class RegionalDatabaseFailover(Problem):
                     client_factory=client_factory,
                     **extra,
                 )
-                self._controller.prepare(enable_noise=enable_noise)
+                if self._environment_cancel.is_set():
+                    if hasattr(self._controller, "cancel"):
+                        self._controller.cancel.set()
+                    raise RuntimeError("Owned preparation cancelled")
+                self._controller.prepare(enable_noise=enable_noise, noise_horizon_seconds=self.noise_horizon_seconds)
                 if not self._controller.seed_result or not self._controller.seed_result.tenants:
                     raise RuntimeError("Preparation did not record a complete legitimate customer seed")
                 seed_result = self._controller.seed_result
@@ -432,7 +563,7 @@ class RegionalDatabaseFailover(Problem):
                     )
                 )
                 requirements.append(DatabaseMemberRequirement(group.name, member.region, namespace, service))
-        api, search, repositories, regions = [], [], [], []
+        api, search, repositories, regions, gateways = [], [], [], [], []
         for region in self.app.regions:
             api.append(
                 HTTPServiceTarget(
@@ -457,23 +588,54 @@ class RegionalDatabaseFailover(Problem):
                     region.name, region.namespace, "repository", resource_kind="statefulset", expected_replicas=1
                 )
             )
+            gateways.append(
+                HTTPServiceTarget(
+                    region.name,
+                    region.namespace,
+                    "gateway",
+                    port=8443,
+                    resource_kind="deployment",
+                    expected_replicas=2,
+                    scheme="https",
+                    ca_certificate=self.app.gateway_certificates[region.namespace],
+                )
+            )
             regions.append(
                 RegionReplicaRequirement(
                     region.name, region.namespace, self.app.tier.api_per_zone, self.app.tier.search_per_zone, 1
                 )
             )
         return RegionalTargetInventory(
-            tuple(databases), tuple(api), tuple(search), tuple(repositories), tuple(requirements), tuple(regions)
+            tuple(databases),
+            tuple(api),
+            tuple(search),
+            tuple(repositories),
+            tuple(requirements),
+            tuple(regions),
+            tuple(gateways),
         )
 
     def _snapshot(self, *, first: bool):
+        if self._observer is not None and getattr(self._observer, "capacity_error", None) is not None:
+            from sregym.service.verifier_runtime import VerifierError
+
+            raise VerifierError("Trusted delivery receiver exceeded its storage budget or became unavailable")
+        for forward in self._forwards:
+            if forward.supervisor_error is not None:
+                raise RuntimeError(
+                    "Owned forwarding infrastructure lost its captured resource"
+                ) from forward.supervisor_error
         if not self._prepared or self._controller is None:
             raise RuntimeError("Prepared customer evidence is required")
         if not self._controller.resolve_pending(deadline_seconds=30):
             raise RuntimeError("Customer request outcomes remain unresolved")
 
         def build(inputs, ledger):
-            from sregym.conductor.oracles.regional_database_recovery import DeliveryObserverTarget, WebhookDestination
+            from sregym.conductor.oracles.regional_database_recovery import (
+                DeliveryObserverTarget,
+                ProcessTarget,
+                WebhookDestination,
+            )
             from sregym.conductor.scenarios.codehub_expectations import (
                 WebhookSubscription,
                 build_receipt_cuts,
@@ -514,9 +676,33 @@ class RegionalDatabaseFailover(Problem):
                 service_token=self.app._credentials["service-token"],
                 webhooks=webhooks,
             )
+            required_processes = []
+            for region in self.app.regions:
+                for kind, name, count in (
+                    ("Deployment", "worker", self.app.tier.workers_per_zone),
+                    ("StatefulSet", "queue", 3),
+                    ("StatefulSet", "delivery", 1),
+                    ("Deployment", "topology", 1),
+                ):
+                    resource = next(
+                        (
+                            item
+                            for item in self.app.inventory.resources
+                            if (item.kind, item.namespace, item.name) == (kind, region.namespace, name)
+                        ),
+                        None,
+                    )
+                    if resource is None:
+                        raise RuntimeError("Captured process inventory omits required regional work")
+                    required_processes.append(
+                        ProcessTarget(region.name, region.namespace, name, kind.lower(), count, resource.uid)
+                    )
+            outcomes = replace(outcomes, process_targets=tuple(required_processes), require_traffic=True)
             if first:
                 journal_factory = self._journal_factory or CodeHubVerificationJournal
-                self._fresh_journal = journal_factory(ledger, dict(routing), observer=self._observer)
+                self._fresh_journal = journal_factory(self._controller.ledger, dict(routing), observer=self._observer)
+                if type(self._fresh_journal) is CodeHubVerificationJournal:
+                    self._fresh_journal.traffic_source = getattr(self._controller, "traffic_facts", None)
             return routing, seed_projects, inventory, webhooks, cuts, effects, outcomes
 
         return self._controller.verification_snapshot(build)
@@ -537,7 +723,57 @@ class RegionalDatabaseFailover(Problem):
             RegionalDatabaseRecoveryOracle.capture_baseline(oracle)
             self._routing, self._seed_projects = routing, seed_projects
             self._target_inventory, self._webhooks = inventory, webhooks
+            if isinstance(self.app, CodeHub):
+                self._capture_dataset_manifest(cuts)
             self._baseline_captured = True
+
+    def _capture_dataset_manifest(self, cuts):
+        from sregym.conductor.scenarios.codehub_expectations import build_dataset_manifest
+        from sregym.conductor.scenarios.codehub_reference_repair import DatabaseReferenceRepair
+
+        capacity = self.app._capacity_monitor
+        capacity.assert_available()
+        physical = capacity.observe()
+        queue_count, oldest = 0, 0
+        reader = DatabaseReferenceRepair(self.app, self._private_dir, cancel=self._environment_cancel)
+        reader._deadline = time.monotonic() + 30
+        for group in self.app.database_groups:
+            writer = next(member for member in group.members if member.role == "writer")
+            rows = reader._sql_json(
+                writer,
+                "SELECT JSON_OBJECT('count',COUNT(*),'oldest',COALESCE(MAX(GREATEST(0,TIMESTAMPDIFF(SECOND,j.accepted_at,UTC_TIMESTAMP(6)))),0)) "
+                "FROM codehub.outbox o JOIN codehub.journal j USING(event_id) WHERE o.state<>'done';",
+            )
+            if len(rows) != 1:
+                raise RuntimeError("Normal durable work backlog observation is unavailable")
+            facts = rows[0]
+            if set(facts) != {"count", "oldest"} or any(
+                type(value) is not int or value < 0 for value in facts.values()
+            ):
+                raise RuntimeError("Normal durable work backlog observation is unavailable")
+            queue_count += facts["count"]
+            oldest = max(oldest, facts["oldest"])
+
+        manifest = self._controller.verification_snapshot(
+            lambda inputs, ledger: build_dataset_manifest(
+                ledger,
+                inputs.tenants,
+                cuts,
+                self.app.database_groups,
+                physical,
+                queue_count=queue_count,
+                oldest_queue_age_seconds=oldest,
+            )
+        )
+        payload = {
+            "run_id": self.app.inventory.run_id,
+            "manifest": asdict(manifest),
+            "queue_scope": "Outstanding durable business effects across writers, including pending and published jobs",
+            "recovery_source_scope": "Protected full-payload journal histories; source containment is checked by isolated healthy verification",
+            "physical_observation": physical,
+            "sampled_peak_memory_bytes": capacity.peak_memory_bytes,
+        }
+        self._write_private("dataset-manifest.json", json.dumps(payload, sort_keys=True))
 
     def prepare_verification(self) -> None:
         with self._runtime_lock:
@@ -558,22 +794,41 @@ class RegionalDatabaseFailover(Problem):
         with self._runtime_lock:
             if not self.fault_injected or self._controller is None:
                 raise RuntimeError("Normal reference recovery requires an injected owned incident")
-            result = self._controller.reference_repair()
+            result = self._controller.reference_repair(timeout=self.reference_repair_seconds)
             self.fault_injected = False
             return result
 
     def stop_environment(self) -> None:
         """Stop captured private services only; application resources belong to app.cleanup."""
+        self._environment_cancel.set()
+        controller = self._controller
+        if controller is not None and hasattr(controller, "cancel"):
+            controller.cancel.set()
         with self._runtime_lock:
             failures = []
             if self._controller is not None:
                 try:
                     self._controller.stop(timeout=30)
+                    noise = getattr(self._controller, "noise", None)
+                    if noise is not None:
+                        try:
+                            noise.assert_completed()
+                        except Exception:
+                            self.environment_failure = "real_noise_owner_failed"
                     self._controller = None
                 except Exception as exc:
                     failures.append(exc)
             # Preserve receiver/forward availability if traffic still failed to stop.
             if self._controller is None:
+                capacity = getattr(self.app, "_capacity_monitor", None)
+                if capacity is not None:
+                    try:
+                        capacity.stop()
+                        if capacity.error is not None:
+                            self.environment_failure = "native_capacity_observation_failed"
+                        self.app._capacity_monitor = None
+                    except Exception as exc:
+                        failures.append(exc)
                 if self._link_binding is not None:
                     try:
                         self._link_binding.owner.stop()
