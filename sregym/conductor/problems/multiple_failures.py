@@ -40,7 +40,7 @@ class MultipleIndependentFailures(Problem):
             self.root_cause = (
                 "This scenario contains multiple independent faults, but no sub-fault root causes were provided."
             )
-        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=fault_sections or self.root_cause)
 
         # mitigation oracle: compound of all sub-problem mitigation oracles
         mitigation_oracles = [getattr(p, "mitigation_oracle", None) for p in self.problems]

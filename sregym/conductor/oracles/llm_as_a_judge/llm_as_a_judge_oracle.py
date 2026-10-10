@@ -14,7 +14,7 @@ class LLMAsAJudgeOracle(Oracle):
     def __init__(
         self,
         problem,
-        expected: str,
+        expected: str | list[str],
         provider: str | None = None,
         model_name: str | None = None,
         url: str | None = None,
@@ -23,7 +23,11 @@ class LLMAsAJudgeOracle(Oracle):
         max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
     ):
         super().__init__(problem)
-        self.expected = expected if expected else ""
+        if isinstance(expected, list) and (
+            not expected or any(not isinstance(cause, str) or not cause.strip() for cause in expected)
+        ):
+            raise ValueError("Expected root causes must be a nonempty list of nonempty strings")
+        self.expected = expected.copy() if isinstance(expected, list) else expected or ""
 
         # Initialize the LLM judge
         self.judge = DiagnosisJudge(
@@ -45,7 +49,34 @@ class LLMAsAJudgeOracle(Oracle):
         duration : float, optional
             Wall-clock time the agent took (currently unused by the judge but
             accepted for interface compatibility with the base ``Oracle``).
+
+        A list of expected causes is graded separately with shared incident
+        context. Every cause must pass; mean accuracy is informational only.
+        Per-cause reports retain the original checklist and any judge errors.
         """
+        if isinstance(self.expected, list):
+            context = "\n\n".join(f"Cause {i}:\n{cause}" for i, cause in enumerate(self.expected, 1))
+            reports = []
+            for i, cause in enumerate(self.expected, 1):
+                expectation = (
+                    f"This incident has {len(self.expected)} independent root causes. "
+                    f"Apply every checklist question ONLY to Cause {i}, the evaluation target below. "
+                    "The other known causes are graded separately. Correct mentions of them are not "
+                    "unrelated faults or over-attribution, and omitting them must not lower this target's score. "
+                    "Evidence about another cause cannot satisfy a question about this target. "
+                    "Still penalize incorrect claims and causes not supported by the full incident context.\n\n"
+                    f"Full incident context:\n{context}\n\nEvaluation target — Cause {i}:\n{cause}"
+                )
+                reports.append({"name": f"cause-{i}", **self._evaluate_single(solution, expectation)})
+            scores = [report["accuracy"] for report in reports]
+            return {
+                "success": all(report["success"] is True for report in reports),
+                "accuracy": round(sum(scores) / len(scores), 2) if all(s is not None for s in scores) else None,
+                "oracles": reports,
+            }
+        return self._evaluate_single(solution, self.expected)
+
+    def _evaluate_single(self, solution, expectation: str) -> dict:
         print("== LLM-as-a-Judge Evaluation ==")
         results = {}
 
@@ -57,7 +88,7 @@ class LLMAsAJudgeOracle(Oracle):
             # Get detailed judgment from DiagnosisJudge using root-cause-only ground truth
             report = self.judge.judge_detailed(
                 solution=solution,
-                expectation=self.expected,
+                expectation=expectation,
             )
 
             # Check if judge is not initialized
@@ -79,9 +110,7 @@ class LLMAsAJudgeOracle(Oracle):
             else:
                 print(f"❌ Incorrect diagnosis: {report.verdict.value} (score: {acc:.1f}/100)")
                 print(
-                    f"   Expected: {self.expected[:100]}..."
-                    if len(self.expected) > 100
-                    else f"   Expected: {self.expected}"
+                    f"   Expected: {expectation[:100]}..." if len(expectation) > 100 else f"   Expected: {expectation}"
                 )
                 print(f"   Got: {solution[:100]}..." if len(solution) > 100 else f"   Got: {solution}")
 
