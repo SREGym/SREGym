@@ -87,11 +87,156 @@ def test_alert_query_distinguishes_firing_from_silence(monkeypatch):
     monkeypatch.setattr(alert_oracle.subprocess, "run", lambda *args, **kwargs: response)
     monkeypatch.setattr(alert_oracle, "_get_benchmark_status", lambda: "mitigation")
     monkeypatch.setattr(alert_oracle.time, "sleep", lambda _: None)
-    oracle = AlertOracle("social-network", buffer_seconds=0, sustained_silence_seconds=0)
+    oracle = AlertOracle("social-network", buffer_seconds=0, sustained_silence_seconds=0, resolve_grace_seconds=0)
     assert oracle.validate().success is False
 
     response.stdout = json.dumps({"status": "success", "data": {"alerts": []}})
     assert oracle.validate().success is True
+
+
+class _FakeClock:
+    """Deterministic clock: ``sleep`` advances ``monotonic`` without waiting."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def _alert_oracle_with_script(monkeypatch, firing_per_poll: list[bool]):
+    """Build an AlertOracle whose polls follow ``firing_per_poll`` (last value repeats)."""
+    from clients.stratus.weak_oracles import alert_oracle
+
+    clock = _FakeClock()
+    polls: list[float] = []
+    alert = {"state": "firing", "labels": {"namespace": "astronomy-shop", "alertname": "HighRequestErrorRate"}}
+
+    def fake_query(self):
+        index = min(len(polls), len(firing_per_poll) - 1)
+        polls.append(clock.now)
+        return [alert] if firing_per_poll[index] else []
+
+    monkeypatch.setattr(alert_oracle.AlertOracle, "_query_firing_alerts", fake_query)
+    monkeypatch.setattr(alert_oracle, "_get_benchmark_status", lambda: "mitigation")
+    monkeypatch.setattr(alert_oracle.time, "sleep", clock.sleep)
+    monkeypatch.setattr(alert_oracle.time, "monotonic", clock.monotonic)
+    oracle = AlertOracle(
+        "astronomy-shop",
+        buffer_seconds=30,
+        poll_interval_seconds=10,
+        sustained_silence_seconds=120,
+        resolve_grace_seconds=180,
+    )
+    return oracle, clock, polls
+
+
+def test_alerts_that_clear_within_grace_pass(monkeypatch):
+    # Prometheus needs ~scrape + evaluation interval to resolve an alert after a
+    # fix; the first polls still see it firing.
+    oracle, clock, polls = _alert_oracle_with_script(monkeypatch, [True] * 9 + [False])
+
+    result = oracle.validate()
+
+    assert result.success is True
+    firing_polls = polls[:9]
+    assert firing_polls[-1] - firing_polls[0] == 80  # 9 polls, 10 s apart, all tolerated
+    # The silence window starts with the first clear poll, not the last firing poll.
+    assert clock.now - polls[9] == 120
+
+
+def test_alerts_that_persist_fail_after_grace(monkeypatch):
+    oracle, clock, polls = _alert_oracle_with_script(monkeypatch, [True])
+
+    result = oracle.validate()
+
+    assert result.success is False
+    assert result.issues == ["Firing alerts: HighRequestErrorRate"]
+    assert polls[-1] - polls[0] >= 180
+    assert polls[-1] - polls[0] < 180 + 10
+
+
+def test_refiring_alert_restarts_silence_window(monkeypatch):
+    # Silent for 50 s, one more firing poll, then silent: the pass must wait for a
+    # full 120 s of silence after the re-fire, not 120 s since the first poll.
+    script = [False] * 5 + [True] + [False]
+    oracle, clock, polls = _alert_oracle_with_script(monkeypatch, script)
+
+    result = oracle.validate()
+
+    assert result.success is True
+    refire_time = polls[5]
+    assert clock.now - refire_time >= 120
+
+
+@pytest.mark.parametrize("deadline_offset", [0, 15, 65, 325])
+def test_alert_polling_respects_validation_deadline(monkeypatch, deadline_offset):
+    oracle, clock, polls = _alert_oracle_with_script(monkeypatch, [True])
+    start = clock.now
+    oracle.resolve_grace_seconds = 300
+    oracle.deadline = start + deadline_offset
+    result = oracle.validate()
+    assert result.success is None
+    assert "budget exhausted" in result.issues[0]
+    assert clock.now == oracle.deadline
+    assert all(poll < oracle.deadline for poll in polls)
+
+
+def test_silence_requires_full_window_from_first_clear_poll(monkeypatch):
+    oracle, clock, polls = _alert_oracle_with_script(monkeypatch, [True] * 9 + [False])
+    oracle.deadline = clock.now + 300
+    assert oracle.validate().success is True
+    assert clock.now - polls[9] == 120
+
+
+def test_expired_budget_skips_all_weak_checks():
+    def unexpected_check():
+        raise AssertionError("Validation must not start after its deadline")
+
+    verdict, issues = driver.validate_oracles([SimpleNamespace(validate=unexpected_check)], deadline=0)
+    assert verdict is None
+    assert "budget exhausted" in issues[0].issues[0]
+
+
+def test_deadline_does_not_erase_an_observed_failure(monkeypatch):
+    clock = _FakeClock()
+
+    def failed_check():
+        clock.now += 2
+        return OracleResult(False, ["Still broken"])
+
+    monkeypatch.setattr(driver.time, "monotonic", clock.monotonic)
+    verdict, results = driver.validate_oracles(
+        [SimpleNamespace(validate=failed_check), SimpleNamespace(validate=lambda: pytest.fail("expired check ran"))],
+        deadline=clock.now + 1,
+    )
+    assert verdict is False
+    assert results[0].success is False
+    assert results[1].success is None
+
+
+@pytest.mark.parametrize("remaining,expected", [(180, 1150), (15, 1000), (None, None), (True, None)])
+def test_validation_deadline_uses_remaining_budget_and_reserves_submission_time(monkeypatch, remaining, expected):
+    from clients.stratus.weak_oracles import alert_oracle
+
+    monkeypatch.setattr(alert_oracle.time, "monotonic", lambda: 1000)
+    response = SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"agent_remaining_seconds": remaining})
+    monkeypatch.setattr(alert_oracle.requests, "get", lambda *args, **kwargs: response)
+    assert alert_oracle.get_validation_deadline() == expected
+
+
+def test_unavailable_deadline_skips_optional_validation(monkeypatch):
+    from clients.stratus.weak_oracles import alert_oracle
+
+    def unavailable(*args, **kwargs):
+        raise alert_oracle.requests.ConnectionError("status unavailable")
+
+    monkeypatch.setattr(alert_oracle.requests, "get", unavailable)
+    monkeypatch.setattr(alert_oracle.time, "monotonic", lambda: 1000)
+    assert alert_oracle.get_validation_deadline() == 1000
 
 
 def test_unavailable_check_does_not_become_a_failed_verdict():
@@ -117,7 +262,10 @@ def test_known_failure_takes_precedence_over_unavailable_check(outcomes):
 
 @pytest.mark.parametrize("retry_mode", ["naive", "validate"])
 @pytest.mark.parametrize("oracle_error", [False, True])
-def test_inconclusive_oracle_submits_without_rollback(monkeypatch, retry_mode, oracle_error):
+@pytest.mark.parametrize("budget_exhausted", [False, True])
+def test_inconclusive_or_exhausted_oracle_submits_without_rollback(
+    monkeypatch, retry_mode, oracle_error, budget_exhausted
+):
     from clients.stratus.stratus_agent.driver import driver as module
 
     config_text = (
@@ -139,12 +287,15 @@ def test_inconclusive_oracle_submits_without_rollback(monkeypatch, retry_mode, o
     monkeypatch.setattr(module.Path, "read_text", fake_read_text)
     monkeypatch.setattr(module, "get_app_info", lambda: {"app_name": "App", "descriptions": "desc", "namespace": "app"})
 
-    def fake_validate(_):
+    def fake_validate(_, **kwargs):
         if oracle_error:
             raise ConnectionError("unavailable")
+        if budget_exhausted:
+            return False, [OracleResult(False, ["Still broken"])]
         return None, [OracleResult(None, ["unavailable"])]
 
     monkeypatch.setattr(module, "validate_oracles", fake_validate)
+    monkeypatch.setattr(module, "get_validation_deadline", lambda: 0 if budget_exhausted else None)
     calls = []
 
     async def fake_agent(_):
