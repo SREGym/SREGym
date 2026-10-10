@@ -144,6 +144,21 @@ def test_steady_state_comes_from_the_task_environment(monkeypatch):
     assert parse_args([]).steady_state_s == 300
 
 
+def test_alert_graded_problems_ignore_hidden_workloads():
+    from types import SimpleNamespace
+
+    from sregym.conductor.oracles.alert_oracle import AlertOracle
+    from sregym.harbor.backend import grade_visible_alerts_only
+
+    problem = SimpleNamespace(namespace="astronomy-shop")
+    problem.mitigation_oracle = AlertOracle(problem=problem)
+    grade_visible_alerts_only(problem)
+    assert problem.mitigation_oracle.ignore_hidden_workloads is True
+    # Other oracles are left alone.
+    grade_visible_alerts_only(SimpleNamespace(mitigation_oracle=object()))
+    grade_visible_alerts_only(SimpleNamespace())
+
+
 @pytest.mark.parametrize(
     ("header", "valid"),
     [

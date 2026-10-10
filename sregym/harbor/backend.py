@@ -74,6 +74,20 @@ class ProblemSession(Protocol):
         """Release local listeners before exit."""
 
 
+def grade_visible_alerts_only(problem) -> None:
+    """Make an alert-graded problem ignore alerts on workloads hidden from the agent.
+
+    The API proxy hides SREGym's load generators from the agent, so it cannot
+    fix their alerts. On a 4-CPU sandbox they fire often: the load generator is
+    CPU-throttled, and a replaced pod's alerts escape the oracle's baseline.
+    """
+    from sregym.conductor.oracles.alert_oracle import AlertOracle
+
+    oracle = getattr(problem, "mitigation_oracle", None)
+    if isinstance(oracle, AlertOracle):
+        oracle.ignore_hidden_workloads = True
+
+
 class ConductorSession:
     """Runs one problem through SREGym's Conductor, as ``main.py`` does."""
 
@@ -119,6 +133,7 @@ class ConductorSession:
                 if self.conductor.fault_injected and self.conductor.problem is not None:
                     self.conductor.problem.recover_fault()
 
+        grade_visible_alerts_only(self.conductor.problem)
         self.conductor.start_k8s_proxy()
         return self.conductor.get_agent_kubeconfig_path()
 
