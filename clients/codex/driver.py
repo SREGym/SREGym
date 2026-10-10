@@ -24,6 +24,7 @@ init_logger()
 
 from clients.codex.codex_agent import CodexAgent, custom_provider_args, filtered_runtime_args  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
+from clients.harness.stages import adapt_instruction  # noqa: E402
 from clients.jev.config import INSTRUCTION as JEV_INSTRUCTION  # noqa: E402
 from clients.jev.config import MODEL_ENV as JEV_MODEL_ENV
 from clients.jev.config import SUBMISSION_INSTRUCTION as JEV_SUBMISSION_INSTRUCTION
@@ -322,6 +323,7 @@ def main():
 
     # Build instruction
     instruction = build_instruction(app_info)
+    instruction = adapt_instruction(instruction, app_info, get_api_base_url())
 
     # Initialize Codex agent
     logs_dir = Path(args.logs_dir)

@@ -253,7 +253,42 @@ async def get_app():
         "namespace": app_inst.namespace,
         "namespaces": namespaces,
         "descriptions": str(app_inst.description),
+        # Lets agents tailor their workflow, e.g. to mitigation-only problems.
+        "stages": [stage["name"] for stage in getattr(_conductor, "stage_sequence", None) or []],
+        # Only the chaos agent's canvas problem sets this; drivers then build the chaos instruction.
+        "chaos": bool(getattr(getattr(_conductor, "problem", None), "expose_slo", False)),
     }
+
+
+@app.get("/chaos/brief")
+async def get_chaos_brief():
+    """The generation brief (theme, faults to avoid) for the chaos agent's canvas problem."""
+    problem = getattr(_conductor, "problem", None)
+    path = os.environ.get("CHAOS_BRIEF_FILE")
+    if problem is None or not getattr(problem, "expose_slo", False) or not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Not Found")
+    with open(path) as f:
+        return {"brief": f.read()}
+
+
+@app.get("/chaos/slo")
+async def get_chaos_slo(window: int = 90):
+    """Live end-user SLO verdict, available only to the chaos agent's canvas problem."""
+    conductor = _conductor
+    problem = getattr(conductor, "problem", None)
+    if problem is None or not getattr(problem, "expose_slo", False):
+        raise HTTPException(status_code=404, detail="Not Found")
+    oracle = problem.slo_oracle
+    if oracle.slo is None:
+        raise HTTPException(status_code=409, detail="SLO baseline not captured yet")
+
+    def measure():
+        from sregym.chaos import slo
+
+        verdict = slo.judge(oracle.slo, slo.recent_rounds(problem.app, max(30, min(window, 600))))
+        return {"slo": oracle.slo.to_dict(), "verdict": verdict.to_dict(), "new_alerts": problem.alerts.new()}
+
+    return await asyncio.to_thread(measure)
 
 
 def run_api(conductor):

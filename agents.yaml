@@ -113,3 +113,11 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  # Applies a generated problem's reference mitigation (chaos-agent validation).
+  - name: refmit
+    kickoff_command: python -m sregym.chaos.refmit_agent
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: null
+    agent_version: null
+    container_isolation: false

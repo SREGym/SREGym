@@ -63,6 +63,13 @@ Credential files must stay outside the image. Host login directories are not
 automatically mounted. The image build excludes common secret and output paths;
 review your checkout for other private files before building.
 
+Every run has a private daemon and cluster, so parallel runs quickly exhaust Docker Hub's
+unauthenticated pull limit (100 pulls per hour per IP). Set `SREGYM_REGISTRY_MIRRORS` in the env file
+to a comma-separated list of Docker Hub mirrors, for example a pull-through cache on the host
+(`docker run -d -p 5000:5000 -e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io registry:2`,
+then `SREGYM_REGISTRY_MIRRORS=http://172.17.0.1:5000,https://mirror.gcr.io`). The private daemon and
+every kind node's containerd then pull Docker Hub images through them, in order.
+
 Results and daemon logs survive container removal in `results/dind/<run-name>/`.
 Set `--output /absolute/path` to change this; always use a distinct directory for
 each concurrent run. Files are written by container root. Docker data uses a

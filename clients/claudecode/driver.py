@@ -15,6 +15,7 @@ import requests
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
 from clients.harness.problem_id import resolve_problem_id
+from clients.harness.stages import adapt_instruction
 from logger import init_logger
 
 # Add SREGym root to path
@@ -302,6 +303,7 @@ def main():
 
     # Build instruction
     instruction = build_instruction(app_info)
+    instruction = adapt_instruction(instruction, app_info, get_api_base_url())
 
     # Initialize Claude Code agent
     logs_dir = Path(args.logs_dir)

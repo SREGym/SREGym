@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+"""Chaos-agent problem generation pipeline (host-side orchestrator).
+
+Every phase runs in its own DinD environment (private Docker daemon + kind
+cluster, see docker/dind/README.md) through the normal ``main.py`` flow:
+
+  1. chaos    a codex/claudecode agent breaks a healthy deployment of the
+              ``chaos_canvas_<app>`` problem and writes a fault artifact.
+  2. validate the artifact replays as ``gen_<id>`` on fresh deployments with
+              the scripted ``refmit`` agent; gates: impact, observability,
+              persistence, integrity, reproducibility, solvability, no leaks.
+  3. panel    fixer agents get the standard 30-minute budget, k attempts
+              each, in two rounds; the problem is accepted when the solve rate
+              stays within the target band (default: at most 1 of 4).
+
+Accepted artifacts are copied into sregym/conductor/problems/generated/, where
+the registry picks them up as ``gen_<id>``. State lives in <work>/ledger.json,
+so the pipeline can be stopped and resumed. Run with access to the Docker
+daemon (e.g. sudo), from the repository root:
+
+  sudo HOME=$HOME python3 sregym/chaos/pipeline.py --work /mnt/docker/chaos --slots 3
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import datetime
+import json
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+
+from sregym.chaos.artifact import GENERATED_ROOT, FaultArtifact  # noqa: E402
+
+AUTH = Path.home() / ".codex" / "auth.json"
+LOCK = threading.RLock()
+
+THEMES = [
+    ("data", "State in a datastore (MongoDB, Memcached, Redis) or seeded application data makes requests "
+             "fail or slow down, while every pod stays Running and Ready."),
+    ("discovery", "Service discovery or routing: requests reach the wrong backend, a stale endpoint, or "
+                  "only a subset of instances misbehave."),
+    ("capacity", "Resource, concurrency or QoS settings (limits, throttling, connection pools, worker counts) "
+                 "that only break under the existing production load, causing tail latency or errors."),
+    ("app-config", "A plausible application configuration change (ConfigMap, env, args, config files) whose "
+                   "semantics subtly break request handling."),
+    ("network", "The network path between specific components (policies, ports, protocols, timeouts, MTU-like "
+                "behaviour) is partially broken; most traffic still flows."),
+    ("multi-cause", "One coherent incident with two contributing changes; fixing only the most visible one "
+                    "leaves users broken."),
+    ("controller", "Kubernetes controllers or companion objects (HPA, PDB, CronJobs, init containers, jobs, "
+                   "owners, admission-free mechanisms) perpetuate or re-apply the bad state so naive fixes "
+                   "do not stick."),
+    ("code", "Application logic deployed through the cluster (scripts, Lua/nginx config, templated config, "
+             "command lines) contains a realistic bug, like a bad code change."),
+    ("identity", "Credential, identity or certificate rotation left components inconsistent with each other."),
+    ("metastable", "Retry, timeout or caching behaviour creates a self-sustaining degraded state."),
+]
+APPS = ["hotel_reservation", "social_network"]
+
+
+def now() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+@dataclass
+class Job:
+    kind: str  # chaos | validate | panel
+    cid: str
+    priority: int
+    label: str
+    args: dict = field(default_factory=dict)
+
+
+class Pipeline:
+    def __init__(self, opts):
+        self.o = opts
+        self.work: Path = opts.work
+        self.ledger_path = self.work / "ledger.json"
+        self.ledger = json.loads(self.ledger_path.read_text()) if self.ledger_path.exists() else {
+            "candidates": {},
+            "sessions": 0,
+        }
+        self.running: dict[str, Job] = {}
+        self.log_file = open(self.work / "pipeline.log", "a")
+
+    # ------------------------------------------------------------- utilities
+    def log(self, msg: str) -> None:
+        with LOCK:
+            line = f"[{now()}] {msg}"
+            print(line, flush=True)
+            self.log_file.write(line + "\n")
+            self.log_file.flush()
+
+    def save(self) -> None:
+        with LOCK:
+            tmp = self.ledger_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.ledger, indent=2))
+            tmp.replace(self.ledger_path)
+
+    def cand(self, cid: str) -> dict:
+        return self.ledger["candidates"][cid]
+
+    def dind(self, name: str, out: Path, command: list[str], env: dict, mounts: list[tuple[Path, str]],
+             timeout_s: int, claude: bool = False) -> int:
+        out.mkdir(parents=True, exist_ok=True)
+        auth = out / "codex-auth.json"
+        shutil.copyfile(AUTH, auth)
+        auth.chmod(0o600)
+        args = [
+            "docker", "run", "--rm", "--privileged", "--cgroupns=private", "--name", name,
+            "--stop-timeout", "45", "--cpus", str(self.o.cpus), "--memory", self.o.memory,
+            "--mount", f"type=bind,src={out},dst=/opt/sregym/results",
+            "--mount", f"type=bind,src={auth},dst=/root/.codex/auth.json",
+            "--env", "SREGYM_CHAOS_REPORT_DIR=/opt/sregym/results/chaos_gates",
+        ]
+        if self.o.registry_mirrors:
+            args += ["--env", f"SREGYM_REGISTRY_MIRRORS={self.o.registry_mirrors}"]
+        if claude and self.o.claude_env_file:
+            args += ["--env-file", str(self.o.claude_env_file)]
+        for key, value in env.items():
+            args += ["--env", f"{key}={value}"]
+        for src, dst in mounts:
+            args += ["--mount", f"type=bind,src={src},dst={dst},readonly"]
+        args += [self.o.image, *command]
+        subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
+        with open(out / "dind.log", "a") as handle:
+            proc = subprocess.Popen(args, stdout=handle, stderr=subprocess.STDOUT)
+            try:
+                code = proc.wait(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                subprocess.run(["docker", "stop", "-t", "60", name], capture_output=True)
+                code = proc.wait()
+        auth.unlink(missing_ok=True)
+        return code
+
+    @staticmethod
+    def csv_rows(out: Path) -> list[dict]:
+        rows = []
+        for path in sorted(out.rglob("*_results.csv")):
+            if path.name.startswith("_running_") or "_ALL_" in path.name:
+                continue
+            with open(path) as f:
+                rows += list(csv.DictReader(f))
+        return rows
+
+    @staticmethod
+    def gate_reports(out: Path, kind: str) -> list[dict]:
+        return [json.loads(p.read_text()) for p in sorted((out / "chaos_gates").glob(f"*.{kind}.*.json"))] \
+            if (out / "chaos_gates").is_dir() else []
+
+    def main_cmd(self, problem: str, agent: str, model: str, attempts: int, timeout_s: int,
+                 extra: list[str] | None = None) -> list[str]:
+        return [
+            "uv", "run", "--frozen", "main.py", "--problem", problem, "--agent", agent, "--model", model,
+            "--stages", "mitigation", "--n-attempts", str(attempts), "--agent-timeout", str(timeout_s),
+            "--judge-backend", "codex", *(extra or []),
+        ]
+
+    # ----------------------------------------------------------------- brief
+    def avoid_list(self) -> str:
+        sys.path.insert(0, str(REPO))
+        lines = []
+        try:
+            registry = (REPO / "sregym/conductor/problems/registry.py").read_text()
+            import re
+
+            ids = sorted(set(re.findall(r'^\s+"([a-z0-9_\-]+)":', registry, re.M)))
+            ids = [i for i in ids if not i.startswith("chaos_canvas")]
+            lines.append("Existing SREGym problem ids (do not recreate these fault types): " + ", ".join(ids))
+        except OSError:
+            pass
+        previous = [
+            f"- {c['meta'].get('root_cause_class')}: {c['meta'].get('title')}"
+            for c in self.ledger["candidates"].values()
+            if c.get("meta")
+        ]
+        if previous:
+            lines.append("Faults already generated in earlier sessions (choose a different root cause):")
+            lines += previous
+        return "\n".join(lines)
+
+    def write_brief(self, cid: str, app: str, theme: tuple[str, str]) -> Path:
+        brief = self.work / "candidates-brief" / f"{cid}.md"
+        brief.parent.mkdir(parents=True, exist_ok=True)
+        brief.write_text(
+            f"Target application: {app}. Set \"app\": \"{app}\" in fault.json.\n"
+            f"Theme for this session ({theme[0]}): {theme[1]}\n"
+            "The theme is a starting direction; pick whatever concrete incident within it you expect to be "
+            "hardest for agents while satisfying every validity rule.\n\n" + self.avoid_list() + "\n"
+        )
+        return brief
+
+    # ----------------------------------------------------------------- phases
+    def run_chaos(self, job: Job) -> None:
+        c = self.cand(job.cid)
+        out = self.work / "runs" / job.cid / "chaos"
+        brief = self.write_brief(job.cid, c["app"], tuple(c["theme"]))
+        backend = c["chaos_backend"]
+        model = self.o.model if backend == "codex" else self.o.claude_model
+        started = time.time()
+        code = self.dind(
+            f"chaos-{job.cid}", out,
+            self.main_cmd(f"chaos_canvas_{c['app']}", backend, model, 1, self.o.chaos_timeout, ["--force-build"]),
+            {"CHAOS_BRIEF_FILE": "/opt/sregym/chaos-brief.md"},
+            [(brief, "/opt/sregym/chaos-brief.md")],
+            self.o.chaos_timeout + 3600, claude=backend == "claudecode",
+        )
+        c["chaos"] = {"exit": code, "minutes": round((time.time() - started) / 60, 1)}
+        rows = self.csv_rows(out)
+        c["chaos"]["slo_violated_at_submit"] = rows[-1].get("Mitigation.success") if rows else None
+        found = sorted(out.rglob("artifact/fault.json"))
+        if not found:
+            c["status"] = "rejected"
+            c["reason"] = "no artifact produced"
+            return
+        dest = self.work / "candidates" / job.cid
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(found[-1].parent, dest)
+        artifact = FaultArtifact.load(dest)
+        c["meta"] = artifact.meta
+        problems = artifact.problems()
+        leaks = artifact.leak_findings()
+        c["lint"] = {"problems": problems, "leaks": leaks}
+        if artifact.meta.get("app") != c["app"]:
+            problems.append(f"artifact app {artifact.meta.get('app')} != {c['app']}")
+        if problems or leaks:
+            c["status"] = "rejected"
+            c["reason"] = "artifact lint: " + "; ".join(problems + leaks[:5])
+            return
+        c["status"] = "validating"
+
+    def run_validate(self, job: Job) -> None:
+        c = self.cand(job.cid)
+        pid = f"gen_{job.cid}"
+        out = self.work / "runs" / job.cid / "validate"
+        started = time.time()
+        code = self.dind(
+            f"val-{job.cid}", out,
+            self.main_cmd(pid, "refmit", "none", self.o.replays, 1800, ["--internet-access", "open"]),
+            {"CHAOS_ARTIFACT_ID": pid, "CHAOS_PERSISTENCE_S": str(self.o.persistence),
+             "SREGYM_GENERATED_DIRS": "/opt/sregym/chaos-candidates"},
+            [(self.work / "candidates" / job.cid, f"/opt/sregym/chaos-candidates/{job.cid}")],
+            self.o.replays * 3600,
+        )
+        rows = self.csv_rows(out)
+        injects = self.gate_reports(out, "inject")
+        mitigations = self.gate_reports(out, "mitigate")
+        gates = {
+            "replays": len(injects),
+            "impact": [r.get("impact_pass", False) for r in injects],
+            "observability": [r.get("observability_pass", False) for r in injects],
+            "persistence": [r.get("persistence_pass", False) for r in injects],
+            "integrity": [r.get("integrity_pass", False) for r in injects],
+            "new_alerts": [r.get("new_alerts", []) for r in injects],
+            "mitigate_rc": [m.get("returncode") for m in mitigations],
+            "solvability": [r.get("Mitigation.success") == "True" for r in rows],
+        }
+        checks = {
+            "reproducibility": len(injects) >= self.o.replays and all(gates["impact"]),
+            "impact": bool(gates["impact"]) and all(gates["impact"]),
+            "observability": bool(gates["observability"]) and all(gates["observability"]),
+            "persistence": bool(gates["persistence"]) and all(gates["persistence"]),
+            "integrity": bool(gates["integrity"]) and all(gates["integrity"]),
+            "solvability": len(gates["solvability"]) >= self.o.replays and all(gates["solvability"]),
+        }
+        c["validate"] = {"exit": code, "minutes": round((time.time() - started) / 60, 1), "gates": gates,
+                         "checks": checks}
+        failed = [name for name, ok in checks.items() if not ok]
+        if failed:
+            c["status"] = "rejected"
+            c["reason"] = "gates failed: " + ", ".join(failed)
+        else:
+            c["status"] = "panel"
+            c["panel"] = {"attempts": []}
+
+    def run_panel(self, job: Job) -> None:
+        c = self.cand(job.cid)
+        pid = f"gen_{job.cid}"
+        agent = job.args["agent"]
+        rnd = job.args["round"]
+        model = self.o.model if agent == "codex" else self.o.claude_model
+        out = self.work / "runs" / job.cid / f"panel-{agent}-r{rnd}"
+        shutil.rmtree(out, ignore_errors=True)
+        started = time.time()
+        code = self.dind(
+            f"fix-{agent[:6]}-{rnd}-{job.cid}"[:63], out,
+            self.main_cmd(pid, agent, model, 1, 1800, ["--force-build"]),
+            {"SREGYM_GENERATED_DIRS": "/opt/sregym/chaos-candidates"},
+            [(self.work / "candidates" / job.cid, f"/opt/sregym/chaos-candidates/{job.cid}")],
+            3 * 3600, claude=agent == "claudecode",
+        )
+        rows = self.csv_rows(out)
+        injects = self.gate_reports(out, "inject")
+        live = bool(injects) and injects[-1].get("impact_pass", False)
+        row = rows[-1] if rows else {}
+        attempt = {
+            "agent": agent, "round": rnd, "exit": code, "minutes": round((time.time() - started) / 60, 1),
+            "valid": bool(rows) and live,
+            "solved": row.get("Mitigation.success") == "True",
+            "reason": row.get("Mitigation.reason"), "ttm": row.get("TTM"), "timed_out": row.get("timed_out"),
+        }
+        with LOCK:
+            c["panel"]["attempts"].append(attempt)
+        self.log(f"PANEL {job.cid} {agent} r{rnd}: {attempt}")
+
+    # ------------------------------------------------------------- decisions
+    def panel_agents(self) -> list[str]:
+        agents = ["codex"]
+        if self.o.claude_env_file:
+            agents.append("claudecode")
+        return agents
+
+    def panel_jobs(self, cid: str) -> list[Job]:
+        """Next panel jobs for a candidate (none while any are running)."""
+        c = self.cand(cid)
+        if any(j.cid == cid and j.kind == "panel" for j in self.running.values()):
+            return []
+        attempts = c["panel"]["attempts"]
+        valid = [a for a in attempts if a["valid"]]
+        solves = sum(a["solved"] for a in valid)
+        total_target = self.o.k * len(self.panel_agents())
+        max_solves = self.o.max_solves
+        if solves > max_solves:
+            c["status"] = "rejected"
+            c["reason"] = f"too easy: {solves}/{len(valid)} solved"
+            return []
+        jobs = []
+        for agent in self.panel_agents():
+            done = [a for a in attempts if a["agent"] == agent]
+            done_valid = [a for a in done if a["valid"]]
+            if len(done_valid) >= self.o.k:
+                continue
+            if len(done) - len(done_valid) >= 2:  # injection repeatedly not live: unreliable fault
+                c["status"] = "rejected"
+                c["reason"] = f"fault not live in {agent} attempts"
+                return []
+            jobs.append(Job("panel", cid, 0, f"{agent}", {"agent": agent, "round": len(done) + 1}))
+        if not jobs and len(valid) >= total_target:
+            c["status"] = "accepted"
+            c["solve_rate"] = f"{solves}/{len(valid)}"
+            self.accept(cid)
+        return jobs
+
+    def accept(self, cid: str) -> None:
+        dest = GENERATED_ROOT / cid
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(self.work / "candidates" / cid, dest)
+        c = self.cand(cid)
+        meta = json.loads((dest / "fault.json").read_text())
+        meta["generation"] = {
+            "chaos_backend": c["chaos_backend"], "theme": c["theme"][0], "solve_rate": c["solve_rate"],
+            "panel": c["panel"]["attempts"], "validated": c["validate"]["checks"], "accepted": now(),
+        }
+        (dest / "fault.json").write_text(json.dumps(meta, indent=2) + "\n")
+        self.log(f"ACCEPTED {cid} solve_rate={c['solve_rate']} -> {dest}")
+
+    def new_candidate(self) -> Job:
+        n = self.ledger["sessions"]
+        self.ledger["sessions"] += 1
+        app = APPS[n % len(APPS)]
+        themes = [t for t in THEMES if not (t[0] == "code" and app != "social_network")]
+        theme = themes[(n // len(APPS)) % len(themes)]
+        backend = "codex"
+        if self.o.claude_env_file and self.o.chaos_claude_every and n % self.o.chaos_claude_every == 1:
+            backend = "claudecode"
+        cid = f"{datetime.datetime.now():%m%d}{n:03d}_{app.split('_')[0]}_{theme[0].replace('-', '')}"
+        self.ledger["candidates"][cid] = {"app": app, "theme": list(theme), "chaos_backend": backend,
+                                          "status": "chaos", "created": now()}
+        return Job("chaos", cid, 2, f"{app}/{theme[0]}")
+
+    def pending_jobs(self) -> list[Job]:
+        jobs = []
+        for cid, c in self.ledger["candidates"].items():
+            busy = any(j.cid == cid for j in self.running.values())
+            if c["status"] == "validating" and not busy:
+                jobs.append(Job("validate", cid, 1, "validate"))
+            elif c["status"] == "panel":
+                jobs += self.panel_jobs(cid)
+            elif c["status"] == "chaos" and not busy:
+                jobs.append(Job("chaos", cid, 2, "resume"))
+        return sorted(jobs, key=lambda j: j.priority)
+
+    # ------------------------------------------------------------------ loop
+    def worker(self, job: Job, key: str) -> None:
+        try:
+            {"chaos": self.run_chaos, "validate": self.run_validate, "panel": self.run_panel}[job.kind](job)
+        except Exception as exc:  # keep the pipeline alive
+            self.log(f"ERROR {job.kind} {job.cid}: {exc!r}")
+            if job.kind != "panel":
+                self.cand(job.cid)["status"] = "error"
+                self.cand(job.cid)["reason"] = repr(exc)
+        finally:
+            with LOCK:
+                self.running.pop(key, None)
+                c = self.cand(job.cid)
+                self.log(f"END {job.kind} {job.cid} -> {c['status']} {c.get('reason', '')}")
+                self.save()
+
+    def stop_requested(self) -> bool:
+        return (self.work / "STOP").exists()
+
+    def generating(self) -> bool:
+        return not self.stop_requested() and self.ledger["sessions"] < self.o.max_sessions
+
+    def run(self) -> None:
+        self.log(f"pipeline start slots={self.o.slots} model={self.o.model} panel={self.panel_agents()} k={self.o.k}")
+        seq = 0
+        while True:
+            with LOCK:
+                free = self.o.slots - len(self.running)
+                jobs = self.pending_jobs() if free > 0 else []
+                in_flight = sum(1 for c in self.ledger["candidates"].values()
+                                if c["status"] in ("chaos", "validating", "panel"))
+                if free > 0 and not jobs and self.generating() and in_flight < self.o.slots + 1:
+                    jobs = [self.new_candidate()]
+                for job in jobs[:max(free, 0)]:
+                    seq += 1
+                    key = f"{job.kind}-{job.cid}-{seq}"
+                    self.running[key] = job
+                    self.log(f"START {job.kind} {job.cid} {job.label}")
+                    threading.Thread(target=self.worker, args=(job, key), daemon=True).start()
+                self.save()
+                idle = not self.running and not self.pending_jobs() and not self.generating()
+            if idle:
+                break
+            time.sleep(20 if self.running else 5)
+        self.log("pipeline done")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--work", type=Path, required=True)
+    parser.add_argument("--image", default="sregym-dind:local")
+    parser.add_argument("--slots", type=int, default=3, help="concurrent DinD environments")
+    parser.add_argument("--cpus", type=float, default=5)
+    parser.add_argument("--memory", default="18g")
+    parser.add_argument("--model", default="gpt-6.1-sol")
+    parser.add_argument("--claude-model", default="claude-opus-5-5")
+    parser.add_argument("--claude-env-file", type=Path, help="env file with CLAUDE_CODE_OAUTH_TOKEN; enables Claude")
+    parser.add_argument("--chaos-claude-every", type=int, default=0, help="every Nth chaos session uses Claude")
+    parser.add_argument("--k", type=int, default=2, help="attempts per panel agent")
+    parser.add_argument("--max-solves", type=int, default=1, help="accept when at most this many attempts solve")
+    parser.add_argument("--replays", type=int, default=2, help="fresh-deployment replays in validation")
+    parser.add_argument("--persistence", type=int, default=300, help="seconds the fault must persist unattended")
+    parser.add_argument("--chaos-timeout", type=int, default=4200)
+    parser.add_argument("--max-sessions", type=int, default=1000)
+    parser.add_argument("--registry-mirrors", default="http://172.17.0.1:5000")
+    opts = parser.parse_args()
+    opts.work = opts.work.resolve()
+    opts.work.mkdir(parents=True, exist_ok=True)
+    Pipeline(opts).run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
