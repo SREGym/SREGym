@@ -4,7 +4,9 @@ from pathlib import Path
 
 from sregym.service.apps.components.postgres import PostgresApplication
 
-STRIPE_IMAGE = "ghcr.io/sregym/stripe-marathon:20261010"
+STRIPE_IMAGE = (
+    "ghcr.io/sregym/stripe-marathon:20261010@sha256:2bb5997c3fa8177e77045e59ff17d66ca20e8040a666e28848ca4b8bd9406cc9"
+)
 
 
 class StripeMarathon(PostgresApplication):
