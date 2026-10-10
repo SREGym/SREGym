@@ -286,12 +286,17 @@ e.g. with `harbor job resume --filter-error-type HealthcheckError`.
 `ubuntu-24.04-arm` runners, **Harbor Oracle Sweep** with `runner:
 ubuntu-24.04-arm`). `network_policy_block` (Hotel Reservation) and
 `env_variable_shadowing_astronomy_shop` scored 1.0 there, Prometheus stack
-included. Two applications ship amd64-only images and cannot run on arm64:
-Social Network (`yg397/openresty-thrift:xenial`) and FleetCast, whose TiDB
-cluster uses the operator's default helper image `busybox:1.26.2` (set
-`spec.helper.image` in `SREGym-applications/FleetCast/tidb-operator` to fix
-it). On an arm64 Mac (Docker Desktop) the Prometheus stack once did not become
-ready within the hour; that did not recur on arm64 Linux.
+included. Social Network cannot run on arm64 yet: its chart in
+SREGym-applications pins nginx-thrift to `yg397/openresty-thrift:xenial`,
+which is amd64-only. SREGym-applications#9 had moved it to the multi-arch
+`ghcr.io/sregym/openresty-thrift`; the merge of #10 brought the old image back,
+which is also why `tests/docker/test_image_references.py::test_social_network_chart_uses_published_images`
+fails. Restoring #9's three lines fixes both. FleetCast's TiDB cluster used the
+operator's default helper image `busybox:1.26.2`, also amd64-only; SREGym now
+sets `spec.helper.image` to the multi-arch `busybox:1.36` (not yet rerun on
+arm64). On an arm64 Mac
+(Docker Desktop) the Prometheus stack once did not become ready within the
+hour; that did not recur on arm64 Linux.
 
 Not yet validated: other cloud providers and real agents.
 
