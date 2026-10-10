@@ -203,6 +203,16 @@ class Pipeline:
         marker.write_text(str(code))
         return code
 
+    def infra_retry(self, c: dict, out: Path, status: str) -> bool:
+        """Re-queue a phase whose environment failed before producing results."""
+        c["infra_retries"] = c.get("infra_retries", 0) + 1
+        shutil.rmtree(out, ignore_errors=True)
+        if c["infra_retries"] > self.o.infra_retries:
+            return False
+        c["status"] = status
+        self.log(f"INFRA RETRY {status} ({c['infra_retries']}/{self.o.infra_retries})")
+        return True
+
     @staticmethod
     def csv_rows(out: Path) -> list[dict]:
         rows = []
@@ -319,6 +329,8 @@ class Pipeline:
         )
         c["chaos"] = {"exit": code, "minutes": round((time.time() - started) / 60, 1)}
         rows = self.csv_rows(out)
+        if not rows and self.infra_retry(c, out, "chaos"):
+            return
         c["chaos"]["slo_violated_at_submit"] = rows[-1].get("Mitigation.success") if rows else None
         found = sorted(out.rglob("artifact/fault.json"))
         if not found:
@@ -356,6 +368,8 @@ class Pipeline:
         )
         rows = self.csv_rows(out)
         injects = self.gate_reports(out, "inject")
+        if not rows and not injects and self.infra_retry(c, out, "validating"):
+            return
         mitigations = self.gate_reports(out, "mitigate")
         gates = {
             "replays": len(injects),
@@ -403,6 +417,8 @@ class Pipeline:
         rows = self.csv_rows(out)
         injects = self.gate_reports(out, "inject")
         live = bool(injects) and injects[-1].get("impact_pass", False)
+        if not rows:
+            shutil.rmtree(out, ignore_errors=True)  # environment failure; the round will be retried
         row = rows[-1] if rows else {}
         attempt = {
             "agent": agent, "round": rnd, "exit": code, "minutes": round((time.time() - started) / 60, 1),
@@ -588,6 +604,7 @@ def main() -> int:
     parser.add_argument("--max-solves", type=int, default=1, help="accept when at most this many attempts solve")
     parser.add_argument("--fast-solve", type=float, default=900,
                         help="reject at once when a valid attempt solves within this many seconds")
+    parser.add_argument("--infra-retries", type=int, default=2, help="re-runs after environment failures")
     parser.add_argument("--max-hardening", type=int, default=2, help="hardening generations per lineage")
     parser.add_argument("--replays", type=int, default=2, help="fresh-deployment replays in validation")
     parser.add_argument("--persistence", type=int, default=300, help="seconds the fault must persist unattended")
