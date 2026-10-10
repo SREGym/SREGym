@@ -69,8 +69,11 @@ unhealthy object in `kubectl get`/`describe` is solved in minutes.
      curl -s "{api_base}/chaos/slo?window=120"   (fields: verdict.violated, verdict.details, slo)
    Rounds last ~30s; wait ~2-3 minutes after a change before trusting the verdict.
 2. OBSERVABILITY: the problem must be visible in the telemetry the fixer has (Prometheus metrics and
-   alerts, Loki logs, Jaeger traces, Kubernetes state/events). Prefer faults that make at least one
-   NEW Prometheus alert fire; the /chaos/slo response lists them in "new_alerts".
+   alerts, Loki logs, Jaeger traces, Kubernetes state/events). Checked automatically as: at least one
+   NEW Prometheus alert fires, or some application container's error-like log lines (error, fail,
+   timeout, refused, unavailable, ...) surge well above their pre-fault level over a 2-minute window.
+   The /chaos/slo response reports both ("new_alerts", "log_surges"; measured since the session began).
+   The signal must point toward the problem area, but it does not have to name the root cause.
 3. SOLVABILITY: a fixer with kubectl access to this cluster (namespace {namespace} and the cluster
    resources you can see) must be able to fully fix it without the original manifests. Do not make
    anything irreparable (no deleting PVCs with unique data unless it can be regenerated, no changes

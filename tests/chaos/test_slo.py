@@ -65,3 +65,11 @@ def test_baseline_timeouts_are_tolerated():
     hung = parse_round(entry(ROUND.replace("  Non-2xx or 3xx responses: 290\n", "").replace("1.20s", "20.00ms")
                              .replace("timeout 10", "timeout 900")))
     assert any(v.startswith("timeout_ratio") for v in slo.violations(hung))
+
+
+def test_log_surges():
+    from sregym.chaos.telemetry import log_surges
+
+    before = {"frontend": 10.0, "search": 400.0}
+    after = {"frontend": 200.0, "search": 500.0, "rate": 5.0}
+    assert log_surges(before, after) == {"frontend": [10.0, 200.0]}

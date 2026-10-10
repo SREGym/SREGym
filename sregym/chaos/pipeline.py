@@ -113,8 +113,9 @@ class Pipeline:
              timeout_s: int, claude: bool = False) -> int:
         out.mkdir(parents=True, exist_ok=True)
         auth = out / "codex-auth.json"
-        shutil.copyfile(AUTH, auth)
-        auth.chmod(0o600)
+        if not auth.exists():
+            shutil.copyfile(AUTH, auth)
+            auth.chmod(0o600)
         args = [
             "docker", "run", "--rm", "--privileged", "--cgroupns=private", "--name", name,
             "--stop-timeout", "45", "--cpus", str(self.o.cpus), "--memory", self.o.memory,
@@ -131,6 +132,20 @@ class Pipeline:
         for src, dst in mounts:
             args += ["--mount", f"type=bind,src={src},dst={dst},readonly"]
         args += [self.o.image, *command]
+        running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name], capture_output=True,
+                                 text=True).stdout.strip() == "true"
+        if running:
+            # A previous pipeline process started this job; wait for it instead of restarting it.
+            self.log(f"ADOPT running container {name}")
+            proc = subprocess.Popen(["docker", "wait", name], stdout=subprocess.PIPE, text=True)
+            try:
+                stdout, _ = proc.communicate(timeout=timeout_s)
+                code = int(stdout.strip() or 1)
+            except (subprocess.TimeoutExpired, ValueError):
+                subprocess.run(["docker", "stop", "-t", "60", name], capture_output=True)
+                code = 1
+            auth.unlink(missing_ok=True)
+            return code
         subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
         with open(out / "dind.log", "a") as handle:
             proc = subprocess.Popen(args, stdout=handle, stderr=subprocess.STDOUT)
@@ -411,11 +426,28 @@ class Pipeline:
     def generating(self) -> bool:
         return not self.stop_requested() and self.ledger["sessions"] < self.o.max_sessions
 
+    def apply_requeue(self) -> None:
+        """Apply lines "<cid> <status>" from <work>/requeue (operator overrides), then delete it."""
+        path = self.work / "requeue"
+        if not path.exists():
+            return
+        for line in path.read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] in self.ledger["candidates"]:
+                c = self.cand(parts[0])
+                c["status"] = parts[1]
+                c.pop("reason", None)
+                if parts[1] == "panel":
+                    c.setdefault("panel", {"attempts": []})
+                self.log(f"REQUEUE {parts[0]} -> {parts[1]}")
+        path.unlink()
+
     def run(self) -> None:
         self.log(f"pipeline start slots={self.o.slots} model={self.o.model} panel={self.panel_agents()} k={self.o.k}")
         seq = 0
         while True:
             with LOCK:
+                self.apply_requeue()
                 free = self.o.slots - len(self.running)
                 jobs = self.pending_jobs() if free > 0 else []
                 in_flight = sum(1 for c in self.ledger["candidates"].values()

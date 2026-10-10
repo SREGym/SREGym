@@ -286,7 +286,12 @@ async def get_chaos_slo(window: int = 90):
         from sregym.chaos import slo
 
         verdict = slo.judge(oracle.slo, slo.recent_rounds(problem.app, max(30, min(window, 600))))
-        return {"slo": oracle.slo.to_dict(), "verdict": verdict.to_dict(), "new_alerts": problem.alerts.new()}
+        return {
+            "slo": oracle.slo.to_dict(),
+            "verdict": verdict.to_dict(),
+            "new_alerts": problem.alerts.new(),
+            "log_surges": problem.log_surges(),
+        }
 
     return await asyncio.to_thread(measure)
 

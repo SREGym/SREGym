@@ -10,7 +10,7 @@ decided later by replaying the artifact on fresh deployments.
 
 from __future__ import annotations
 
-from sregym.chaos import protected
+from sregym.chaos import protected, telemetry
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.slo_oracle import SLOMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -32,7 +32,8 @@ class ChaosImpactOracle(Oracle):
         integrity = protected.compare(
             self.slo_oracle.protected_before or {}, protected.snapshot(self.problem.namespace)
         )
-        detail = {"window": verdict.to_dict(), "new_alerts": self.problem.alerts.new(), "integrity": integrity}
+        detail = {"window": verdict.to_dict(), "new_alerts": self.problem.alerts.new(),
+                  "log_surges": self.problem.log_surges(), "integrity": integrity}
         if not verdict.violated:
             return self.fail("slo_not_violated", **detail)
         return {"success": True, "detail": detail}
@@ -52,6 +53,10 @@ class ChaosCanvas(Problem):
     def inject_fault(self):
         self.slo_oracle.capture_baseline()
         self.alerts.capture_baseline()
+        self.logs_before = telemetry.error_log_counts(self.namespace, 120)
+
+    def log_surges(self) -> dict:
+        return telemetry.log_surges(self.logs_before, telemetry.error_log_counts(self.namespace, 120))
 
     def recover_fault(self):
         return
