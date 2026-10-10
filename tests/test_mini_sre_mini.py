@@ -57,7 +57,7 @@ def harness(monkeypatch, tmp_path):
     monkeypatch.setattr(driver, "RETRY_WAIT_S", 0)
     monkeypatch.setattr(driver, "resolve_problem_id", lambda cli_problem_id=None: "anon_test")
     monkeypatch.setattr(driver, "get_app_info", lambda: APP)
-    monkeypatch.setattr(driver, "current_stage", lambda: state["current"])
+    monkeypatch.setattr(driver, "conductor_status", lambda: {"stage": state["current"]})
 
     def wait_for_stage(stages, timeout):
         state["current"] = state["stages"].pop(0)
@@ -197,7 +197,7 @@ def test_stage_ends_on_submission_receipt(monkeypatch, harness):
 
 def test_stage_change_counts_as_submission(monkeypatch, harness):
     backend = FakeBackend([block("python3 -c 'import requests'")])
-    monkeypatch.setattr(driver, "current_stage", lambda: "tearing_down")
+    monkeypatch.setattr(driver, "conductor_status", lambda: {"stage": "tearing_down"})
     assert run_main(monkeypatch, backend) == 0
     assert read_results(harness["logs"])["mini_sre"]["termination_reason"] == "submitted_by_command"
 

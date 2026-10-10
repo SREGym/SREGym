@@ -236,3 +236,18 @@ def test_gateway_error_fails_after_retries(tmp_path, monkeypatch):
     monkeypatch.setattr(litellm, "completion", always)
     reply = backend.complete([{"role": "user", "content": "go"}], step_dir=tmp_path / "t2")
     assert reply.error is not None and "BadGateway" in reply.error
+
+
+def test_reasoning_effort_for_anthropic_is_left_to_litellm():
+    # LiteLLM turns it into Anthropic's thinking and effort; in extra_body it would reach the API as an unknown field
+    backend = ApiBackend("anthropic/claude-sonnet-5-5", "high", env={})
+    request = backend.build_request([{"role": "user", "content": "hi"}])
+    assert request["reasoning_effort"] == "high" and "extra_body" not in request
+    optional = litellm.utils.get_optional_params(
+        model="claude-sonnet-5-5", custom_llm_provider="anthropic", reasoning_effort=request["reasoning_effort"]
+    )
+    assert optional["output_config"] == {"effort": "high"} and "reasoning_effort" not in optional
+    # an OpenAI-compatible endpoint LiteLLM does not know reads it from the body (test_build_request)
+    plain = ApiBackend("openai/qwen3.8-27b-mtp", "high", env={"AGENT_API_BASE": "http://vllm:8000/v1"})
+    request = plain.build_request([{"role": "user", "content": "hi"}])
+    assert request["extra_body"] == {"reasoning_effort": "high"} and "reasoning_effort" not in request

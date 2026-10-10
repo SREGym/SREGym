@@ -80,15 +80,34 @@ def get_app_info(max_retries: int = 6, backoff: int = 5) -> dict:
                 raise
 
 
-def current_stage() -> str | None:
-    """Return the conductor's current stage, or None if the conductor does not answer."""
+def conductor_status() -> dict | None:
+    """Return the conductor's /status answer, or None if the conductor does not answer."""
     try:
         resp = requests.get(f"{CONDUCTOR_URL}/status", timeout=10)
         resp.raise_for_status()
-        return resp.json().get("stage")
+        status = resp.json()
+        return status if isinstance(status, dict) else None
     except Exception as e:
         logger.debug(f"Status poll error: {e}")
         return None
+
+
+def current_stage() -> str | None:
+    """Return the conductor's current stage, or None if the conductor does not answer."""
+    status = conductor_status()
+    return status.get("stage") if status else None
+
+
+def run_deadline(status: dict | None) -> float | None:
+    """Return when SREGym stops the agent, on this process's monotonic clock, or None if /status does not say.
+
+    SREGym gives the agent one time limit for the whole attempt (1800 s by default), diagnosis and mitigation
+    together, and reports what is left of it as ``agent_remaining_seconds``.
+    """
+    left = (status or {}).get("agent_remaining_seconds")
+    if isinstance(left, bool) or not isinstance(left, (int, float)):
+        return None
+    return time.monotonic() + float(left)
 
 
 def wait_for_stage(target_stages: set[str], timeout: int = 300) -> str:
@@ -202,8 +221,12 @@ def run_stage(
     The stage ends when the conductor accepts the model's submission, or when the conductor moves to
     another stage after a command. At a limit the model is told once to submit and gets WRAP_UP_CALLS
     more replies. If it does not submit, the stage ends without a submission.
+
+    The time left is the stage's own DEADLINE_S or what is left of SREGym's limit for the whole attempt,
+    whichever ends first: after a long diagnosis, mitigation has less than DEADLINE_S.
     """
     started = time.monotonic()
+    run_ends = run_deadline(conductor_status())
     usage_records: list[dict] = []
     model_calls = 0
     used = 0
@@ -225,17 +248,18 @@ def run_stage(
             records=records,
         )
 
+    def seconds_left() -> float:
+        """Return the seconds left in this stage."""
+        left = DEADLINE_S - (time.monotonic() - started)
+        return left if run_ends is None else min(left, run_ends - time.monotonic())
+
     def with_budget(text: str) -> str:
         """Add the budget line to an observation."""
-        return text + mini.budget_notice(
-            used=used,
-            cap=HARD_CAP,
-            seconds_left=DEADLINE_S - (time.monotonic() - started),
-        )
+        return text + mini.budget_notice(used=used, cap=HARD_CAP, seconds_left=seconds_left())
 
     while True:
         limit = None
-        if time.monotonic() - started > DEADLINE_S:
+        if seconds_left() <= 0:
             limit = ("deadline", "the time limit")
         elif used >= HARD_CAP:
             limit = ("hard_cap", f"the limit of {HARD_CAP} commands")
@@ -309,6 +333,9 @@ def run_stage(
             }
         )
         used += 1
+        # one /status per command: the time left for the budget line, and the stage for the check below
+        status = conductor_status()
+        run_ends = run_deadline(status) or run_ends
         if result.timed_out:
             session.add_user(with_budget(mini.timeout_text(action, output)))
             continue
@@ -317,7 +344,7 @@ def run_stage(
             # The conductor accepted the submission, so the stage ends here.
             logger.info(f"[{stage}] the conductor accepted the model's submission; ending the stage")
             return outcome("submitted_by_command")
-        observed = current_stage()
+        observed = status.get("stage") if status else None
         if observed not in {stage, None}:
             logger.info(f"[{stage}] the model submitted with a command; conductor stage is now {observed}")
             return outcome("submitted_by_command")

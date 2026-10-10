@@ -162,11 +162,29 @@ class ApiBackend:
         if self.api_key:
             request["api_key"] = self.api_key
         extra = dict(self.extra_body)
-        if self.reasoning_effort:
+        if self.reasoning_effort and self._translates_reasoning_effort():
+            request["reasoning_effort"] = self.reasoning_effort
+        elif self.reasoning_effort:
             extra["reasoning_effort"] = self.reasoning_effort
         if extra:
             request["extra_body"] = extra
         return request
+
+    def _translates_reasoning_effort(self) -> bool:
+        """Check whether LiteLLM turns ``reasoning_effort`` into the provider's own setting.
+
+        For Anthropic it becomes ``thinking`` and ``output_config.effort``; put in ``extra_body`` it would reach the
+        API as an unknown field. For an OpenAI-compatible endpoint LiteLLM does not know (``openai/<model>`` with
+        AGENT_API_BASE), it refuses the parameter, so there it goes into the body as it is, as such endpoints read it.
+        """
+        import litellm
+
+        try:
+            model, provider, _, _ = litellm.get_llm_provider(self.model, api_base=self.api_base)
+            supported = litellm.get_supported_openai_params(model=model, custom_llm_provider=provider) or []
+        except Exception:  # a model LiteLLM cannot place: the body keeps it as it is
+            return False
+        return "reasoning_effort" in supported
 
     def complete(self, messages: list[dict], *, step_dir: Path) -> Reply:
         """Send the conversation and save what was sent and what came back."""

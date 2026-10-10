@@ -12,7 +12,7 @@ uv run main.py --suite sregym-lite --agent mini-sre --model openai/<model> --for
 
 - `--force-build` builds the agent image from your local code. The released image does not have this agent.
 - The default filtered internet mode works as for the other agents: the agent can reach its model endpoint and SREGym's own services, and nothing else.
-- `--reasoning-effort` is passed to the model as `reasoning_effort`. Without it, the provider's default is used.
+- `--reasoning-effort` is passed to the model as `reasoning_effort`. Without it, the provider's default is used. Where LiteLLM knows the provider's own setting, it translates the value (for Anthropic, `thinking` and `output_config.effort`). For an OpenAI-compatible endpoint it does not know (`openai/<model>` with `AGENT_API_BASE`), the value goes into the request body as it is.
 
 ## Prompt
 
@@ -22,8 +22,10 @@ mini-swe-agent is under the MIT License, in `LICENSE-mini-swe-agent`.
 
 ## Limits
 
-Each stage allows 80 commands and 1500 seconds. Each command can run for 60 seconds. When 15 commands or 5 minutes
-are left, the model is told to submit. When a limit is reached, it gets 3 more replies to submit. A stage also ends
+Each stage allows 80 commands and 1500 seconds. Each command can run for 60 seconds. SREGym also stops the agent a set time
+after it starts (`--agent-timeout`, 1800 seconds by default), for both stages together, so a stage ends earlier if less is left of that: after each
+command the driver reads the time left from the conductor's `/status`. When 15 commands or 5 minutes are left, the
+model is told to submit. When a limit is reached, it gets 3 more replies to submit. A stage also ends
 after 3 replies in a row without exactly one bash block, or after 2 failed model calls in a row.
 
 ## Settings
