@@ -118,6 +118,6 @@ agents:
     kickoff_workdir: .
     kickoff_env:
       MINI_SRE_HARD_CAP: "80"  # commands per stage
-      MINI_SRE_DEADLINE_S: "1500"  # seconds per stage
+      MINI_SRE_DIAGNOSIS_SHARE: "0.667"  # share of --agent-timeout diagnosis may use; mitigation has the rest
     install_script: null
     agent_version: null

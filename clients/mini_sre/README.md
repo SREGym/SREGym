@@ -22,9 +22,10 @@ mini-swe-agent is under the MIT License, in `LICENSE-mini-swe-agent`.
 
 ## Limits
 
-Each stage allows 80 commands and 1500 seconds. Each command can run for 60 seconds. SREGym also stops the agent a set time
-after it starts (`--agent-timeout`, 1800 seconds by default), for both stages together, so a stage ends earlier if less is left of that: after each
-command the driver reads the time left from the conductor's `/status`. When 15 commands or 5 minutes are left, the
+SREGym stops the agent a set time after it starts (`--agent-timeout`, 1800 seconds by default), for both stages
+together. Diagnosis may use up to two thirds of that time (1200 of 1800 seconds); mitigation has the rest, and more
+if diagnosis ends sooner. After each command the driver reads the time left from the conductor's `/status`. Each
+stage also allows 80 commands, and each command can run for 60 seconds. When 15 commands or 5 minutes are left, the
 model is told to submit. When a limit is reached, it gets 3 more replies to submit. A stage also ends
 after 3 replies in a row without exactly one bash block, or after 2 failed model calls in a row.
 
@@ -36,7 +37,8 @@ The agent runs in the agent container, so set these in `agents.yaml` under `kick
 | Variable                   | Default | Meaning                           |
 | -------------------------- | ------- | --------------------------------- |
 | `MINI_SRE_HARD_CAP`        | 80      | Commands per stage                |
-| `MINI_SRE_DEADLINE_S`      | 1500    | Seconds per stage                 |
+| `MINI_SRE_DIAGNOSIS_SHARE` | 0.667   | Share of the time for diagnosis   |
+| `MINI_SRE_ATTEMPT_S`       | 1800    | Time for both stages, if `/status` does not give it |
 | `MINI_SRE_COMMAND_TIMEOUT` | 60      | Seconds per command               |
 | `MINI_SRE_WRAP_UP_CALLS`   | 3       | Replies allowed after a limit     |
 | `MINI_SRE_MAX_TOKENS`      | 65536   | `max_tokens` for each model call  |

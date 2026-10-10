@@ -50,7 +50,11 @@ HARD_CAP = int(os.environ.get("MINI_SRE_HARD_CAP", "80"))
 # Replies allowed after the limit message.
 WRAP_UP_CALLS = int(os.environ.get("MINI_SRE_WRAP_UP_CALLS", "3"))
 COMMAND_TIMEOUT = int(os.environ.get("MINI_SRE_COMMAND_TIMEOUT", "60"))
-DEADLINE_S = float(os.environ.get("MINI_SRE_DEADLINE_S", "1500"))
+# SREGym stops the agent this long after it starts (--agent-timeout), for both stages together. The conductor's
+# /status says what is left of it; this is used only when it does not.
+ATTEMPT_S = float(os.environ.get("MINI_SRE_ATTEMPT_S", "1800"))
+# Diagnosis may use up to this share of that time. Mitigation has the rest, and more if diagnosis ends sooner.
+DIAGNOSIS_SHARE = float(os.environ.get("MINI_SRE_DIAGNOSIS_SHARE", str(2 / 3)))
 RETRY_WAIT_S = float(os.environ.get("MINI_SRE_RETRY_WAIT_S", "30"))
 SESSION_REASONING = os.environ.get("MINI_SRE_SESSION_REASONING", "1") != "0"
 
@@ -108,6 +112,15 @@ def run_deadline(status: dict | None) -> float | None:
     if isinstance(left, bool) or not isinstance(left, (int, float)):
         return None
     return time.monotonic() + float(left)
+
+
+def diagnosis_deadline(run_ends: float, agent_started: float) -> float:
+    """Return when diagnosis must end: after DIAGNOSIS_SHARE of the attempt's time (1200 of 1800 seconds).
+
+    Over 59 earlier runs of the agent, this left every mitigation that passed enough time, and cut short one
+    diagnosis that passed (1450 seconds, in a run whose limit had been raised to 3600).
+    """
+    return run_ends - (1 - DIAGNOSIS_SHARE) * (run_ends - agent_started)
 
 
 def wait_for_stage(target_stages: set[str], timeout: int = 300) -> str:
@@ -213,6 +226,8 @@ def run_stage(
     *,
     stage: str,
     work_dir: str,
+    run_ends: float,
+    stage_ends: float | None = None,
     call_offset: int = 0,
     index_offset: int = 0,
 ) -> StageOutcome:
@@ -222,11 +237,10 @@ def run_stage(
     another stage after a command. At a limit the model is told once to submit and gets WRAP_UP_CALLS
     more replies. If it does not submit, the stage ends without a submission.
 
-    The time left is the stage's own DEADLINE_S or what is left of SREGym's limit for the whole attempt,
-    whichever ends first: after a long diagnosis, mitigation has less than DEADLINE_S.
+    The stage has until ``stage_ends`` (the end of diagnosis's share), or else until ``run_ends``, when SREGym stops
+    the agent. ``run_ends`` is read again from the conductor after every command.
     """
     started = time.monotonic()
-    run_ends = run_deadline(conductor_status())
     usage_records: list[dict] = []
     model_calls = 0
     used = 0
@@ -250,8 +264,8 @@ def run_stage(
 
     def seconds_left() -> float:
         """Return the seconds left in this stage."""
-        left = DEADLINE_S - (time.monotonic() - started)
-        return left if run_ends is None else min(left, run_ends - time.monotonic())
+        ends = run_ends if stage_ends is None else min(stage_ends, run_ends)
+        return ends - time.monotonic()
 
     def with_budget(text: str) -> str:
         """Add the budget line to an observation."""
@@ -387,6 +401,7 @@ def main():
     parser.add_argument("--logs-dir", default=AGENT_LOGS_DIR)
     parser.add_argument("--problem-id", default=None, help="artifact id (default: SREGYM_ARTIFACT_ID)")
     args = parser.parse_args()
+    agent_started = time.monotonic()  # SREGym starts the clock of its limit when it starts the agent
 
     if not MODEL:
         logger.error("AGENT_MODEL_ID is not set (SREGym sets it from --model)")
@@ -414,7 +429,8 @@ def main():
         "context": "session",
         "session_reasoning": SESSION_REASONING,
         "hard_cap": HARD_CAP,
-        "deadline_s": DEADLINE_S,
+        "attempt_s": ATTEMPT_S,
+        "diagnosis_share": round(DIAGNOSIS_SHARE, 3),
         "command_timeout_s": COMMAND_TIMEOUT,
         "artifact_id": problem_id,
         "stages": {},
@@ -439,6 +455,10 @@ def main():
     # The task text covers both stages, so no message is sent when mitigation starts.
     session.open(backend.system_message(mini.system_text()), mini.instance_text(app_info))
     transcript.write({"type": "prompt", "messages": [dict(m) for m in session.messages]})
+    # SREGym's limit for the whole attempt, as the conductor reports it; diagnosis may use its share of it
+    run_ends = run_deadline(conductor_status()) or agent_started + ATTEMPT_S
+    diagnosis_ends = diagnosis_deadline(run_ends, agent_started)
+    mini_sre_meta["attempt_s"] = round(run_ends - agent_started)
 
     def run(stage_name: str, **kwargs) -> StageOutcome:
         """Run one stage with the shared session and transcript."""
@@ -481,7 +501,7 @@ def main():
     calls = 0
     records = 0
     if stage == "diagnosis":
-        outcome = run("diagnosis")
+        outcome = run("diagnosis", run_ends=run_ends, stage_ends=diagnosis_ends)
         calls, records = outcome.model_calls, outcome.records
         # The diagnosis numbers also go at the top level of the results file.
         mini_sre_meta.update(
@@ -503,7 +523,8 @@ def main():
         logger.info("Benchmark starts at mitigation; skipping diagnosis")
 
     if stage == "mitigation":
-        record(run("mitigation", call_offset=calls, index_offset=records))
+        run_ends = run_deadline(conductor_status()) or run_ends
+        record(run("mitigation", run_ends=run_ends, call_offset=calls, index_offset=records))
         with contextlib.suppress(TimeoutError):
             wait_for_stage({"tearing_down", "done"}, timeout=600)
 

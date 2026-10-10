@@ -216,7 +216,9 @@ def convert_records(
                     "submission_mode",
                     "max_commands",
                     "hard_cap",
-                    "deadline_s",
+                    "deadline_s",  # transcripts written before the time was split between the stages
+                    "attempt_s",
+                    "diagnosis_share",
                     "command_timeout_s",
                     "reasoning_effort",
                     "tools",
