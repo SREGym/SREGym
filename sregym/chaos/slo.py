@@ -201,7 +201,8 @@ def collect_rounds(app, window_s: float, min_rounds: int = 1, timeout_s: float |
         wrk._extractlog()
     except Exception:
         pass
-    started = wrk.last_log_time or 0.0
+    # Entry times are the round start times (pod clock = host clock under kind).
+    started = time.time() - 2
     deadline = time.monotonic() + (timeout_s or window_s + 3 * round_seconds(app) + 60)
     window_end_wall = time.time() + window_s
     out: list[RoundStats] = []

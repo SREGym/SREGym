@@ -54,3 +54,12 @@ def test_discover_extra_roots(tmp_path, monkeypatch):
     make(tmp_path, "b2")
     monkeypatch.setenv("SREGYM_GENERATED_DIRS", str(tmp_path))
     assert "gen_b2" in discover()
+
+
+def test_notes_are_not_linted(tmp_path):
+    path = make(tmp_path)
+    (path / "validation.json").write_text('{"first_injection_checks": []}')
+    (path / "design.md").write_text("The fault is injected into rate.")
+    (path / "cm.yaml").write_text("metadata:\n  name: fault-config\n")
+    findings = FaultArtifact.load(path).leak_findings()
+    assert findings == ["cm.yaml:2: name: fault-config"]

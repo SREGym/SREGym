@@ -45,6 +45,8 @@ class ChaosCanvas(Problem):
     def __init__(self, app_name: str):
         super().__init__(app=make_app(app_name))
         self.app.create_workload()
+        # StreamWorkloadManager.log_history is a class attribute; keep this run's rounds separate.
+        self.app.wrk.log_history = []
         self.slo_oracle = SLOMitigationOracle(problem=self)
         self.mitigation_oracle = ChaosImpactOracle(self, self.slo_oracle)
         self.alerts = FiringAlerts(self)

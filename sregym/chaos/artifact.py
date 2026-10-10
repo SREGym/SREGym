@@ -28,6 +28,8 @@ SUPPORTED_APPS = ("hotel_reservation", "social_network")
 # Leaks the fixer could read from cluster state. Scripts may use these words
 # in comments; resource names, labels and annotations may not.
 SUSPICIOUS_WORDS = ("chaos", "fault", "inject", "sregym", "benchmark")
+# Files that can put content into the cluster (scripts, manifests, app config).
+CLUSTER_STATE_SUFFIXES = (".sh", ".py", ".yaml", ".yml", ".json", ".lua", ".conf", ".tmpl", ".cfg", ".ini", ".js")
 
 GENERATED_ROOT = Path(__file__).resolve().parents[1] / "conductor" / "problems" / "generated"
 
@@ -69,8 +71,10 @@ class FaultArtifact:
         """Lines in non-comment script code that would plant a telltale name in the cluster."""
         findings = []
         for file in sorted(self.path.rglob("*")):
-            if not file.is_file() or file.name == "fault.json" or file.suffix in (".md",):
+            if not file.is_file() or file.suffix not in CLUSTER_STATE_SUFFIXES:
                 continue
+            if file.suffix == ".json" and '"apiVersion"' not in file.read_text(errors="ignore"):
+                continue  # notes and validation records, not manifests
             try:
                 lines = file.read_text().splitlines()
             except UnicodeDecodeError:
