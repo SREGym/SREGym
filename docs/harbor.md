@@ -129,22 +129,24 @@ reason:
   rejects them at once (`REJECT --reject-with icmp-port-unreachable`), where
   Calico drops them.
 
-These 14 problems are generated but do not work as tasks at the default size
-(4 CPUs, 8 GiB) on Daytona, or on the k3s cluster at all. Leave them out of a
-dataset (`--task-ids`). A failed setup is reported as an error, never as a
-reward. Results are from the sweep under [Validation status](#validation-status).
+These 12 problems are generated but are not reliable as tasks at the default
+size (4 CPUs, 8 GiB) on Daytona. Leave them out of a dataset (`--task-ids`). A
+failed setup is reported as an error, never as a reward. The runs are the three
+sweeps under [Validation status](#validation-status); the first used a 5-minute
+fault wait, the others 10 minutes.
 
-| Problem | Oracle agent | Why |
+| Problem | Oracle agent, 3 sweeps | Why |
 |---|---|---|
-| `astronomy_shop_ad_service_high_cpu`, `astronomy_shop_product_catalog_service_failure` | 1.0 when set up; setup failed in 1 of 2 runs (and in both no-op runs) | their alerts do not always fire within the 10-minute wait |
-| `astronomy_shop_ad_service_manual_gc` | setup failed in 3 of 4 runs | its alerts rarely fire within the wait |
-| `astronomy_shop_ad_service_image_slow_load` | setup failed in 4 of 4 runs | no alert fires. SREGym runs the load generator without browser traffic, so slow images are probably never requested. |
-| `astronomy_shop_ad_service_failure`, `astronomy_shop_cart_service_failure` | 0.0 in all 3 runs that got through setup | Locust's `HighRequestErrorRate` keeps firing for 10 minutes after recovery |
-| `kafka_queue_problems` | 0.0 in the 1 run that got through setup | `MessageConsumerLag` keeps firing after recovery |
-| `loadgenerator_flood_homepage` | setup failed in 4 of 4 runs | the flood's only alert is CPU throttling on the load generator, which the agent cannot see, so no alert it could act on fires |
-| `capacity_decrease_rpc_retry_storm`, `load_spike_rpc_retry_storm` | setup failed | CPU stress on every node starves the API server and Prometheus |
-| `trainticket_f17_nested_sql_select_clause_error`, `trainticket_f22_sql_column_name_mismatch_error` | setup failed | Train Ticket's dozens of services overload the sandbox |
-| `operator_wrong_operator_image` | setup failed | its oracle checks Deployments in `tidb-cluster`, but the fault breaks the operator in `tidb-operator`. The oracle never sees the fault, on any cluster, so any agent would pass. |
+| `astronomy_shop_product_catalog_service_failure` | 1.0, 1.0; setup failed once (5-minute wait) | passes when set up, but its alerts did not fire in time in 2 of 3 no-op runs |
+| `astronomy_shop_ad_service_failure` | 1.0 once, 0.0 twice | Locust's `HighRequestErrorRate` can keep firing for 10 minutes after recovery |
+| `astronomy_shop_ad_service_high_cpu` | 1.0, 0.0, setup failed once | its alerts are slow to fire and to clear |
+| `astronomy_shop_cart_service_failure` | 0.0; setup failed twice | as above |
+| `astronomy_shop_ad_service_manual_gc` | setup failed 3 of 3 | its alerts rarely fire within the wait |
+| `astronomy_shop_ad_service_image_slow_load` | setup failed 3 of 3 | no alert fires. SREGym runs the load generator without browser traffic, so slow images are probably never requested. |
+| `kafka_queue_problems` | 0.0 twice, setup failed once | `MessageConsumerLag` keeps firing after recovery |
+| `loadgenerator_flood_homepage` | setup failed 3 of 3 | the flood's only alert is CPU throttling on the load generator, which the agent cannot see, so no alert it could act on fires |
+| `capacity_decrease_rpc_retry_storm`, `load_spike_rpc_retry_storm` | setup failed every time | CPU stress on every node starves the API server and Prometheus |
+| `trainticket_f17_nested_sql_select_clause_error`, `trainticket_f22_sql_column_name_mismatch_error` | setup failed every time | Train Ticket's dozens of services overload the sandbox |
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -278,10 +280,13 @@ To publish an update, regenerate with a new image tag and the same secret, run
 
 | Check | Result |
 |---|---|
-| **Oracle sweep of every generated task**, Harbor on Daytona, default task size (4 CPUs, 8 GiB, 10 GiB), image `ae0f9edc14db` with the grading and setup changes up to `2a7de13` layered on; the 16 alert-graded tasks run twice | **80 of 94 pass**: 74 of the 78 tasks not graded by alerts scored 1.0, and 6 alert-graded tasks scored 1.0 in both runs. Every trial that reached the agent had first shown the oracle failing with the fault live. The other 14 are in the table under [Generate tasks](#generate-tasks). |
-| No-op agent, the 16 alert-graded tasks, twice each, same image | 0.0 in all 18 runs that got through setup. The rest failed setup because no alert fired within the wait, and Harbor scored them as errors, not rewards. Before the fault-live wait, the no-op agent scored 1.0 on `gc_capacity_degradation` and `loadgenerator_flood_homepage`. |
-| Earlier sweep, image `3946472e669d`, before the fault-live wait | 86 of 94 at 1.0 after reruns. Without the wait, a task whose oracle never saw its fault also scored 1.0, which is why `operator_wrong_operator_image`, `cumulative_admission_webhook_timeout_hotel_reservation` and some Astronomy Shop alert tasks passed there. |
-| The 7 problems in `K3S_UNSUPPORTED`, generated by hand and run with the oracle agent on Daytona, image `2610c6277410` | None works as a task, for the listed reasons. Five fail in setup: no Calico CRDs, no KIND node containers or Ansible inventory, emulated cluster refused, host-global sysctl, no kube-proxy DaemonSet. `kubelet_crash` finds no kubelet to crash (0.0). `pod_cidr_exhaustion_hotel_reservation`'s Calico IPPool is rejected, so its fault never takes effect: the oracle and no-op agents both score 1.0. |
+| **SREGym-Lite on the published image**, oracle agent, Harbor on Daytona, `ghcr.io/sregym/sregym-harbor:bcb224d85322`, generated exactly as for the Hub | **17/17 at 1.0** |
+| **Oracle sweep of every generated task**, Harbor on Daytona, default task size (4 CPUs, 8 GiB, 10 GiB), image `ae0f9edc14db` with every later change up to `d4ef5df` layered on (the same code as `bcb224d85322`) | **81 of 93 pass**: 75 of the 77 tasks not graded by alerts scored 1.0 (not the two Train Ticket problems), and 6 alert-graded tasks scored 1.0 here and in both earlier sweeps. Every trial that reached the agent had first shown the oracle failing with the fault live. The other 12 are in the table under [Generate tasks](#generate-tasks). |
+| No-op agent, the 16 alert-graded tasks plus `operator_wrong_operator_image`, three sweeps | 0.0 in every run that got through setup (29 runs). The rest failed setup because no alert fired within the wait, and Harbor scored them as errors, not rewards. Before the fault wait, the no-op agent scored 1.0 on `gc_capacity_degradation` and `loadgenerator_flood_homepage`. |
+| Social Network's 14 tasks with the restored multi-arch nginx-thrift chart, oracle agent, Harbor on Daytona | 14/14 at 1.0 |
+| Two earlier sweeps of every generated task: image `3946472e669d` without the fault wait, and `ae0f9edc14db` with a 5-minute wait and no control-plane taint | 86 of 94 at 1.0 after reruns in the first. Without the wait, a task whose oracle never saw its fault also scored 1.0, which is how `operator_wrong_operator_image` (its oracle then checked the wrong namespace), `cumulative_admission_webhook_timeout_hotel_reservation` and some Astronomy Shop alert tasks passed. 80 of 94 in the second. |
+| The first 7 problems in `K3S_UNSUPPORTED`, generated by hand and run with the oracle agent on Daytona, image `2610c6277410` | None works as a task, for the listed reasons. Five fail in setup: no Calico CRDs, no KIND node containers or Ansible inventory, emulated cluster refused, host-global sysctl, no kube-proxy DaemonSet. `kubelet_crash` finds no kubelet to crash (0.0). `pod_cidr_exhaustion_hotel_reservation`'s Calico IPPool is rejected, so its fault never takes effect: the oracle and no-op agents both score 1.0. |
+| `cumulative_admission_webhook_timeout_hotel_reservation` (now in `K3S_UNSUPPORTED`), oracle and no-op agents, and a live Daytona sandbox | Setup failed in all 6 runs: the oracle never saw the fault. In the sandbox, a connection from the API server's node to an isolated webhook backend was refused at once by kube-router's `REJECT` rule, so the webhook calls never time out. |
 | SREGym-Lite plus `taint_no_toleration_social_network`, oracle agent, Harbor on Daytona, image `2610c6277410` (after merging `main` at #1077) | 18/18 at 1.0 |
 | SREGym-Lite, oracle and no-op agents, **Harbor Oracle Sweep** workflow (`docker` environment, GitHub runners) | 17/17 at 1.0 with the oracle agent, 0.0 with the no-op agent |
 | `network_policy_block`, no-op agent, Harbor on Daytona | Reward 0.0 (`fault_still_present`) |
@@ -290,7 +295,7 @@ To publish an update, regenerate with a new image tag and the same secret, run
 | `operator_overload_replicas` (FleetCast), **Harbor Oracle Sweep** (`docker` environment, GitHub amd64 runner) | 1.0 once the overlay raised the open-file limit; before, TiKV exited at start |
 
 `kafka_producer_leak` and `postgres_lock_contention_product_catalog`, flaky in
-the earlier sweep (2 of 3 and 1 of 2), scored 1.0 in this one.
+the first sweep (2 of 3 and 1 of 2), scored 1.0 in both later ones.
 
 About 1 in 70 cluster starts on Daytona fails at once: moving the first node's
 `unshare` parent into its cgroup returns EIO (`cluster.log` names the node and
@@ -326,10 +331,9 @@ with the local Docker environment.
 - **k3s-compatible problems only.** Problems that need real nodes, KIND node
   containers or Calico are skipped. Validate individual tasks with the oracle
   agent before relying on them.
-- **Sized for a 4-CPU, 8 GiB sandbox.** 14 generated problems do not work as
-  tasks: at that size they overload the sandbox, their alerts do not fire or do
-  not clear, or (two of them) they do not work on k3s or anywhere. See
-  [Generate tasks](#generate-tasks).
+- **Sized for a 4-CPU, 8 GiB sandbox.** 12 generated problems are not reliable
+  at that size: they overload the sandbox, or their alerts do not fire or do
+  not clear in time. See [Generate tasks](#generate-tasks).
 - **Alert-graded problems are graded when the agent stops.** `AlertOracle`
   fails while any new alert fires in the namespace, and alerts lag a fix by a
   few minutes. The reference solution waits for the oracle to pass; an agent
