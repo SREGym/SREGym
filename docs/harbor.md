@@ -299,12 +299,12 @@ e.g. with `harbor job resume --filter-error-type HealthcheckError`.
 `ubuntu-24.04-arm` runners, **Harbor Oracle Sweep** with `runner:
 ubuntu-24.04-arm`). `network_policy_block` (Hotel Reservation) and
 `env_variable_shadowing_astronomy_shop` scored 1.0 there, Prometheus stack
-included. Social Network cannot run on arm64 yet: its chart in
-SREGym-applications pins nginx-thrift to `yg397/openresty-thrift:xenial`,
-which is amd64-only. SREGym-applications#9 had moved it to the multi-arch
-`ghcr.io/sregym/openresty-thrift`; the merge of #10 brought the old image back,
-which is also why `tests/docker/test_image_references.py::test_social_network_chart_uses_published_images`
-fails. Restoring #9's three lines fixes both. FleetCast's TiDB cluster used the
+included. Social Network and FleetCast failed there on amd64-only images, both
+now replaced but not yet rerun on arm64. Social Network's chart pinned
+nginx-thrift to `yg397/openresty-thrift:xenial`: SREGym-applications#9 had
+moved it to the multi-arch `ghcr.io/sregym/openresty-thrift`, and the merge of
+#10 brought the old image back. The submodule now points at a commit (on #13's
+branch) that restores it. FleetCast's TiDB cluster used the
 operator's default helper image `busybox:1.26.2`, also amd64-only; SREGym now
 sets `spec.helper.image` to the multi-arch `busybox:1.36`. With it, FleetCast
 still scores 1.0 on Daytona (amd64); it has not been rerun on arm64. On an arm64 Mac
