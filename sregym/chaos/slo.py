@@ -90,9 +90,10 @@ def parse_round(entry) -> RoundStats | None:
         read_errors=socket[1],
         write_errors=socket[2],
         timeouts=socket[3],
-        p50_ms=percentiles.get("50"),
-        p90_ms=percentiles.get("90"),
-        p99_ms=percentiles.get("99"),
+        # Short rounds can end with an empty histogram, printed as 0.00us.
+        p50_ms=percentiles.get("50") or None,
+        p90_ms=percentiles.get("90") or None,
+        p99_ms=percentiles.get("99") or None,
     )
 
 
