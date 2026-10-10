@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from sregym.chaos.artifact import FaultArtifact, discover
 
 META = {
@@ -10,6 +12,11 @@ META = {
     "root_cause_class": "stale-cache",
     "incident_class": "cache inconsistency",
 }
+
+
+@pytest.fixture(autouse=True)
+def _workdir(tmp_path, monkeypatch):
+    monkeypatch.setenv("SREGYM_FAULT_WORKDIR", str(tmp_path / "work"))
 
 
 def make(tmp_path, name="a1", meta=META, inject="kubectl -n $NAMESPACE rollout restart deploy/rate\n"):
@@ -47,7 +54,18 @@ def test_leaks_ignore_comments(tmp_path):
 def test_run_passes_namespace(tmp_path):
     path = make(tmp_path, inject='echo "ns=$NAMESPACE dir=$ARTIFACT_DIR"\n')
     result = FaultArtifact.load(path).run("inject.sh", "hotel")
-    assert result.returncode == 0 and f"ns=hotel dir={path}" in result.stdout
+    artifact = FaultArtifact.load(path)
+    assert result.returncode == 0 and f"ns=hotel dir={artifact.workdir()}" in result.stdout
+
+
+def test_scripts_can_keep_state(tmp_path):
+    path = make(tmp_path, "s1", inject='echo saved > "$ARTIFACT_DIR/state"\n')
+    (path / "recover.sh").write_text('cat "$ARTIFACT_DIR/state"\n')
+    path.chmod(0o555)
+    artifact = FaultArtifact.load(path)
+    assert artifact.run("inject.sh", "ns").returncode == 0
+    assert artifact.run("recover.sh", "ns").stdout.strip() == "saved"
+    path.chmod(0o755)
 
 
 def test_discover_extra_roots(tmp_path, monkeypatch):

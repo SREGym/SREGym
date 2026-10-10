@@ -116,7 +116,9 @@ unhealthy object in `kubectl get`/`describe` is solved in minutes.
                     "expected_agent_pitfalls": ["..."],
                     "mitigation_summary": "<what mitigate.sh does>"}}
      design.md     short explanation of the fault, its realism, and how an expert would diagnose it.
-   The scripts run later from {ARTIFACT_DIR}/ with an admin kubeconfig, NOT in your session.
+   The scripts run later with an admin kubeconfig, NOT in your session, from a writable copy of the
+   artifact directory ($ARTIFACT_DIR; also the working directory). inject.sh may save state there for
+   recover.sh; mitigate.sh must not depend on it.
 4. Validate end to end in THIS cluster: run inject.sh, confirm /chaos/slo shows violated in two
    consecutive checks >= 60s apart; run mitigate.sh, confirm the SLO is healthy again (all rounds);
    run recover.sh, confirm healthy; run inject.sh AGAIN and confirm violated. Iterate on the design

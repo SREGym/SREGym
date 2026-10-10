@@ -19,7 +19,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,15 +90,26 @@ class FaultArtifact:
                     findings.append(f"{file.name}:{n}: {line.strip()[:160]}")
         return findings
 
+    def workdir(self) -> Path:
+        """Writable copy of the artifact, so inject.sh can leave state for recover.sh."""
+        root = os.environ.get("SREGYM_FAULT_WORKDIR") or Path(tempfile.gettempdir()) / "sregym-fault-work"
+        work = Path(root) / self.path.name
+        if not work.is_dir():
+            shutil.copytree(self.path, work)
+            for path in (work, *work.rglob("*")):
+                path.chmod(path.stat().st_mode | 0o700 if path.is_dir() else path.stat().st_mode | 0o600)
+        return work
+
     def run(self, script: str, namespace: str, timeout_s: int = 900) -> subprocess.CompletedProcess:
+        work = self.workdir()
         env = dict(os.environ)
-        env.update(NAMESPACE=namespace, ARTIFACT_DIR=str(self.path))
+        env.update(NAMESPACE=namespace, ARTIFACT_DIR=str(work))
         admin = Path.home() / ".kube" / "config"
         if admin.is_file():
             env["KUBECONFIG"] = str(admin)
         return subprocess.run(
-            ["bash", "-euo", "pipefail", str(self.path / script)],
-            cwd=self.path,
+            ["bash", "-euo", "pipefail", str(work / script)],
+            cwd=work,
             env=env,
             capture_output=True,
             text=True,
