@@ -1,5 +1,6 @@
 #!/bin/bash
-# Runs as root. Stop everything the agent left running, then grade once.
+# Runs as root. Stop everything the agent left running, then grade once. No pod
+# runs as the agent's UID (docker/harbor/Dockerfile), so this spares the cluster.
 pkill -KILL -u agent 2>/dev/null || true
 curl -fsS --max-time {{grade_timeout}} -X POST \
     -H "Authorization: Bearer $(cat {{grade_token_path}})" \

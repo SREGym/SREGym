@@ -23,7 +23,7 @@ The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
   │    127.0.0.1:16443 filtered Kubernetes API proxy                          │
   │    :8765 /oracle/recover (solution token)  127.0.0.1:8766 /grade (token)  │
   │                                                                           │
-  │ agent (uid 1001)                                                          │
+  │ agent (uid 48713)                                                         │
   │  kubectl ──► API proxy only. Cannot read the problem, the grader,         │
   │              the cluster's credentials or the grade token.                │
   └───────────────────────────────────────────────────────────────────────────┘

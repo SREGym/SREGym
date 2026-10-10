@@ -42,9 +42,13 @@ COPY docker/harbor/sregym-ready /usr/local/bin/sregym-ready
 # The agent runs as this user (task.toml [agent] user). Problem code, grading,
 # cluster state and admin credentials stay root-only; the agent reaches the
 # cluster only through SREGym's filtered API proxy, via $KUBECONFIG.
+# Pod processes keep their UIDs in this container (Sysbox skips the nested user
+# namespace; elsewhere it maps IDs one to one), so the agent's UID must be one no
+# workload runs as: otherwise the agent could signal those pods, and the verifier's
+# `pkill -u agent` would kill them. Charts commonly use 1000 and 1001.
 RUN chmod 755 /usr/local/lib/sregym-harbor/start.sh /usr/local/bin/sregym-ready \
     && chmod 700 /opt/sregym /root \
-    && useradd -m -s /bin/bash agent \
+    && groupadd -g 48713 agent && useradd -m -u 48713 -g agent -s /bin/bash agent \
     && echo root:0:65536 > /etc/subuid && echo root:0:65536 > /etc/subgid
 
 ENV PATH="/opt/sregym/.venv/bin:${PATH}" \
