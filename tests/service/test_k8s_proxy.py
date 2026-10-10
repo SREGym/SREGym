@@ -9,6 +9,7 @@ from datetime import timedelta
 
 import pytest
 from cryptography import x509
+from kubernetes import config
 
 from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
@@ -81,16 +82,18 @@ class FakeResponse:
 class FakeHTTPSConnection:
     requests: list[tuple[str, str, dict[str, str]]] = []
     response = FakeResponse(b"{}")
+    responses: dict[str, FakeResponse] = {}
     sock: socket.socket | None = None
 
     def __init__(self, *args, **kwargs):
         self.sock = type(self).sock
 
     def request(self, method: str, path: str, body=None, headers=None):
+        self.path = path
         self.requests.append((method, path, headers or {}))
 
     def getresponse(self) -> FakeResponse:
-        return self.response
+        return self.responses.get(self.path, self.response)
 
     def close(self):
         if self.sock is not None:
@@ -102,6 +105,7 @@ class FakeHTTPSConnection:
 def proxy(monkeypatch):
     FakeHTTPSConnection.requests = []
     FakeHTTPSConnection.response = FakeResponse(b"{}")
+    FakeHTTPSConnection.responses = {}
     FakeHTTPSConnection.sock = None
     monkeypatch.setattr(http.client, "HTTPSConnection", FakeHTTPSConnection)
 
@@ -1051,7 +1055,7 @@ def test_events_for_hidden_workloads_are_filtered_from_lists_and_direct_reads(pr
         "involvedObject": {
             "apiVersion": "v1",
             "kind": "Pod",
-            "name": "load-generator-5d945c566-2lbl4",
+            "name": "wrk2-job-check",
             "namespace": "astronomy-shop",
         },
         "reason": "Scheduled",
@@ -1068,16 +1072,118 @@ def test_events_for_hidden_workloads_are_filtered_from_lists_and_direct_reads(pr
         "reason": "Scheduled",
         "message": "Successfully assigned astronomy-shop/frontend-abc to worker",
     }
-    filtered = filter_resource_list(
-        {"items": [loadgen_event, frontend_event]},
-        hidden_namespaces={"chaos-mesh"},
-        hidden_labels={"app": {"load-generator"}},
+    proxy.hidden_labels["job"] = {"workload"}
+    FakeHTTPSConnection.responses["/api/v1/namespaces/astronomy-shop/pods/wrk2-job-check"] = FakeResponse(
+        json.dumps({"metadata": {"name": "wrk2-job-check", "labels": {"job": "workload"}}}).encode()
     )
-    assert filtered["items"] == [frontend_event]
-
+    FakeHTTPSConnection.responses["/api/v1/namespaces/astronomy-shop/pods/frontend-abc"] = FakeResponse(b"{}")
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"items": [loadgen_event, frontend_event]}).encode())
+    status, _, body = request(proxy, "/api/v1/namespaces/astronomy-shop/events")
+    assert status == 200
+    assert json.loads(body)["items"] == [frontend_event]
     FakeHTTPSConnection.response = FakeResponse(json.dumps(loadgen_event).encode())
     status, _, _ = request(proxy, "/api/v1/namespaces/astronomy-shop/events/load-generator-5d945c566-2lbl4.18a1")
     assert status == 404
+
+
+@pytest.mark.parametrize("reference_field", ["involvedObject", "regarding"])
+@pytest.mark.parametrize("format", ["list", "table", "direct", "direct-table"])
+def test_event_visibility_uses_labels_not_name_prefixes(proxy, reference_field, format):
+    pod = {
+        "kind": "Pod",
+        "metadata": {"name": "load-generator-diagnostic", "uid": "pod-1", "labels": {"app": "diagnostic"}},
+    }
+    event = {
+        "kind": "Event",
+        "metadata": {"name": "check", "namespace": "app"},
+        reference_field: {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "load-generator-diagnostic",
+            "namespace": "app",
+            "uid": "pod-1",
+        },
+    }
+    FakeHTTPSConnection.responses["/api/v1/namespaces/app/pods/load-generator-diagnostic"] = FakeResponse(
+        json.dumps(pod).encode()
+    )
+    payload = (
+        {"items": [event]}
+        if format == "list"
+        else {"kind": "Table", "rows": [{"object": event}]}
+        if format in {"table", "direct-table"}
+        else event
+    )
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(payload).encode())
+    path = "/api/v1/namespaces/app/events" + ("/check" if format.startswith("direct") else "")
+    status, _, body = request(proxy, path)
+    assert status == 200
+    assert json.loads(body) == payload
+
+
+def test_deleted_event_reference_uses_uid_and_live_label_changes_override_cache(proxy):
+    pod_path = "/api/v1/namespaces/app/pods/worker"
+    event = {
+        "kind": "Event",
+        "metadata": {"name": "check", "namespace": "app"},
+        "involvedObject": {"apiVersion": "v1", "kind": "Pod", "name": "worker", "namespace": "app", "uid": "old"},
+    }
+    pod = {
+        "kind": "Pod",
+        "metadata": {"name": "worker", "namespace": "app", "uid": "old", "labels": {"app": "load-generator"}},
+    }
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(json.dumps(pod).encode())
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(event).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 404
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(b"{}", status=404)
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 404
+    pod["metadata"]["uid"] = "new"
+    pod["metadata"]["labels"] = {"app": "diagnostic"}
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(json.dumps(pod).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 404
+    event["involvedObject"]["uid"] = "new"
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(event).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 200
+    pod["metadata"]["labels"] = {"app": "load-generator"}
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(json.dumps(pod).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 404
+    pod["metadata"]["labels"] = {"app": "diagnostic"}
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(json.dumps(pod).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 200
+
+
+def test_event_reference_lookup_error_fails_closed(proxy):
+    event = {"involvedObject": {"apiVersion": "v1", "kind": "Pod", "name": "worker", "namespace": "app"}}
+    FakeHTTPSConnection.responses["/api/v1/namespaces/app/pods/worker"] = FakeResponse(b"{}", status=503)
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"items": [event]}).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events")[0] == 502
+
+
+@pytest.mark.parametrize("resource", ["pods", "events"])
+def test_direct_table_reads_do_not_expose_hidden_objects(proxy, resource):
+    pod = {"kind": "Pod", "metadata": {"name": "worker", "namespace": "app", "labels": {"app": "load-generator"}}}
+    event = {"involvedObject": {"apiVersion": "v1", "kind": "Pod", "name": "worker", "namespace": "app"}}
+    FakeHTTPSConnection.responses["/api/v1/namespaces/app/pods/worker"] = FakeResponse(json.dumps(pod).encode())
+    obj = pod if resource == "pods" else event
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"kind": "Table", "rows": [{"object": obj}]}).encode())
+    assert request(proxy, f"/api/v1/namespaces/app/{resource}/check")[0] == 404
+
+
+def test_unknown_deleted_reference_does_not_guess_from_name(proxy):
+    event = {
+        "involvedObject": {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "load-generator-diagnostic",
+            "namespace": "app",
+            "uid": "unseen",
+        }
+    }
+    FakeHTTPSConnection.responses["/api/v1/namespaces/app/pods/load-generator-diagnostic"] = FakeResponse(
+        b"{}", status=404
+    )
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(event).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 200
 
 
 def test_resolve_upstream_kubeconfig_honors_env_and_skips_agent_proxy_files(monkeypatch, tmp_path):
@@ -1088,3 +1194,52 @@ def test_resolve_upstream_kubeconfig_honors_env_and_skips_agent_proxy_files(monk
 
     monkeypatch.setenv("KUBECONFIG", f"{agent_cfg}:{cluster_cfg}")
     assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == str(cluster_cfg)
+
+
+def test_explicit_missing_kubeconfig_does_not_select_another_cluster(monkeypatch, tmp_path):
+    missing = tmp_path / "missing.yaml"
+    monkeypatch.setenv("KUBECONFIG", str(missing))
+    assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == str(missing)
+    with pytest.raises(config.ConfigException):
+        KubernetesAPIProxy()
+
+
+def test_upstream_kubeconfig_merges_files_and_resolves_relative_certificates(monkeypatch, tmp_path):
+    import yaml
+
+    context = tmp_path / "context.yaml"
+    credentials_dir = tmp_path / "credentials"
+    credentials_dir.mkdir()
+    credentials = credentials_dir / "cluster.yaml"
+    (credentials_dir / "ca.pem").write_text("test-ca")
+    (credentials_dir / "cert.pem").write_text("test-cert")
+    (credentials_dir / "key.pem").write_text("test-key")
+    context.write_text(
+        yaml.safe_dump(
+            {"current-context": "real", "contexts": [{"name": "real", "context": {"cluster": "real", "user": "real"}}]}
+        )
+    )
+    credentials.write_text(
+        yaml.safe_dump(
+            {
+                "clusters": [
+                    {
+                        "name": "real",
+                        "cluster": {"server": "https://real-cluster:7443", "certificate-authority": "ca.pem"},
+                    }
+                ],
+                "users": [
+                    {
+                        "name": "real",
+                        "user": {"client-certificate": "cert.pem", "client-key": "key.pem", "token": "test-token"},
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("KUBECONFIG", f"{context}:{credentials}")
+    proxy = KubernetesAPIProxy()
+    assert proxy.api_host == "real-cluster"
+    assert proxy.api_port == 7443
+    assert (proxy.ca_cert, proxy.client_cert, proxy.client_key) == ("test-ca", "test-cert", "test-key")
+    assert proxy._bearer_token == "test-token"

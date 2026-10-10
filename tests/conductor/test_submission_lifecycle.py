@@ -29,6 +29,8 @@ def _conductor(diagnosis_evaluation=None, mitigation_evaluation=None) -> Conduct
     conductor.problem = None
     conductor._baseline_captured = False
     conductor.execution_start_time = time.time()
+    conductor.agent_timeout_seconds = None
+    conductor.agent_deadline_monotonic = None
     conductor.results = {}
     conductor.stage_sequence = [
         {
@@ -66,6 +68,21 @@ def _conductor(diagnosis_evaluation=None, mitigation_evaluation=None) -> Conduct
 
     conductor._advance_to_next_stage = MethodType(advance, conductor)
     return conductor
+
+
+@pytest.mark.parametrize(
+    "deadline,timeout,remaining", [(None, None, None), (None, 180, 180), (1150, 180, 150), (999, 180, 0)]
+)
+def test_status_exposes_remaining_budget_without_changing_stage(monkeypatch, deadline, timeout, remaining):
+    conductor = _conductor()
+    conductor.agent_deadline_monotonic = deadline
+    conductor.agent_timeout_seconds = timeout
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+    monkeypatch.setattr(conductor_api.time, "monotonic", lambda: 1000)
+    expected = {"stage": "diagnosis"}
+    if remaining is not None:
+        expected["agent_remaining_seconds"] = remaining
+    assert asyncio.run(conductor_api.get_status()) == expected
 
 
 def _wait_for_current_evaluation(conductor: Conductor) -> None:

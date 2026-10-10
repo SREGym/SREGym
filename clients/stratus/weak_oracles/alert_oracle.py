@@ -20,6 +20,26 @@ _BUFFER_SECONDS = 30
 # alerts persistent; a measured fix cleared the alerts 138-183 s after it was
 # applied.
 _RESOLVE_GRACE_SECONDS = 300
+_SUBMISSION_RESERVE_SECONDS = 30
+
+
+def get_validation_deadline() -> float | None:
+    """Convert the runner's remaining budget to this process's monotonic clock."""
+    start = time.monotonic()
+    try:
+        api_hostname = os.getenv("API_HOSTNAME", "localhost")
+        api_port = os.getenv("API_PORT", "8000")
+        response = requests.get(f"http://{api_hostname}:{api_port}/status", timeout=5)
+        response.raise_for_status()
+        remaining = response.json().get("agent_remaining_seconds")
+        if isinstance(remaining, (int, float)) and not isinstance(remaining, bool):
+            return start + max(0.0, remaining - _SUBMISSION_RESERVE_SECONDS)
+    except (requests.RequestException, ValueError, TypeError):
+        logger.warning("Could not read the benchmark's remaining agent budget")
+        # An unavailable budget must not start a long optional check. Submit the
+        # current state to the authoritative evaluator instead.
+        return start
+    return None
 
 
 def _get_benchmark_status() -> str:
@@ -44,12 +64,22 @@ class AlertOracle(BaseOracle):
         poll_interval_seconds: int = _POLL_INTERVAL_SECONDS,
         buffer_seconds: int = _BUFFER_SECONDS,
         resolve_grace_seconds: int = _RESOLVE_GRACE_SECONDS,
+        *,
+        deadline: float | None = None,
     ):
         self.namespace = namespace
         self.sustained_silence_seconds = sustained_silence_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
         self.resolve_grace_seconds = resolve_grace_seconds
+        self.deadline = deadline
+
+    def _wait(self, seconds: float) -> bool:
+        """Wait only within the validation budget; leave the submission reserve intact."""
+        if self.deadline is not None:
+            seconds = min(seconds, max(0.0, self.deadline - time.monotonic()))
+        time.sleep(seconds)
+        return self.deadline is None or time.monotonic() < self.deadline
 
     def _query_firing_alerts(self) -> list[dict] | None:
         """Return firing alerts, or None when Prometheus cannot be checked."""
@@ -69,7 +99,12 @@ class AlertOracle(BaseOracle):
             "http://localhost:9090/api/v1/alerts",
         ]
         try:
-            result = subprocess.run(cmd, text=True, capture_output=True, timeout=15)
+            timeout = 15
+            if self.deadline is not None:
+                timeout = min(timeout, self.deadline - time.monotonic())
+                if timeout <= 0:
+                    return None
+            result = subprocess.run(cmd, text=True, capture_output=True, timeout=timeout)
             if result.returncode != 0:
                 logger.warning(
                     "Failed to query Prometheus alerts: exit %s; stderr: %r", result.returncode, result.stderr
@@ -94,12 +129,16 @@ class AlertOracle(BaseOracle):
 
     def validate(self) -> OracleResult:
         logger.info(f"Waiting {self.buffer_seconds}s before checking alerts...")
-        time.sleep(self.buffer_seconds)
+        budget_exhausted = OracleResult(success=None, issues=["Validation budget exhausted; submit for final grading"])
+        if not self._wait(self.buffer_seconds):
+            return budget_exhausted
 
         start = time.monotonic()
-        silence_start = start
+        silence_start = None
         last_names = ""
         while True:
+            if self.deadline is not None and time.monotonic() >= self.deadline:
+                return budget_exhausted
             status = _get_benchmark_status()
             if status in ("tearing_down", "done"):
                 logger.info(f"[AlertOracle] Benchmark is '{status}', stopping alert polling.")
@@ -109,6 +148,8 @@ class AlertOracle(BaseOracle):
             if firing is None:
                 return OracleResult(success=None, issues=["Could not query Prometheus alerts"])
             now = time.monotonic()
+            if self.deadline is not None and now >= self.deadline:
+                return budget_exhausted
             if firing:
                 last_names = ", ".join(a.get("labels", {}).get("alertname", "?") for a in firing)
                 # Alerts need up to a scrape + evaluation interval to resolve after
@@ -120,13 +161,16 @@ class AlertOracle(BaseOracle):
                     )
                     return OracleResult(success=False, issues=[f"Firing alerts: {last_names}"])
                 logger.info(f"Firing alerts in {self.namespace}: {last_names} (waiting for them to resolve)")
-                silence_start = now
+                silence_start = None
             else:
+                if silence_start is None:
+                    silence_start = now
                 remaining = self.sustained_silence_seconds - (now - silence_start)
                 if remaining <= 0:
                     break
 
-            time.sleep(self.poll_interval_seconds)
+            if not self._wait(self.poll_interval_seconds):
+                return budget_exhausted
 
         logger.info(
             f"[AlertOracle] PASS — no firing alerts detected in namespace '{self.namespace}' for {self.sustained_silence_seconds}s"

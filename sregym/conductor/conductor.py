@@ -109,6 +109,8 @@ class Conductor:
         self.app = None
         self.detection_oracle = None
         self.execution_start_time: float = 0.0
+        self.agent_timeout_seconds: float | None = None
+        self.agent_deadline_monotonic: float | None = None
 
         # grading flow state
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
@@ -675,6 +677,8 @@ class Conductor:
             self.problem = None
             self.app = None
             self.results = {}
+            self.agent_timeout_seconds = None
+            self.agent_deadline_monotonic = None
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
