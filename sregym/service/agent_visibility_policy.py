@@ -1,6 +1,7 @@
 """Shared rules for the Kubernetes and observability data shown to agents."""
 
 import json
+from collections.abc import Callable
 
 HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
 HIDDEN_LABELS: dict[str, set[str]] = {
@@ -52,7 +53,23 @@ def is_chaos_event(resource: dict, hidden_namespaces: set[str]) -> bool:
     )
 
 
-def is_hidden_resource(resource: dict, hidden_namespaces: set[str], hidden_labels: dict[str, set[str]]) -> bool:
+def is_hidden_workload_event(resource: dict, is_hidden_reference: Callable[[dict], bool] | None = None) -> bool:
+    """Return whether a Kubernetes Event refers to a workload hidden by label policy."""
+    if resource.get("kind") != "Event" and "involvedObject" not in resource and "regarding" not in resource:
+        return False
+    if is_hidden_reference is None:
+        return False
+    references = (resource.get("involvedObject") or {}, resource.get("regarding") or {})
+    return any(is_hidden_reference(ref) for ref in references if ref)
+
+
+def is_hidden_resource(
+    resource: dict,
+    hidden_namespaces: set[str],
+    hidden_labels: dict[str, set[str]],
+    *,
+    is_hidden_reference: Callable[[dict], bool] | None = None,
+) -> bool:
     """Return whether a Kubernetes object must not be visible to an agent."""
     metadata = resource.get("metadata") or {}
     labels = metadata.get("labels") or {}
@@ -62,6 +79,7 @@ def is_hidden_resource(resource: dict, hidden_namespaces: set[str], hidden_label
         or has_hidden_label
         or is_helm_release_secret(resource)
         or is_chaos_event(resource, hidden_namespaces)
+        or is_hidden_workload_event(resource, is_hidden_reference)
         or (not metadata.get("namespace") and mentions_chaos_mesh(str(metadata.get("name", ""))))
     )
 
@@ -101,20 +119,24 @@ def filter_namespace_list(data: dict, hidden_namespaces: set[str]) -> dict:
     return data
 
 
-def filter_resource_list(data: dict, hidden_namespaces: set[str], hidden_labels: dict[str, set[str]]) -> dict:
+def filter_resource_list(
+    data: dict,
+    hidden_namespaces: set[str],
+    hidden_labels: dict[str, set[str]],
+    *,
+    is_hidden: Callable[[dict], bool] | None = None,
+) -> dict:
     """Remove hidden objects from standard and Table list responses."""
+    if is_hidden is None:
+
+        def is_hidden(item):
+            return is_hidden_resource(item, hidden_namespaces, hidden_labels)
+
     if "items" in data:
-        data["items"] = [
-            sanitize_visible_resource(item)
-            for item in data["items"]
-            if not is_hidden_resource(item, hidden_namespaces, hidden_labels)
-        ]
+        data["items"] = [sanitize_visible_resource(item) for item in data["items"] if not is_hidden(item)]
     if "rows" in data:
         data["rows"] = [
-            row
-            for row in data["rows"]
-            if isinstance(row.get("object"), dict)
-            and not is_hidden_resource(row["object"], hidden_namespaces, hidden_labels)
+            row for row in data["rows"] if isinstance(row.get("object"), dict) and not is_hidden(row["object"])
         ]
         for row in data["rows"]:
             sanitize_visible_resource(row["object"])

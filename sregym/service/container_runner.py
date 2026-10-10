@@ -104,7 +104,7 @@ class ExecInput:
 
 @dataclass
 class ContainerConfig:
-    image: str = DEFAULT_AGENT_IMAGE
+    image: str = field(default_factory=lambda: os.environ.get("SREGYM_AGENT_IMAGE") or DEFAULT_AGENT_IMAGE)
     network_mode: str = "host"
     kubeconfig_path: Path | None = None
     workspace_path: Path | None = None  # bind-mounted to /workspace for agent output
