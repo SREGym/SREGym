@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 
 import pyfiglet
 from fastapi import FastAPI, HTTPException
@@ -237,7 +238,14 @@ async def get_status():
         raise HTTPException(status_code=400, detail="No problem has been started")
     stage, _, _ = conductor.submission_state()
     logger.debug(f"API returns Current stage: {stage}")
-    return {"stage": stage}
+    result = {"stage": stage}
+    deadline = conductor.agent_deadline_monotonic
+    remaining = conductor.agent_timeout_seconds
+    if deadline is not None:
+        remaining = max(0.0, deadline - time.monotonic())
+    if remaining is not None:
+        result["agent_remaining_seconds"] = remaining
+    return result
 
 
 @app.get("/get_app")

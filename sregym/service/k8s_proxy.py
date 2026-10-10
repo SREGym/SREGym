@@ -24,11 +24,12 @@ import socket
 import ssl
 import tempfile
 import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address
-from urllib.parse import parse_qs, unquote, urlparse, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 
 import urllib3
 import yaml
@@ -38,7 +39,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from jsonpatch import JsonPatchException
 from jsonpointer import JsonPointerException
-from kubernetes import config
+from kubernetes import client, config
 
 from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
@@ -48,7 +49,6 @@ from sregym.service.agent_visibility_policy import (
     filter_namespace_list,
     filter_openapi_document,
     filter_resource_list,
-    is_chaos_event,
     is_hidden_api_group,
     is_hidden_cluster_resource,
     is_hidden_resource,
@@ -82,6 +82,16 @@ WORKLOAD_RESOURCES = {
     "replicasets",
     "replicationcontrollers",
     "statefulsets",
+}
+_WORKLOAD_REFERENCE_RESOURCES = {
+    ("v1", "Pod"): "pods",
+    ("v1", "ReplicationController"): "replicationcontrollers",
+    ("apps/v1", "Deployment"): "deployments",
+    ("apps/v1", "ReplicaSet"): "replicasets",
+    ("apps/v1", "StatefulSet"): "statefulsets",
+    ("apps/v1", "DaemonSet"): "daemonsets",
+    ("batch/v1", "Job"): "jobs",
+    ("batch/v1", "CronJob"): "cronjobs",
 }
 STRUCTURED_KUBERNETES_CONTENT_TYPES = {
     "application/apply-patch+yaml",
@@ -475,76 +485,53 @@ class KubernetesAPIProxy:
             self.api_host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
             self.api_port = int(os.environ.get("KUBERNETES_SERVICE_PORT", "443"))
         else:
-            # Running outside the cluster — load from kubeconfig
-            # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
-            # This prevents circular dependency if KUBECONFIG points to our proxy
-            default_kubeconfig = os.path.expanduser("~/.kube/config")
-            config.load_kube_config(config_file=default_kubeconfig)
+            # Running outside the cluster — load from upstream kubeconfig,
+            # skipping any proxy-generated sregym-agent-kubeconfig-* files.
+            default_kubeconfig = self._resolve_upstream_kubeconfig()
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
                 kubeconfig_path=default_kubeconfig
             )
 
+    @staticmethod
+    def _resolve_upstream_kubeconfig() -> str:
+        """Preserve kubeconfig merging, excluding generated agent proxy files."""
+        env_paths = os.environ.get("KUBECONFIG", "")
+        paths = []
+        for raw_path in env_paths.split(os.path.pathsep):
+            candidate = raw_path.strip()
+            if not candidate:
+                continue
+            expanded = os.path.expanduser(candidate)
+            if os.path.basename(expanded).startswith("sregym-agent-kubeconfig-"):
+                continue
+            paths.append(expanded)
+        return os.path.pathsep.join(paths) if paths else os.path.expanduser("~/.kube/config")
+
     def _load_cluster_config(self, kubeconfig_path: str | None = None):
-        """Extract API server connection details from kubeconfig."""
-        # Load full kubeconfig
+        """Use the Kubernetes client's merged configuration and credential loader."""
         if kubeconfig_path is None:
-            kubeconfig_path = os.path.expanduser("~/.kube/config")
+            kubeconfig_path = self._resolve_upstream_kubeconfig()
 
-        # Get the current context's cluster and user from the explicit config file
-        _, active_context = config.list_kube_config_contexts(config_file=kubeconfig_path)
-        cluster_name = active_context["context"]["cluster"]
-        user_name = active_context["context"]["user"]
-        with open(kubeconfig_path) as f:
-            kubeconfig = yaml.safe_load(f)
+        upstream = client.Configuration()
+        config.load_kube_config(config_file=kubeconfig_path, client_configuration=upstream)
+        client.Configuration.set_default(upstream)
+        authorization = upstream.get_api_key_with_prefix("authorization")
+        self._bearer_token = authorization.removeprefix("Bearer ") if authorization else None
+        parsed = urlparse(upstream.host)
 
-        # Find cluster config
-        cluster_config = None
-        for cluster in kubeconfig["clusters"]:
-            if cluster["name"] == cluster_name:
-                cluster_config = cluster["cluster"]
-                break
+        def read_certificate(path):
+            if path:
+                with open(path) as handle:
+                    return handle.read()
+            return None
 
-        # Find user config
-        user_config = None
-        for user in kubeconfig["users"]:
-            if user["name"] == user_name:
-                user_config = user["user"]
-                break
-
-        if not cluster_config:
-            raise ValueError(f"Cluster {cluster_name} not found in kubeconfig")
-
-        # Parse API server URL
-        server_url = cluster_config["server"]
-        parsed = urlparse(server_url)
-        api_host = parsed.hostname
-        api_port = parsed.port or 443
-
-        # Get CA cert (might be inline or file path)
-        ca_cert = None
-        if "certificate-authority-data" in cluster_config:
-            ca_cert = base64.b64decode(cluster_config["certificate-authority-data"]).decode()
-        elif "certificate-authority" in cluster_config:
-            with open(cluster_config["certificate-authority"]) as f:
-                ca_cert = f.read()
-
-        # Get client cert and key
-        client_cert = None
-        client_key = None
-        if user_config:
-            if "client-certificate-data" in user_config:
-                client_cert = base64.b64decode(user_config["client-certificate-data"]).decode()
-            elif "client-certificate" in user_config:
-                with open(user_config["client-certificate"]) as f:
-                    client_cert = f.read()
-
-            if "client-key-data" in user_config:
-                client_key = base64.b64decode(user_config["client-key-data"]).decode()
-            elif "client-key" in user_config:
-                with open(user_config["client-key"]) as f:
-                    client_key = f.read()
-
-        return api_host, api_port, ca_cert, client_cert, client_key
+        return (
+            parsed.hostname,
+            parsed.port or 443,
+            read_certificate(upstream.ssl_ca_cert),
+            read_certificate(upstream.cert_file),
+            read_certificate(upstream.key_file),
+        )
 
     def _create_temp_cert_files(self):
         """Create temporary files for certificates."""
@@ -628,6 +615,10 @@ class KubernetesAPIProxy:
         bearer_token = self._bearer_token
         agent_token = self._agent_token
         restrict_network_access = self.restrict_network_access
+        # Keep UID-based visibility after a workload is deleted. Never infer it
+        # from a name prefix, which can also belong to a normal diagnostic pod.
+        reference_visibility: OrderedDict[str, bool] = OrderedDict()
+        reference_lock = threading.Lock()
 
         class FilteringProxyHandler(BaseHTTPRequestHandler):
             """HTTP request handler that proxies and filters Kubernetes API responses."""
@@ -635,7 +626,7 @@ class KubernetesAPIProxy:
             def log_message(self, format, *args):
                 logger.debug(f"Proxy: {format % args}")
 
-            def _get_upstream_connection(self):
+            def _get_upstream_connection(self, timeout=None):
                 """Create HTTPS connection to upstream Kubernetes API."""
                 import http.client
 
@@ -649,11 +640,11 @@ class KubernetesAPIProxy:
                 if cert_files.get("cert") and cert_files.get("key"):
                     context.load_cert_chain(cert_files["cert"], cert_files["key"])
 
-                return http.client.HTTPSConnection(api_host, api_port, context=context)
+                return http.client.HTTPSConnection(api_host, api_port, context=context, timeout=timeout)
 
             def _read_object(self, object_path: str) -> dict | None:
                 """Read policy input with upstream credentials, never the agent token."""
-                conn = self._get_upstream_connection()
+                conn = self._get_upstream_connection(timeout=10)
                 try:
                     headers = {"Accept": "application/json"}
                     if bearer_token:
@@ -671,6 +662,38 @@ class KubernetesAPIProxy:
                     return result
                 finally:
                     conn.close()
+
+            def _is_hidden_reference(self, reference: dict) -> bool:
+                resource = _WORKLOAD_REFERENCE_RESOURCES.get((reference.get("apiVersion"), reference.get("kind")))
+                namespace, name, uid = (reference.get(key) for key in ("namespace", "name", "uid"))
+                if not resource or not namespace or not name:
+                    return False
+                key = (reference.get("apiVersion"), resource, namespace, name, uid)
+                if key not in self._reference_results:
+                    version = reference["apiVersion"]
+                    prefix = "/api/v1" if version == "v1" else f"/apis/{version}"
+                    path = f"{prefix}/namespaces/{quote(namespace, safe='')}/{resource}/{quote(name, safe='')}"
+                    obj = self._read_object(path)
+                    if obj is not None and (not uid or obj.get("metadata", {}).get("uid") == uid):
+                        hidden = self._is_hidden_resource(obj)
+                    else:
+                        with reference_lock:
+                            hidden = reference_visibility.get(uid, False)
+                    self._reference_results[key] = hidden
+                return self._reference_results[key]
+
+            def _is_hidden_resource(self, obj: dict) -> bool:
+                hidden = is_hidden_resource(
+                    obj, hidden_namespaces, hidden_labels, is_hidden_reference=self._is_hidden_reference
+                )
+                uid = (obj.get("metadata") or {}).get("uid")
+                if uid and obj.get("kind") != "Event" and "involvedObject" not in obj and "regarding" not in obj:
+                    with reference_lock:
+                        reference_visibility[uid] = hidden
+                        reference_visibility.move_to_end(uid)
+                        if len(reference_visibility) > 4096:
+                            reference_visibility.popitem(last=False)
+                return hidden
 
             def _validate_mutation(self, path, method, body, content_type):
                 resource, name = _resource_request(path)
@@ -727,6 +750,7 @@ class KubernetesAPIProxy:
 
             def _proxy_request(self, method: str):
                 """Proxy request to upstream API and filter response."""
+                self._reference_results = {}
                 path = self.path
 
                 if not is_valid_bearer_token(self.headers.get("Authorization"), agent_token):
@@ -891,6 +915,7 @@ class KubernetesAPIProxy:
                             return
 
                         def transform_event(event):
+                            self._reference_results.clear()
                             obj = event["object"]
                             if event.get("type") == "ERROR" and mentions_chaos_mesh(json.dumps(obj)):
                                 event["object"] = {
@@ -907,7 +932,7 @@ class KubernetesAPIProxy:
                                 and (obj.get("metadata") or {}).get("name") in hidden_namespaces
                             ):
                                 return None
-                            if is_hidden_resource(obj, hidden_namespaces, hidden_labels):
+                            if self._is_hidden_resource(obj):
                                 return None
                             event["object"] = sanitize_visible_resource(obj)
                             return event
@@ -973,12 +998,18 @@ class KubernetesAPIProxy:
                             elif filter_type in {"openapi_v2", "openapi_v3"}:
                                 data = filter_openapi_document(data, filter_type)
                                 response_body = json.dumps(data).encode()
-                            elif filter_type == "resources":
-                                data = filter_resource_list(data, hidden_namespaces, hidden_labels)
+                            elif filter_type == "resources" or data.get("kind") == "Table":
+                                data = filter_resource_list(
+                                    data, hidden_namespaces, hidden_labels, is_hidden=self._is_hidden_resource
+                                )
+                                if filter_type is None and not data.get("rows"):
+                                    self.send_error(404, "Not Found")
+                                    conn.close()
+                                    return
                                 response_body = json.dumps(data).encode()
-                            elif filter_type is None and is_hidden_resource(data, hidden_namespaces, hidden_labels):
+                            elif filter_type is None and self._is_hidden_resource(data):
                                 # Block direct access to individual hidden resources
-                                if is_chaos_event(data, hidden_namespaces):
+                                if data.get("kind") == "Event" or "involvedObject" in data or "regarding" in data:
                                     self.send_error(404, "Not Found")
                                 else:
                                     self.send_error(403, "Forbidden: Access to this resource is not allowed")
