@@ -143,17 +143,7 @@ def test_a_missing_repository_is_graded_rather_than_raising():
 
 
 def test_the_oracle_only_asks_its_application_for_methods_that_exist():
-    """Catch a wrong oracle base class statically, not at the deploy stage.
-
-    `SaaSOracle.capture_baseline` calls `app.record_query`, which GitLab,
-    Mattermost and Stripe define and Gitea does not. Basing this oracle on it --
-    the natural mistake, since it was written from the GitLab one -- fails during
-    *deploy* with a bare `AttributeError` and looks like a broken application
-    rather than a wrong import. Two screens were spent before that was obvious.
-
-    This walks every `app.<name>` the oracle and its bases reach for and asserts
-    the application actually provides it.
-    """
+    """Require each oracle dependency to exist on its application adapter."""
     import ast
     import inspect
 

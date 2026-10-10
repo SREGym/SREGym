@@ -18,8 +18,8 @@ from sregym.service.apps.gitlab.runtime.ambiguous_mail_sink import (
 from sregym.service.apps.gitlab.runtime.mail_sink import SMTPServer
 
 RAW = (
-    b"From: gitlab@sregym.local\r\nTo: user@sregym.local\r\nSubject: Receipt\r\n"
-    b"X-GitLab-NotificationReason: sregym-ack\r\n\r\nAccepted work\r\n"
+    b"From: gitlab@example.test\r\nTo: user@example.test\r\nSubject: Receipt\r\n"
+    b"X-GitLab-NotificationReason: issue-update\r\n\r\nAccepted work\r\n"
 )
 
 
@@ -35,11 +35,11 @@ def test_failed_smtp_attempts_can_have_different_durable_outcomes(tmp_path):
                 smtplib.SMTP(*server.server_address, timeout=3) as client,
                 pytest.raises(smtplib.SMTPServerDisconnected),
             ):
-                client.sendmail("gitlab@sregym.local", ["user@sregym.local"], RAW)
+                client.sendmail("gitlab@example.test", ["user@example.test"], RAW)
         assert len(AmbiguousMailbox(mailbox.path).messages()) == 1
         mailbox.set_fault()
         with smtplib.SMTP(*server.server_address, timeout=3) as client:
-            client.sendmail("gitlab@sregym.local", ["user@sregym.local"], RAW)
+            client.sendmail("gitlab@example.test", ["user@example.test"], RAW)
         # Retrying a failed send really creates a second accepted message.
         assert len(mailbox.messages()) == 2
     finally:
@@ -57,7 +57,7 @@ def test_concurrent_transports_cannot_exceed_acceptance_budget(tmp_path):
 
     def send(_):
         with smtplib.SMTP(*server.server_address, timeout=3) as client, pytest.raises(smtplib.SMTPServerDisconnected):
-            client.sendmail("gitlab@sregym.local", ["user@sregym.local"], RAW)
+            client.sendmail("gitlab@example.test", ["user@example.test"], RAW)
 
     try:
         with ThreadPoolExecutor(max_workers=6) as executor:
@@ -79,11 +79,11 @@ def test_unrelated_mail_does_not_consume_incident_fault_budget(tmp_path):
     thread.start()
     try:
         with smtplib.SMTP(*server.server_address, timeout=3) as client:
-            client.sendmail("gitlab@sregym.local", ["user@sregym.local"], RAW.replace(b"sregym-ack", b"welcome"))
+            client.sendmail("gitlab@example.test", ["user@example.test"], RAW.replace(b"issue-update", b"welcome"))
         with mailbox.connect() as db:
             assert db.execute("SELECT active,remaining FROM fault").fetchone() == (1, 1)
         with smtplib.SMTP(*server.server_address, timeout=3) as client, pytest.raises(smtplib.SMTPServerDisconnected):
-            client.sendmail("gitlab@sregym.local", ["user@sregym.local"], RAW)
+            client.sendmail("gitlab@example.test", ["user@example.test"], RAW)
         assert len(mailbox.messages()) == 2
         with mailbox.connect() as db:
             assert db.execute("SELECT count(*),count(delivery_id) FROM transport_faults").fetchone() == (1, 1)
@@ -96,7 +96,7 @@ def test_unrelated_mail_does_not_consume_incident_fault_budget(tmp_path):
 def test_http_pagination_preserves_snapshot_and_read_only_history(tmp_path):
     mailbox = AmbiguousMailbox(tmp_path / "mail.sqlite")
     for _ in range(43):
-        mailbox.accept("gitlab@sregym.local", ["user@sregym.local"], RAW)
+        mailbox.accept("gitlab@example.test", ["user@example.test"], RAW)
     server = ThreadingHTTPServer(("127.0.0.1", 0), audit_handler(mailbox))
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
@@ -104,7 +104,7 @@ def test_http_pagination_preserves_snapshot_and_read_only_history(tmp_path):
     try:
         first = json.load(urllib.request.urlopen(base + "/messages"))
         assert len(first["items"]) == 40 and first["total"] == 43
-        mailbox.accept("gitlab@sregym.local", ["user@sregym.local"], RAW)
+        mailbox.accept("gitlab@example.test", ["user@example.test"], RAW)
         second = json.load(urllib.request.urlopen(base + first["next"]))
         assert second["next"] is None and second["snapshot"] == first["snapshot"]
         assert [r["id"] for r in first["items"] + second["items"]] == list(range(1, 44))

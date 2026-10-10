@@ -54,7 +54,7 @@ class AmbiguousMailbox(Mailbox):
             active, remaining = db.execute("SELECT active,remaining FROM fault WHERE id=1").fetchone()
             # Only the selected incident traffic participates in this fault.
             # Unrelated welcome/digest mail must not consume its finite budget.
-            active = active and record["headers"].get("x-gitlab-notificationreason") == "sregym-ack"
+            active = active and record["headers"].get("x-gitlab-notificationreason") == "issue-update"
             delivery_id = None
             if not active or remaining > 0:
                 delivery_id = db.execute("INSERT INTO deliveries(data) VALUES (?)", (json.dumps(record),)).lastrowid

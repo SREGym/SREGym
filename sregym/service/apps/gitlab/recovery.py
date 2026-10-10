@@ -1,6 +1,7 @@
 """Real GitLab database recovery, independent archives and issue reconciliation."""
 
 import json
+import time
 from pathlib import Path
 
 from sregym.service.apps.components.postgres import POSTGRES_IMAGE
@@ -132,6 +133,28 @@ class GitLabRecovery(GitLabCE):
         self.archive_command("pg_restore", "--list", path)
         self.command("scale", "deployment/gitlab-ce", "--replicas=0")
         self.command("wait", "--for=delete", "pod", "-l", "app=gitlab-ce", "--timeout=180s", timeout=200)
+        self.restore_database(path)
+        self.command("scale", "deployment/gitlab-ce", "--replicas=1")
+        self.command(
+            "rollout",
+            "status",
+            "deployment/gitlab-ce",
+            f"--timeout={self.startup_timeout}s",
+            timeout=self.startup_timeout + 30,
+        )
+        self.wait_for_api()
+
+    def restore_database(self, path):
+        """Restore a validated archive after the caller has stopped all writers."""
+        # GitLab's partitioned constraints cannot always be dropped individually
+        # by pg_restore --clean. Reset schemas before the transactional restore.
+        self.sql("""DO $$ DECLARE n text; BEGIN
+          FOR n IN SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'
+            AND nspname <> 'information_schema' LOOP
+            EXECUTE format('DROP SCHEMA %I CASCADE', n);
+          END LOOP;
+          CREATE SCHEMA public AUTHORIZATION gitlab_ce;
+        END $$;""")
         self.archive_command(
             "pg_restore",
             "--exit-on-error",
@@ -145,14 +168,17 @@ class GitLabRecovery(GitLabCE):
             timeout=600,
         )
         self.wait_database()
-        self.command("scale", "deployment/gitlab-ce", "--replicas=1")
-        self.command(
-            "rollout",
-            "status",
-            "deployment/gitlab-ce",
-            f"--timeout={self.startup_timeout}s",
-            timeout=self.startup_timeout + 30,
-        )
+
+    def wait_for_api(self, timeout=180):
+        """Readiness can briefly remain True while Puma restarts."""
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                return self.recovery_client("git")
+            except Exception:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(3)
 
 
 class GitLabRecoveryUnannounced(GitLabRecovery):

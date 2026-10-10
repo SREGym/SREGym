@@ -23,8 +23,8 @@ def test_smtp_persistence_duplicates_and_read_only_audit(tmp_path):
         thread.start()
     try:
         message = EmailMessage()
-        message["From"] = "gitlab@sregym.local"
-        message["To"] = "user@sregym.local"
+        message["From"] = "gitlab@example.test"
+        message["To"] = "user@example.test"
         message["Subject"] = "Private issue"
         message["X-GitLab-Issue-IID"] = "12"
         message.set_content("Preserve this text\n.dot-prefixed line\n")
@@ -32,7 +32,7 @@ def test_smtp_persistence_duplicates_and_read_only_audit(tmp_path):
             client.send_message(message)
             client.send_message(message)
             with pytest.raises(smtplib.SMTPRecipientsRefused):
-                client.sendmail("gitlab@sregym.local", ["external@example.org"], message.as_bytes())
+                client.sendmail("gitlab@example.test", ["external@example.org"], message.as_bytes())
         stored = Mailbox(path).messages()
         assert len(stored) == 2
         assert stored[0]["body"].splitlines() == ["Preserve this text", ".dot-prefixed line"]

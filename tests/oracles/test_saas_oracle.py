@@ -1,14 +1,29 @@
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock
+
+import pytest
 
 from sregym.conductor.oracles.saas import SaaSOracle
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
 
+READY_DEPLOYMENT = {
+    "metadata": {"generation": 1},
+    "spec": {"replicas": 1},
+    "status": {
+        "observedGeneration": 1,
+        "replicas": 1,
+        "updatedReplicas": 1,
+        "readyReplicas": 1,
+        "availableReplicas": 1,
+    },
+}
+
 
 def oracle(monkeypatch):
     app = SimpleNamespace(slug="mattermost", auxiliary_deployments=(), scale_tier="replicated", members=3)
-    app.command = Mock(return_value=json.dumps({"spec": {"replicas": 1}, "status": {"readyReplicas": 1}}))
+    app.command = Mock(return_value=json.dumps(READY_DEPLOYMENT))
     app.run_client, app.check_workflow = Mock(), Mock(return_value={"token": "b" * 32})
     result = SaaSOracle(SimpleNamespace(app=app))
     result.baseline = {"token": "a" * 32}
@@ -38,8 +53,42 @@ def test_missing_worker_cannot_pass_with_healthy_frontend(monkeypatch):
     judge, app = oracle(monkeypatch)
     app.auxiliary_deployments = ("worker",)
     app.command.side_effect = [
-        json.dumps({"spec": {"replicas": 1}, "status": {"readyReplicas": 1}}),
+        json.dumps(READY_DEPLOYMENT),
         json.dumps({"spec": {"replicas": 0}, "status": {}}),
     ]
     assert judge.evaluate()["success"] is False
     app.check_workflow.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("metadata", "generation", 2),
+        ("metadata", "deletionTimestamp", "2026-10-10T00:00:00Z"),
+        ("status", "updatedReplicas", 0),
+        ("status", "replicas", 2),
+        ("status", "availableReplicas", 0),
+    ],
+)
+def test_auxiliary_deployment_requires_current_rollout(monkeypatch, section, field, value):
+    judge, app = oracle(monkeypatch)
+    app.auxiliary_deployments = ("worker",)
+    worker = deepcopy(READY_DEPLOYMENT)
+    worker[section][field] = value
+    app.command.side_effect = [json.dumps(READY_DEPLOYMENT), json.dumps(worker)]
+
+    result = judge.evaluate()
+
+    assert result["success"] is False
+    assert result["reason"] == "required_deployment_not_rolled_out"
+    assert result["detail"]["deployment"] == "worker"
+    app.check_workflow.assert_not_called()
+
+
+def test_current_auxiliary_rollout_reaches_business_checks(monkeypatch):
+    judge, app = oracle(monkeypatch)
+    app.auxiliary_deployments = ("worker",)
+
+    assert judge.evaluate()["success"] is True
+    app.run_client.assert_called_once_with("verify", **judge.baseline)
+    app.check_workflow.assert_called_once_with()

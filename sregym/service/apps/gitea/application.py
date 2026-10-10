@@ -12,7 +12,8 @@ import yaml
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.paths import BASE_DIR
 from sregym.service.apps.base import Application
-from sregym.service.apps.components.postgres import OPERATOR_IMAGE, POSTGRES_IMAGE, TIERS
+from sregym.service.apps.components.cnpg import ensure_operator
+from sregym.service.apps.components.postgres import POSTGRES_IMAGE, TIERS
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.apps.persistent import cleanup_persistent_namespace
 from sregym.service.kubectl import KubeCtl
@@ -22,7 +23,7 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "gitea-zoo"
 
 
 class Gitea(Application):
-    def __init__(self, tier="replicated", storage_class="standard"):
+    def __init__(self, tier="replicated", storage_class="openebs-hostpath"):
         if tier not in TIERS:
             raise ValueError(f"Unknown Gitea tier {tier!r}; choose from {tuple(TIERS)}")
         super().__init__(BASE_DIR / "service/metadata/gitea.json")
@@ -194,16 +195,10 @@ class Gitea(Application):
         ]
 
     def deploy(self):
-        operator = json.loads(
-            self.command("get", "deployment", "cnpg-controller-manager", "-n", "cnpg-system", "-o", "json")
-        )
-        if not any(c["image"] == OPERATOR_IMAGE for c in operator["spec"]["template"]["spec"]["containers"]):
-            raise RuntimeError(
-                "Install the pinned CloudNativePG operator before the benchmark: python scripts/install_cnpg.py"
-            )
-        self.create_namespace()
         self.command("get", "storageclass", self.storage_class)
-        for name, username in (("gitea-database", "gitea"), ("gitea-admin", "benchmark")):
+        ensure_operator(self.command)
+        self.create_namespace()
+        for name, username in (("gitea-database", "gitea"), ("gitea-admin", "service-admin")):
             if not self.command("get", "secret", name, "--ignore-not-found", "-o", "name").strip():
                 self.apply(
                     [
@@ -236,11 +231,11 @@ class Gitea(Application):
                 "user",
                 "create",
                 "--username",
-                "benchmark",
+                "service-admin",
                 "--password",
                 password,
                 "--email",
-                "benchmark@sregym.local",
+                "service-admin@example.com",
                 "--admin",
                 "--must-change-password=false",
                 "--config",
@@ -336,7 +331,7 @@ class Gitea(Application):
             "--git-dir",
             "/data/git/repositories/zoo-labs/zoo-utilities.git",
             "show",
-            f"HEAD:sregym/{result['token']}.txt",
+            f"HEAD:changes/{result['token']}.txt",
         )
         if stored != result["token"]:
             raise RuntimeError("Acknowledged file is missing from the Git repository")

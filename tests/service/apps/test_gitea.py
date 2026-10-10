@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from sregym.service.apps.gitea import workload
 from sregym.service.apps.gitea.application import Gitea
 from sregym.service.apps.persistent import cleanup_persistent_namespace
 
@@ -26,7 +27,7 @@ def test_tiers_keep_one_repository_writer_and_use_dedicated_database_storage(tie
     database = next(d for d in documents if d["kind"] == "Cluster")["spec"]
     application = next(d for d in documents if d["kind"] == "Deployment")["spec"]
     assert database["instances"] == members
-    assert database["storage"] == {"size": "2Gi", "storageClass": "standard"}
+    assert database["storage"] == {"size": "2Gi", "storageClass": "openebs-hostpath"}
     assert application["replicas"] == 1
     assert application["strategy"]["type"] == "Recreate"
     assert application["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] == "gitea-repositories"
@@ -62,3 +63,27 @@ def test_native_git_probe_rejects_missing_acknowledged_content():
     app.command = Mock(return_value="corrupted")
     with pytest.raises(RuntimeError, match="missing from the Git repository"):
         app.check_workflow()
+
+
+def test_probe_and_verification_use_the_same_issue_and_repository_path(monkeypatch, capsys):
+    issue = {"number": 1, "title": "change-abc123"}
+    api = Mock(return_value=issue)
+    write = Mock()
+    read = Mock(return_value="abc123")
+    monkeypatch.setattr(workload, "api", api)
+    monkeypatch.setattr(workload, "write_file", write)
+    monkeypatch.setattr(workload, "read_file", read)
+
+    workload.run("probe", token="abc123")
+    result = json.loads(capsys.readouterr().out)
+    api.assert_any_call("/repos/zoo-labs/zoo-utilities/issues", "POST", {"title": "change-abc123", "body": "abc123"})
+    write.assert_called_once_with("zoo-labs/zoo-utilities", "changes/abc123.txt", "abc123")
+    workload.run("verify", **result, fixture={"repositories": []})
+    assert json.loads(capsys.readouterr().out) == {"success": True}
+    assert read.call_args_list[0] == read.call_args_list[1]
+
+    app = Gitea()
+    app.run_client = Mock(return_value=result)
+    app.command = Mock(return_value="abc123")
+    assert app.check_workflow(token="abc123") == result
+    assert app.command.call_args.args[-1] == "HEAD:changes/abc123.txt"

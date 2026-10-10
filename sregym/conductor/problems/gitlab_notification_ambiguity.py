@@ -10,20 +10,17 @@ from sregym.service.apps.gitlab.notifications import GitLabNotificationAmbiguity
 class GitLabNotificationAmbiguity(GitLabNotificationRecovery):
     application_class = AmbiguousApplication
     audit_noise_per_batch = 160
+    root_cause_description = (
+        "Wrong-primary deletion reached every PostgreSQL replica. The usable backup predates "
+        "acknowledged issues and queued mail, with sequence gaps permitting internal-ID reuse. SMTP "
+        "connections failed both after durable acceptance and before acceptance, leaving ambiguous retries. "
+        "Reconcile original data and notification intent using the paginated provider audit without "
+        "duplicate or wrong-recipient delivery."
+    )
 
     def __init__(self, scale_tier="replicated"):
         super().__init__(scale_tier)
         self.transport_evidence = None
-        self.root_cause = self.build_structured_root_cause(
-            component="gitlab-ce-db",
-            namespace=self.namespace,
-            description="Wrong-primary deletion reached every PostgreSQL replica. The usable backup predates "
-            "acknowledged issues and queued mail, with sequence gaps permitting internal-ID reuse. SMTP "
-            "connections failed both after durable acceptance and before acceptance, leaving ambiguous retries. "
-            "Reconcile original data and notification intent using the paginated provider audit without "
-            "duplicate or wrong-recipient delivery.",
-        )
-        self.diagnosis_oracle.expected = self.root_cause
 
     def prepare_recovery_material(self):
         super().prepare_recovery_material()

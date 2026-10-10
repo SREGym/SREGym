@@ -60,7 +60,7 @@ class GiteaOracle(ServiceEndpointMitigationOracle):
             if not token or any(c not in "0123456789abcdef" for c in token):
                 raise ValueError("Invalid probe token")
             # Gitea's API title is stored in the issue table's legacy `name` column.
-            while app.sql(f"SELECT count(*) FROM issue WHERE name = 'sregym-{token}';", pod=name) != "1":
+            while app.sql(f"SELECT count(*) FROM issue WHERE name = 'change-{token}';", pod=name) != "1":
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f"Acknowledged issue missing on database member {name}")
                 time.sleep(1)

@@ -1,6 +1,6 @@
 """Run the 12 unchanged SWE-Marathon gates on the reference and durable adapter.
 
-Uses only the private DinD Docker daemon. The adapter's API and worker are
+Uses isolated local Docker containers. The adapter's API and worker are
 separate containers sharing a network namespace, so upstream localhost webhook
 fixtures work unchanged. The normal SREGym deployment uses separate pods.
 """
@@ -38,20 +38,18 @@ def command(*args, **kwargs):
     return subprocess.run(["docker", *args], check=True, capture_output=True, text=True, **kwargs).stdout
 
 
-def validate(output):
-    if not Path("/run/sregym-ready").exists():
-        raise RuntimeError("This test requires a private SREGym DinD environment")
+def validate(output, image=STRIPE_IMAGE):
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     name = "stripe-contract-" + secrets.token_hex(4)
-    test_image = STRIPE_IMAGE + "-tests"
-    result = {"application_image": STRIPE_IMAGE, "passed": False, "modes": {}}
+    test_image = name + "-tests"
+    result = {"application_image": image, "passed": False, "modes": {}}
     created = []
     with tempfile.TemporaryDirectory(prefix="stripe-contract-build-") as temporary:
         context = Path(temporary)
-        shutil.copytree(ROOT / "sregym/service/apps/fixtures/swe-marathon-stripe/tests", context / "tests")
+        shutil.copytree(ROOT / "docker/stripe-marathon/vendor/tests", context / "tests")
         (context / "Dockerfile").write_text(
-            f"FROM {STRIPE_IMAGE}\nRUN pip install --no-cache-dir stripe==10.10.0 pytest==8.4.1\nCOPY tests/ /tests/\n"
+            f"FROM {image}\nRUN pip install --no-cache-dir stripe==10.10.0 pytest==8.4.1\nCOPY tests/ /tests/\n"
         )
         built = subprocess.run(["docker", "build", "-t", test_image, str(context)], capture_output=True, text=True)
         (output / "build.log").write_text(built.stdout + built.stderr)
@@ -195,6 +193,7 @@ def validate(output):
         for container in reversed(created):
             subprocess.run(["docker", "rm", "-f", "-v", container], capture_output=True)
         subprocess.run(["docker", "network", "rm", name], capture_output=True)
+        subprocess.run(["docker", "image", "rm", test_image], capture_output=True)
         (output / "results.json").write_text(json.dumps(result, indent=2) + "\n")
     return result
 
@@ -202,7 +201,8 @@ def validate(output):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--image", default=STRIPE_IMAGE, help="Application image to verify")
     args = parser.parse_args()
-    result = validate(args.output)
+    result = validate(args.output, args.image)
     print(json.dumps(result, indent=2))
     raise SystemExit(int(not result["passed"]))

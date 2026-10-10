@@ -1,13 +1,7 @@
-"""The GitHub-2018 divergence on Gitea, to test whether the shape travels.
+"""A lagging Gitea replica becomes primary and creates a divergent issue history.
 
-`gitlab_regional_failover` is the sharpest problem in the suite at 1 of 3, and it
-is one problem on one agent. This is the same incident on a different
-application: if a frontier agent fails here too, the difficulty is a property of
-the divergence; if it solves this, the GitLab result was about GitLab.
-
-Gitea allocates `issue."index"` per repository, so the promoted replica issues
-numbers the demoted primary already gave to different issues -- the same
-collision GitLab's IIDs produce, reached by a different route.
+Gitea allocates issue numbers per repository. The promoted replica reuses numbers
+that the old primary already assigned, so recovery must retain both histories.
 """
 
 import json
@@ -95,9 +89,7 @@ class GiteaRegionalFailover(Problem):
             self.snapshot_sha256[label] = app.archive_command("sha256sum", path).split()[0]
 
     def write_evidence(self, promoted):
-        # The orchestrator's own log, and nothing authored at the responder. A
-        # failover tool really does record what it did; a colleague writing down
-        # the diagnosis is a briefing by another name.
+        # Record the failover decision and the available replication information.
         self.app.archive_write(
             "/recovery/orchestrator.log",
             "region-east primary unreachable for 43s; health checks failed in 3 consecutive probes\n"

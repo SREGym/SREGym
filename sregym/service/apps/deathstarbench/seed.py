@@ -46,7 +46,7 @@ def compose(index):
         {
             "username": "username_" + str(index),
             "user_id": index,
-            "text": "sregym-seed-" + str(index),
+            "text": "status-update-" + str(index),
             "media_ids": "[]",
             "media_types": "[]",
             "post_type": 0,

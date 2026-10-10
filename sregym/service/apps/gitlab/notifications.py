@@ -1,14 +1,13 @@
 """GitLab notification environments and their durable SMTP provider."""
 
 import json
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from sregym.service.apps.gitlab.notification_workflow import reconcile_delayed, reconcile_immediate
 from sregym.service.apps.gitlab.recovery import ARCHIVE, GitLabRecovery
 
-NOTIFICATION_REASON = "sregym-ack"
+NOTIFICATION_REASON = "issue-update"
 NOTIFICATION_JOURNAL = "/recovery/journal/acknowledged-notifications.json"
 NOTIFICATION_DESCRIPTION = (
     " Issue notifications are delivered over SMTP through a Sidekiq mailers queue"
@@ -64,11 +63,11 @@ class GitLabNotificationRecovery(GitLabRecovery):
                 for key, value in {
                     "smtp_address": "'notification-mailbox'",
                     "smtp_port": "1025",
-                    "smtp_domain": "'sregym.local'",
+                    "smtp_domain": "'example.test'",
                     "smtp_enable_starttls_auto": "false",
                     "smtp_tls": "false",
-                    "gitlab_email_from": "'gitlab@sregym.local'",
-                    "gitlab_email_reply_to": "'noreply@sregym.local'",
+                    "gitlab_email_from": "'gitlab@example.test'",
+                    "gitlab_email_reply_to": "'noreply@example.test'",
                 }.items()
             )
         )
@@ -152,41 +151,10 @@ class GitLabNotificationRecovery(GitLabRecovery):
     def restore_archive(self, path=ARCHIVE):
         self.archive_command("pg_restore", "--list", path)
         self.control("stop", "sidekiq", "puma")
-        # GitLab has inherited/partitioned constraints that pg_restore --clean
-        # cannot individually drop on an already restored database. Rebuild the
-        # schemas while writers are quiesced, just as on the initial empty DB.
-        self.sql("""DO $$ DECLARE n text; BEGIN
-          FOR n IN SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'
-            AND nspname <> 'information_schema' LOOP
-            EXECUTE format('DROP SCHEMA %I CASCADE', n);
-          END LOOP;
-          CREATE SCHEMA public AUTHORIZATION gitlab_ce;
-        END $$;""")
-        self.archive_command(
-            "pg_restore",
-            "--exit-on-error",
-            "--single-transaction",
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "--no-privileges",
-            "--dbname=gitlab_ce",
-            path,
-            timeout=600,
-        )
-        self.wait_database()
+        self.restore_database(path)
         self.control("start", "puma")
         self.command("rollout", "status", "deployment/gitlab-ce", "--timeout=180s", timeout=200)
-        # Readiness status can briefly remain True while Puma starts.
-        deadline = time.monotonic() + 180
-        while True:
-            try:
-                self.recovery_client("git")
-                break
-            except Exception:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(3)
+        self.wait_for_api()
 
     def enqueue_notification_probe(self, receipt, reason):
         return self.rails(f"""
@@ -257,7 +225,7 @@ puts 'RESULT:' + {{removed: removed, queued: records.length}}.to_json
             output = self.command(
                 "exec", "deployment/gitlab-redis", "--", "redis-cli", "--raw", command, key, "0", "-1"
             )
-            jobs.extend(json.loads(line) for line in output.splitlines() if "sregym-ack" in line)
+            jobs.extend(json.loads(line) for line in output.splitlines() if "issue-update" in line)
         return jobs
 
     def public_messages(self):
@@ -304,8 +272,8 @@ from email.message import EmailMessage
 with smtplib.SMTP('notification-mailbox', 1025, timeout=20) as smtp:
     for index in range({count}):
         message = EmailMessage()
-        message['From'] = 'digest@sregym.local'
-        message['To'] = 'operations@sregym.local'
+        message['From'] = 'digest@example.test'
+        message['To'] = 'operations@example.test'
         message['Subject'] = 'Scheduled activity summary {batch}/' + str(index)
         message['X-GitLab-NotificationReason'] = 'scheduled-digest'
         message.set_content('Ordinary synthetic tenant activity; batch {batch}/' + str(index))

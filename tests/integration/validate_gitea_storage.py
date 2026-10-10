@@ -1,6 +1,6 @@
 """Validate Gitea's retained data across PostgreSQL switchover and pod restarts.
 
-Install scripts/install_cnpg.py first. Run separately from agent attempts.
+Run separately from agent attempts. Application setup installs its PostgreSQL operator.
 """
 
 import argparse

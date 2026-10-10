@@ -5,6 +5,7 @@ import time
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class SaaSOracle(ServiceEndpointMitigationOracle):
@@ -83,8 +84,8 @@ class SaaSOracle(ServiceEndpointMitigationOracle):
                 d = json.loads(app.command("get", "deployment", name, "-o", "json"))
                 if d["spec"].get("replicas", 1) != 1:
                     return self.fail("required_application_topology_changed", deployment=name)
-                if d.get("status", {}).get("readyReplicas") != 1:
-                    raise RuntimeError(f"Required deployment {name} not ready")
+                if not deployment_rollout_complete(d):
+                    return self.fail("required_deployment_not_rolled_out", deployment=name)
             if self.volume_ids() != self.volumes:
                 return self.fail("persistent_volumes_replaced_or_missing")
             if failed := self.verify_replication(self.baseline["token"]):

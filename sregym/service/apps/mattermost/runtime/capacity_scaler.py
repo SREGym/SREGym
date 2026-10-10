@@ -1,13 +1,4 @@
-"""Capacity automation keyed on CPU, which shrinks the gateway during the incident.
-
-The policy is ordinary and was reasonable when written: scale out on high CPU,
-scale in on low CPU. It is also exactly wrong here, because the gateway's CPU
-falls when it saturates. The automation therefore removes capacity from a service
-that is already failing, and reverts a responder's manual scale-up.
-
-The policy is a control file, so this is repairable as well as stoppable: disable
-it, raise its floor to the service's capacity floor, or key it on saturation.
-"""
+"""Scale gateway replicas from measured usage and a persistent capacity policy."""
 
 import json
 import os

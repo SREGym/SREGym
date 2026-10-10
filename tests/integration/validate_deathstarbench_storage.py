@@ -1,8 +1,7 @@
 """Exercise a real election and pod replacement in a fresh scaled application.
 
-Run in a prepared DinD/KIND environment, with no other benchmark using the app's
-namespace. This is separate from agent evaluation so test actions never enter an
-agent's incident history.
+Run against a Kubernetes cluster with OpenEBS installed and no other run in the
+application namespace. These checks do not involve an agent.
 """
 
 import argparse
@@ -13,7 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from sregym.service.apps.deathstarbench import ScaledHotelReservation, ScaledSocialNetwork
+from sregym.service.apps.deathstarbench.application import ScaledHotelReservation, ScaledSocialNetwork
 
 
 def wait_for_workflow(app):

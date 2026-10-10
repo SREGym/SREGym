@@ -100,7 +100,7 @@ class MattermostCascade(Mattermost):
             },
             control,
         )
-        # Several replicas, unlike every other deployment in these prototypes.
+        # Keep enough gateway replicas to tolerate a rolling update or node loss.
         gateway["spec"]["replicas"] = self.capacity_floor
         # RollingUpdate so a scale change does not take the whole gateway down.
         gateway["spec"]["strategy"] = {"type": "RollingUpdate"}

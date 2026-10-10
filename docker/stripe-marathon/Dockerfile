@@ -1,8 +1,22 @@
-FROM python:3.12.13-slim-bookworm
+ARG PYTHON_IMAGE=python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
+FROM --platform=$BUILDPLATFORM ${PYTHON_IMAGE} AS dependencies
+ARG TARGETARCH
+COPY requirements.lock /tmp/requirements.lock
+RUN case "$TARGETARCH" in \
+      amd64) platform=manylinux2014_x86_64 ;; \
+      arm64) platform=manylinux2014_aarch64 ;; \
+      *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && pip install --no-cache-dir --no-compile --only-binary=:all: \
+      --platform "$platform" --target /dependencies -r /tmp/requirements.lock \
+    && mv /dependencies/bin /entrypoints
+
+FROM ${PYTHON_IMAGE}
+LABEL org.opencontainers.image.source="https://github.com/SREGym/SREGym"
 WORKDIR /app
-COPY sregym/service/apps/fixtures/swe-marathon-stripe/solution/ /app/
-COPY sregym/service/apps/fixtures/swe-marathon-stripe/LICENSE sregym/service/apps/fixtures/swe-marathon-stripe/NOTICE sregym/service/apps/fixtures/swe-marathon-stripe/upstream.json /usr/share/doc/swe-marathon-stripe/
-COPY docker/stripe-marathon/requirements.lock /tmp/requirements.lock
-RUN pip install --no-cache-dir -r /tmp/requirements.lock
-COPY docker/stripe-marathon/backend.py docker/stripe-marathon/receiver.py /app/
+COPY --from=dependencies /dependencies/ /usr/local/lib/python3.12/site-packages/
+COPY --from=dependencies /entrypoints/ /usr/local/bin/
+COPY vendor/solution/app/ /app/app/
+COPY vendor/LICENSE vendor/NOTICE vendor/upstream.json /usr/share/doc/swe-marathon-stripe/
+COPY backend.py receiver.py /app/
 CMD ["python", "backend.py"]

@@ -1,4 +1,4 @@
-"""GitLab CE prototype: external PostgreSQL and Redis, persistent Gitaly data."""
+"""GitLab CE with external PostgreSQL, Redis, and persistent Gitaly data."""
 
 from pathlib import Path
 
@@ -75,7 +75,7 @@ class GitLabCE(PostgresApplication):
                 {"name": "GITLAB_OMNIBUS_CONFIG", "value": self.omnibus_config()},
                 self.secret_env("DATABASE_PASSWORD", "password", "application-database"),
                 self.secret_env("ROOT_PASSWORD", "password"),
-                self.secret_env("BENCHMARK_TOKEN", "token"),
+                self.secret_env("APPLICATION_TOKEN", "token"),
             ],
             "volumeMounts": [
                 {"name": "gitlab-config", "mountPath": "/etc/gitlab"},
@@ -103,16 +103,16 @@ class GitLabCE(PostgresApplication):
         ]
 
     def initialize(self):
-        # Only the per-attempt benchmark token is provisioned; no external account is used.
+        # Each deployment uses its own local API token; no external account is used.
         ruby = """u = User.find_by_username!('root')
-t = u.personal_access_tokens.find_or_initialize_by(name: 'sregym-prototype')
+t = u.personal_access_tokens.find_or_initialize_by(name: 'application-client')
 t.scopes = ['api']; t.expires_at = Date.today + 30
-t.set_token(ENV.fetch('BENCHMARK_TOKEN')); t.save!
-puts 'Benchmark API access initialized'
+t.set_token(ENV.fetch('APPLICATION_TOKEN')); t.save!
+puts 'Application API access initialized'
 """
         self.command(
             "exec", "-i", f"deployment/{self.slug}", "--", "gitlab-rails", "runner", "-", input_text=ruby, timeout=300
         )
 
     def record_query(self, token):
-        return f"SELECT count(*) FROM issues WHERE title = 'sregym-{token}';"
+        return f"SELECT count(*) FROM issues WHERE title = 'healthcheck-{token}';"

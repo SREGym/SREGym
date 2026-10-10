@@ -61,4 +61,4 @@ class Mattermost(PostgresApplication):
         return [self.deployment(self.slug, app, volume, initContainers=[init], securityContext={"fsGroup": 2000})]
 
     def record_query(self, token):
-        return f"SELECT count(*) FROM posts WHERE message = 'sregym-{token}' AND deleteat = 0;"
+        return f"SELECT count(*) FROM posts WHERE message = 'change-{token}' AND deleteat = 0;"

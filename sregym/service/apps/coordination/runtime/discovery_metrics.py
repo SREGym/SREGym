@@ -1,15 +1,4 @@
-"""A metrics endpoint that resolves its targets through the service it monitors.
-
-This is the circular observability failure from the Roblox incident: the
-telemetry you would reach for to diagnose the coordination service discovers its
-scrape targets *through* that same coordination service. While coordination is
-degraded, this endpoint returns no series at all -- not wrong numbers, nothing --
-so an agent that waits for the dashboard to tell it what is wrong waits forever.
-
-The per-service truth is still reachable by asking each service directly. The
-point is that the aggregated view, which is the convenient one, is exactly the
-view that fails.
-"""
+"""Collect service metrics using targets resolved through the coordinator."""
 
 import json
 import os

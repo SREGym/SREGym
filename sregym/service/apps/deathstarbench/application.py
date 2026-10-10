@@ -20,7 +20,7 @@ from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 
 MONGO_IMAGE = "mongo:4.4.29"
-LABEL = "sregym.io/database"
+LABEL = "app.kubernetes.io/instance"
 
 
 @dataclass(frozen=True)
@@ -163,7 +163,7 @@ class ScaledApplication:
         metadata = super().get_app_json()
         if hasattr(self, "scale_tier"):
             metadata["Desc"] += (
-                f" DeathStarBench 2.0 tier {self.scale_tier}: {self.scale.members} persistent MongoDB members per "
+                f" Deployment tier {self.scale_tier}: {self.scale.members} persistent MongoDB members per "
                 f"database and {self.scale.service_replicas} replicas per application service. "
                 "Database members have stable DNS names and independent volumes; clients discover the elected primary."
             )
@@ -317,7 +317,7 @@ class ScaledApplication:
         return rendered
 
     def check_workflow(self):
-        script = Path(__file__).with_name("deathstarbench_workflow.py").read_text()
+        script = Path(__file__).with_name("workflow.py").read_text()
         output = self.command(
             "exec", "-i", "application-client", "--", "python", "-", self.namespace, input_text=script, timeout=120
         )
@@ -394,7 +394,7 @@ class ScaledHotelReservation(ScaledApplication, HotelReservation):
     authenticated_databases = frozenset({"mongodb-geo", "mongodb-rate"})
     services = frozenset({"frontend", "geo", "profile", "rate", "recommendation", "reservation", "search", "user"})
 
-    def __init__(self, tier: str = "replicated", storage_class: str = "standard"):
+    def __init__(self, tier: str = "replicated", storage_class: str = "openebs-hostpath"):
         tier_config(tier)
         super().__init__(mount_failure_scripts=False)
         self.configure_scale(tier, storage_class)
@@ -443,7 +443,7 @@ class ScaledHotelReservation(ScaledApplication, HotelReservation):
 class ScaledSocialNetwork(ScaledApplication, SocialNetwork):
     expected_databases = 6
 
-    def __init__(self, tier: str = "replicated", storage_class: str = "standard"):
+    def __init__(self, tier: str = "replicated", storage_class: str = "openebs-hostpath"):
         tier_config(tier)
         super().__init__()
         self.configure_scale(tier, storage_class)
@@ -455,13 +455,13 @@ class ScaledSocialNetwork(ScaledApplication, SocialNetwork):
         marker = self.command("get", "configmap", "business-data-seeded", "--ignore-not-found", "-o", "name")
         if marker.strip():
             return  # A normal redeployment must not replace or repair incident state.
-        script = Path(__file__).with_name("deathstarbench_seed.py").read_text()
+        script = Path(__file__).with_name("seed.py").read_text()
         output = self.command("exec", "-i", "application-client", "--", "python", "-", input_text=script, timeout=600)
         counts = json.loads(output)
         self.mongo_primary("user-mongodb", f"assert.eq({counts['users']},db.getSiblingDB('user').user.count());")
         self.mongo_primary(
             "post-storage-mongodb",
-            f"assert.eq({counts['posts']},db.getSiblingDB('post').post.count({{text:/^sregym-seed-/}}));",
+            f"assert.eq({counts['posts']},db.getSiblingDB('post').post.count({{text:/^status-update-/}}));",
         )
         self.apply(
             [

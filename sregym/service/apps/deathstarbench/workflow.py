@@ -44,15 +44,15 @@ def check(application):
         assert json.loads(response)["message"] == "Reserve successfully!", response
     elif application == "social-network":
         base = "http://nginx-thrift:8080"
-        user = "probe_" + token
+        user = "user_" + token
         # The wrk2 registration API accepts an explicit ID. Keep it exactly representable in Lua numbers.
         expected_user_id = int(token[:12], 16) + 1000
         request(
             base,
             "/wrk2-api/user/register",
             {
-                "first_name": "Probe",
-                "last_name": "User",
+                "first_name": "Alex",
+                "last_name": "Morgan",
                 "username": user,
                 "password": token,
                 "user_id": expected_user_id,

@@ -1,13 +1,12 @@
-"""Slack-2021-inspired cascade: a misleading signal and automation that believes it.
+"""Upstream latency causes CPU-based capacity automation to remove gateway replicas.
 
 The only thing injected is upstream latency. Everything after that is emergent:
 the gateway's workers block instead of working, so its CPU *falls*, and the
 pre-existing capacity automation reads that as spare capacity and removes
 replicas from a service that is already shedding requests.
 
-That is why this family is not another data-recovery task. There is nothing to
-restore; the agent has to distrust a real measurement, stop automation that is
-actively making things worse, and restore capacity that stays restored.
+Recovery removes the latency and corrects the capacity policy so it does not
+undo a manual scale-up.
 """
 
 import time

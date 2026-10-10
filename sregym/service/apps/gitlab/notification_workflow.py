@@ -17,7 +17,7 @@ sets = Sidekiq::Queue.all + [Sidekiq::RetrySet.new, Sidekiq::ScheduledSet.new, S
 removed = 0
 sets.each do |set|
   set.each do |job|
-    next unless job.item.fetch('args', []).to_json.include?('sregym-ack')
+    next unless job.item.fetch('args', []).to_json.include?('issue-update')
     job.delete
     removed += 1
   end
@@ -45,7 +45,7 @@ end
 def accepted(rows, r)
   rows.any? do |m|
     h = m.fetch('headers')
-    h['x-gitlab-notificationreason'] == 'sregym-ack' &&
+    h['x-gitlab-notificationreason'] == 'issue-update' &&
       h['x-gitlab-project-id'] == r.fetch('project').to_s && h['x-gitlab-issue-iid'] == r.fetch('iid').to_s &&
       m.fetch('recipients') == [r.fetch('recipient')] && m.fetch('subject').include?(r.fetch('title')) &&
       m.fetch('body').include?(r.fetch('description'))
@@ -63,7 +63,7 @@ records.each do |r|
     break if accepted(audit, r)
     begin
       sends += 1
-      Notify.new_issue_email(recipient.id, issue.id, 'sregym-ack').deliver_now
+      Notify.new_issue_email(recipient.id, issue.id, 'issue-update').deliver_now
     rescue StandardError => e
       # A mail-stack exception can follow an accepted external effect. The
       # audit decides whether retry is safe, regardless of exception wrapping.
@@ -91,7 +91,7 @@ sets = Sidekiq::Queue.all + [Sidekiq::RetrySet.new, Sidekiq::ScheduledSet.new, S
 removed = 0
 sets.each do |set|
   set.each do |job|
-    next unless job.item.fetch('args', []).to_json.include?('sregym-ack')
+    next unless job.item.fetch('args', []).to_json.include?('issue-update')
     job.delete
     removed += 1
   end
@@ -135,7 +135,7 @@ end
 def accepted(rows, r)
   rows.any? do |m|
     h = m.fetch('headers')
-    h['x-gitlab-notificationreason'] == 'sregym-ack' &&
+    h['x-gitlab-notificationreason'] == 'issue-update' &&
       h['x-gitlab-project-id'] == r.fetch('project').to_s && h['x-gitlab-issue-iid'] == r.fetch('iid').to_s &&
       m.fetch('recipients') == [r.fetch('recipient')] && m.fetch('subject').include?(r.fetch('title')) &&
       m.fetch('body').include?(r.fetch('description'))
@@ -157,7 +157,7 @@ audit = settled_audit(provider_audit, checks)
     raise 'Restored issue mismatch' unless issue.title == r.fetch('title') && issue.description == r.fetch('description')
     begin
       sends += 1
-      Notify.new_issue_email(recipient.id, issue.id, 'sregym-ack').deliver_now
+      Notify.new_issue_email(recipient.id, issue.id, 'issue-update').deliver_now
     rescue StandardError => e
       delivery_errors << {{type: e.class.name, cause: e.cause&.class&.name}}
     end

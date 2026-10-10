@@ -1,18 +1,8 @@
-"""Roblox-2021-inspired coordination collapse: long horizon, broken tools, real cost.
+"""Coordination collapse caused by excess watches and uncompacted state.
 
-Built because the three preceding families all scored 0% difficulty, solved in a
-quarter of their budget. This one uses the levers none of them did:
-
-- recovery has a measured floor and every phase is gated on the previous one
-  settling, with premature action costing progress rather than merely failing;
-- the convenient tools lie or hang, and the aggregated telemetry is circularly
-  dependent on the thing that is broken;
-- requests lost are lost permanently, and forcing progress by destroying members
-  leaves damage no later action repairs.
-
-Nothing here is injected as a flag. The fault is the coordination service's own
-state -- watch subscriptions far over budget and a large compaction debt -- and
-the degradation is computed from it.
+The persisted load prevents a stable leader, interrupts dependent services, and
+blocks service discovery for metrics. Recovery must shed load before restoring
+coordination state and gradually admitting traffic.
 """
 
 import time
@@ -30,9 +20,7 @@ class CoordinationCollapse(Problem):
     #: The reference recovery waits out every gate, so cleanup needs more than
     #: the shared drain allows.
     cleanup_timeout_seconds = 1800
-    #: Surfaced for the campaign runner and documented in the family's page: a
-    #: 900-second budget is below this incident's own recovery floor plus any
-    #: time to diagnose it, so running it at 900s would measure the budget.
+    #: Includes time for diagnosis and each mandatory recovery stability window.
     recommended_agent_timeout_seconds = RECOMMENDED_AGENT_TIMEOUT
 
     def __init__(self, scale_tier="single"):
@@ -57,13 +45,7 @@ class CoordinationCollapse(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
-        """Develop the collapse, then prove it is real and observable.
-
-        The application deploys healthy and serving, so the harness can confirm
-        the cluster worked before the incident. Injection drives it into the
-        degraded state and then verifies the symptom, the stale tool and the
-        circular telemetry failure before an agent is charged for any of it.
-        """
+        """Verify healthy startup, then induce and check the service failures."""
         app = self.app
         before = app.wait_for_coordinator()
         if not before["leader_healthy"] or before["serve_capacity_fraction"] < 1.0:

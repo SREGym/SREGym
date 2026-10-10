@@ -9,19 +9,16 @@ from sregym.service.apps.gitlab.notifications import (
 
 class GitLabNotificationIntermittent(GitLabNotificationAmbiguity):
     application_class = IntermittentApplication
+    root_cause_description = (
+        "Wrong-primary deletion reached every PostgreSQL replica, while independently durable "
+        "Sidekiq jobs refer to pre-restore issue IDs. SMTP failures remain intermittent during recovery: "
+        "some failed sends are already accepted, others are not. Preserve acknowledged data, reconcile "
+        "each delivery against the provider audit, and prevent automatic retries from duplicating mail."
+    )
 
     def __init__(self, scale_tier="replicated"):
         super().__init__(scale_tier)
         self.reference_delivery_history = []
-        self.root_cause = self.build_structured_root_cause(
-            component="gitlab-ce-db",
-            namespace=self.namespace,
-            description="Wrong-primary deletion reached every PostgreSQL replica, while independently durable "
-            "Sidekiq jobs refer to pre-restore issue IDs. SMTP failures remain intermittent during recovery: "
-            "some failed sends are already accepted, others are not. Preserve acknowledged data, reconcile "
-            "each delivery against the provider audit, and prevent automatic retries from duplicating mail.",
-        )
-        self.diagnosis_oracle.expected = self.root_cause
 
     def prepare_recovery_material(self):
         super().prepare_recovery_material()

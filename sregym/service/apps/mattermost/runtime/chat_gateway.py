@@ -1,13 +1,4 @@
-"""A bounded-worker chat gateway whose CPU *falls* as it saturates.
-
-This is the misleading signal at the heart of the Slack 2021 cascade. Each
-request costs real CPU, but a slow upstream makes workers block instead of work:
-throughput collapses, so aggregate CPU drops even though the service is failing.
-Any automation keyed on CPU therefore reads the incident backwards.
-
-All control state lives on a persistent volume, so the injected condition
-survives pod restarts and cannot be cleared by recreating the Deployment.
-"""
+"""A chat gateway with a bounded worker pool, usage metrics, and persistent configuration."""
 
 import hashlib
 import json

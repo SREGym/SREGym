@@ -26,14 +26,14 @@ def recovery_workflow(client, mode, **args):
     if mode == "seed":
         projects = []
         for index in range(1, args["count"] + 1):
-            username = f"incident-user-{index}"
+            username = f"tenant-user-{index}"
             user = client.call(
                 "POST",
                 "/api/v4/users",
                 {
                     "username": username,
-                    "name": f"Incident User {index}",
-                    "email": username + "@sregym.local",
+                    "name": f"Tenant User {index}",
+                    "email": username + "@example.test",
                     "password": client.password,
                     "skip_confirmation": True,
                 },
@@ -42,8 +42,8 @@ def recovery_workflow(client, mode, **args):
                 "POST",
                 "/api/v4/projects",
                 {
-                    "name": f"incident-{index}",
-                    "path": f"incident-{index}",
+                    "name": f"tenant-project-{index}",
+                    "path": f"tenant-project-{index}",
                     "visibility": "private",
                     "initialize_with_readme": True,
                 },

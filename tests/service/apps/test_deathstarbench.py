@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.service.apps.deathstarbench import (
+from sregym.service.apps.deathstarbench.application import (
     LABEL,
     SCALE_TIERS,
     ScaledHotelReservation,
@@ -27,6 +27,7 @@ def test_hotel_renders_real_replica_sets_without_mutating_source(tier):
     for stateful in sets:
         assert stateful["spec"]["replicas"] == app.scale.members
         assert stateful["spec"]["volumeClaimTemplates"][0]["spec"]["accessModes"] == ["ReadWriteOnce"]
+        assert stateful["spec"]["volumeClaimTemplates"][0]["spec"]["storageClassName"] == "openebs-hostpath"
         name = stateful["metadata"]["name"]
         service = next(d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == name)
         assert service["spec"]["selector"] == {LABEL: name}
@@ -38,6 +39,30 @@ def test_hotel_renders_real_replica_sets_without_mutating_source(tier):
     assert config["GeoMongoAddress"].count(":27017") == app.scale.members
     # Source files are unchanged, despite rendering a different deployment topology.
     assert original == ScaledHotelReservation(tier).source_documents()
+
+
+@pytest.mark.parametrize("factory", [ScaledHotelReservation, ScaledSocialNetwork])
+def test_custom_storage_class_remains_supported(factory):
+    app = factory(storage_class="custom-storage")
+    stateful_sets = [document for document in app.render() if document["kind"] == "StatefulSet"]
+    assert stateful_sets
+    assert all(
+        document["spec"]["volumeClaimTemplates"][0]["spec"]["storageClassName"] == "custom-storage"
+        for document in stateful_sets
+    )
+
+
+@pytest.mark.parametrize("factory", [ScaledHotelReservation, ScaledSocialNetwork])
+def test_workflow_uses_the_application_package_script(factory):
+    app = factory()
+    app.command = Mock(return_value=json.dumps({"token": "customer-record"}))
+    app.mongo_primary = Mock()
+    app.check_workflow()
+    call = app.command.call_args
+    assert call.args == ("exec", "-i", "application-client", "--", "python", "-", app.namespace)
+    compile(call.kwargs["input_text"], "workflow.py", "exec")
+    assert "def check(application):" in call.kwargs["input_text"]
+    assert "customer-record" in app.mongo_primary.call_args.args[1]
 
 
 def test_invalid_tier_fails_before_cluster_access():
@@ -100,6 +125,19 @@ def test_social_redeployment_does_not_reseed_existing_incident_state():
     assert app.command.call_count == 1
     app.mongo_primary.assert_not_called()
     app.apply.assert_not_called()
+
+
+def test_social_seed_uses_matching_application_data_prefix():
+    app = ScaledSocialNetwork()
+    app.command = Mock(side_effect=["", json.dumps({"users": 962, "posts": 962})])
+    app.mongo_primary = Mock()
+    app.apply = Mock()
+    app.seed_data()
+    script = app.command.call_args.kwargs["input_text"]
+    compile(script, "seed.py", "exec")
+    assert '"text": "status-update-"' in script
+    assert "text:/^status-update-/" in app.mongo_primary.call_args.args[1]
+    assert app.apply.call_args.args[0][0]["metadata"]["name"] == "business-data-seeded"
 
 
 def test_social_media_readiness_matches_its_service_and_nginx_listener():

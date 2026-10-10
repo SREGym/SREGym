@@ -60,7 +60,7 @@ class GitLabNotificationRecoveryOracle(GitLabDatabaseRecoveryOracle):
                 return self.fail("notification_delivery_violation", notifications=report)
             if report["missing"]:
                 return self.fail("notification_backlog_incomplete", notifications=report)
-            probe_reason = "sregym-probe-" + secrets.token_hex(8)
+            probe_reason = "notification-check-" + secrets.token_hex(8)
             probe = app.recovery_client(
                 "create",
                 records=[
@@ -72,7 +72,7 @@ class GitLabNotificationRecoveryOracle(GitLabDatabaseRecoveryOracle):
                     }
                 ],
             )[0]
-            probe["recipient"] = "incident-user-1@sregym.local"
+            probe["recipient"] = "tenant-user-1@example.test"
             jobs = app.enqueue_notification_probe(probe, probe_reason)
             if jobs["pending_incident_jobs"]:
                 return self.fail("notification_jobs_unreconciled", pending=jobs["pending_incident_jobs"])

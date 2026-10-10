@@ -1,13 +1,8 @@
 """Two divergent Gitea histories left behind by an automated regional failover.
 
-The same divergence as the GitLab family, on a different application: Gitea
-allocates `issue."index"` per repository, so a promoted replica that has since
+Gitea allocates `issue."index"` per repository, so a promoted replica that has since
 accepted new issues hands out numbers the demoted primary already gave to
 different issues. Neither history alone is the complete record.
-
-A second application matters because the GitLab result is one problem on one
-agent. If the shape travels, the property is about the incident; if it does not,
-it was about GitLab.
 """
 
 import time
@@ -29,8 +24,6 @@ DIVERGENCE_COUNTS = {"single": (12, 6, 6), "replicated": (60, 30, 30)}
 class GiteaFailover(GiteaRecovery):
     def get_app_json(self):
         result = super().get_app_json()
-        # Architecture only. That the deployment has two database regions behind
-        # an orchestrator is a fact about the system, not about any incident.
         result["Desc"] += " The database runs in two regions behind a failover orchestrator."
         return result
 

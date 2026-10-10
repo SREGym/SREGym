@@ -37,7 +37,7 @@ def file_path(repository, name):
 def write_file(repository, name, content):
     path = file_path(repository, name)
     old = api(path, missing_ok=True)
-    data = {"content": base64.b64encode(content.encode()).decode(), "message": "Benchmark data: " + name}
+    data = {"content": base64.b64encode(content.encode()).decode(), "message": "Update " + name}
     if old:
         data["sha"] = old["sha"]
     return api(path, method="PUT" if old else "POST", data=data)
@@ -123,16 +123,16 @@ def run(mode, **arguments):
         result = seed(arguments["fixture"])
     elif mode == "probe":
         token = arguments["token"]
-        title = "sregym-" + token
+        title = "change-" + token
         issue = api(f"/repos/{REPOSITORY}/issues", "POST", {"title": title, "body": token})
         assert api(f"/repos/{REPOSITORY}/issues/{issue['number']}")["title"] == title
-        write_file(REPOSITORY, f"sregym/{token}.txt", token)
-        assert read_file(REPOSITORY, f"sregym/{token}.txt") == token
+        write_file(REPOSITORY, f"changes/{token}.txt", token)
+        assert read_file(REPOSITORY, f"changes/{token}.txt") == token
         result = {"token": token, "issue_number": issue["number"]}
     elif mode == "verify":
         token = arguments["token"]
-        assert read_file(REPOSITORY, f"sregym/{token}.txt") == token
-        assert api(f"/repos/{REPOSITORY}/issues/{arguments['issue_number']}")["title"] == "sregym-" + token
+        assert read_file(REPOSITORY, f"changes/{token}.txt") == token
+        assert api(f"/repos/{REPOSITORY}/issues/{arguments['issue_number']}")["title"] == "change-" + token
         for repository in arguments["fixture"]["repositories"]:
             full_name = repository["owner"] + "/" + repository["name"]
             for name, expected in {"README.md": repository["readme"], **repository["files"]}.items():

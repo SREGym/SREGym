@@ -178,6 +178,8 @@ exclude = [
     "*.egg-info",
     # Vendored verbatim from Harbor (see atif_converter/atif/UPSTREAM.md).
     "atif_converter/atif",
+    # Keep the pinned upstream application and its contract tests unchanged.
+    "docker/stripe-marathon/vendor",
 ]
 
 [tool.ruff.lint]
@@ -202,14 +204,13 @@ ignore = [
 "clients/stratus/stratus_agent/driver/driver.py" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["atif_converter", "sregym", "clients", "provisioner", "scripts", "experiments"]
+known-first-party = ["atif_converter", "sregym", "clients", "provisioner", "scripts"]
 
 [tool.ruff.format]
 quote-style = "double"
 docstring-code-format = true
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
 markers = [
     "integration: end-to-end tests requiring a running Kubernetes cluster",
 ]

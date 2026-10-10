@@ -13,6 +13,12 @@ from sregym.utils.decorators import mark_fault_injected
 
 class GitLabDatabaseDeletion(Problem):
     application_class = GitLabRecovery
+    mitigation_oracle_class = GitLabDatabaseRecoveryOracle
+    root_cause_description = (
+        "Replica maintenance used the writable-primary endpoint and erased application schemas. "
+        "Physical standbys replayed the deletion. The advertised latest backup is truncated; a valid staging "
+        "snapshot predates accepted issue creations. Recover identities, permissions, Git data and the acknowledged tail."
+    )
 
     def __init__(self, scale_tier="replicated"):
         super().__init__(self.application_class(scale_tier))
@@ -23,12 +29,10 @@ class GitLabDatabaseDeletion(Problem):
         self.root_cause = self.build_structured_root_cause(
             component="gitlab-ce-db",
             namespace=self.namespace,
-            description="Replica maintenance used the writable-primary endpoint and erased application schemas. "
-            "Physical standbys replayed the deletion. The advertised latest backup is truncated; a valid staging "
-            "snapshot predates accepted issue creations. Recover identities, permissions, Git data and the acknowledged tail.",
+            description=self.root_cause_description,
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(self, self.root_cause)
-        self.mitigation_oracle = GitLabDatabaseRecoveryOracle(self)
+        self.mitigation_oracle = self.mitigation_oracle_class(self)
         self.app.create_workload()
 
     def prepare_recovery_material(self):

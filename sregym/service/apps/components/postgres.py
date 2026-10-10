@@ -10,11 +10,11 @@ import yaml
 
 from sregym.paths import BASE_DIR
 from sregym.service.apps.base import Application
+from sregym.service.apps.components.cnpg import ensure_operator
 from sregym.service.apps.persistent import cleanup_persistent_namespace
 from sregym.service.kubectl import KubeCtl
 
 POSTGRES_IMAGE = "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie"
-OPERATOR_IMAGE = "ghcr.io/cloudnative-pg/cloudnative-pg:1.30.1"
 TIERS = {"single": 1, "replicated": 3}
 
 
@@ -27,7 +27,7 @@ class PostgresApplication(Application):
     auxiliary_deployments = ()
     client_workflow: Path
 
-    def __init__(self, tier="replicated", storage_class="standard"):
+    def __init__(self, tier="replicated", storage_class="openebs-hostpath"):
         if tier not in TIERS:
             raise ValueError(f"Unsupported tier {tier!r}: choose {tuple(TIERS)}")
         super().__init__(BASE_DIR / "service" / "metadata" / f"{self.slug}.json")
@@ -179,19 +179,15 @@ class PostgresApplication(Application):
         ]
 
     def deploy(self):
-        operator = json.loads(
-            self.command("get", "deployment", "cnpg-controller-manager", "-n", "cnpg-system", "-o", "json")
-        )
-        if not any(c["image"] == OPERATOR_IMAGE for c in operator["spec"]["template"]["spec"]["containers"]):
-            raise RuntimeError("Install the pinned operator first: python scripts/install_cnpg.py")
-        self.create_namespace()
         self.command("get", "storageclass", self.storage_class)
+        ensure_operator(self.command)
+        self.create_namespace()
         for name, data in (
             ("application-database", {"username": self.database, "password": secrets.token_hex(24)}),
             (
                 "application-credentials",
                 {
-                    "username": "benchmark",
+                    "username": "application",
                     "password": secrets.token_hex(24),
                     "token": "sk_test_" + secrets.token_hex(24),
                 },

@@ -2,7 +2,7 @@
 
 This service represents an external recipient, not an incident repair tool. Each
 accepted SMTP transaction is retained, including duplicates. It never forwards
-mail. Only synthetic sregym.local recipients are accepted.
+mail. Only synthetic example.test recipients are accepted.
 """
 
 import email.policy
@@ -59,7 +59,7 @@ def smtp_handler(mailbox):
                 self.wfile.write(line.encode() + b"\r\n")
                 self.wfile.flush()
 
-            reply("220 mailbox.sregym.local ESMTP")
+            reply("220 mailbox.example.test ESMTP")
             while raw := self.rfile.readline(8193):
                 if len(raw) > 8192:
                     reply("500 Command too long")
@@ -67,13 +67,13 @@ def smtp_handler(mailbox):
                 command, _, argument = raw.decode(errors="replace").strip().partition(" ")
                 command = command.upper()
                 if command in ("EHLO", "HELO"):
-                    reply("250 mailbox.sregym.local")
+                    reply("250 mailbox.example.test")
                 elif command == "MAIL" and argument.upper().startswith("FROM:"):
                     sender, recipients = argument[5:].strip().split(" ")[0].strip("<>"), []
                     reply("250 OK")
                 elif command == "RCPT" and sender is not None and argument.upper().startswith("TO:"):
                     recipient = argument[3:].strip().split(" ")[0].strip("<>")
-                    if not recipient.lower().endswith("@sregym.local"):
+                    if not recipient.lower().endswith("@example.test"):
                         reply("550 Only local synthetic recipients are accepted")
                     else:
                         recipients.append(recipient.lower())

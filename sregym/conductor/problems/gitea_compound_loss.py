@@ -1,22 +1,7 @@
-"""One incident, two faults: one that announces itself and one that does not.
+"""A maintenance reset deletes both database state and one Git repository.
 
-The shape that separated the agent on `stripe_feature_config` was silent
-incompleteness -- repairing the visible fault restored every signal the agent
-thought to check, while a second obligation remained. That one came about by
-accident. This builds it deliberately, and by mechanism rather than by
-withholding a sentence, so it holds even if the description-pointer lever turns
-out to be weak.
-
-The maintenance reset deletes the database schema, which is loud: Gitea returns
-500s, `\\dt` is empty, and the recovery path is obvious. The same reset also
-discards one repository's git storage, which is silent: once the database is
-restored Gitea serves, the issue journal reconciles, every repository is listed,
-and only that one repository's files are gone. `acknowledged_git_data_changed`
-is already graded, so a recovery that stops at the database is a named failure
-rather than a surprise.
-
-It stays solvable: a local snapshot of the repository storage is on the data
-volume, and the recovery path is the same `tar` the backup was made with.
+Database recovery restores the API but not the missing repository contents.
+The repository snapshot remains on the data volume for independent recovery.
 """
 
 import json
@@ -67,14 +52,7 @@ class GiteaCompoundLoss(GiteaDatabaseDeletion):
 
     @mark_fault_injected(strict=True)
     def recover_fault(self):
-        """Database first, then storage.
-
-        Extracting the snapshot needs a running Gitea pod, and a deleted schema
-        can leave it crashlooping, so repairing the database has to come first --
-        `restore_archive` brings the deployment back up on its way out. Reversing
-        these two turns a recoverable state into a failed teardown, which voids
-        the attempt instead of grading it.
-        """
+        """Restore the database first so a running Gitea pod can extract the Git archive."""
         # The parent is decorated too; nesting is safe because the decorator only
         # records state and re-raises, it asserts nothing about the prior value.
         GiteaDatabaseDeletion.recover_fault(self)

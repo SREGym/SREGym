@@ -1,7 +1,7 @@
 """Live SaaS admission: faults, record loss, restarts, switchover and reset.
 
-Run inside DinD after experiments/environment_scaling/prepare.py. This exercises the
-registered problem's application, fault injector, reference repair and oracle.
+Run on an idle benchmark cluster. This exercises the application's fault injector,
+reference repair and oracle.
 """
 
 import argparse

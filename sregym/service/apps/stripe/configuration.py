@@ -26,8 +26,8 @@ class StripeConfig(StripeMarathon):
         documents = super().application_documents()
         runtime = Path(__file__).with_name("runtime")
         scripts = {name: (runtime / name).read_text() for name in ("feature_edge.py", "requeue_webhooks.py")}
-        volumes = [{"name": "incident", "configMap": {"name": "incident-runtime"}}]
-        mount = {"name": "incident", "mountPath": "/incident", "readOnly": True}
+        volumes = [{"name": "payments-runtime", "configMap": {"name": "payments-runtime"}}]
+        mount = {"name": "payments-runtime", "mountPath": "/opt/payments", "readOnly": True}
         for document in documents:
             if document["kind"] != "Deployment":
                 continue
@@ -53,7 +53,7 @@ class StripeConfig(StripeMarathon):
             {
                 **common,
                 "name": "edge",
-                "command": ["python", "-u", "/incident/feature_edge.py", "edge"],
+                "command": ["python", "-u", "/opt/payments/feature_edge.py", "edge"],
                 **self.probes("/ready"),
             },
             [*volumes, *control],
@@ -62,7 +62,7 @@ class StripeConfig(StripeMarathon):
             {
                 **common,
                 "name": "producer",
-                "command": ["python", "-u", "/incident/feature_edge.py", "producer"],
+                "command": ["python", "-u", "/opt/payments/feature_edge.py", "producer"],
             }
         )
         catalog = {
@@ -78,7 +78,7 @@ class StripeConfig(StripeMarathon):
             "resources": {"requests": {"cpu": "200m", "memory": "512Mi"}, "limits": {"memory": "2Gi"}},
         }
         return [
-            {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "incident-runtime"}, "data": scripts},
+            {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "payments-runtime"}, "data": scripts},
             *documents,
             self.service("stripe-origin", 8000),
             self.service("feature-catalog", 8123),
@@ -96,7 +96,7 @@ class StripeConfig(StripeMarathon):
         return super().run_client(mode, **arguments)
 
     def control(self, action, argument=None):
-        args = ["python", "/incident/feature_edge.py", action]
+        args = ["python", "/opt/payments/feature_edge.py", action]
         if argument is not None:
             args.append(argument if isinstance(argument, str) else json.dumps(argument))
         return self.command("exec", "deployment/stripe-marathon", "-c", "edge", "--", *args)
@@ -145,7 +145,7 @@ class StripeConfig(StripeMarathon):
         return json.loads(self.command("exec", "application-client", "--", "python", "-c", source))
 
     def requeue(self, event_ids=None):
-        args = ["env", "PYTHONPATH=/app", "python", "/incident/requeue_webhooks.py"]
+        args = ["env", "PYTHONPATH=/app", "python", "/opt/payments/requeue_webhooks.py"]
         if event_ids is not None:
             args.append(json.dumps(event_ids))
         return json.loads(self.command("exec", "deployment/stripe-worker", "--", *args))

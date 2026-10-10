@@ -2,7 +2,7 @@
 
 One PostgreSQL JSONB document preserves the reference's object model. Transactions
 serialize API mutations with worker updates; responses are buffered until commit.
-This is an intentionally bounded prototype, not a high-throughput payment store.
+This adapter targets bounded workloads, not high-throughput payment processing.
 """
 
 import asyncio

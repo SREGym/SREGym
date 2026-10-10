@@ -11,12 +11,6 @@
       "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
     },
     {
-      "path": "instruction.md",
-      "upstream_path": "tasks/stripe-clone/instruction.md",
-      "git_blob": "6e3f3dfe605b2f957da7f048079f51d832a2ee32",
-      "sha256": "6c676d531d4864678511584d025aa00c2f751908d89102e9ad2a1f3ebeef7ce0"
-    },
-    {
       "path": "solution/app/__init__.py",
       "upstream_path": "tasks/stripe-clone/solution/app/__init__.py",
       "git_blob": "a18f4e2d1cada9442e7e960e1f657eb57991845d",
@@ -137,24 +131,6 @@
       "sha256": "5e370c49f992ffe05a8686f4afad181b427206dfb03de23a06619e8a51b1a542"
     },
     {
-      "path": "solution/solve.sh",
-      "upstream_path": "tasks/stripe-clone/solution/solve.sh",
-      "git_blob": "1b2ad038a6f897925823744b5d7a523544c5ef55",
-      "sha256": "2b9f87ad5a7d0228c99bf2cf8b83ca560ae95ffa0b288a7213d9867dd7f5cc9e"
-    },
-    {
-      "path": "solution/start.sh",
-      "upstream_path": "tasks/stripe-clone/solution/start.sh",
-      "git_blob": "2e4367b4ffecaf752dad8a6108a8fd03ec2afe51",
-      "sha256": "b921b0de9cec8607bb7f2aeb6bc7bbe1b2a56a989ed16933eeadd6ddf2baf2d3"
-    },
-    {
-      "path": "task.toml",
-      "upstream_path": "tasks/stripe-clone/task.toml",
-      "git_blob": "d93bb7eefbfa52123135c00072a1f099578b672f",
-      "sha256": "49f39187f2d972116d10cdb85e418a5982f9227fb33425f0b86883d8ce8df7ee"
-    },
-    {
       "path": "tests/anti_cheat.py",
       "upstream_path": "tasks/stripe-clone/tests/anti_cheat.py",
       "git_blob": "42ce0ebede15067d3bfe98c985c187684e63bdb7",
@@ -165,18 +141,6 @@
       "upstream_path": "tasks/stripe-clone/tests/conftest.py",
       "git_blob": "4f973c37dfe4653f5e1dc8df5b96d3c6c0c2aa46",
       "sha256": "fcd5088441bd5e443893e37edb64990535752af4ac9000ee4a001903c879e4b7"
-    },
-    {
-      "path": "tests/dump_artifacts.py",
-      "upstream_path": "tasks/stripe-clone/tests/dump_artifacts.py",
-      "git_blob": "d240ae16e2f61e7f41743f6f626266d4ec6b87c5",
-      "sha256": "2c8fcd12f71123694e0229fe8aba9e37eec29cfb9550952feb63250848679d44"
-    },
-    {
-      "path": "tests/test.sh",
-      "upstream_path": "tasks/stripe-clone/tests/test.sh",
-      "git_blob": "2b698938eb0fd4711a88e5a08fd97ea773b83f35",
-      "sha256": "23368bde136e4b7e41a26be78f7391f0991c1f5831d262e456f77e2a1e8cab71"
     },
     {
       "path": "tests/test_anti_cheat.py",

@@ -1,24 +1,4 @@
-"""A coordination service whose recovery has a floor you cannot compress.
-
-Modelled on the shape of the Roblox 2021 Consul outage. Three properties are the
-point, and all three are mechanical rather than scripted:
-
-1. **Long horizon.** Recovery is a sequence of phases, each gated on the previous
-   one having *settled* for real time. Acting early does not merely fail, it
-   regresses you -- so rushing makes the incident longer, exactly as a cold-cache
-   restart storm did in the original.
-2. **Broken tooling.** While the leader is churning, the status endpoint serves a
-   pre-incident snapshot, so an agent that trusts it sees a healthy cluster. The
-   obvious diagnostic -- a full key listing -- is itself the amplification source:
-   it hangs, and calling it makes the degradation worse.
-3. **Accumulating, irreversible cost.** Dropped requests accrue into a counter
-   that never decreases, and force-resetting a member destroys it as a quorum
-   source permanently.
-
-The degradation is computed from real state (watch subscriptions, key count,
-compaction debt), not toggled by a flag. All of it lives on a persistent volume,
-so none of it can be cleared by restarting the pod.
-"""
+"""Persistent coordination state, membership, admission, and operation status."""
 
 import json
 import os
@@ -49,27 +29,17 @@ COLD_ADMISSION_LIMIT = 0.25
 #: How long each admission step must hold before the next is safe.
 ADMISSION_STEP_SECONDS = float(os.environ.get("ADMISSION_STEP_SECONDS", "45"))
 #: Seconds the reported compaction state trails the real one. Zero in the base
-#: family, which is therefore unchanged. When set, a compaction that has actually
-#: succeeded keeps reporting `compacted: false` for this long, and compacting
-#: again during the window is a second write storm: it adds debt and restarts the
-#: stability window. The event ledger records the truth immediately, so an agent
-#: that cross-checks its own actions wins and one that trusts the status loses.
-#: Shorter than STABILITY_SECONDS, so waiting is always sufficient.
+#: service. The event ledger records completed operations immediately.
 COMPACTION_ACK_LAG_SECONDS = float(os.environ.get("COMPACTION_ACK_LAG_SECONDS", "0"))
 #: Seconds the reported admitted fraction trails the real one. Zero in the base
-#: family. When set, an admission step that has taken effect keeps reporting the
-#: previous fraction for this long, so an agent that re-issues the step to "make
-#: it stick" hits the step-interval refusal and learns nothing, while one that
-#: reads the ledger sees the change recorded immediately.
+#: service. The event ledger records admission changes immediately.
 ADMISSION_ACK_LAG_SECONDS = float(os.environ.get("ADMISSION_ACK_LAG_SECONDS", "0"))
 
 #: Subscriptions, keys and debt once the incident has developed. Watches far
 #: over budget are what hold write latency above the health threshold.
 COLLAPSE = {"watch_subscriptions": 96, "keys": 24000, "compaction_debt": 18000}
 
-#: A healthy, settled cluster. The application deploys in this state so the
-#: harness can prove it was serving before the incident, and so the grader's
-#: pre-injection check means something.
+#: Initial service state with stable leadership and fully admitted traffic.
 DEFAULT_STATE = {
     "watch_subscriptions": WATCH_BUDGET,
     "keys": 6000,
@@ -88,19 +58,13 @@ DEFAULT_STATE = {
     "destroyed_members": [],
     "regressions": 0,
     "last_regression_reason": None,
-    # The snapshot /status serves. Fresh now; it becomes the stale lie the
-    # moment the leader starts churning.
+    # The last completed status snapshot remains available during leader churn.
     "snapshot": {"healthy": True, "leader": MEMBER, "watch_subscriptions": WATCH_BUDGET, "latency_ms": 120.0},
 }
 
 
 def settled(now):
-    """A healthy cluster that has already been up for a while.
-
-    Backdating the clocks is honest -- the service really has been running -- and
-    it means the deployed baseline serves at full capacity immediately instead of
-    spending the warming window looking degraded.
-    """
+    """Initialize stable service without a startup warming interval."""
     return {
         **DEFAULT_STATE,
         "leader_since": now - STABILITY_SECONDS - 1,
@@ -110,13 +74,7 @@ def settled(now):
 
 
 def collapsed(state, now):
-    """Develop the incident from a healthy cluster.
-
-    Traffic is pulled as the leader goes down, which is what an edge does when
-    its backends stop resolving. That matters for grading: with admission at
-    zero, dropped requests accrue only from an agent's own premature admissions
-    rather than from the clock, so the cost is attributable to choices.
-    """
+    """Apply excess coordination load and withdraw traffic admission."""
     return {
         **state,
         **COLLAPSE,

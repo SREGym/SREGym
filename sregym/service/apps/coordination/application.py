@@ -17,9 +17,7 @@ from sregym.service.apps.mattermost.application import Mattermost
 CONTROL_VOLUME = "coordination-control"
 #: Customer-facing services that depend on coordination for backend lookup.
 SESSION_SERVICES = ("session-service", "presence-service")
-#: Recovery has a measured floor of ~370s with flawless play, so the agent needs
-#: materially more than the 900s the earlier families used. The budget is part
-#: of the task definition, not a runner detail.
+#: Allow diagnosis time in addition to the required recovery stability windows.
 RECOMMENDED_AGENT_TIMEOUT = 2700
 
 TIER_SETTINGS = {
@@ -51,15 +49,12 @@ class CoordinationCluster(Mattermost):
 
     @property
     def recovery_floor_seconds(self):
-        """The fastest a flawless recovery can possibly complete."""
+        """Minimum duration of the required recovery stability windows."""
         stability, warming, step = self.settings
         return stability + warming + 4 * step
 
     def get_app_json(self):
         result = super().get_app_json()
-        # Architecture only, in the register the stock applications use. The
-        # agent is told what the system is, never that anything is wrong with
-        # it: the task description stays the generic one.
         result["Desc"] += (
             " Customer sessions resolve their backends through a three-member"
             " `coordinator` service with an HTTP operator API, fronted by"
@@ -253,7 +248,7 @@ class CoordinationCluster(Mattermost):
                 time.sleep(5)
 
     def reference_recovery(self):
-        """The flawless operator path. Takes the floor, and never rushes a gate."""
+        """Restore service while respecting each recovery stability window."""
         stability, warming, step = self.settings
         self.operate("shed", watch_subscriptions=coordination_store.WATCH_BUDGET)
         # Wait the stability window out without touching the gated endpoints: an

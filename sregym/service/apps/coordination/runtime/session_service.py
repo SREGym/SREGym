@@ -1,10 +1,4 @@
-"""A customer-facing service whose availability tracks coordination capacity.
-
-This is what the incident actually costs: every request resolves its backend
-through the coordination service, so the fraction it can serve is the fraction
-coordination can serve. It reports its own metrics honestly and directly, which
-is the path around the circular observability failure.
-"""
+"""Resolve session backends through the coordination service and report request metrics."""
 
 import json
 import os

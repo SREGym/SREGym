@@ -27,7 +27,7 @@ class WrongServiceSelector(Problem):
 
             app = Gitea(tier=scale_tier or "replicated")
         elif scale_tier is not None:
-            from sregym.service.apps.deathstarbench import ScaledHotelReservation, ScaledSocialNetwork
+            from sregym.service.apps.deathstarbench.application import ScaledHotelReservation, ScaledSocialNetwork
 
             scaled_apps = {"hotel_reservation": ScaledHotelReservation, "social_network": ScaledSocialNetwork}
             if app_name not in scaled_apps:

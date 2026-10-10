@@ -17,8 +17,8 @@ from sregym.service.apps.gitlab.runtime.delayed_mail_sink import DelayedAuditMai
 from sregym.service.apps.gitlab.runtime.mail_sink import SMTPServer
 
 RAW = (
-    b"From: gitlab@sregym.local\r\nTo: user@sregym.local\r\nSubject: Receipt\r\n"
-    b"X-GitLab-NotificationReason: sregym-ack\r\n\r\nAccepted work\r\n"
+    b"From: gitlab@example.test\r\nTo: user@example.test\r\nSubject: Receipt\r\n"
+    b"X-GitLab-NotificationReason: issue-update\r\n\r\nAccepted work\r\n"
 )
 
 
@@ -47,7 +47,7 @@ class DelayedAuditTest(unittest.TestCase):
 
     def send(self, raw=RAW):
         with smtplib.SMTP(*self.smtp.server_address, timeout=3) as client:
-            client.sendmail("gitlab@sregym.local", ["user@sregym.local"], raw)
+            client.sendmail("gitlab@example.test", ["user@example.test"], raw)
 
     def get(self, path="/messages"):
         with urllib.request.urlopen(self.base + path, timeout=3) as response:
@@ -117,7 +117,7 @@ class DelayedAuditTest(unittest.TestCase):
         self.assertGreater(rejected, 0)
 
     def test_pagination_keeps_publication_snapshot_stable(self):
-        normal = RAW.replace(b"sregym-ack", b"scheduled-digest")
+        normal = RAW.replace(b"issue-update", b"scheduled-digest")
         for _ in range(41):
             self.send(normal)
         self.mailbox.set_ongoing_fault(True)
@@ -165,7 +165,7 @@ class DelayedAuditTest(unittest.TestCase):
         self.assertEqual(self.get()["total"], 1)
         self.mailbox.set_fault()
         self.mailbox.set_ongoing_fault(True)
-        self.send(RAW.replace(b"sregym-ack", b"sregym-probe-new"))
+        self.send(RAW.replace(b"issue-update", b"notification-check-new"))
         self.assertEqual(self.get()["total"], 2)
         with self.mailbox.connect() as db:
             self.assertEqual(db.execute("SELECT attempts FROM ongoing_fault").fetchone()[0], 0)

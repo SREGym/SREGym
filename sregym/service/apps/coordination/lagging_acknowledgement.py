@@ -1,30 +1,7 @@
-"""The coordination cluster with a confirmation that trails reality.
+"""Coordination services whose status reports lag completed operations.
 
-`coordination_collapse` was built to be hard -- a 360-second recovery floor, five
-gated phases, premature action regressing progress, a status endpoint that lies
-while churning, permanently accumulating loss -- and was solved 3 of 3 with every
-protective mechanic untouched. The agent read each refusal and waited.
-
-The refusals are why. Every one of them is honest and prescriptive:
-
-    leader stable for 12s; 60s required. This attempt restarted the stability
-    window.
-
-Screening across ten problems narrowed what actually separates an agent to one
-property: **verification cannot establish correctness.** Tooling that lies about
-*state* is not enough, because waiting resolves it. What is not resolved by
-waiting is a confirmation that trails the action -- the agent compacts, the store
-really does compact, and the reported state still says it has not.
-
-So this variant changes exactly one thing: `COMPACTION_ACK_LAG_SECONDS`. A
-compaction that has succeeded keeps reporting `compacted: false` for that long,
-and compacting again inside the window is a second write storm -- it adds debt
-and restarts the stability window, which is the existing penalty for haste.
-
-The lag is shorter than the stability window the agent must already wait out, so
-patience is always sufficient and the task stays solvable. The event ledger
-records `compacted` the instant it happens, so an agent that cross-checks its own
-actions against the ledger rather than trusting the status reads through it.
+Compaction and admission acknowledgements arrive before the next safe operation
+window. The event ledger records operations immediately.
 """
 
 from sregym.service.apps.coordination.application import CoordinationCluster
@@ -42,10 +19,7 @@ ADMISSION_ACK_LAG = {"single": 30, "replicated": 40}
 class LaggingAck(CoordinationCluster):
     """Configure one or more acknowledgement lags on the coordinator."""
 
-    #: Environment variable name to per-tier seconds. Empty means this class
-    #: would be identical to its parent, which `application_documents` refuses:
-    #: a variant that silently changes nothing would look like an experiment and
-    #: measure nothing.
+    #: Map each acknowledgement setting to its delay in seconds for each tier.
     LAGS: dict[str, dict[str, int]] = {}
 
     def lag_env(self):
@@ -76,12 +50,6 @@ class CoordinationLaggingAck(LaggingAck):
 
 
 class CoordinationLaggingAdmission(LaggingAck):
-    """The admitted fraction trails the admission.
-
-    A different mechanism in the same family. Compaction is a one-shot gate, so
-    its lag is survived by waiting once; admission is a repeated step, so a
-    responder ramping traffic meets the stale value on every step and has to
-    decide each time whether its last action took effect.
-    """
+    """The reported admitted fraction trails each admission step."""
 
     LAGS = {"ADMISSION_ACK_LAG_SECONDS": ADMISSION_ACK_LAG}

@@ -12,8 +12,8 @@ from sregym.service.apps.gitlab.runtime.intermittent_mail_sink import Intermitte
 from sregym.service.apps.gitlab.runtime.mail_sink import SMTPServer
 
 RAW = (
-    b"From: gitlab@sregym.local\r\nTo: user@sregym.local\r\nSubject: Receipt\r\n"
-    b"X-GitLab-NotificationReason: sregym-ack\r\n\r\nAccepted work\r\n"
+    b"From: gitlab@example.test\r\nTo: user@example.test\r\nSubject: Receipt\r\n"
+    b"X-GitLab-NotificationReason: issue-update\r\n\r\nAccepted work\r\n"
 )
 
 
@@ -34,7 +34,7 @@ class TransportTest(unittest.TestCase):
 
     def send(self, raw=RAW):
         with smtplib.SMTP(*self.server.server_address, timeout=3) as client:
-            client.sendmail("gitlab@sregym.local", ["user@sregym.local"], raw)
+            client.sendmail("gitlab@example.test", ["user@example.test"], raw)
 
     def test_naive_retry_duplicates_an_accepted_message(self):
         self.mailbox.set_ongoing_fault(True)
@@ -66,7 +66,7 @@ class TransportTest(unittest.TestCase):
 
     def test_counter_and_fault_survive_provider_restart_and_ignore_normal_mail(self):
         self.mailbox.set_ongoing_fault(True)
-        self.send(RAW.replace(b"sregym-ack", b"sregym-probe-new"))
+        self.send(RAW.replace(b"issue-update", b"notification-check-new"))
         with self.assertRaises(smtplib.SMTPServerDisconnected):
             self.send()
         self.stop_server()

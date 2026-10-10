@@ -3,7 +3,6 @@ from unittest.mock import Mock
 
 import pytest
 
-from experiments.environment_scaling.evaluate import problem_id
 from sregym.service.apps.gitlab.recovery import GitLabRecovery
 from sregym.service.apps.stripe.configuration import StripeConfig
 
@@ -31,13 +30,90 @@ def test_bad_backup_rejected_before_application_is_stopped():
     app.command.assert_not_called()
 
 
-def test_comparison_routes_only_supported_incident_application_pairs():
-    assert problem_id("gitlab_ce", "single", "database_deletion") == "gitlab_database_deletion_single"
-    assert problem_id("stripe_marathon", "replicated", "feature_config") == "stripe_feature_config_replicated"
-    with pytest.raises(ValueError):
-        problem_id("mattermost", "single", "feature_config")
-    with pytest.raises(ValueError):
-        problem_id("stripe_marathon", "expanded", "feature_config")
+@pytest.mark.parametrize("variant", ["recovery", "failover", "notifications"])
+def test_gitlab_restore_resets_partitioned_schemas_with_writers_stopped(variant):
+    from sregym.service.apps.gitlab.failover import EAST_SNAPSHOT, GitLabFailover
+    from sregym.service.apps.gitlab.notifications import GitLabNotificationRecovery
+    from sregym.service.apps.gitlab.recovery import ARCHIVE
+
+    app = {"recovery": GitLabRecovery, "failover": GitLabFailover, "notifications": GitLabNotificationRecovery}[
+        variant
+    ]()
+    calls = Mock()
+    for name in ("archive_command", "command", "sql", "wait_database", "recovery_client", "control"):
+        child = Mock()
+        setattr(app, name, child)
+        calls.attach_mock(child, name)
+
+    app.restore_archive()
+
+    path = EAST_SNAPSHOT if variant == "failover" else ARCHIVE
+    events = calls.method_calls
+    assert events[0].args == ("pg_restore", "--list", path)
+    stop = events[1]
+    if variant == "notifications":
+        assert stop.args == ("stop", "sidekiq", "puma")
+        app.control.assert_any_call("start", "puma")
+        assert all("sidekiq" not in call.args for call in app.control.call_args_list[1:])
+    else:
+        assert stop.args == ("scale", "deployment/gitlab-ce", "--replicas=0")
+        app.command.assert_any_call("wait", "--for=delete", "pod", "-l", "app=gitlab-ce", "--timeout=180s", timeout=200)
+        app.command.assert_any_call("scale", "deployment/gitlab-ce", "--replicas=1")
+    app.sql.assert_called_once()
+    assert "DROP SCHEMA %I CASCADE" in app.sql.call_args.args[0]
+    restore = app.archive_command.call_args_list[1]
+    assert restore.args == (
+        "pg_restore",
+        "--exit-on-error",
+        "--single-transaction",
+        "--clean",
+        "--if-exists",
+        "--no-owner",
+        "--no-privileges",
+        "--dbname=gitlab_ce",
+        path,
+    )
+    assert restore.kwargs == {"timeout": 600}
+    assert next(i for i, call in enumerate(events) if call[0] == "sql") < next(
+        i for i, call in enumerate(events) if call[0] == "archive_command" and "--single-transaction" in call.args
+    )
+    app.wait_database.assert_called_once_with()
+    assert events[-1][0] == "recovery_client"
+    assert events[-1].args == ("git",)
+
+
+@pytest.mark.parametrize(
+    "problem_name",
+    [
+        "gitlab_notification_unannounced.GitLabNotificationUnannouncedAmbiguity",
+        "gitlab_notification_intermittent.GitLabNotificationIntermittent",
+        "gitlab_notification_delayed_audit.GitLabNotificationDelayedAudit",
+    ],
+)
+def test_gitlab_variants_select_final_oracles_once(monkeypatch, problem_name):
+    import importlib
+
+    import sregym.conductor.problems.gitlab_database_deletion as database_deletion
+    from sregym.conductor.oracles.gitlab_notification_recovery import GitLabNotificationRecoveryOracle
+
+    diagnosis = Mock()
+    monkeypatch.setattr(database_deletion, "LLMAsAJudgeOracle", diagnosis)
+    module, name = problem_name.rsplit(".", 1)
+    problem = getattr(importlib.import_module("sregym.conductor.problems." + module), name)()
+
+    diagnosis.assert_called_once_with(problem, problem.root_cause)
+    assert problem.root_cause.endswith(problem.root_cause_description)
+    assert isinstance(problem.mitigation_oracle, GitLabNotificationRecoveryOracle)
+
+
+def test_gitlab_generated_resources_do_not_disclose_benchmark_names():
+    import json
+
+    from sregym.service.apps.gitlab.notifications import GitLabNotificationDelayedAudit
+
+    app = GitLabNotificationDelayedAudit()
+    assert "sregym" not in json.dumps(app.render()).lower()
+    assert "sregym" not in app.client_workflow.read_text().lower()
 
 
 def test_notification_environment_preserves_real_queue_and_external_evidence():
@@ -58,9 +134,6 @@ def test_notification_environment_preserves_real_queue_and_external_evidence():
     config = frontend["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"]
     assert "gitlab_rails['smtp_address'] = 'notification-mailbox'" in config
     assert "gitlab_rails['redis_host'] = 'gitlab-redis'" in config
-    assert problem_id("gitlab_ce", "replicated", "notification_recovery") == "gitlab_notification_recovery_replicated"
-    with pytest.raises(ValueError):
-        problem_id("gitlab_ce", "single", "notification_recovery")
 
 
 def test_ambiguous_provider_keeps_evidence_and_fault_controls_protected():
@@ -74,9 +147,6 @@ def test_ambiguous_provider_keeps_evidence_and_fault_controls_protected():
     assert runtime["metadata"]["labels"]["network-access"] == "restricted"
     assert set(runtime["data"]) == {"mail_sink.py", "ambiguous_mail_sink.py"}
     assert app.expected_volume_count == 8
-    assert problem_id("gitlab_ce", "replicated", "notification_ambiguity") == "gitlab_notification_ambiguity_replicated"
-    with pytest.raises(ValueError):
-        problem_id("gitlab_ce", "single", "notification_ambiguity")
 
 
 def test_intermittent_provider_preserves_protected_evidence_and_is_opt_in():
@@ -94,14 +164,6 @@ def test_intermittent_provider_preserves_protected_evidence_and_is_opt_in():
     assert receiver["spec"]["template"]["metadata"]["labels"]["network-access"] == "restricted"
     assert receiver["spec"]["template"]["spec"]["containers"][0]["command"][-1] == "/runtime/intermittent_mail_sink.py"
     assert app.expected_volume_count == 8
-    assert (
-        problem_id("gitlab_ce", "replicated", "notification_intermittent")
-        == "gitlab_notification_intermittent_replicated"
-    )
-    with pytest.raises(ValueError):
-        problem_id("gitlab_ce", "single", "notification_intermittent")
-    with pytest.raises(ValueError):
-        problem_id("gitea", "replicated", "notification_intermittent")
 
 
 def test_delayed_provider_preserves_protected_evidence_and_is_opt_in():
@@ -123,14 +185,6 @@ def test_delayed_provider_preserves_protected_evidence_and_is_opt_in():
     assert receiver["spec"]["template"]["metadata"]["labels"]["network-access"] == "restricted"
     assert receiver["spec"]["template"]["spec"]["containers"][0]["command"][-1] == "/runtime/delayed_mail_sink.py"
     assert app.expected_volume_count == 8
-    assert (
-        problem_id("gitlab_ce", "replicated", "notification_delayed_audit")
-        == "gitlab_notification_delayed_audit_replicated"
-    )
-    with pytest.raises(ValueError):
-        problem_id("gitlab_ce", "single", "notification_delayed_audit")
-    with pytest.raises(ValueError):
-        problem_id("gitea", "replicated", "notification_delayed_audit")
 
 
 def test_expanded_notifications_scale_workload_without_changing_replication_contract():
@@ -148,15 +202,6 @@ def test_expanded_notifications_scale_workload_without_changing_replication_cont
     )
     assert runtime["metadata"]["labels"]["network-access"] == "restricted"
     assert "delayed_mail_sink.py" in runtime["data"]
-    assert (
-        problem_id("gitlab_ce", "expanded", "notification_delayed_audit")
-        == "gitlab_notification_delayed_audit_expanded"
-    )
-    for incident in ("database_deletion", "notification_recovery", "notification_intermittent"):
-        with pytest.raises(ValueError):
-            problem_id("gitlab_ce", "expanded", incident)
-    with pytest.raises(ValueError):
-        problem_id("gitea", "expanded", "notification_delayed_audit")
 
 
 def test_failover_environment_adds_evidence_without_new_storage():

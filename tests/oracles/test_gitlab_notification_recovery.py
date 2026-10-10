@@ -9,15 +9,15 @@ RECEIPT = {
     "iid": 12,
     "title": "Keep title",
     "description": "Keep confidential text",
-    "recipient": "alice@sregym.local",
+    "recipient": "alice@example.test",
 }
 MAIL = {
     "id": 1,
-    "recipients": ["alice@sregym.local"],
+    "recipients": ["alice@example.test"],
     "subject": "Project | Keep title (#12)",
     "body": "Keep confidential text\nVisit issue",
     "headers": {
-        "x-gitlab-notificationreason": "sregym-ack",
+        "x-gitlab-notificationreason": "issue-update",
         "x-gitlab-project-id": "2",
         "x-gitlab-issue-iid": "12",
         "x-gitlab-issue-id": "9999",
@@ -32,7 +32,7 @@ def test_public_identity_allows_safe_internal_id_changes():
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("recipients", ["bob@sregym.local"]),
+        ("recipients", ["bob@example.test"]),
         ("subject", "Different issue"),
         ("body", "Wrong private text"),
     ],

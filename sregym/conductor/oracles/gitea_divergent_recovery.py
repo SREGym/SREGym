@@ -1,16 +1,4 @@
-"""Require one Gitea history that retains both regions' acknowledged writes.
-
-The accounting is the GitLab family's, reused with Gitea's column names: the
-divergence is a property of the incident, not of the application, so grading it
-twice from scratch would only create two things to keep in step.
-
-The base class is `GiteaOracle`, not `SaaSOracle`. `SaaSOracle.capture_baseline`
-calls `app.record_query(token)`, which GitLab, Mattermost and Stripe define and
-Gitea does not -- inheriting it fails at the *deploy* stage with a bare
-`AttributeError`, which reads as a broken application rather than a wrong base
-class. `GiteaOracle` supplies the Gitea equivalents (`check_workflow`,
-`volume_ids`, `verify_replication`), which is why the deletion family uses it.
-"""
+"""Require one Gitea history that retains both regions' acknowledged writes."""
 
 import time
 

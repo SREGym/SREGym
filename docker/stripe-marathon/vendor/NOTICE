@@ -6,6 +6,8 @@ License: Apache License, Version 2.0 (included as LICENSE)
 These are the upstream human-written reference solution and tests, not the
 source of a successful agent submission. All imported files are unchanged;
 upstream.json records original paths and cryptographic hashes.
+Task instructions and upstream launch, solution, and artifact-export scripts
+are omitted because SREGym supplies its own application and test entry points.
 
 SREGym's separate docker/stripe-marathon/backend.py adds PostgreSQL durability,
 transactional API responses and a separate worker. receiver.py provides a local

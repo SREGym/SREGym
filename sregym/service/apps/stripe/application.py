@@ -1,27 +1,10 @@
 """SWE-Marathon Stripe reference, durable API state and a separate retry worker."""
 
-import hashlib
 from pathlib import Path
 
-from sregym.paths import BASE_PARENT_DIR
 from sregym.service.apps.components.postgres import PostgresApplication
 
-
-def image_tag():
-    root = BASE_PARENT_DIR
-    paths = [
-        *sorted((root / "docker/stripe-marathon").glob("*")),
-        root / "sregym/service/apps/fixtures/swe-marathon-stripe/upstream.json",
-        root / "sregym/service/apps/fixtures/swe-marathon-stripe/NOTICE",
-    ]
-    digest = hashlib.sha256()
-    for path in paths:
-        if path.is_file():
-            digest.update(str(path.relative_to(root)).encode() + b"\0" + path.read_bytes())
-    return "sregym-stripe-marathon:" + digest.hexdigest()[:16]
-
-
-STRIPE_IMAGE = image_tag()
+STRIPE_IMAGE = "ghcr.io/sregym/stripe-marathon:20261010"
 
 
 class StripeMarathon(PostgresApplication):

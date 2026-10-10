@@ -5,7 +5,6 @@ history survives only as an independent snapshot plus an acknowledgement
 journal, so neither side alone is the complete record.
 """
 
-import time
 from collections import Counter
 
 from sregym.service.apps.gitlab.recovery import GitLabRecovery
@@ -57,56 +56,8 @@ class GitLabFailover(GitLabRecovery):
         self.archive_command("mkdir", "-p", "/recovery/east")
 
     def restore_archive(self, path=EAST_SNAPSHOT):
-        """Replace the live history wholesale, as a fail-back would.
-
-        Overridden because the inherited ``--clean --if-exists`` restore cannot
-        individually drop GitLab's inherited and partitioned constraints on an
-        already-populated database. Rebuilding the schemas with writers stopped
-        reaches the same state the initial empty restore does.
-        """
-        self.archive_command("pg_restore", "--list", path)
-        self.command("scale", "deployment/gitlab-ce", "--replicas=0")
-        self.command("wait", "--for=delete", "pod", "-l", "app=gitlab-ce", "--timeout=180s", timeout=200)
-        self.sql("""DO $$ DECLARE n text; BEGIN
-          FOR n IN SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'
-            AND nspname <> 'information_schema' LOOP
-            EXECUTE format('DROP SCHEMA %I CASCADE', n);
-          END LOOP;
-          CREATE SCHEMA public AUTHORIZATION gitlab_ce;
-        END $$;""")
-        self.archive_command(
-            "pg_restore",
-            "--exit-on-error",
-            "--single-transaction",
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "--no-privileges",
-            "--dbname=gitlab_ce",
-            path,
-            timeout=600,
-        )
-        self.wait_database()
-        self.command("scale", "deployment/gitlab-ce", "--replicas=1")
-        self.command(
-            "rollout",
-            "status",
-            "deployment/gitlab-ce",
-            f"--timeout={self.startup_timeout}s",
-            timeout=self.startup_timeout + 30,
-        )
-        self.wait_for_api()
-
-    def wait_for_api(self, timeout=180):
-        """Readiness can report True while Puma is still refusing API calls."""
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                return self.recovery_client("git")
-            except Exception:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(3)
+        """Replace the live history with the demoted primary's snapshot."""
+        return super().restore_archive(path)
 
     def reconcile_orphans(self, receipts):
         """Reference reconciliation: re-accept each orphaned write as new work.

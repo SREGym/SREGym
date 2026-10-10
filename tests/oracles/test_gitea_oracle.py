@@ -26,7 +26,7 @@ def oracle_with_database():
     # Execute the data query so an invalid column cannot pass through a mock.
     database = sqlite3.connect(":memory:")
     database.execute("CREATE TABLE issue (name TEXT)")
-    database.execute("INSERT INTO issue VALUES ('sregym-abc123')")
+    database.execute("INSERT INTO issue VALUES ('change-abc123')")
 
     def sql(statement, pod):
         if "pg_is_in_recovery" in statement:

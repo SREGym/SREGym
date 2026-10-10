@@ -25,6 +25,13 @@ from sregym.utils.decorators import mark_fault_injected
 
 class GitLabNotificationRecovery(GitLabDatabaseDeletion):
     application_class = GitLabNotificationApplication
+    mitigation_oracle_class = GitLabNotificationRecoveryOracle
+    root_cause_description = (
+        "Wrong-primary schema deletion reached all physical replicas. The usable staging backup "
+        "predates acknowledged issues and Redis notification jobs. Post-snapshot sequence gaps mean public-IID "
+        "replay can reuse internal issue IDs for different objects. Some notifications have already reached "
+        "the independent SMTP provider; reconcile remaining intent without wrong or duplicate deliveries."
+    )
     # A logical GitLab restore, Rails boot and queue reconciliation may exceed
     # the generic five-minute cleanup drain. This does not extend agent time.
     cleanup_timeout_seconds = 900
@@ -32,16 +39,6 @@ class GitLabNotificationRecovery(GitLabDatabaseDeletion):
     def __init__(self, scale_tier="replicated"):
         super().__init__(scale_tier)
         self.notifications = []
-        self.mitigation_oracle = GitLabNotificationRecoveryOracle(self)
-        self.root_cause = self.build_structured_root_cause(
-            component="gitlab-ce-db",
-            namespace=self.namespace,
-            description="Wrong-primary schema deletion reached all physical replicas. The usable staging backup "
-            "predates acknowledged issues and Redis notification jobs. Post-snapshot sequence gaps mean public-IID "
-            "replay can reuse internal issue IDs for different objects. Some notifications have already reached "
-            "the independent SMTP provider; reconcile remaining intent without wrong or duplicate deliveries.",
-        )
-        self.diagnosis_oracle.expected = self.root_cause
 
     def before_acknowledged_writes(self):
         # Normal aborted transactions/import reservations consume sequence values;
@@ -56,7 +53,7 @@ class GitLabNotificationRecovery(GitLabDatabaseDeletion):
 records = JSON.parse({json.dumps(records)})
 result = records.each_with_index.map do |r, index|
   issue = Issue.find_by!(project_id: r.fetch('project'), iid: r.fetch('iid'))
-  recipient = User.find_by_username!("incident-user-#{{{json.dumps(self.app.projects)}.index(r.fetch('project')) + 1}}")
+  recipient = User.find_by_username!("tenant-user-#{{{json.dumps(self.app.projects)}.index(r.fetch('project')) + 1}}")
   mail = Notify.new_issue_email(recipient.id, issue.id, {json.dumps(NOTIFICATION_REASON)})
   job = index < 6 ? (mail.deliver_now; nil) : mail.deliver_later
   r.merge('recipient' => recipient.email, 'recipient_id' => recipient.id,

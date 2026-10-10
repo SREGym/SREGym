@@ -39,7 +39,7 @@ class IntermittentMailbox(AmbiguousMailbox):
         message = BytesParser(policy=email.policy.default).parsebytes(raw)
         with self.connect() as db:
             active = db.execute("SELECT active FROM ongoing_fault WHERE id=1").fetchone()[0]
-        if not active or message.get("X-GitLab-NotificationReason") != "sregym-ack":
+        if not active or message.get("X-GitLab-NotificationReason") != "issue-update":
             return super().accept(sender, recipients, raw)
         record = {
             "sender": sender,

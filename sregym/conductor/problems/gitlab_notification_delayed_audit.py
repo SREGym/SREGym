@@ -8,15 +8,9 @@ from sregym.service.apps.gitlab.notifications import (
 
 class GitLabNotificationDelayedAudit(GitLabNotificationIntermittent):
     application_class = DelayedAuditApplication
-
-    def __init__(self, scale_tier="replicated"):
-        super().__init__(scale_tier)
-        self.root_cause = self.build_structured_root_cause(
-            component="gitlab-ce-db",
-            namespace=self.namespace,
-            description="Wrong-primary deletion propagated to PostgreSQL replicas while durable Sidekiq jobs "
-            "retained obsolete issue IDs. SMTP failures continue during recovery, and the independent provider "
-            "audit publishes acceptance receipts late. Restore acknowledged data and reconcile each original "
-            "notification using complete provider evidence before retrying uncertain sends.",
-        )
-        self.diagnosis_oracle.expected = self.root_cause
+    root_cause_description = (
+        "Wrong-primary deletion propagated to PostgreSQL replicas while durable Sidekiq jobs "
+        "retained obsolete issue IDs. SMTP failures continue during recovery, and the independent provider "
+        "audit publishes acceptance receipts late. Restore acknowledged data and reconcile each original "
+        "notification using complete provider evidence before retrying uncertain sends."
+    )

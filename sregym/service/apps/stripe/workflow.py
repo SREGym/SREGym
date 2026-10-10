@@ -16,7 +16,7 @@ def workflow(c, mode, token=None, wait_webhook=True, webhook_url="http://stripe-
         return {"endpoint": endpoint["id"]}
     if mode == "probe":
         idem = {"Idempotency-Key": "customer-" + token}
-        params = {"email": token + "@sregym.local", "metadata": {"probe": token}}
+        params = {"email": token + "@example.test", "metadata": {"probe": token}}
         customer = c.call("POST", "/v1/customers", params, idem)
         c.require(
             c.call("POST", "/v1/customers", params, idem)["id"] == customer["id"],
@@ -51,7 +51,7 @@ def workflow(c, mode, token=None, wait_webhook=True, webhook_url="http://stripe-
             workflow(c, "verify", **result)
         return result
     customer = c.call("GET", "/v1/customers/" + baseline["customer"])
-    c.require(customer["email"] == token + "@sregym.local", "Acknowledged customer changed")
+    c.require(customer["email"] == token + "@example.test", "Acknowledged customer changed")
     pi = c.call("GET", "/v1/payment_intents/" + baseline["payment"])
     # The pinned reference subtracts refunds from amount_received.
     c.require(

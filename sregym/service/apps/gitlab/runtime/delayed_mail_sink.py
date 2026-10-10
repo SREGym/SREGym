@@ -49,7 +49,7 @@ BEGIN
     (julianday('now') - 2440587.5) * 86400.0,
     (julianday('now') - 2440587.5) * 86400.0 + CASE
       WHEN (SELECT active FROM ongoing_fault WHERE id=1) = 1
-        AND json_extract(NEW.data, '$.headers."x-gitlab-notificationreason"') = 'sregym-ack'
+        AND json_extract(NEW.data, '$.headers."x-gitlab-notificationreason"') = 'issue-update'
       THEN (SELECT delay FROM audit_policy WHERE id=1) ELSE 0 END
   );
 END

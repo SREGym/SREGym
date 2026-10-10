@@ -29,7 +29,7 @@ class ScaledServiceEndpointOracle(ServiceEndpointMitigationOracle):
             app.mongo_primary(
                 name,
                 f"""
-                var r = db.getSiblingDB('sregym-durability').runCommand({{
+                var r = db.getSiblingDB('operations_audit').runCommand({{
                     insert:'canaries', documents:[{{_id:{json.dumps(self.canary)}}}],
                     writeConcern:{{w:{app.scale.members}, wtimeout:10000}}
                 }});
@@ -90,7 +90,7 @@ class ScaledServiceEndpointOracle(ServiceEndpointMitigationOracle):
                 app.mongo_primary(
                     name,
                     f"""
-                    var d=db.getSiblingDB('sregym-durability');
+                    var d=db.getSiblingDB('operations_audit');
                     var r=d.runCommand({{update:'progress', updates:[{{q:{{_id:'latest'}},
                         u:{{$set:{{token:{json.dumps(token)}}}}}, upsert:true}}],
                         writeConcern:{{w:{app.scale.members}, wtimeout:10000}}}});
@@ -101,7 +101,7 @@ class ScaledServiceEndpointOracle(ServiceEndpointMitigationOracle):
                     app.mongo(
                         name,
                         f"""
-                        rs.slaveOk(); var d=db.getSiblingDB('sregym-durability');
+                        rs.slaveOk(); var d=db.getSiblingDB('operations_audit');
                         assert(d.canaries.findOne({{_id:{json.dumps(self.canary)}}}));
                         assert.eq({json.dumps(token)},d.progress.findOne({{_id:'latest'}}).token);
                     """,
