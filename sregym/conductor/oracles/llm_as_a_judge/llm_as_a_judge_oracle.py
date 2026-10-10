@@ -23,6 +23,8 @@ class LLMAsAJudgeOracle(Oracle):
         max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
     ):
         super().__init__(problem)
+        if expected is None:
+            expected = ""
         if not isinstance(expected, (str, list)):
             raise TypeError("Expected root causes must be a string or a list of strings")
         if isinstance(expected, list) and (

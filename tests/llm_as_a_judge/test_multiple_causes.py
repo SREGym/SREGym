@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -6,7 +5,6 @@ import pytest
 from sregym.conductor.oracles.llm_as_a_judge.judge import JudgmentResult
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.llm_as_a_judge.models import DimensionResult, JudgmentReport, QuestionResult
-from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures
 
 
 def report(score=1.0, verdict=JudgmentResult.TRUE):
@@ -128,25 +126,18 @@ def test_invalid_cause_lists_are_rejected(expected):
         LLMAsAJudgeOracle(None, expected)
 
 
-@pytest.mark.parametrize("expected", [("cause A", "cause B"), {"cause": "A"}, 3, None])
+@pytest.mark.parametrize("expected", [("cause A", "cause B"), {"cause": "A"}, 3])
 def test_unsupported_cause_types_are_rejected(expected):
     with pytest.raises(TypeError, match="string or a list"):
         LLMAsAJudgeOracle(None, expected)
 
 
-def test_multiple_failures_passes_separate_causes_but_retains_combined_description():
-    problems = [
-        SimpleNamespace(
-            app=SimpleNamespace(name=f"app-{i}", namespace=f"ns-{i}"),
-            namespace=f"ns-{i}",
-            root_cause=f"service-{i} has fault-{i}",
-        )
-        for i in range(4)
-    ]
+@pytest.mark.parametrize("expected", [None, ""])
+def test_missing_root_cause_keeps_the_previous_empty_expectation(expected):
+    oracle = LLMAsAJudgeOracle(None, expected)
+    oracle.judge.judge_detailed = Mock(return_value=report())
 
-    problem = MultipleIndependentFailures(problems)
+    oracle.evaluate("A diagnosis")
 
-    assert len(problem.diagnosis_oracle.expected) == 4
-    for cause, original in zip(problem.diagnosis_oracle.expected, problems, strict=True):
-        assert original.root_cause in cause
-        assert original.root_cause in problem.root_cause
+    assert oracle.expected == ""
+    oracle.judge.judge_detailed.assert_called_once_with(solution="A diagnosis", expectation="")
