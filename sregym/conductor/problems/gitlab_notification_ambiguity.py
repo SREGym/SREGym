@@ -4,7 +4,7 @@ import time
 
 from sregym.conductor.oracles.gitlab_notification_recovery import notification_report
 from sregym.conductor.problems.gitlab_notification_recovery import GitLabNotificationRecovery
-from sregym.service.apps.gitlab_notification_ambiguity import GitLabNotificationAmbiguity as AmbiguousApplication
+from sregym.service.apps.gitlab.notifications import GitLabNotificationAmbiguity as AmbiguousApplication
 
 
 class GitLabNotificationAmbiguity(GitLabNotificationRecovery):

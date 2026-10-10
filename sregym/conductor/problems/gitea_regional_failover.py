@@ -17,8 +17,8 @@ import time
 from sregym.conductor.oracles.gitea_divergent_recovery import GiteaDivergentRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
-from sregym.service.apps.gitea import FIXTURES
-from sregym.service.apps.gitea_failover import (
+from sregym.service.apps.gitea.application import FIXTURES
+from sregym.service.apps.gitea.failover import (
     EAST_SNAPSHOT,
     PARTITION_JOURNAL,
     SHARED_SNAPSHOT,

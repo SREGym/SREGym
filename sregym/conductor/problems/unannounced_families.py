@@ -8,11 +8,9 @@ screens show is attributable to that sentence and nothing else.
 from sregym.conductor.problems.gitea_database_deletion import GiteaDatabaseDeletion
 from sregym.conductor.problems.gitlab_database_deletion import GitLabDatabaseDeletion
 from sregym.conductor.problems.mattermost_capacity_cascade import MattermostCapacityCascade
-from sregym.service.apps.unannounced_families import (
-    GiteaRecoveryUnannounced,
-    GitLabRecoveryUnannounced,
-    MattermostCascadeUnannounced,
-)
+from sregym.service.apps.gitea.recovery import GiteaRecoveryUnannounced
+from sregym.service.apps.gitlab.recovery import GitLabRecoveryUnannounced
+from sregym.service.apps.mattermost.cascade import MattermostCascadeUnannounced
 
 
 class GiteaDatabaseDeletionUnannounced(GiteaDatabaseDeletion):

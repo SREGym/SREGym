@@ -5,7 +5,7 @@ from collections import Counter
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.saas import SaaSOracle
-from sregym.service.apps.gitlab_recovery import ARCHIVE
+from sregym.service.apps.gitlab.recovery import ARCHIVE
 
 KEYS = {"users": ("id",), "projects": ("id",), "members": ("id",), "issues": ("project_id", "iid")}
 

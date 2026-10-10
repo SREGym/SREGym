@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
-from sregym.service.apps.gitlab_ce import GitLabCE
-from sregym.service.apps.mattermost import Mattermost
-from sregym.service.apps.stripe_marathon import StripeMarathon
+from sregym.service.apps.gitlab.application import GitLabCE
+from sregym.service.apps.mattermost.application import Mattermost
+from sregym.service.apps.stripe.application import StripeMarathon
 
 
 @pytest.mark.parametrize("cls", [GitLabCE, Mattermost, StripeMarathon])

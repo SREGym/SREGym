@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from sregym.conductor.oracles.stripe_config_recovery import StripeConfigRecoveryOracle, compare_state
-from sregym.service.apps.incident_runtime import feature_edge as edge
+from sregym.service.apps.stripe.runtime import feature_edge as edge
 
 
 @pytest.fixture

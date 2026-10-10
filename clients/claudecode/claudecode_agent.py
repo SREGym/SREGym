@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from clients.harness.token_usage import aggregate_usage, read_jsonl, sum_counts, token_count, usage_metrics
@@ -207,12 +208,8 @@ class ClaudeCodeAgent:
         return aggregate_usage(records)
 
     def _setup_sessions_structure(self) -> None:
-        """Create required Claude Code session directory structure."""
-        (self.sessions_dir / "debug").mkdir(parents=True, exist_ok=True)
+        """Create the artifact directory for Claude Code session records."""
         (self.sessions_dir / "projects" / "-app").mkdir(parents=True, exist_ok=True)
-        (self.sessions_dir / "shell-snapshots").mkdir(parents=True, exist_ok=True)
-        (self.sessions_dir / "statsig").mkdir(parents=True, exist_ok=True)
-        (self.sessions_dir / "todos").mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Created session directory structure at {self.sessions_dir}")
 
@@ -228,16 +225,9 @@ class ClaudeCodeAgent:
             return None
         return path if isinstance(oauth, dict) and oauth.get("accessToken") else None
 
-    def _install_subscription_credentials(self, source: Path) -> None:
-        """Copy the credentials into the config dir the CLI will actually read.
-
-        The agent runs with ``CLAUDE_CONFIG_DIR`` pointed at its own sessions
-        directory so the run's traces are captured, which also means the CLI no
-        longer looks at the mounted ``~/.claude``. Copying rather than linking
-        keeps a token refresh inside the container from writing back to the
-        read-only mount.
-        """
-        destination = self.sessions_dir / ".credentials.json"
+    def _install_subscription_credentials(self, source: Path, config_dir: Path) -> None:
+        """Use a private copy so token refresh cannot change the read-only mount."""
+        destination = config_dir / ".credentials.json"
         shutil.copyfile(source, destination)
         destination.chmod(0o600)
         logger.info(f"Installed subscription credentials for the agent at {destination}")
@@ -324,7 +314,6 @@ class ClaudeCodeAgent:
 
         # Build environment variables
         env = os.environ.copy()
-        env["CLAUDE_CONFIG_DIR"] = str(self.sessions_dir)
         env["FORCE_AUTO_BACKGROUND_TASKS"] = "1"
         env["ENABLE_BACKGROUND_TASKS"] = "1"
 
@@ -346,9 +335,6 @@ class ClaudeCodeAgent:
             logger.error(f"  - a subscription credentials file at {CREDENTIALS_FILE}")
             logger.error("=" * 80)
             return 1
-
-        if credentials and not api_key and not oauth_token:
-            self._install_subscription_credentials(credentials)
 
         # Prefer OAuth when explicitly set: an OAuth token in the env reflects
         # caller intent (e.g. driving the agent on a Claude Code subscription
@@ -387,8 +373,19 @@ class ClaudeCodeAgent:
         logger.info(f"Executing command: {' '.join(command)}")
 
         try:
-            # Run Claude Code and capture output
-            with open(self.output_path, "w") as out_file:
+            # Never put CLI configuration or credentials in publishable results.
+            # Only the projects directory, which holds session logs, is saved.
+            with (
+                tempfile.TemporaryDirectory(prefix="sregym-claude-config-") as directory,
+                open(self.output_path, "w") as out_file,
+            ):
+                config_dir = Path(directory)
+                (config_dir / "projects").symlink_to(
+                    (self.sessions_dir / "projects").resolve(), target_is_directory=True
+                )
+                env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+                if credentials and not api_key and not oauth_token:
+                    self._install_subscription_credentials(credentials, config_dir)
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,

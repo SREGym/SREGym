@@ -14,7 +14,7 @@ import time
 from sregym.conductor.oracles.gitlab_divergent_recovery import GitLabDivergentRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
-from sregym.service.apps.gitlab_failover import (
+from sregym.service.apps.gitlab.failover import (
     EAST_SNAPSHOT,
     PARTITION_JOURNAL,
     SHARED_SNAPSHOT,

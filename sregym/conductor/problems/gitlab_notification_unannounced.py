@@ -13,10 +13,10 @@ amount, it is about the time the search costs.
 
 from sregym.conductor.problems.gitlab_notification_ambiguity import GitLabNotificationAmbiguity
 from sregym.conductor.problems.gitlab_notification_recovery import GitLabNotificationRecovery
-from sregym.service.apps.gitlab_notification_unannounced import (
+from sregym.service.apps.gitlab.notifications import (
     GitLabNotificationUnannounced as UnannouncedApplication,
 )
-from sregym.service.apps.gitlab_notification_unannounced import (
+from sregym.service.apps.gitlab.notifications import (
     GitLabNotificationUnannouncedAmbiguity as UnannouncedAmbiguityApplication,
 )
 

@@ -12,9 +12,9 @@ from contextlib import suppress
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from sregym.service.apps.incident_runtime.ambiguous_mail_sink import ambiguous_smtp_handler
-from sregym.service.apps.incident_runtime.delayed_mail_sink import DelayedAuditMailbox, delayed_audit_handler
-from sregym.service.apps.incident_runtime.mail_sink import SMTPServer
+from sregym.service.apps.gitlab.runtime.ambiguous_mail_sink import ambiguous_smtp_handler
+from sregym.service.apps.gitlab.runtime.delayed_mail_sink import DelayedAuditMailbox, delayed_audit_handler
+from sregym.service.apps.gitlab.runtime.mail_sink import SMTPServer
 
 RAW = (
     b"From: gitlab@sregym.local\r\nTo: user@sregym.local\r\nSubject: Receipt\r\n"

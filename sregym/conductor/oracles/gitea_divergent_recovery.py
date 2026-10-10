@@ -17,7 +17,7 @@ import time
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.gitea import GiteaOracle
 from sregym.conductor.oracles.gitlab_divergent_recovery import divergence_report
-from sregym.service.apps.gitea_failover import EAST_SNAPSHOT, SHARED_SNAPSHOT
+from sregym.service.apps.gitea.failover import EAST_SNAPSHOT, SHARED_SNAPSHOT
 
 
 def gitea_keys(repositories):

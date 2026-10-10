@@ -226,45 +226,11 @@ class ProblemRegistry:
             "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_service_selector_social_network": lambda: WrongServiceSelector(app_name="social_network", faulty_service="user-service"),
-            # Only the problems a screen showed to separate a frontier agent are
-            # registered. The remaining families in this branch are built and
-            # tested but deliberately unregistered: each was solved 3 of 3 under a
-            # generic task description, so registering them would add campaign cost
-            # without adding discrimination. Re-register one when a screen gives a
-            # reason to -- a harder tier, a weaker agent, or a new lever.
-            # The only one of ten candidates that did not saturate: 2 of 3, with
-            # the failure in the same graded mode as the two races
-            # (expected 30, delivered 30, missing 0, duplicates 3). Registered on
-            # the same standard as stripe_feature_config, which is also 2 of 3.
-            # One failure in three is weak -- across the four pointer pairs it is
-            # one failure in twelve against zero in twelve for their baselines --
-            # so treat it as a candidate for an n=10, not as an established
-            # discriminator.
             "gitlab_notification_unannounced_ambiguity_replicated": lambda: GitLabNotificationUnannouncedAmbiguity(
                 scale_tier="replicated"
             ),
-            # Seven candidates were screened against these families and none
-            # discriminated, so none is registered. They remain in the tree
-            # because the negative results are the useful part and the code is
-            # how to reproduce them:
-            #   gitlab_notification_unannounced        3/3  563s vs 614s announced
-            #   mattermost_capacity_cascade_unannounced 3/3  206s vs 243s announced
-            #   gitea_compound_loss                    3/3  187s vs 152s baseline
-            #   gitea_regional_failover                3/3   96s vs 287s on GitLab
-            # The first two show a withheld pointer is free when it names
-            # anything kubectl lists; the third that silent incompleteness loses
-            # to a verifier that enumerates what it did not touch; the fourth
-            # that the same conflict on another application is three times
-            # faster. See docs/deathstarbench/HANDOFF.md.
             "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittent(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAudit(scale_tier="replicated"),
-            # gitlab_regional_failover is NOT registered. It was this suite's
-            # flagship at 1 of 3, and an n=10 confirmation returned 10 of 10 at
-            # 120s median. The 1-of-3 cohort saw a description advertising a
-            # "backup catalog", which primes restoring a backup, and the restore
-            # is the destructive action -- every failure there was
-            # post_promotion_writes_lost. Re-register it if an n=10 under that
-            # older wording reproduces the difficulty; see HANDOFF.md.
             "stripe_feature_config_single": lambda: StripeFeatureConfig(scale_tier="single"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,

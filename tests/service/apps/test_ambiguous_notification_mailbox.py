@@ -10,12 +10,12 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from sregym.service.apps.incident_runtime.ambiguous_mail_sink import (
+from sregym.service.apps.gitlab.runtime.ambiguous_mail_sink import (
     AmbiguousMailbox,
     ambiguous_smtp_handler,
     audit_handler,
 )
-from sregym.service.apps.incident_runtime.mail_sink import SMTPServer
+from sregym.service.apps.gitlab.runtime.mail_sink import SMTPServer
 
 RAW = (
     b"From: gitlab@sregym.local\r\nTo: user@sregym.local\r\nSubject: Receipt\r\n"

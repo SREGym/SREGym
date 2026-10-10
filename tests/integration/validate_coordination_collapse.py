@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from sregym.conductor.problems.coordination_collapse import CoordinationCollapse
-from sregym.service.apps.incident_runtime import coordination_store
+from sregym.service.apps.coordination.runtime import coordination_store
 
 
 def validate(tier):

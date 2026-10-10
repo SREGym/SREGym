@@ -11,7 +11,7 @@ from sregym.conductor.oracles.gitlab_database_recovery import (
     compare_records,
     records_intact,
 )
-from sregym.service.apps.gitlab_recovery_workflow import reconcile
+from sregym.service.apps.gitlab.recovery_workflow import reconcile
 
 
 @pytest.fixture

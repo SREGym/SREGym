@@ -22,7 +22,7 @@ volume, and the recovery path is the same `tar` the backup was made with.
 import json
 
 from sregym.conductor.problems.gitea_database_deletion import GiteaDatabaseDeletion
-from sregym.service.apps.gitea import FIXTURES
+from sregym.service.apps.gitea.application import FIXTURES
 from sregym.utils.decorators import mark_fault_injected
 
 

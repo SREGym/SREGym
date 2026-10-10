@@ -3,9 +3,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from scripts.evaluate_deathstarbench import problem_id
-from sregym.service.apps.gitlab_recovery import GitLabRecovery
-from sregym.service.apps.stripe_config import StripeConfig
+from experiments.environment_scaling.evaluate import problem_id
+from sregym.service.apps.gitlab.recovery import GitLabRecovery
+from sregym.service.apps.stripe.configuration import StripeConfig
 
 
 @pytest.mark.parametrize("tier,members", [("single", 1), ("replicated", 3)])
@@ -41,7 +41,7 @@ def test_comparison_routes_only_supported_incident_application_pairs():
 
 
 def test_notification_environment_preserves_real_queue_and_external_evidence():
-    from sregym.service.apps.gitlab_notification_recovery import GitLabNotificationRecovery
+    from sregym.service.apps.gitlab.notifications import GitLabNotificationRecovery
 
     app = GitLabNotificationRecovery()
     docs = app.render()
@@ -64,7 +64,7 @@ def test_notification_environment_preserves_real_queue_and_external_evidence():
 
 
 def test_ambiguous_provider_keeps_evidence_and_fault_controls_protected():
-    from sregym.service.apps.gitlab_notification_ambiguity import GitLabNotificationAmbiguity
+    from sregym.service.apps.gitlab.notifications import GitLabNotificationAmbiguity
 
     app = GitLabNotificationAmbiguity()
     docs = app.render()
@@ -80,7 +80,7 @@ def test_ambiguous_provider_keeps_evidence_and_fault_controls_protected():
 
 
 def test_intermittent_provider_preserves_protected_evidence_and_is_opt_in():
-    from sregym.service.apps.gitlab_notification_intermittent import GitLabNotificationIntermittent
+    from sregym.service.apps.gitlab.notifications import GitLabNotificationIntermittent
 
     app = GitLabNotificationIntermittent()
     docs = app.render()
@@ -105,7 +105,7 @@ def test_intermittent_provider_preserves_protected_evidence_and_is_opt_in():
 
 
 def test_delayed_provider_preserves_protected_evidence_and_is_opt_in():
-    from sregym.service.apps.gitlab_notification_delayed_audit import GitLabNotificationDelayedAudit
+    from sregym.service.apps.gitlab.notifications import GitLabNotificationDelayedAudit
 
     app = GitLabNotificationDelayedAudit()
     docs = app.render()
@@ -134,7 +134,7 @@ def test_delayed_provider_preserves_protected_evidence_and_is_opt_in():
 
 
 def test_expanded_notifications_scale_workload_without_changing_replication_contract():
-    from sregym.service.apps.gitlab_notification_expanded import GitLabNotificationExpanded
+    from sregym.service.apps.gitlab.notifications import GitLabNotificationExpanded
 
     app = GitLabNotificationExpanded()
     assert app.scale_tier == "replicated"
@@ -161,7 +161,7 @@ def test_expanded_notifications_scale_workload_without_changing_replication_cont
 
 def test_failover_environment_adds_evidence_without_new_storage():
     """The divergence family reuses the archive volume; only its contents differ."""
-    from sregym.service.apps.gitlab_failover import GitLabFailover
+    from sregym.service.apps.gitlab.failover import GitLabFailover
 
     app = GitLabFailover()
     # Same storage as the deletion family: 3 members plus 4 data volumes. The
@@ -177,7 +177,7 @@ def test_failover_environment_adds_evidence_without_new_storage():
 
 @pytest.mark.parametrize(("tier", "projects", "orphaned", "post"), [("single", 3, 6, 6), ("replicated", 5, 30, 30)])
 def test_failover_tiers_acknowledge_writes_on_both_sides_of_the_partition(tier, projects, orphaned, post):
-    from sregym.service.apps.gitlab_failover import GitLabFailover
+    from sregym.service.apps.gitlab.failover import GitLabFailover
 
     app = GitLabFailover(tier)
     assert app.recovery_counts[0] == projects
@@ -194,7 +194,7 @@ def test_the_failover_family_ships_no_guide():
     contract, which is the judgement the family exists to test. Removing that
     one disclosure took the family from 3 of 3 solved to 1 of 3.
     """
-    import sregym.service.apps.gitlab_failover as failover
+    import sregym.service.apps.gitlab.failover as failover
 
     assert not hasattr(failover, "FAILOVER_GUIDE")
     # The journal still exists: it is the evidence, not a briefing about it.
@@ -202,7 +202,7 @@ def test_the_failover_family_ships_no_guide():
 
 
 def test_failover_rejects_a_bad_snapshot_before_stopping_the_application():
-    from sregym.service.apps.gitlab_failover import GitLabFailover
+    from sregym.service.apps.gitlab.failover import GitLabFailover
 
     app = GitLabFailover()
     app.archive_command = Mock(side_effect=subprocess.CalledProcessError(1, ["pg_restore", "--list"]))
@@ -218,7 +218,7 @@ STORED = {"project_id": 4, "iid": 9, "title": "t", "description": "d", "confiden
 
 def test_reconciliation_keeps_content_and_project_and_drops_the_stale_iid():
     """The original IID belongs to a post-promotion issue and cannot be reused."""
-    from sregym.service.apps.gitlab_failover import GitLabFailover
+    from sregym.service.apps.gitlab.failover import GitLabFailover
 
     app = GitLabFailover()
     app.snapshot = Mock(return_value={"issues": []})
@@ -238,7 +238,7 @@ def test_reconciliation_keeps_content_and_project_and_drops_the_stale_iid():
 
 def test_reconciliation_skips_writes_already_present_exactly_once():
     """Cleanup after a partly successful attempt must not create duplicates."""
-    from sregym.service.apps.gitlab_failover import GitLabFailover
+    from sregym.service.apps.gitlab.failover import GitLabFailover
 
     app = GitLabFailover()
     # Already reconciled under a fresh IID: content present, identity moved.
@@ -250,7 +250,7 @@ def test_reconciliation_skips_writes_already_present_exactly_once():
 
 
 def test_reconciliation_completes_a_partially_recovered_tail():
-    from sregym.service.apps.gitlab_failover import GitLabFailover
+    from sregym.service.apps.gitlab.failover import GitLabFailover
 
     app = GitLabFailover()
     second = {**RECEIPT, "title": "u", "iid": 10}
@@ -269,7 +269,7 @@ def test_cascade_gateway_runs_several_replicas_and_is_not_oracle_topology_checke
     The gateway is meant to run several, and deleting the scaler is a legitimate
     repair, so neither may be an `auxiliary_deployment`.
     """
-    from sregym.service.apps.mattermost_cascade import MattermostCascade
+    from sregym.service.apps.mattermost.cascade import MattermostCascade
 
     app = MattermostCascade()
     docs = app.render()
@@ -281,7 +281,7 @@ def test_cascade_gateway_runs_several_replicas_and_is_not_oracle_topology_checke
 
 
 def test_only_the_scaler_gets_an_api_token_and_only_over_the_gateway_scale():
-    from sregym.service.apps.mattermost_cascade import MattermostCascade
+    from sregym.service.apps.mattermost.cascade import MattermostCascade
 
     docs = MattermostCascade().render()
     pods = [d for d in docs if d["kind"] == "Deployment"]
@@ -296,7 +296,7 @@ def test_only_the_scaler_gets_an_api_token_and_only_over_the_gateway_scale():
 
 
 def test_cascade_control_state_is_persistent_so_a_restart_cannot_clear_it():
-    from sregym.service.apps.mattermost_cascade import CONTROL_VOLUME, MattermostCascade
+    from sregym.service.apps.mattermost.cascade import CONTROL_VOLUME, MattermostCascade
 
     app = MattermostCascade()
     assert CONTROL_VOLUME in app.data_volumes
@@ -310,7 +310,7 @@ def test_cascade_control_state_is_persistent_so_a_restart_cannot_clear_it():
 
 def test_customer_traffic_is_concurrent_and_part_of_the_environment():
     """A sequential probe can never saturate a worker pool, however slow it gets."""
-    from sregym.service.apps.mattermost_cascade import MattermostCascade
+    from sregym.service.apps.mattermost.cascade import MattermostCascade
 
     app = MattermostCascade()
     docs = app.render()
@@ -331,7 +331,7 @@ def test_the_cascade_family_ships_no_guide():
     and pointed at the metrics endpoint and the latency control file. The agent's
     first action on the old screen was to read that file and then execute it.
     """
-    import sregym.service.apps.mattermost_cascade as cascade
+    import sregym.service.apps.mattermost.cascade as cascade
 
     assert not hasattr(cascade, "CASCADE_GUIDE")
     description = cascade.MattermostCascade().get_app_json()["Desc"]
@@ -343,8 +343,8 @@ def test_calibrated_policy_still_reads_a_saturated_gateway_as_idle():
     """Thresholds come from measured healthy CPU, so they travel between hosts."""
     from unittest.mock import Mock
 
-    from sregym.service.apps.incident_runtime.capacity_scaler import DEFAULT_POLICY, decide
-    from sregym.service.apps.mattermost_cascade import MattermostCascade
+    from sregym.service.apps.mattermost.cascade import MattermostCascade
+    from sregym.service.apps.mattermost.runtime.capacity_scaler import DEFAULT_POLICY, decide
 
     app = MattermostCascade()
     app.healthy_cpu = Mock(return_value=44.0)
@@ -366,17 +366,11 @@ def test_calibrated_policy_still_reads_a_saturated_gateway_as_idle():
 
 
 def test_unannounced_variants_remove_the_mail_clause_and_nothing_else():
-    """The only difference from the announced family is the missing sentence.
-
-    If the mixin silently stopped matching, the problem would look like a
-    disclosure experiment while being identical to its parent, and the screen
-    would measure nothing. The app raises in that case; this pins the behaviour
-    and the exact text.
-    """
-    from sregym.service.apps.gitlab_notification_ambiguity import GitLabNotificationAmbiguity
-    from sregym.service.apps.gitlab_notification_recovery import GitLabNotificationRecovery
-    from sregym.service.apps.gitlab_notification_unannounced import (
-        ANNOUNCEMENT,
+    """Description options do not change the deployed notification subsystem."""
+    from sregym.service.apps.gitlab.notifications import (
+        NOTIFICATION_DESCRIPTION,
+        GitLabNotificationAmbiguity,
+        GitLabNotificationRecovery,
         GitLabNotificationUnannounced,
         GitLabNotificationUnannouncedAmbiguity,
     )
@@ -387,9 +381,9 @@ def test_unannounced_variants_remove_the_mail_clause_and_nothing_else():
     ):
         loud = announced("replicated").get_app_json()["Desc"]
         quiet = unannounced("replicated").get_app_json()["Desc"]
-        assert ANNOUNCEMENT in loud
-        assert ANNOUNCEMENT not in quiet
-        assert quiet == loud.replace(ANNOUNCEMENT, "")
+        assert NOTIFICATION_DESCRIPTION in loud
+        assert NOTIFICATION_DESCRIPTION not in quiet
+        assert quiet == loud.replace(NOTIFICATION_DESCRIPTION, "")
         # The subsystem itself must still be there: this withholds narration,
         # not capability. An unsolvable task is not a harder task.
         documents = unannounced("replicated").render()
@@ -398,15 +392,38 @@ def test_unannounced_variants_remove_the_mail_clause_and_nothing_else():
         assert names.count("notification-mailbox") == 3  # PVC, Service, Deployment
 
 
-def test_unannounced_mixin_refuses_to_be_a_silent_no_op(monkeypatch):
-    """If the parent stops announcing, this must break loudly, not quietly pass."""
-    from sregym.service.apps.gitlab_notification_recovery import GitLabNotificationRecovery
-    from sregym.service.apps.gitlab_notification_unannounced import GitLabNotificationUnannounced
+def test_description_options_do_not_depend_on_exact_parent_wording(monkeypatch):
+    from sregym.service.apps.gitlab.notifications import GitLabNotificationUnannounced
+    from sregym.service.apps.gitlab.recovery import GitLabRecovery
 
     monkeypatch.setattr(
-        GitLabNotificationRecovery,
+        GitLabRecovery,
         "get_app_json",
         lambda self: {"Name": "GitLab CE prototype", "Desc": "a description with no mail clause"},
     )
-    with pytest.raises(RuntimeError, match="no longer removes anything"):
-        GitLabNotificationUnannounced("replicated").get_app_json()
+    assert GitLabNotificationUnannounced("replicated").get_app_json()["Desc"] == "a description with no mail clause"
+
+
+@pytest.mark.parametrize(
+    "application",
+    [
+        "sregym.service.apps.gitlab.notifications.GitLabNotificationUnannouncedAmbiguity",
+        "sregym.service.apps.gitlab.notifications.GitLabNotificationIntermittent",
+        "sregym.service.apps.gitlab.notifications.GitLabNotificationDelayedAudit",
+        "sregym.service.apps.stripe.configuration.StripeConfig",
+    ],
+)
+def test_agent_descriptions_do_not_state_the_diagnosis_or_recovery_procedure(application):
+    import importlib
+
+    module, name = application.rsplit(".", 1)
+    app = getattr(importlib.import_module(module), name)()
+    description = app.get_app_json()["Desc"]
+    for phrase in (
+        "Recover every intended notification exactly once",
+        "without losing acknowledged",
+        "Check candidate archives before use",
+        "does not establish that a send was rejected",
+        "take thirty seconds to appear",
+    ):
+        assert phrase not in description

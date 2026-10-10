@@ -15,7 +15,7 @@ import time
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mattermost_cascade_recovery import MattermostCascadeOracle
 from sregym.conductor.problems.base import Problem
-from sregym.service.apps.mattermost_cascade import MattermostCascade
+from sregym.service.apps.mattermost.cascade import MattermostCascade
 from sregym.utils.decorators import mark_fault_injected
 
 #: Added upstream latency. Far above the gateway's own per-request work, so its

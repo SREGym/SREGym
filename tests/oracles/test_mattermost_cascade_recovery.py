@@ -8,7 +8,7 @@ import pytest
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mattermost_cascade_recovery import MattermostCascadeOracle, latency_budget
-from sregym.service.apps.incident_runtime.capacity_scaler import DEFAULT_POLICY, decide, observe
+from sregym.service.apps.mattermost.runtime.capacity_scaler import DEFAULT_POLICY, decide, observe
 
 
 def test_cpu_policy_removes_capacity_from_a_saturated_gateway():

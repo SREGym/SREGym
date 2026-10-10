@@ -5,7 +5,7 @@ import secrets
 import time
 
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
-from sregym.service.apps.gitea import FIXTURES
+from sregym.service.apps.gitea.application import FIXTURES
 
 
 class GiteaOracle(ServiceEndpointMitigationOracle):

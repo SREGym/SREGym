@@ -2,7 +2,7 @@
 
 from sregym.conductor.oracles.gitlab_notification_recovery import notification_report
 from sregym.conductor.problems.gitlab_notification_ambiguity import GitLabNotificationAmbiguity
-from sregym.service.apps.gitlab_notification_intermittent import (
+from sregym.service.apps.gitlab.notifications import (
     GitLabNotificationIntermittent as IntermittentApplication,
 )
 

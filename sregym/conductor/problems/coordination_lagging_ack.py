@@ -12,7 +12,7 @@ progress, where acting on the stale report costs the window it was waiting for.
 """
 
 from sregym.conductor.problems.coordination_collapse import CoordinationCollapse
-from sregym.service.apps.coordination_lagging_ack import (
+from sregym.service.apps.coordination.lagging_acknowledgement import (
     CoordinationLaggingAck,
     CoordinationLaggingAdmission,
 )

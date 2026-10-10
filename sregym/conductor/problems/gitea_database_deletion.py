@@ -7,8 +7,8 @@ import time
 from sregym.conductor.oracles.gitea_database_recovery import GiteaDatabaseRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
-from sregym.service.apps.gitea import FIXTURES
-from sregym.service.apps.gitea_recovery import ARCHIVE, JOURNAL, RECOVERY_COUNTS, GiteaRecovery
+from sregym.service.apps.gitea.application import FIXTURES
+from sregym.service.apps.gitea.recovery import ARCHIVE, JOURNAL, RECOVERY_COUNTS, GiteaRecovery
 from sregym.utils.decorators import mark_fault_injected
 
 

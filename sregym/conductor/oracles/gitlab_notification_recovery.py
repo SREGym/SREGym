@@ -6,7 +6,7 @@ from collections import Counter
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.gitlab_database_recovery import GitLabDatabaseRecoveryOracle
-from sregym.service.apps.gitlab_notification_recovery import NOTIFICATION_REASON
+from sregym.service.apps.gitlab.notifications import NOTIFICATION_REASON
 
 
 def notification_report(expected, messages, reason=NOTIFICATION_REASON):

@@ -10,7 +10,7 @@ from collections import Counter
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.saas import SaaSOracle
-from sregym.service.apps.gitlab_failover import EAST_SNAPSHOT, SHARED_SNAPSHOT
+from sregym.service.apps.gitlab.failover import EAST_SNAPSHOT, SHARED_SNAPSHOT
 
 
 def content_key(record):

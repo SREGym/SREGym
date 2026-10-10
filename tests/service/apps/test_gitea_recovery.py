@@ -4,8 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.service.apps.gitea_recovery import GiteaRecovery
-from sregym.service.apps.gitea_recovery_workflow import reconcile_issues
+from sregym.service.apps.gitea.recovery import GiteaRecovery
+from sregym.service.apps.gitea.recovery_workflow import reconcile_issues
 
 
 @pytest.fixture

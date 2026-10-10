@@ -5,7 +5,7 @@ from collections import Counter
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.gitea import GiteaOracle
-from sregym.service.apps.gitea_recovery import ARCHIVE
+from sregym.service.apps.gitea.recovery import ARCHIVE
 
 
 def compare_records(expected, actual):

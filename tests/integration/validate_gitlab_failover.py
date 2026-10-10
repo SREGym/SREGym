@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from sregym.conductor.problems.gitlab_regional_failover import GitLabRegionalFailover
-from sregym.service.apps.gitlab_failover import EAST_SNAPSHOT, PARTITION_JOURNAL, SHARED_SNAPSHOT
+from sregym.service.apps.gitlab.failover import EAST_SNAPSHOT, PARTITION_JOURNAL, SHARED_SNAPSHOT
 
 
 def validate(tier):

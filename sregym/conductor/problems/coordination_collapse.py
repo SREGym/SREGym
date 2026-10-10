@@ -20,8 +20,8 @@ import time
 from sregym.conductor.oracles.coordination_recovery import CoordinationRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
-from sregym.service.apps.coordination_cluster import RECOMMENDED_AGENT_TIMEOUT, CoordinationCluster
-from sregym.service.apps.incident_runtime import coordination_store
+from sregym.service.apps.coordination.application import RECOMMENDED_AGENT_TIMEOUT, CoordinationCluster
+from sregym.service.apps.coordination.runtime import coordination_store
 from sregym.utils.decorators import mark_fault_injected
 
 

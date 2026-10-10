@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from sregym.service.apps.incident_runtime.mail_sink import Mailbox, SMTPServer, http_handler, smtp_handler
+from sregym.service.apps.gitlab.runtime.mail_sink import Mailbox, SMTPServer, http_handler, smtp_handler
 
 
 def test_smtp_persistence_duplicates_and_read_only_audit(tmp_path):

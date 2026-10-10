@@ -15,15 +15,15 @@ class WrongServiceSelector(Problem):
         self.faulty_service = faulty_service
 
         if app_name in ("gitlab_ce", "mattermost", "stripe_marathon"):
-            from sregym.service.apps.gitlab_ce import GitLabCE
-            from sregym.service.apps.mattermost import Mattermost
-            from sregym.service.apps.stripe_marathon import StripeMarathon
+            from sregym.service.apps.gitlab.application import GitLabCE
+            from sregym.service.apps.mattermost.application import Mattermost
+            from sregym.service.apps.stripe.application import StripeMarathon
 
             app = {"gitlab_ce": GitLabCE, "mattermost": Mattermost, "stripe_marathon": StripeMarathon}[app_name](
                 tier=scale_tier or "replicated"
             )
         elif app_name == "gitea":
-            from sregym.service.apps.gitea import Gitea
+            from sregym.service.apps.gitea.application import Gitea
 
             app = Gitea(tier=scale_tier or "replicated")
         elif scale_tier is not None:

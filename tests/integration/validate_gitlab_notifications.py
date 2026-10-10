@@ -12,7 +12,7 @@ from pathlib import Path
 
 from sregym.conductor.oracles.gitlab_notification_recovery import notification_report
 from sregym.conductor.problems.gitlab_notification_recovery import GitLabNotificationRecovery
-from sregym.service.apps.gitlab_notification_recovery import NOTIFICATION_REASON
+from sregym.service.apps.gitlab.notifications import NOTIFICATION_REASON
 
 
 def validate(

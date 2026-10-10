@@ -128,7 +128,7 @@ def test_a_missing_repository_is_graded_rather_than_raising():
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from sregym.service.apps.gitea_recovery import GiteaRecovery
+    from sregym.service.apps.gitea.recovery import GiteaRecovery
 
     # Called unbound against a stub: constructing the application needs a
     # kubeconfig, and this behaviour is worth testing without a cluster.
@@ -158,7 +158,7 @@ def test_the_oracle_only_asks_its_application_for_methods_that_exist():
     import inspect
 
     from sregym.conductor.oracles.gitea_divergent_recovery import GiteaDivergentRecoveryOracle
-    from sregym.service.apps.gitea_failover import GiteaFailover
+    from sregym.service.apps.gitea.failover import GiteaFailover
 
     wanted = set()
     for klass in GiteaDivergentRecoveryOracle.__mro__:

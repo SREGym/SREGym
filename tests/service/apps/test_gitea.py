@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.service.apps.gitea import Gitea
+from sregym.service.apps.gitea.application import Gitea
 from sregym.service.apps.persistent import cleanup_persistent_namespace
 
 

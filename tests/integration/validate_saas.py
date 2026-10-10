@@ -1,6 +1,6 @@
 """Live SaaS admission: faults, record loss, restarts, switchover and reset.
 
-Run inside DinD after scripts/prepare_saas_prototypes.py. This exercises the
+Run inside DinD after experiments/environment_scaling/prepare.py. This exercises the
 registered problem's application, fault injector, reference repair and oracle.
 """
 

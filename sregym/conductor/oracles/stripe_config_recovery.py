@@ -2,7 +2,7 @@
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.saas import SaaSOracle
-from sregym.service.apps.incident_runtime.feature_edge import PERIOD
+from sregym.service.apps.stripe.runtime.feature_edge import PERIOD
 
 
 def compare_state(expected, actual, events, receipts):

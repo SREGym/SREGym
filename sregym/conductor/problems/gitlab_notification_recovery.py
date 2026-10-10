@@ -13,11 +13,11 @@ from sregym.conductor.oracles.gitlab_notification_recovery import (
     notification_report,
 )
 from sregym.conductor.problems.gitlab_database_deletion import GitLabDatabaseDeletion
-from sregym.service.apps.gitlab_notification_recovery import (
+from sregym.service.apps.gitlab.notifications import (
     NOTIFICATION_JOURNAL,
     NOTIFICATION_REASON,
 )
-from sregym.service.apps.gitlab_notification_recovery import (
+from sregym.service.apps.gitlab.notifications import (
     GitLabNotificationRecovery as GitLabNotificationApplication,
 )
 from sregym.utils.decorators import mark_fault_injected

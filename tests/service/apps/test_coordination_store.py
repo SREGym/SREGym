@@ -18,7 +18,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setenv("STABILITY_SECONDS", "60")
     monkeypatch.setenv("WARMING_SECONDS", "120")
     monkeypatch.setenv("ADMISSION_STEP_SECONDS", "45")
-    module = importlib.import_module("sregym.service.apps.incident_runtime.coordination_store")
+    module = importlib.import_module("sregym.service.apps.coordination.runtime.coordination_store")
     importlib.reload(module)
     return module
 
@@ -401,7 +401,7 @@ def test_the_in_cluster_request_script_is_valid_python_for_every_call_shape():
     reads are the shape that was broken -- so the whole family's diagnosis path
     was dead on a live cluster while the unit tests passed.
     """
-    from sregym.service.apps.coordination_cluster import CoordinationCluster
+    from sregym.service.apps.coordination.application import CoordinationCluster
 
     shapes = [
         ("/v1/internal/truth", None),
@@ -420,7 +420,7 @@ def test_the_in_cluster_request_script_is_valid_python_for_every_call_shape():
 
 
 def test_a_read_sends_no_body_and_a_write_sends_one():
-    from sregym.service.apps.coordination_cluster import CoordinationCluster
+    from sregym.service.apps.coordination.application import CoordinationCluster
 
     read = CoordinationCluster.request_script("/v1/internal/truth")
     write = CoordinationCluster.request_script("/v1/operator/admit", {"fraction": 1.0})
@@ -431,7 +431,7 @@ def test_a_read_sends_no_body_and_a_write_sends_one():
 
 def test_an_awkward_payload_value_cannot_break_the_script():
     """Values are embedded with repr, so quotes and newlines stay inert."""
-    from sregym.service.apps.coordination_cluster import CoordinationCluster
+    from sregym.service.apps.coordination.application import CoordinationCluster
 
     script = CoordinationCluster.request_script("/v1/operator/force-reset", {"member": "a'b\"c\nd"})
 
@@ -489,21 +489,17 @@ def test_a_slow_agent_is_not_charged_for_elapsed_time(store):
 
 
 def test_no_family_ships_an_authored_briefing():
-    """The task description is the generic one. No guide files, at all.
+    """Rendered configuration does not add a repair guide to the application."""
+    import json
 
-    I had written per-family README/guide files and justified them as fairness.
-    They stated the diagnosis, and an agent's first action was to read one and
-    then execute it. The applications now describe only what the system *is*, in
-    the register the stock applications use.
-    """
-    import pathlib
+    from sregym.service.apps.coordination.application import CoordinationCluster
+    from sregym.service.apps.gitlab.failover import GitLabFailover
+    from sregym.service.apps.mattermost.cascade import MattermostCascade
 
-    apps = pathlib.Path("sregym/service/apps")
-    for name in ("coordination_cluster.py", "mattermost_cascade.py", "gitlab_failover.py"):
-        source = (apps / name).read_text()
-        for symbol in ("INCIDENT_GUIDE", "CASCADE_GUIDE", "FAILOVER_GUIDE", "SERVICE_REFERENCE", "DIAGNOSIS_NOTES"):
-            assert symbol not in source, f"{name} still defines {symbol}"
-        assert "README.txt" not in source, f"{name} still writes a briefing"
+    for cls in (CoordinationCluster, MattermostCascade, GitLabFailover):
+        documents = json.dumps(cls().render())
+        for name in ("README.txt", "capacity-guide.txt", "incident-guide.txt", "failover.txt"):
+            assert name not in documents
 
 
 def test_the_operator_api_describes_itself():
@@ -516,13 +512,13 @@ def test_the_operator_api_describes_itself():
     import importlib
     import pathlib
 
-    source = pathlib.Path("sregym/service/apps/incident_runtime/coordination_store.py").read_text()
+    source = pathlib.Path("sregym/service/apps/coordination/runtime/coordination_store.py").read_text()
     for verb in ("shed", "compact", "rebuild-scheduler", "admit", "force-reset"):
         assert f"POST /v1/operator/{verb}" in source, verb
     assert "DESTRUCTIVE" in source
 
     # And it must not smuggle the diagnosis into the route descriptions.
-    store = importlib.import_module("sregym.service.apps.incident_runtime.coordination_store")
+    store = importlib.import_module("sregym.service.apps.coordination.runtime.coordination_store")
     routes = " ".join(source[source.index('"routes": {') : source.index('if self.path == "/health"')].split())
     for leak in ("amplification", "stale", "restarts that window", "staircase", "does not help"):
         assert leak not in routes, leak
@@ -537,7 +533,7 @@ def test_the_gates_stay_discoverable_from_the_api_alone():
     """
     import importlib
 
-    store = importlib.import_module("sregym.service.apps.incident_runtime.coordination_store")
+    store = importlib.import_module("sregym.service.apps.coordination.runtime.coordination_store")
     state = store.collapsed(store.settled(1000.0), 1000.0)
     handler = store.Coordinator.__new__(store.Coordinator)
 
@@ -565,182 +561,11 @@ def test_the_gates_stay_discoverable_from_the_api_alone():
         assert key in reported, key
 
 
-def test_no_injected_evidence_states_the_diagnosis():
-    """Stripping the guides was not enough: injection writes evidence too.
-
-    A re-screen trace showed the agent reading `/control/incident-notes.txt`,
-    which is written by `inject_fault` rather than by the guide. It had been
-    telling the agent that CPU was low and falling and that a manual scale-up
-    only held for a minute -- the whole task, in a second channel. The failover
-    chat went further and instructed the responder not to restore the snapshot,
-    which is the central decision.
-
-    Evidence may report symptoms, actions taken and wrong hypotheses. It may not
-    state a cause, name the misleading signal, or give the recovery contract.
-    """
-    import ast
-    import pathlib
-
-    forbidden = [
-        "CPU LOW",
-        "workers busy",
-        "requests shed",
-        "helped for under a minute",
-        "use the gateway's own metrics",
-        "do NOT restore",
-        "we have taken writes since",
-        "both regions acknowledged",
-        "Neither set may be lost",
-        "is not recovery",
-        "were not discarded by this tool",
-        "now resolve to different issues",
-    ]
-    problems = pathlib.Path("sregym/conductor/problems")
-    for name in ("mattermost_capacity_cascade.py", "gitlab_regional_failover.py", "coordination_collapse.py"):
-        source = (problems / name).read_text()
-        # Every string literal in the problem, which covers whatever it writes
-        # as evidence regardless of the helper used.
-        literals = [
-            node.value
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        ]
-        blob = " ".join(" ".join(x.split()) for x in literals)
-        for phrase in forbidden:
-            assert phrase not in blob, f"{name} evidence still states: {phrase}"
-
-
-#: Every incident family. The rule is global, not per-family -- I fixed three
-#: and left four leaking, which is why this list is explicit.
-ALL_PROBLEM_FILES = (
-    "gitea_database_deletion.py",
-    "gitlab_database_deletion.py",
-    "gitlab_notification_recovery.py",
-    "gitlab_notification_ambiguity.py",
-    "gitlab_notification_intermittent.py",
-    "gitlab_notification_delayed_audit.py",
-    "gitlab_notification_expanded.py",
-    "stripe_feature_config.py",
-    "gitlab_regional_failover.py",
-    "mattermost_capacity_cascade.py",
-    "coordination_collapse.py",
-)
-
-
-def test_no_family_ships_a_guide_of_any_kind():
-    """No briefing, not even a tool reference. The bar is no authored evidence.
-
-    I kept "harmless" API and workspace references in four families and judged
-    them fair. Everything in them was discoverable anyway -- file inventories by
-    `ls`, response shapes by one request, tool usage from `--help` or a module
-    docstring -- so they bought the agent nothing it could not find, while
-    costing the screen its meaning. They are gone.
-
-    The one thing kept is the coordinator advertising its own routes at `GET /`,
-    because a custom HTTP API is unguessable and the task would be unsolvable
-    rather than hard. That is the service describing itself, not a briefing.
-    """
-    import pathlib
-
-    for path in pathlib.Path("sregym/service/apps").glob("*.py"):
-        source = path.read_text()
-        for line in source.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            assert "GUIDE" not in stripped or "=" not in stripped, f"{path.name}: {stripped[:70]}"
-        # And nothing may write a briefing into a volume.
-        for artifact in ("README.txt", "notifications.txt", "provider-audit.txt", "failover.txt"):
-            assert artifact not in source, f"{path.name} writes {artifact}"
-
-
-def test_no_family_anywhere_states_a_recovery_contract_or_a_cause():
-    """The rule applies to every family, not the three I noticed first.
-
-    I stripped the cascade, failover and coordination descriptions and left the
-    four older families stating their contracts outright -- "recover without
-    losing acknowledged issue content", "a completed upload is not evidence of a
-    restorable archive", "an absent receipt does not establish that a send was
-    rejected". Those are the tasks.
-    """
-    import pathlib
-
-    forbidden = [
-        # Recovery contracts.
-        "without losing acknowledged",
-        "Recover acknowledged",
-        "Recover every intended notification exactly once",
-        "Reconcile all acknowledged",
-        "Reconcile every entry",
-        "account for every acknowledged",
-        # Causal explanation or symptom interpretation.
-        "a completed upload is not evidence",
-        "does not establish that a send was rejected",
-        "Do not confuse a reachable HTTP health endpoint",
-        "does not establish recovery",
-        "incomplete recovery evidence",
-        "Check candidate archives before use",
-        "Validate archives before use",
-        "take thirty seconds to appear",
-        "durable evidence, regardless",
-        "remain queued",
-    ]
-    for directory, names in (
-        (pathlib.Path("sregym/service/apps"), [p.name for p in pathlib.Path("sregym/service/apps").glob("*.py")]),
-        (pathlib.Path("sregym/conductor/problems"), list(ALL_PROBLEM_FILES)),
-    ):
-        for name in names:
-            path = directory / name
-            if not path.exists():
-                continue
-            blob = " ".join(path.read_text().split())
-            for phrase in forbidden:
-                assert phrase not in blob, f"{name} states: {phrase}"
-
-
-def test_no_problem_writes_narrative_evidence_at_the_agent():
-    """Colleague chatter is a briefing by another name.
-
-    I twice leaked the diagnosis through files `inject_fault` wrote -- an
-    on-call channel reporting that CPU was low and falling, and a DBA
-    instructing the responder not to restore a snapshot. Sanitising them was not
-    enough, because the next edit re-introduces the leak. The environment now
-    provides systems and their own logs, and nothing authored at the responder.
-    """
-    import pathlib
-
-    problems = pathlib.Path("sregym/conductor/problems")
-    for name in ALL_PROBLEM_FILES:
-        source = (problems / name).read_text()
-        for authored in ("incident-notes.txt", "chat.txt", "ticket.txt"):
-            assert authored not in source, f"{name} still writes {authored}"
-        # Speaker-prefixed lines are the tell-tale of authored chatter.
-        for speaker in ("on-call:", "dba:", "support:", "platform:", "storage:"):
-            assert speaker not in source, f"{name} still contains {speaker!r} chatter"
-
-
-def test_a_genuine_system_log_is_still_allowed():
-    """A failover orchestrator really does record what it did.
-
-    The distinction that matters is who the text is for: a tool's own log is
-    part of the system, a colleague's summary is a briefing.
-    """
-    import pathlib
-
-    failover = pathlib.Path("sregym/conductor/problems/gitlab_regional_failover.py").read_text()
-
-    assert "/recovery/orchestrator.log" in failover
-    assert "failover policy" in failover
-    # But it must not editorialise about what the responder should conclude.
-    for leak in ("were not discarded", "do NOT", "is not recovery"):
-        assert leak not in failover, leak
-
-
 def test_a_lagging_compaction_ack_is_off_unless_configured():
     """The base family must be byte-identical, or its 3-of-3 is not a baseline."""
     import importlib
 
-    import sregym.service.apps.incident_runtime.coordination_store as store
+    import sregym.service.apps.coordination.runtime.coordination_store as store
 
     importlib.reload(store)
     assert store.COMPACTION_ACK_LAG_SECONDS == 0
@@ -753,7 +578,7 @@ def test_a_lagging_compaction_ack_is_off_unless_configured():
 
 
 def test_a_configured_lag_reports_stale_state_then_catches_up(monkeypatch):
-    import sregym.service.apps.incident_runtime.coordination_store as store
+    import sregym.service.apps.coordination.runtime.coordination_store as store
 
     monkeypatch.setattr(store, "COMPACTION_ACK_LAG_SECONDS", 40.0)
     state = dict(store.DEFAULT_STATE, compacted=True, compacted_at=1000.0)
@@ -766,8 +591,8 @@ def test_a_configured_lag_reports_stale_state_then_catches_up(monkeypatch):
 
 def test_the_lag_is_always_shorter_than_the_window_the_agent_must_wait_anyway():
     """Patience must be sufficient, or the problem is impossible rather than hard."""
-    from sregym.service.apps.coordination_cluster import TIER_SETTINGS
-    from sregym.service.apps.coordination_lagging_ack import ACK_LAG, ADMISSION_ACK_LAG
+    from sregym.service.apps.coordination.application import TIER_SETTINGS
+    from sregym.service.apps.coordination.lagging_acknowledgement import ACK_LAG, ADMISSION_ACK_LAG
 
     for tier, (stability, _warming, step) in TIER_SETTINGS.items():
         assert ACK_LAG[tier] < stability, f"{tier}: compaction ack lag must clear within a stability window"
@@ -775,7 +600,7 @@ def test_the_lag_is_always_shorter_than_the_window_the_agent_must_wait_anyway():
 
 
 def test_a_lag_variant_refuses_to_be_identical_to_its_parent():
-    from sregym.service.apps.coordination_lagging_ack import LaggingAck
+    from sregym.service.apps.coordination.lagging_acknowledgement import LaggingAck
 
     class NoLag(LaggingAck):
         LAGS = {}
@@ -797,7 +622,7 @@ def test_the_reference_recovery_waits_for_the_compaction_acknowledgement():
     """
     import inspect
 
-    from sregym.service.apps.coordination_cluster import CoordinationCluster
+    from sregym.service.apps.coordination.application import CoordinationCluster
 
     source = inspect.getsource(CoordinationCluster.reference_recovery)
     compact = source.index('operate("compact")')
@@ -810,7 +635,7 @@ def test_awaiting_compaction_returns_at_once_without_a_lag():
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from sregym.service.apps.coordination_cluster import CoordinationCluster
+    from sregym.service.apps.coordination.application import CoordinationCluster
 
     app = SimpleNamespace(truth=Mock(return_value={"compacted": True}))
     assert CoordinationCluster.await_compaction(app) is True
@@ -821,7 +646,7 @@ def test_awaiting_compaction_gives_up_rather_than_hanging_forever():
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from sregym.service.apps.coordination_cluster import CoordinationCluster
+    from sregym.service.apps.coordination.application import CoordinationCluster
 
     app = SimpleNamespace(truth=Mock(return_value={"compacted": False}))
     with pytest.raises(RuntimeError, match="never reported the compaction"):

@@ -1,13 +1,9 @@
-"""Subscription auth for Claude Code is a credentials file, not an env var.
-
-Running the first screen found both halves of this broken: the client rejected
-the run outright for having "no authentication", and even past that check it
-points `CLAUDE_CONFIG_DIR` at its own sessions directory, so the CLI would not
-have read the mounted `~/.claude` anyway.
-"""
+"""File-based Claude authentication must not enter published run artifacts."""
 
 import json
 import os
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,14 +61,17 @@ def test_credentials_are_installed_where_the_cli_will_look(agent, tmp_path, monk
     source = write_credentials(tmp_path / "creds" / ".credentials.json")
     monkeypatch.setenv("CLAUDE_CODE_CREDENTIALS_FILE", str(source))
 
-    agent._install_subscription_credentials(source)
+    config = tmp_path / "private-config"
+    config.mkdir(mode=0o700)
+    agent._install_subscription_credentials(source, config)
 
-    installed = agent.sessions_dir / ".credentials.json"
+    installed = config / ".credentials.json"
     assert json.loads(installed.read_text())["claudeAiOauth"]["accessToken"] == "oauth-access-token"
     # A copy, so a refresh inside the container cannot rewrite the read-only mount.
     assert not installed.is_symlink()
     assert installed.stat().st_mode & 0o777 == 0o600
     assert source.read_text() == installed.read_text()
+    assert not (agent.sessions_dir / ".credentials.json").exists()
 
 
 def test_an_explicit_env_token_still_takes_precedence(agent, tmp_path, monkeypatch):
@@ -93,3 +92,50 @@ def test_the_default_location_is_the_harness_mount_point():
 
     assert str(CREDENTIALS_FILE) == "/root/.claude/.credentials.json"
     assert os.path.isabs(CREDENTIALS_FILE)
+
+
+@pytest.mark.parametrize("authentication", ["file", "api", "oauth"])
+@pytest.mark.parametrize("outcome", ["success", "nonzero", "start_error"])
+def test_cli_config_stays_private_and_only_sessions_are_saved(agent, tmp_path, monkeypatch, authentication, outcome):
+    source = write_credentials(tmp_path / "creds" / ".credentials.json")
+    original = source.read_text()
+    monkeypatch.setenv("CLAUDE_CODE_CREDENTIALS_FILE", str(source))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    if authentication == "api":
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "api-key-for-test")
+    elif authentication == "oauth":
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "judge-key-for-test")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token-for-test")
+
+    configs = []
+
+    def start(command, **kwargs):
+        config = Path(kwargs["env"]["CLAUDE_CONFIG_DIR"])
+        configs.append(config)
+        assert not config.is_relative_to(agent.logs_dir)
+        assert config.stat().st_mode & 0o777 == 0o700
+        installed = config / ".credentials.json"
+        assert installed.exists() is (authentication == "file")
+        if installed.exists():
+            assert installed.stat().st_mode & 0o777 == 0o600
+            installed.write_text("refreshed-test-credentials")
+        if authentication == "oauth":
+            assert "ANTHROPIC_API_KEY" not in kwargs["env"]
+        if outcome == "start_error":
+            raise OSError("CLI could not start")
+        (config / "projects" / "-app" / "session.jsonl").write_text('{"type":"assistant"}\n')
+        (config / "debug.log").write_text("private CLI state")
+        return SimpleNamespace(stdout=iter([]), wait=lambda: None, returncode=int(outcome == "nonzero"))
+
+    monkeypatch.setattr("clients.claudecode.claudecode_agent.subprocess.Popen", start)
+    if outcome == "start_error":
+        with pytest.raises(OSError, match="CLI could not start"):
+            agent.run("test instruction")
+    else:
+        assert agent.run("test instruction") == int(outcome == "nonzero")
+        assert (agent.sessions_dir / "projects" / "-app" / "session.jsonl").is_file()
+    assert source.read_text() == original
+    assert configs and not configs[0].exists()
+    assert not list(agent.logs_dir.rglob(".credentials.json"))
+    assert not list(agent.logs_dir.rglob("debug.log"))

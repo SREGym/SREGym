@@ -15,7 +15,7 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from sregym.service.apps.stripe_marathon import STRIPE_IMAGE
+from sregym.service.apps.stripe.application import STRIPE_IMAGE
 
 ROOT = Path(__file__).resolve().parents[2]
 GATES = (
