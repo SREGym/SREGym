@@ -19,12 +19,11 @@ MEMBERS = int(os.environ.get("MEMBER_COUNT", "3"))
 LATENCY_BUDGET_MS = 400.0
 #: Watch subscriptions above this amplify every write across the cluster.
 WATCH_BUDGET = 48
-#: Seconds the leader must hold without churn before the next phase unlocks.
+#: Stable leadership required before maintenance operations can proceed.
 STABILITY_SECONDS = float(os.environ.get("STABILITY_SECONDS", "60"))
 #: Seconds of stable, compacted operation before caches are considered warm.
 WARMING_SECONDS = float(os.environ.get("WARMING_SECONDS", "120"))
-#: Admitting more than this fraction while caches are cold re-collapses the
-#: cluster. The original incident's gradual DNS-based admission, in one number.
+#: Maximum traffic admission while caches are cold.
 COLD_ADMISSION_LIMIT = 0.25
 #: How long each admission step must hold before the next is safe.
 ADMISSION_STEP_SECONDS = float(os.environ.get("ADMISSION_STEP_SECONDS", "45"))
@@ -118,27 +117,14 @@ DEBT_LATENCY_MS_PER_K = 3.0
 
 
 def write_latency_ms(state):
-    """Leader write latency from real state.
-
-    Every watch subscription fans a write out again, so cost grows with the
-    square of how far subscriptions exceed their budget; uncompacted debt adds a
-    smaller floor on top. Shedding load is therefore both necessary *and*
-    sufficient to let the leader hold a term -- which matters, because every
-    later phase is gated on a stable leader. If debt alone could hold latency
-    over budget, compaction could never unlock and the incident would be
-    unsolvable rather than long.
-    """
+    """Estimate write latency from watch fan-out and uncompacted storage debt."""
     ratio = max(0.0, state["watch_subscriptions"]) / float(WATCH_BUDGET)
     debt = 0.0 if state["compacted"] else state["compaction_debt"] / 1000.0
     return BASE_LATENCY_MS * ratio**2 + debt * DEBT_LATENCY_MS_PER_K
 
 
 def visible_admitted_fraction(state, now):
-    """The *reported* admitted fraction, which trails the real one when lagging.
-
-    The cluster's physics always use the real value, so the loss the grader
-    counts is caused by what the agent actually did, never by what it was shown.
-    """
+    """Return traffic admission after the configured reporting delay."""
     if ADMISSION_ACK_LAG_SECONDS <= 0:
         return state["admitted_fraction"]
     at = state.get("admitted_since")
@@ -148,11 +134,7 @@ def visible_admitted_fraction(state, now):
 
 
 def compaction_visible(state, now):
-    """Whether the *reported* state has caught up with the real one.
-
-    With no lag configured this is just `state["compacted"]`, so the base family
-    behaves exactly as before.
-    """
+    """Report completed compaction after the configured delay."""
     if not state["compacted"]:
         return False
     if COMPACTION_ACK_LAG_SECONDS <= 0:
@@ -198,7 +180,7 @@ def serve_capacity(state, now):
 
 
 def regress(state, reason, now):
-    """Premature action costs progress. This is what makes the horizon real."""
+    """Reset leadership, caches, scheduler state, and traffic admission."""
     state["leader_since"] = None
     state["leader_elections"] += 1
     state["cache_warm_since"] = None
@@ -211,7 +193,7 @@ def regress(state, reason, now):
 
 
 def reconcile(state, now):
-    """Advance the cluster's own physics. Called on every request and by a ticker."""
+    """Update cluster state on each request and periodic tick."""
     healthy = leader_healthy(state)
     if not healthy:
         # The churn loop: an unhealthy leader cannot hold its term, and every
@@ -239,13 +221,11 @@ def reconcile(state, now):
     if admitted > capacity:
         overshoot = admitted - capacity
         state["dropped_requests"] += int(round(overshoot * 400))
-        # A hard overshoot while cold re-collapses the cluster, as a restart
-        # storm did in the original incident.
+        # Excess admission while caches are cold destabilizes leadership.
         if admitted > COLD_ADMISSION_LIMIT and cache_warm_fraction(state, now) < 0.5:
             regress(state, f"admitted {admitted:.0%} with caches {cache_warm_fraction(state, now):.0%} warm", now)
 
-    # Once the leader is healthy the stale snapshot stops lying, because an
-    # operator who fixed the cluster can see that they fixed it.
+    # Refresh the status snapshot after leadership stabilizes.
     if healthy and stable_seconds(state, now) >= STABILITY_SECONDS:
         state["snapshot"] = {
             "healthy": True,
@@ -257,7 +237,7 @@ def reconcile(state, now):
 
 
 def public_status(state, now):
-    """What /status serves. Stale while churning: the tool lies, it is not absent."""
+    """Return the last completed status snapshot while leadership is unstable."""
     if not leader_healthy(state) or stable_seconds(state, now) < STABILITY_SECONDS:
         return {
             **state["snapshot"],
@@ -274,7 +254,7 @@ def public_status(state, now):
 
 
 def truth(state, now):
-    """The unvarnished view. Available, but not from the endpoint named /status."""
+    """Return internal state with configured acknowledgment delays."""
     return {
         "member": MEMBER,
         "leader": state["leader"] if leader_healthy(state) else None,
@@ -285,9 +265,7 @@ def truth(state, now):
         "watch_budget": WATCH_BUDGET,
         "keys": state["keys"],
         "compaction_debt": state["compaction_debt"],
-        # The reported value, which trails reality when a lag is configured. The
-        # event ledger carries the truth immediately: a `compacted` entry is
-        # there the moment it happens, so the two can be cross-checked.
+        # Reporting can lag behind the completed operation in the event ledger.
         "compacted": compaction_visible(state, now),
         "scheduler_state_fresh": state["scheduler_state_fresh"],
         "leader_stable_seconds": round(stable_seconds(state, now), 1),
@@ -333,11 +311,7 @@ class Coordinator(BaseHTTPRequestHandler):
     def do_GET(self):
         now = time.time()
         if self.path in ("/", "/v1"):
-            # A real HTTP service advertises its own routes, and this one must:
-            # no amount of kubectl reveals that /v1/operator/compact exists, so
-            # without self-description the incident would be unsolvable rather
-            # than hard. Discovery, not disclosure -- it says what each route
-            # does, never what is wrong or what to do about it.
+            # Publish the supported API routes and request formats.
             return self.reply(
                 200,
                 {
@@ -359,8 +333,7 @@ class Coordinator(BaseHTTPRequestHandler):
                 },
             )
         if self.path == "/health":
-            # Liveness stays up even when the cluster serves nothing, so a probe
-            # cannot be mistaken for recovery.
+            # Process liveness is independent of request availability.
             return self.reply(200, {"status": "ok", "member": MEMBER})
         with lock:
             state = reconcile(load(), now)
@@ -485,7 +458,7 @@ class Coordinator(BaseHTTPRequestHandler):
             return {"admitted_fraction": fraction, "serve_capacity": round(serve_capacity(state, now), 3)}
 
         if action == "induce":
-            # The harness's injection path, not part of the operator surface.
+            # Apply excess coordination load.
             state.update(collapsed(state, now))
             record("incident_started", watch_subscriptions=state["watch_subscriptions"])
             return {"induced": True, "watch_subscriptions": state["watch_subscriptions"]}

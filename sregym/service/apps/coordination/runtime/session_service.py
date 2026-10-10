@@ -40,8 +40,7 @@ def serves_request(rng):
     with lock:
         admitted, served_fraction = capacity["admitted"], capacity["fraction"]
     if rng.random() > admitted:
-        # Not admitted: shed at the edge, which is a deliberate operator choice
-        # rather than a failure, so it is not counted against the service.
+        # Edge load shedding is separate from failures after admission.
         return None
     return rng.random() <= served_fraction
 
@@ -63,8 +62,7 @@ class Session(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            # Liveness only. This service is up while serving nothing, which is
-            # why a readiness probe is not a recovery signal.
+            # Process liveness is independent of request availability.
             return self.reply(200, {"status": "ok", "service": SERVICE})
         if self.path == "/metrics":
             with lock:
