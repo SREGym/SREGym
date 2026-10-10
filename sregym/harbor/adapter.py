@@ -79,6 +79,34 @@ K3S_UNSUPPORTED = {
     "workload_imbalance": "replaces the kube-proxy DaemonSet; k3s has kube-proxy built in",
 }
 
+# Problems the cluster runs, but whose reference solution did not pass reliably
+# in a task of the default size (4 CPUs, 8 GiB) in oracle sweeps on Daytona,
+# with the reason. Larger sandboxes may run them; regenerate after removing one.
+SANDBOX_UNRELIABLE = {
+    "capacity_decrease_rpc_retry_storm": (
+        "its CPU stress on every node starves the API server in a 4-CPU sandbox; setup times out"
+    ),
+    "load_spike_rpc_retry_storm": "its CPU stress on every node starves the API server in a 4-CPU sandbox; setup times out",
+    "gc_capacity_degradation": (
+        "the workload generator stays unready after the reference recovery, so its alerts keep firing "
+        "(0 of 3 oracle runs passed)"
+    ),
+    "kafka_queue_problems": "MessageConsumerLag keeps firing after the reference recovery (0 of 3 oracle runs passed)",
+    "astronomy_shop_ad_service_manual_gc": (
+        "HighRequestErrorRate keeps firing after the reference recovery in a 4-CPU sandbox (1 of 3 oracle runs passed)"
+    ),
+    "trainticket_f17_nested_sql_select_clause_error": (
+        "Train Ticket's dozens of services overload a 4-CPU, 8 GiB sandbox; setup or recovery timed out"
+    ),
+    "trainticket_f22_sql_column_name_mismatch_error": (
+        "Train Ticket's dozens of services overload a 4-CPU, 8 GiB sandbox; setup or recovery timed out"
+    ),
+    "loadgenerator_flood_homepage": (
+        "the load generator stays CPU-throttled after the reference recovery in a 4-CPU sandbox "
+        "(1 of 3 oracle runs passed)"
+    ),
+}
+
 
 @dataclass
 class ProblemInfo:
@@ -151,6 +179,9 @@ def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
             continue
         if problem_id in K3S_UNSUPPORTED:
             inspection.skipped[problem_id] = K3S_UNSUPPORTED[problem_id]
+            continue
+        if problem_id in SANDBOX_UNRELIABLE:
+            inspection.skipped[problem_id] = SANDBOX_UNRELIABLE[problem_id]
             continue
         try:
             problem = registry.get_problem(problem_id)()

@@ -221,9 +221,10 @@ def test_inspection_skips_problems_that_cannot_run_on_kind():
 
 def test_inspection_skips_problems_the_unprivileged_cluster_cannot_run():
     # inspect_problems() rejects unknown IDs, so a renamed problem fails here.
-    inspection = adapter.inspect_problems(["network_policy_block", *adapter.K3S_UNSUPPORTED])
+    excluded = adapter.K3S_UNSUPPORTED | adapter.SANDBOX_UNRELIABLE
+    inspection = adapter.inspect_problems(["network_policy_block", *excluded])
     assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]
-    assert inspection.skipped == adapter.K3S_UNSUPPORTED
+    assert inspection.skipped == excluded
 
 
 def test_alert_graded_problems_run_steady_before_the_fault(tmp_path):

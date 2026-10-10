@@ -115,6 +115,10 @@ reason:
   `sregym/harbor/adapter.py`): node faults injected with `docker exec` into KIND
   nodes, Calico-specific faults (the cluster runs flannel), a host-global sysctl
   and a replaced kube-proxy
+- problems whose reference solution did not pass reliably in a task of the
+  default size in oracle sweeps on Daytona (`SANDBOX_UNRELIABLE`): CPU stress on
+  every node that starves the API server, and alerts that keep firing after
+  recovery on a 4-CPU sandbox
 
 | Option | Default | Meaning |
 |---|---|---|
