@@ -71,6 +71,43 @@ def now() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def fixer_digest(out: Path, limit: int = 4000) -> str:
+    """Commands and messages of a fixer run, compact enough to brief a hardening session."""
+    lines = []
+    for path in sorted(out.rglob("codex.txt")):
+        for raw in path.read_text(errors="ignore").splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            item = event.get("item") or {}
+            if event.get("type") != "item.completed":
+                continue
+            if item.get("type") == "agent_message":
+                lines.append("SAYS: " + (item.get("text") or "")[:400].replace("\n", " "))
+            elif item.get("type") == "command_execution":
+                lines.append("RUNS: " + item.get("command", "")[:300].replace("\n", " "))
+    for path in sorted(out.rglob("*.jsonl")):  # Claude Code stream-json
+        if "claude" not in path.name and "stream" not in path.name:
+            continue
+        for raw in path.read_text(errors="ignore").splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            for block in (event.get("message") or {}).get("content") or []:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text":
+                    lines.append("SAYS: " + block.get("text", "")[:400].replace("\n", " "))
+                elif block.get("type") == "tool_use":
+                    lines.append("RUNS: " + json.dumps(block.get("input"))[:300])
+    text = "\n".join(lines)
+    if len(text) > limit:
+        text = text[: limit // 3] + "\n[...]\n" + text[-2 * limit // 3 :]
+    return text
+
+
 @dataclass
 class Job:
     kind: str  # chaos | validate | panel
@@ -202,25 +239,67 @@ class Pipeline:
             lines.append("Existing SREGym problem ids (do not recreate these fault types): " + ", ".join(ids))
         except OSError:
             pass
-        previous = [
-            f"- {c['meta'].get('root_cause_class')}: {c['meta'].get('title')}"
-            for c in self.ledger["candidates"].values()
-            if c.get("meta")
-        ]
+        previous = []
+        for c in self.ledger["candidates"].values():
+            if not c.get("meta"):
+                continue
+            line = f"- {c['meta'].get('root_cause_class')}: {c['meta'].get('title')}"
+            solved = [a for a in (c.get("panel") or {}).get("attempts", []) if a.get("solved")]
+            if solved:
+                line += f" -- TOO EASY: a fixer solved it in {float(solved[0].get('ttm') or 0) / 60:.0f} min"
+            previous.append(line)
         if previous:
             lines.append("Faults already generated in earlier sessions (choose a different root cause):")
             lines += previous
         return "\n".join(lines)
 
+    def hardening_brief(self, parent_id: str) -> str:
+        parent = self.cand(parent_id)
+        files = []
+        for name in ("fault.json", "design.md", "inject.sh", "mitigate.sh", "recover.sh"):
+            path = self.work / "candidates" / parent_id / name
+            if path.is_file():
+                files.append(f"--- {name} ---\n{path.read_text(errors='ignore')[:6000]}")
+        winners = [a for a in parent.get("panel", {}).get("attempts", []) if a.get("solved")]
+        for a in winners:
+            if not a.get("digest"):
+                a["digest"] = fixer_digest(self.work / "runs" / parent_id / f"panel-{a['agent']}-r{a['round']}")
+        digests = "\n\n".join(
+            f"--- {a['agent']} solved it in {float(a.get('ttm') or 0) / 60:.0f} min ---\n{a.get('digest', '')}"
+            for a in winners[:2]
+        )
+        return (
+            "HARDENING SESSION. A previous chaos session produced the incident below. It was valid, but fixer "
+            "agents solved it quickly. Their trajectories are included. Evolve it into a harder incident of the "
+            "same realistic family: study exactly which evidence led the fixer to the cause and which fix "
+            "worked, then change the incident so that path no longer succeeds. For example, the evidence the "
+            "fixer followed now plausibly implicates something else; the fix it applied is necessary but not "
+            "sufficient (a second independent contributing cause, or something that re-creates the bad "
+            "state); or the decisive evidence requires correlating several sources. Every validity rule "
+            "still applies. Write a complete new artifact; you may start by applying the parent's inject.sh, "
+            "but its scripts are not available in your session, so recreate anything you need.\n\n"
+            + "\n\n".join(files) + "\n\n" + digests
+        )
+
     def write_brief(self, cid: str, app: str, theme: tuple[str, str]) -> Path:
         brief = self.work / "candidates-brief" / f"{cid}.md"
         brief.parent.mkdir(parents=True, exist_ok=True)
-        brief.write_text(
-            f"Target application: {app}. Set \"app\": \"{app}\" in fault.json.\n"
-            f"Theme for this session ({theme[0]}): {theme[1]}\n"
-            "The theme is a starting direction; pick whatever concrete incident within it you expect to be "
-            "hardest for agents while satisfying every validity rule.\n\n" + self.avoid_list() + "\n"
+        c = self.cand(cid)
+        text = f"Target application: {app}. Set \"app\": \"{app}\" in fault.json.\n"
+        if c.get("parent"):
+            text += self.hardening_brief(c["parent"]) + "\n\n"
+        else:
+            text += (
+                f"Theme for this session ({theme[0]}): {theme[1]}\n"
+                "The theme is a starting direction; pick whatever concrete incident within it you expect to be "
+                "hardest for agents while satisfying every validity rule.\n\n"
+            )
+        text += (
+            "Lesson from earlier sessions: fixers start from the logs of the failing services and follow the "
+            "first error message that names a dependency; single-hop faults whose logs name the culprit are "
+            "solved in minutes.\n\n" + self.avoid_list() + "\n"
         )
+        brief.write_text(text)
         return brief
 
     # ----------------------------------------------------------------- phases
@@ -330,10 +409,11 @@ class Pipeline:
             "valid": bool(rows) and live,
             "solved": row.get("Mitigation.success") == "True",
             "reason": row.get("Mitigation.reason"), "ttm": row.get("TTM"), "timed_out": row.get("timed_out"),
+            "digest": fixer_digest(out),
         }
         with LOCK:
             c["panel"]["attempts"].append(attempt)
-        self.log(f"PANEL {job.cid} {agent} r{rnd}: {attempt}")
+        self.log(f"PANEL {job.cid} {agent} r{rnd}: { {k: v for k, v in attempt.items() if k != 'digest'} }")
 
     # ------------------------------------------------------------- decisions
     def panel_agents(self) -> list[str]:
@@ -352,9 +432,13 @@ class Pipeline:
         solves = sum(a["solved"] for a in valid)
         total_target = self.o.k * len(self.panel_agents())
         max_solves = self.o.max_solves
-        if solves > max_solves:
+        fast = [a for a in valid if a["solved"] and float(a.get("ttm") or 1e9) < self.o.fast_solve]
+        if solves > max_solves or fast:
             c["status"] = "rejected"
-            c["reason"] = f"too easy: {solves}/{len(valid)} solved"
+            c["reason"] = f"too easy: {solves}/{len(valid)} solved" + (
+                f", fastest in {min(float(a['ttm']) for a in fast) / 60:.0f} min" if fast else "")
+            if c.get("depth", 0) < self.o.max_hardening:
+                c["harden"] = "pending"
             return []
         jobs = []
         for agent in self.panel_agents():
@@ -389,6 +473,16 @@ class Pipeline:
     def new_candidate(self) -> Job:
         n = self.ledger["sessions"]
         self.ledger["sessions"] += 1
+        for pid, parent in self.ledger["candidates"].items():
+            if parent.get("harden") == "pending":
+                parent["harden"] = "spawned"
+                depth = parent.get("depth", 0) + 1
+                cid = f"{datetime.datetime.now():%m%d}{n:03d}_{parent['app'].split('_')[0]}_h{depth}"
+                self.ledger["candidates"][cid] = {
+                    "app": parent["app"], "theme": parent["theme"], "chaos_backend": parent["chaos_backend"],
+                    "status": "chaos", "created": now(), "parent": pid, "depth": depth,
+                }
+                return Job("chaos", cid, 2, f"harden {pid}")
         app = APPS[n % len(APPS)]
         themes = [t for t in THEMES if not (t[0] == "code" and app != "social_network")]
         theme = themes[(n // len(APPS)) % len(themes)]
@@ -492,6 +586,9 @@ def main() -> int:
     parser.add_argument("--chaos-claude-every", type=int, default=0, help="every Nth chaos session uses Claude")
     parser.add_argument("--k", type=int, default=2, help="attempts per panel agent")
     parser.add_argument("--max-solves", type=int, default=1, help="accept when at most this many attempts solve")
+    parser.add_argument("--fast-solve", type=float, default=900,
+                        help="reject at once when a valid attempt solves within this many seconds")
+    parser.add_argument("--max-hardening", type=int, default=2, help="hardening generations per lineage")
     parser.add_argument("--replays", type=int, default=2, help="fresh-deployment replays in validation")
     parser.add_argument("--persistence", type=int, default=300, help="seconds the fault must persist unattended")
     parser.add_argument("--chaos-timeout", type=int, default=4200)

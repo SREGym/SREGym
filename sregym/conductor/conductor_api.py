@@ -248,19 +248,21 @@ async def get_app():
     app_inst = _conductor.app
     logger.debug(f"API returns App instance: {app_inst}")
     namespaces = getattr(app_inst, "namespaces", None) or [app_inst.namespace]
-    return {
+    info = {
         "app_name": app_inst.app_name,
         "namespace": app_inst.namespace,
         "namespaces": namespaces,
         "descriptions": str(app_inst.description),
         # Lets agents tailor their workflow, e.g. to mitigation-only problems.
         "stages": [stage["name"] for stage in getattr(_conductor, "stage_sequence", None) or []],
-        # Only the chaos agent's canvas problem sets this; drivers then build the chaos instruction.
-        "chaos": bool(getattr(getattr(_conductor, "problem", None), "expose_slo", False)),
     }
+    # Only the chaos agent's canvas problem is flagged; drivers then build the chaos instruction.
+    if getattr(getattr(_conductor, "problem", None), "expose_slo", False):
+        info["chaos"] = True
+    return info
 
 
-@app.get("/chaos/brief")
+@app.get("/chaos/brief", include_in_schema=False)
 async def get_chaos_brief():
     """The generation brief (theme, faults to avoid) for the chaos agent's canvas problem."""
     problem = getattr(_conductor, "problem", None)
@@ -271,7 +273,7 @@ async def get_chaos_brief():
         return {"brief": f.read()}
 
 
-@app.get("/chaos/slo")
+@app.get("/chaos/slo", include_in_schema=False)
 async def get_chaos_slo(window: int = 90):
     """Live end-user SLO verdict, available only to the chaos agent's canvas problem."""
     conductor = _conductor
