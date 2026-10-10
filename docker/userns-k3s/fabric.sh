@@ -79,12 +79,18 @@ for n in $NODES; do
     if [ $cgroup_version = 2 ]; then
         # The unshare parent stays outside the node's PID namespace, where the
         # node cannot move it; park it in the node's leaf so the node's root
-        # cgroup can delegate controllers. Retried: on Daytona this write once
-        # failed with EIO, which ended the fabric and the whole cluster.
+        # cgroup can delegate controllers. On Daytona this write has failed with
+        # EIO in about 1 of 70 starts, and retrying has not helped yet; the
+        # failure logs the cgroup state so the cause can be found.
         attempt=1
-        until echo $pid 2>/dev/null > /sys/fs/cgroup/node-$n/init/cgroup.procs; do
+        until err=$({ echo $pid > /sys/fs/cgroup/node-$n/init/cgroup.procs; } 2>&1); do
             if [ $attempt -ge 20 ]; then
-                echo "[fabric] cannot move node $n's unshare parent ($pid) into its cgroup" >&2
+                echo "[fabric] cannot move node $n's unshare parent ($pid) into its cgroup: $err" >&2
+                for f in /proc/$pid/cgroup /sys/fs/cgroup/node-$n/cgroup.type /sys/fs/cgroup/node-$n/cgroup.procs \
+                    /sys/fs/cgroup/node-$n/cgroup.subtree_control /sys/fs/cgroup/node-$n/init/cgroup.type; do
+                    echo "[fabric] $f: $(tr '\n' ' ' < $f 2>&1)" >&2
+                done
+                grep -E '^(State|NSpid)' /proc/$pid/status >&2
                 exit 1
             fi
             attempt=$((attempt + 1))
