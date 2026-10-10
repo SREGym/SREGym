@@ -72,9 +72,6 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 For an experimental Docker-in-Docker environment with a private cluster per run,
 including parallel problem execution, see the [DinD guide](./docker/dind/README.md).
 
-For the new application prototypes and their experiment reports, see
-[environment scaling](./experiments/environment_scaling/README.md).
-
 **Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
 
 ```bash

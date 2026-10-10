@@ -3,8 +3,9 @@
 Application code is in `sregym/service/apps/`, grouped by application.
 Fault definitions and oracles remain in the Conductor.
 
-`evaluate.py` compares registered problems through the standard runner.
-It rejects unregistered variants before building images or starting validation.
+`evaluate.py` compares registered problems through the standard runner, with
+normal diagnosis and mitigation stages. It does not change agent credentials,
+prompts, images, or CLI versions. It rejects unregistered variants before validation.
 `prepare.py` builds the pinned Stripe reference image for KIND.
 
 `evidence/` contains the original experiment reports, including superseded results.

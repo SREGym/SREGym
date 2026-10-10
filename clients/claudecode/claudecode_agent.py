@@ -3,21 +3,15 @@ Claude Code agent implementation for SREGym.
 Based on Harbor's Claude Code agent implementation for parity experiments.
 """
 
-import json
 import logging
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from clients.harness.token_usage import aggregate_usage, read_jsonl, sum_counts, token_count, usage_metrics
 
 logger = logging.getLogger("all.claudecode.agent")
-
-#: Where a Claude Code subscription login stores its OAuth credentials. The
-#: harness mounts this into agent containers for subscription-backed runs.
-CREDENTIALS_FILE = Path("/root/.claude/.credentials.json")
 
 
 class ClaudeCodeAgent:
@@ -208,29 +202,14 @@ class ClaudeCodeAgent:
         return aggregate_usage(records)
 
     def _setup_sessions_structure(self) -> None:
-        """Create the artifact directory for Claude Code session records."""
+        """Create required Claude Code session directory structure."""
+        (self.sessions_dir / "debug").mkdir(parents=True, exist_ok=True)
         (self.sessions_dir / "projects" / "-app").mkdir(parents=True, exist_ok=True)
+        (self.sessions_dir / "shell-snapshots").mkdir(parents=True, exist_ok=True)
+        (self.sessions_dir / "statsig").mkdir(parents=True, exist_ok=True)
+        (self.sessions_dir / "todos").mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Created session directory structure at {self.sessions_dir}")
-
-    @staticmethod
-    def _subscription_credentials() -> Path | None:
-        """The subscription credentials file, if this host has a usable one."""
-        path = Path(os.environ.get("CLAUDE_CODE_CREDENTIALS_FILE", CREDENTIALS_FILE))
-        if path.is_symlink() or not path.is_file() or not os.access(path, os.R_OK):
-            return None
-        try:
-            oauth = json.loads(path.read_text()).get("claudeAiOauth")
-        except (OSError, ValueError):
-            return None
-        return path if isinstance(oauth, dict) and oauth.get("accessToken") else None
-
-    def _install_subscription_credentials(self, source: Path, config_dir: Path) -> None:
-        """Use a private copy so token refresh cannot change the read-only mount."""
-        destination = config_dir / ".credentials.json"
-        shutil.copyfile(source, destination)
-        destination.chmod(0o600)
-        logger.info(f"Installed subscription credentials for the agent at {destination}")
 
     def generate_trajectory(self, problem_id: str, output_dir: Path | None = None) -> Path | None:
         """
@@ -314,25 +293,20 @@ class ClaudeCodeAgent:
 
         # Build environment variables
         env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = str(self.sessions_dir)
         env["FORCE_AUTO_BACKGROUND_TASKS"] = "1"
         env["ENABLE_BACKGROUND_TASKS"] = "1"
 
         # Set API key if available
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
-        # A subscription login is a credentials file, not an env var, and it is
-        # how the harness supplies Claude Code auth for a subscription-backed
-        # evaluation. Seed it into CLAUDE_CONFIG_DIR below rather than rejecting
-        # the run for having "no authentication".
-        credentials = self._subscription_credentials()
 
-        if not api_key and not oauth_token and not credentials:
+        if not api_key and not oauth_token:
             logger.error("=" * 80)
             logger.error("ERROR: No Anthropic API authentication found")
-            logger.error("Provide one of:")
+            logger.error("Please set one of the following environment variables:")
             logger.error("  - ANTHROPIC_API_KEY")
             logger.error("  - CLAUDE_CODE_OAUTH_TOKEN")
-            logger.error(f"  - a subscription credentials file at {CREDENTIALS_FILE}")
             logger.error("=" * 80)
             return 1
 
@@ -373,19 +347,8 @@ class ClaudeCodeAgent:
         logger.info(f"Executing command: {' '.join(command)}")
 
         try:
-            # Never put CLI configuration or credentials in publishable results.
-            # Only the projects directory, which holds session logs, is saved.
-            with (
-                tempfile.TemporaryDirectory(prefix="sregym-claude-config-") as directory,
-                open(self.output_path, "w") as out_file,
-            ):
-                config_dir = Path(directory)
-                (config_dir / "projects").symlink_to(
-                    (self.sessions_dir / "projects").resolve(), target_is_directory=True
-                )
-                env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-                if credentials and not api_key and not oauth_token:
-                    self._install_subscription_credentials(credentials, config_dir)
+            # Run Claude Code and capture output
+            with open(self.output_path, "w") as out_file:
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,

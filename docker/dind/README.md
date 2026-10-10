@@ -89,14 +89,10 @@ Use `--cpus` and `--memory` before `--` to set outer container limits.
 For disposable evaluations on a slow disk, `--docker-tmpfs-size 24g --memory 32g`
 puts the entire private Docker data directory in memory, using a sparse ext4
 loop image in tmpfs so image-layer extended attributes work on older kernels.
-The image is mounted with discard so deleting volumes and cached images releases
-their backing RAM between attempts.
 This requires loop-device support on the host. The tmpfs limit counts
 toward the outer memory limit, so leave room for Kubernetes, applications and the
-agent. Results still persist on the host. This option also mounts `/tmp` in tmpfs
-(4 GiB limit) so KIND's image-export
-archives do not fill the host disk. Both tmpfs mounts share the outer memory budget.
-Use disk-backed runs for disk faults, host-reboot persistence or I/O measurements.
+agent. Results still persist on the host. This option changes all nested storage
+behavior: use disk-backed runs for disk faults, persistence or I/O measurements.
 
 To keep an environment available, omit the command and use a second terminal:
 
@@ -149,17 +145,6 @@ Prior work inspected while implementing this runtime:
 
 ## Validation status
 
-The [DeathStarBench 2.0 guide](../../docs/deathstarbench/README.md) describes
-replicated HotelReservation and SocialNetwork tiers and the validation-gated
-comparison campaign. For subscription-backed evaluations, pass the one
-credential file explicitly rather than the whole login directory:
-
-- Codex: `run --codex-auth-file ~/.codex/auth.json`
-- Claude Code: `run --claude-auth-file ~/.claude/.credentials.json`
-
-Either file is mounted read-only. Inside the container, the harness gives each
-agent container its own copy, so a token refresh cannot rewrite the host file.
-
 Run real problem lifecycles without API keys using the existing validator:
 
 ```bash
@@ -168,8 +153,7 @@ python3 docker/dind/run.py run --name sregym-network-policy -- \
   --summary results/network-policy-validation.md
 ```
 
-This deploys the application, requires the oracle to pass before injection,
-injects the fault, requires the mitigation oracle
+This deploys the application, injects the fault, requires the mitigation oracle
 to report failure, calls `recover_fault()`, and requires the oracle to report success.
 For a noop agent run through the complete benchmark/agent-container path:
 

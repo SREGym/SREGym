@@ -1,6 +1,7 @@
 """SWE-Marathon Stripe reference, durable API state and a separate retry worker."""
 
 import hashlib
+from pathlib import Path
 
 from sregym.paths import BASE_PARENT_DIR
 from sregym.service.apps.components.postgres import PostgresApplication
@@ -29,6 +30,7 @@ class StripeMarathon(PostgresApplication):
     health_path = "/v1/health"
     data_volumes = ("stripe-receipts",)
     auxiliary_deployments = ("stripe-worker", "stripe-receiver")
+    client_workflow = Path(__file__).with_name("workflow.py")
 
     def application_documents(self):
         env = [

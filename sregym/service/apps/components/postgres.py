@@ -25,6 +25,7 @@ class PostgresApplication(Application):
     startup_timeout = 900
     data_volumes = ()
     auxiliary_deployments = ()
+    client_workflow: Path
 
     def __init__(self, tier="replicated", storage_class="standard"):
         if tier not in TIERS:
@@ -299,8 +300,10 @@ class PostgresApplication(Application):
         raise RuntimeError("PostgreSQL primary and replicas did not converge")
 
     def run_client(self, mode, **arguments):
-        source = Path(__file__).with_name("workflows.py").read_text()
-        source += f"\nrun({self.slug!r}, {mode!r}, **json.loads({json.dumps(arguments)!r}))\n"
+        source = Path(__file__).with_name("http_client.py").read_text() + "\n"
+        source += self.client_workflow.read_text()
+        url = f"http://{self.slug}:{self.frontend_port}"
+        source += f"\nprint(json.dumps(workflow(Client({url!r}), {mode!r}, **json.loads({json.dumps(arguments)!r}))))\n"
         return json.loads(
             self.command("exec", "-i", "application-client", "--", "python", "-", input_text=source, timeout=180)
         )

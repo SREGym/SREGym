@@ -1,5 +1,7 @@
 """GitLab CE prototype: external PostgreSQL and Redis, persistent Gitaly data."""
 
+from pathlib import Path
+
 from sregym.service.apps.components.postgres import PostgresApplication
 
 GITLAB_IMAGE = "gitlab/gitlab-ce:18.11.12-ce.0"
@@ -14,6 +16,7 @@ class GitLabCE(PostgresApplication):
     data_volumes = ("gitlab-config", "gitlab-data", "gitlab-redis")
     auxiliary_deployments = ("gitlab-redis",)
     smtp_enabled = False
+    client_workflow = Path(__file__).with_name("workflow.py")
 
     def probes(self, path=None):
         # GitLab's readiness endpoint is allowlisted to localhost by default.

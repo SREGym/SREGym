@@ -5,7 +5,7 @@ solved, shown as one block per attempt in run order. Invalid attempts are marked
 distinctly and excluded from the solve count, because an attempt that never
 graded is not evidence about the agent.
 
-    python scripts/screen_report.py [results_root ...]
+    python -m experiments.environment_scaling.screen_report [results_root ...]
 """
 
 import argparse

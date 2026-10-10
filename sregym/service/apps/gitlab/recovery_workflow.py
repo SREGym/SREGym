@@ -22,6 +22,7 @@ def reconcile(client, receipts, write=False):
 
 
 def recovery_workflow(client, mode, **args):
+    client.headers["PRIVATE-TOKEN"] = client.token
     if mode == "seed":
         projects = []
         for index in range(1, args["count"] + 1):

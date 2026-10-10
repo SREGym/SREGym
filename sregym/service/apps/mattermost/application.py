@@ -1,5 +1,7 @@
 """Mattermost Team Edition with retained attachments and external PostgreSQL."""
 
+from pathlib import Path
+
 from sregym.service.apps.components.postgres import PostgresApplication
 
 MATTERMOST_IMAGE = "mattermost/mattermost-team-edition:11.7.0"
@@ -10,6 +12,7 @@ class Mattermost(PostgresApplication):
     frontend_port = 8065
     health_path = "/api/v4/system/ping"
     data_volumes = ("mattermost-data",)
+    client_workflow = Path(__file__).with_name("workflow.py")
 
     def application_documents(self):
         folders = ("config", "data", "logs", "plugins", "client-plugins", "bleve-indexes")

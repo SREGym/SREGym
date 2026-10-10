@@ -113,9 +113,11 @@ class GitLabRecovery(GitLabCE):
 
     def recovery_client(self, mode, **arguments):
         directory = Path(__file__).parent
-        source = (directory.parent / "components" / "workflows.py").read_text() + "\n"
+        source = (directory.parent / "components" / "http_client.py").read_text() + "\n"
         source += (directory / "recovery_workflow.py").read_text()
-        source += f"\nrecovery_workflow(Client('gitlab-ce'), {mode!r}, **json.loads({json.dumps(arguments)!r}))\n"
+        source += (
+            f"\nrecovery_workflow(Client('http://gitlab-ce'), {mode!r}, **json.loads({json.dumps(arguments)!r}))\n"
+        )
         return json.loads(
             self.command("exec", "-i", "application-client", "--", "python", "-", input_text=source, timeout=600)
         )
