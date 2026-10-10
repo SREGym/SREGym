@@ -111,6 +111,15 @@ class Pipeline:
 
     def dind(self, name: str, out: Path, command: list[str], env: dict, mounts: list[tuple[Path, str]],
              timeout_s: int, claude: bool = False) -> int:
+        marker = out / "EXIT"
+        running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name], capture_output=True,
+                                 text=True).stdout.strip() == "true"
+        if not running:
+            if marker.exists():
+                return int(marker.read_text().strip() or 1)
+            if self.csv_rows(out) if out.exists() else False:
+                return 0  # finished while no pipeline process was watching it
+            shutil.rmtree(out, ignore_errors=True)  # stale or partial output
         out.mkdir(parents=True, exist_ok=True)
         auth = out / "codex-auth.json"
         if not auth.exists():
@@ -132,8 +141,6 @@ class Pipeline:
         for src, dst in mounts:
             args += ["--mount", f"type=bind,src={src},dst={dst},readonly"]
         args += [self.o.image, *command]
-        running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name], capture_output=True,
-                                 text=True).stdout.strip() == "true"
         if running:
             # A previous pipeline process started this job; wait for it instead of restarting it.
             self.log(f"ADOPT running container {name}")
@@ -145,6 +152,7 @@ class Pipeline:
                 subprocess.run(["docker", "stop", "-t", "60", name], capture_output=True)
                 code = 1
             auth.unlink(missing_ok=True)
+            marker.write_text(str(code))
             return code
         subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
         with open(out / "dind.log", "a") as handle:
@@ -155,6 +163,7 @@ class Pipeline:
                 subprocess.run(["docker", "stop", "-t", "60", name], capture_output=True)
                 code = proc.wait()
         auth.unlink(missing_ok=True)
+        marker.write_text(str(code))
         return code
 
     @staticmethod
@@ -304,7 +313,6 @@ class Pipeline:
         rnd = job.args["round"]
         model = self.o.model if agent == "codex" else self.o.claude_model
         out = self.work / "runs" / job.cid / f"panel-{agent}-r{rnd}"
-        shutil.rmtree(out, ignore_errors=True)
         started = time.time()
         code = self.dind(
             f"fix-{agent[:6]}-{rnd}-{job.cid}"[:63], out,
@@ -436,6 +444,9 @@ class Pipeline:
             if len(parts) == 2 and parts[0] in self.ledger["candidates"]:
                 c = self.cand(parts[0])
                 c["status"] = parts[1]
+                phase = {"validating": "validate", "chaos": "chaos"}.get(parts[1])
+                if phase:
+                    shutil.rmtree(self.work / "runs" / parts[0] / phase, ignore_errors=True)
                 c.pop("reason", None)
                 if parts[1] == "panel":
                     c.setdefault("panel", {"attempts": []})
