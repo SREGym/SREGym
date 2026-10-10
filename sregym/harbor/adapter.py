@@ -77,6 +77,10 @@ K3S_UNSUPPORTED = {
     "pod_cidr_exhaustion_hotel_reservation": "needs Calico; the cluster runs flannel",
     "node_conntrack_exhaustion_hotel_reservation": "writes a host-global sysctl",
     "workload_imbalance": "replaces the kube-proxy DaemonSet; k3s has kube-proxy built in",
+    "cumulative_admission_webhook_timeout_hotel_reservation": (
+        "needs NetworkPolicy to drop the API server's webhook calls, as Calico does; "
+        "k3s's kube-router rejects them at once, so they never time out"
+    ),
 }
 
 

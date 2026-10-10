@@ -123,8 +123,11 @@ reason:
 - problems whose constructor queries a live cluster
 - problems the k3s cluster cannot run (`K3S_UNSUPPORTED` in
   `sregym/harbor/adapter.py`): node faults injected with `docker exec` into KIND
-  nodes, Calico-specific faults (the cluster runs flannel), a host-global sysctl
-  and a replaced kube-proxy
+  nodes, Calico-specific faults (the cluster runs flannel), a host-global sysctl,
+  a replaced kube-proxy, and an admission-webhook fault that needs denied
+  connections to hang. k3s enforces NetworkPolicy with kube-router, which
+  rejects them at once (`REJECT --reject-with icmp-port-unreachable`), where
+  Calico drops them.
 
 These 14 problems are generated but do not work as tasks at the default size
 (4 CPUs, 8 GiB) on Daytona, or on the k3s cluster at all. Leave them out of a
@@ -142,7 +145,6 @@ reward. Results are from the sweep under [Validation status](#validation-status)
 | `capacity_decrease_rpc_retry_storm`, `load_spike_rpc_retry_storm` | setup failed | CPU stress on every node starves the API server and Prometheus |
 | `trainticket_f17_nested_sql_select_clause_error`, `trainticket_f22_sql_column_name_mismatch_error` | setup failed | Train Ticket's dozens of services overload the sandbox |
 | `operator_wrong_operator_image` | setup failed | its oracle checks Deployments in `tidb-cluster`, but the fault breaks the operator in `tidb-operator`. The oracle never sees the fault, on any cluster, so any agent would pass. |
-| `cumulative_admission_webhook_timeout_hotel_reservation` | setup failed in 3 of 3 runs | the fault does not hold on k3s: replacement pods are still admitted. k3s enforces NetworkPolicy with kube-router, which likely does not cut the API server off from the webhook pods. |
 
 | Option | Default | Meaning |
 |---|---|---|
