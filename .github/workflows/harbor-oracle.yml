@@ -3,8 +3,9 @@ name: Harbor Oracle Sweep
 # Runs Harbor's oracle agent on generated SREGym tasks, one problem per job, on
 # GitHub-hosted runners through Harbor's local Docker environment. Harbor
 # accepts an adapter only when the oracle scores 1.0 on every task; this checks
-# that without cloud credentials. Each job deploys the problem's application in
-# the task's own sidecar and KIND cluster, so it needs unrestricted egress.
+# that without cloud credentials. Each job builds the task image for the
+# runner's architecture and deploys the problem in the task container's own
+# k3s cluster, so it needs unrestricted egress.
 
 on:
   workflow_dispatch:
@@ -21,6 +22,10 @@ on:
         description: Also require the no-op agent to score 0 (the fault is live)
         type: boolean
         default: false
+      runner:
+        description: Runner label, e.g. ubuntu-24.04-arm to check arm64
+        required: true
+        default: ubuntu-latest
 
 permissions:
   contents: read
@@ -56,7 +61,7 @@ jobs:
   oracle:
     needs: plan
     name: oracle (${{ matrix.problem }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
