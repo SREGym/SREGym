@@ -23,11 +23,15 @@ class LLMAsAJudgeOracle(Oracle):
         max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
     ):
         super().__init__(problem)
+        if not isinstance(expected, (str, list)):
+            raise TypeError("Expected root causes must be a string or a list of strings")
         if isinstance(expected, list) and (
             not expected or any(not isinstance(cause, str) or not cause.strip() for cause in expected)
         ):
             raise ValueError("Expected root causes must be a nonempty list of nonempty strings")
-        self.expected = expected.copy() if isinstance(expected, list) else expected or ""
+        if isinstance(expected, list):
+            expected = expected[0] if len(expected) == 1 else expected.copy()
+        self.expected = expected
 
         # Initialize the LLM judge
         self.judge = DiagnosisJudge(
@@ -67,16 +71,17 @@ class LLMAsAJudgeOracle(Oracle):
                     "Still penalize incorrect claims and causes not supported by the full incident context.\n\n"
                     f"Full incident context:\n{context}\n\nEvaluation target — Cause {i}:\n{cause}"
                 )
-                reports.append({"name": f"cause-{i}", **self._evaluate_single(solution, expectation)})
+                reports.append({"name": f"cause-{i}", **self._evaluate_single(solution, expectation, cause)})
             scores = [report["accuracy"] for report in reports]
+            outcomes = [report["success"] for report in reports]
             return {
-                "success": all(report["success"] is True for report in reports),
+                "success": False if False in outcomes else (None if None in outcomes else True),
                 "accuracy": round(sum(scores) / len(scores), 2) if all(s is not None for s in scores) else None,
                 "oracles": reports,
             }
         return self._evaluate_single(solution, self.expected)
 
-    def _evaluate_single(self, solution, expectation: str) -> dict:
+    def _evaluate_single(self, solution, expectation: str, display_expectation: str | None = None) -> dict:
         print("== LLM-as-a-Judge Evaluation ==")
         results = {}
 
@@ -109,9 +114,8 @@ class LLMAsAJudgeOracle(Oracle):
                 print(f"✅ Correct diagnosis: {report.verdict.value} (score: {acc:.1f}/100)")
             else:
                 print(f"❌ Incorrect diagnosis: {report.verdict.value} (score: {acc:.1f}/100)")
-                print(
-                    f"   Expected: {expectation[:100]}..." if len(expectation) > 100 else f"   Expected: {expectation}"
-                )
+                display = expectation if display_expectation is None else display_expectation
+                print(f"   Expected: {display[:100]}..." if len(display) > 100 else f"   Expected: {display}")
                 print(f"   Got: {solution[:100]}..." if len(solution) > 100 else f"   Got: {solution}")
 
             # Include dimension breakdown in results

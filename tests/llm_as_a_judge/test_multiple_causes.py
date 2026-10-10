@@ -25,15 +25,18 @@ def report(score=1.0, verdict=JudgmentResult.TRUE):
     )
 
 
-def test_single_cause_keeps_original_request_and_report():
-    oracle = LLMAsAJudgeOracle(None, "checkout points to port 8082 instead of 8080")
+@pytest.mark.parametrize("as_list", [False, True])
+def test_single_cause_keeps_original_request_and_report(as_list):
+    cause = "checkout points to port 8082 instead of 8080"
+    expected = [cause] if as_list else cause
+    oracle = LLMAsAJudgeOracle(None, expected)
+    if as_list:
+        expected[0] = "must not modify the configured reference"
     oracle.judge.judge_detailed = Mock(return_value=report())
 
     result = oracle.evaluate("The checkout port is wrong", duration=12)
 
-    oracle.judge.judge_detailed.assert_called_once_with(
-        solution="The checkout port is wrong", expectation=oracle.expected
-    )
+    oracle.judge.judge_detailed.assert_called_once_with(solution="The checkout port is wrong", expectation=cause)
     assert result["success"] is True
     assert result["accuracy"] == 100
     assert result["judgment"] == "True"
@@ -43,7 +46,7 @@ def test_single_cause_keeps_original_request_and_report():
     assert "oracles" not in result
 
 
-@pytest.mark.parametrize("count", [1, 2, 3, 4])
+@pytest.mark.parametrize("count", [2, 3, 4])
 def test_every_cause_receives_full_answer_and_scoped_context(count):
     causes = [f"service-{i} has fault-{i}" for i in range(count)]
     oracle = LLMAsAJudgeOracle(None, causes)
@@ -92,21 +95,42 @@ def test_judge_error_does_not_skip_remaining_causes():
     assert result["oracles"][2]["success"] is True
 
 
-def test_unavailable_judge_cannot_pass_and_preserves_unknown_score():
+@pytest.mark.parametrize("verdict,success", [(JudgmentResult.TRUE, None), (JudgmentResult.FALSE, False), (None, None)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_unavailable_judge_preserves_incomplete_unless_another_cause_fails(verdict, success, reverse):
     oracle = LLMAsAJudgeOracle(None, ["cause A", "cause B"])
-    oracle.judge.judge_detailed = Mock(side_effect=[report(), report(0, None)])
+    reports = [report(1 if verdict == JudgmentResult.TRUE else 0, verdict), report(0, None)]
+    oracle.judge.judge_detailed = Mock(side_effect=reports[::-1] if reverse else reports)
 
     result = oracle.evaluate("A diagnosis")
 
-    assert result["success"] is False
+    assert result["success"] is success
     assert result["accuracy"] is None
-    assert result["oracles"][1]["success"] is None
-    assert result["oracles"][1]["accuracy"] is None
+    assert result["oracles"][0 if reverse else 1]["success"] is None
+    assert result["oracles"][0 if reverse else 1]["accuracy"] is None
+    assert oracle.judge.judge_detailed.call_count == 2
+
+
+def test_failed_cause_log_displays_the_cause_instead_of_the_shared_preamble(capsys):
+    oracle = LLMAsAJudgeOracle(None, ["checkout has the wrong port", "database has the wrong isolation"])
+    oracle.judge.judge_detailed = Mock(side_effect=[report(), report(0, JudgmentResult.FALSE)])
+
+    oracle.evaluate("A diagnosis")
+
+    output = capsys.readouterr().out
+    assert "Expected: database has the wrong isolation" in output
+    assert "Expected: This incident" not in output
 
 
 @pytest.mark.parametrize("expected", [[], [""], ["cause", "   "], [None], ["cause", 3]])
 def test_invalid_cause_lists_are_rejected(expected):
     with pytest.raises(ValueError, match="nonempty"):
+        LLMAsAJudgeOracle(None, expected)
+
+
+@pytest.mark.parametrize("expected", [("cause A", "cause B"), {"cause": "A"}, 3, None])
+def test_unsupported_cause_types_are_rejected(expected):
+    with pytest.raises(TypeError, match="string or a list"):
         LLMAsAJudgeOracle(None, expected)
 
 
