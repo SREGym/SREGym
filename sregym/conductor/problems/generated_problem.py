@@ -102,6 +102,7 @@ class GeneratedProblem(Problem):
         signals = telemetry.Signals(self.namespace, self.impact_window_s)
         signals.capture_baseline()
         before = protected.snapshot(self.namespace)
+        leaks_before = protected.leak_scan(self.namespace)
 
         result = self.artifact.run("inject.sh", self.namespace)
         injected_at = time.time()
@@ -124,6 +125,7 @@ class GeneratedProblem(Problem):
             new_alerts=self.alerts.new(),
             **signals.changes(),
             integrity=protected.compare(before, protected.snapshot(self.namespace)),
+            leaks=sorted(protected.leak_scan(self.namespace) - leaks_before),
             workload_running=protected.workload_running(self.namespace),
             seconds_after_inject=round(time.time() - injected_at),
         )
@@ -138,6 +140,7 @@ class GeneratedProblem(Problem):
             self.gates["new_alerts"] or self.gates["log_surges"] or self.gates["cpu_surges"]
         )
         self.gates["integrity_pass"] = self.gates["integrity"]["intact"] and self.gates["workload_running"]
+        self.gates["no_leak_pass"] = not self.gates["leaks"]
         self._write_report("inject", self.gates)
         print(
             f"[GATES] impact={impact.violated} ({impact.violating}/{impact.rounds} rounds) "

@@ -97,3 +97,44 @@ def compare(before: dict[str, str], after: dict[str, str]) -> dict:
     removed = sorted(k for k in before if k not in after)
     added = sorted(k for k in after if k not in before)
     return {"intact": not (changed or removed), "changed": changed, "removed": removed, "added": added}
+
+
+LEAK_KINDS = (
+    "deployments,statefulsets,daemonsets,replicasets,pods,services,configmaps,secrets,serviceaccounts,"
+    "networkpolicies,roles,rolebindings,jobs,cronjobs,horizontalpodautoscalers,poddisruptionbudgets,"
+    "persistentvolumeclaims,ingresses,endpoints"
+)
+
+
+def _strings(obj, path=""):
+    """Yield (path, text) for every key and string value in a JSON object."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            yield f"{path}.{key}", str(key)
+            yield from _strings(value, f"{path}.{key}")
+    elif isinstance(obj, list):
+        for i, value in enumerate(obj):
+            yield from _strings(value, f"{path}[{i}]")
+    elif isinstance(obj, str):
+        yield path, obj
+
+
+def leak_scan(namespace: str) -> set[str]:
+    """Fixer-visible strings in the namespace that would reveal an injected fault."""
+    from sregym.chaos.artifact import SUSPICIOUS
+
+    found = set()
+    for obj in _kubectl_json(["get", LEAK_KINDS, "-n", namespace]).get("items", []):
+        meta = obj.get("metadata", {})
+        meta.pop("managedFields", None)
+        if obj.get("kind") == "Secret":
+            obj.pop("data", None)  # values are base64; names and labels still count
+        where = f"{obj.get('kind')}/{meta.get('name')}"
+        for path, text in _strings({"metadata": meta, "spec": obj.get("spec"), "data": obj.get("data")}):
+            if SUSPICIOUS.search(text):
+                found.add(f"{where}{path}: {text[:120]}")
+    for event in _kubectl_json(["get", "events", "-n", namespace]).get("items", []):
+        text = f"{event.get('reason', '')} {event.get('message', '')}"
+        if SUSPICIOUS.search(text):
+            found.add(f"Event: {text[:160]}")
+    return found

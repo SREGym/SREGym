@@ -347,10 +347,11 @@ class Pipeline:
         c["lint"] = {"problems": problems, "leaks": leaks}
         if artifact.meta.get("app") != c["app"]:
             problems.append(f"artifact app {artifact.meta.get('app')} != {c['app']}")
-        if problems or leaks:
+        if problems:
             c["status"] = "rejected"
-            c["reason"] = "artifact lint: " + "; ".join(problems + leaks[:5])
+            c["reason"] = "artifact lint: " + "; ".join(problems)
             return
+        # Script text is only a hint; the validation replay scans the cluster for real leaks.
         c["status"] = "validating"
 
     def run_validate(self, job: Job) -> None:
@@ -377,6 +378,8 @@ class Pipeline:
             "observability": [r.get("observability_pass", False) for r in injects],
             "persistence": [r.get("persistence_pass", False) for r in injects],
             "integrity": [r.get("integrity_pass", False) for r in injects],
+            "no_leak": [r.get("no_leak_pass", False) for r in injects],
+            "leaks": [r.get("leaks", []) for r in injects],
             "new_alerts": [r.get("new_alerts", []) for r in injects],
             "mitigate_rc": [m.get("returncode") for m in mitigations],
             "solvability": [r.get("Mitigation.success") == "True" for r in rows],
@@ -387,6 +390,7 @@ class Pipeline:
             "observability": bool(gates["observability"]) and all(gates["observability"]),
             "persistence": bool(gates["persistence"]) and all(gates["persistence"]),
             "integrity": bool(gates["integrity"]) and all(gates["integrity"]),
+            "no_leak": bool(gates["no_leak"]) and all(gates["no_leak"]),
             "solvability": len(gates["solvability"]) >= self.o.replays and all(gates["solvability"]),
         }
         c["validate"] = {"exit": code, "minutes": round((time.time() - started) / 60, 1), "gates": gates,
