@@ -126,8 +126,12 @@ def leak_scan(namespace: str) -> dict[str, str]:
     strings that existed before (e.g. image registries) never count, even on
     objects that were recreated under new names.
     """
-    from sregym.chaos.artifact import SUSPICIOUS
+    import re
 
+    from sregym.chaos.artifact import SUSPICIOUS_WORDS
+
+    # Every app image lives under ghcr.io/sregym/, so the project name is no signal here.
+    suspicious = re.compile(r"(?<![a-z])(" + "|".join(w for w in SUSPICIOUS_WORDS if w != "sregym") + ")", re.I)
     found: dict[str, str] = {}
     for obj in _kubectl_json(["get", LEAK_KINDS, "-n", namespace]).get("items", []):
         meta = obj.get("metadata", {})
@@ -136,10 +140,10 @@ def leak_scan(namespace: str) -> dict[str, str]:
             obj.pop("data", None)  # values are base64; names and labels still count
         where = f"{obj.get('kind')}/{meta.get('name')}"
         for path, text in _strings({"metadata": meta, "spec": obj.get("spec"), "data": obj.get("data")}):
-            if SUSPICIOUS.search(text):
+            if suspicious.search(text):
                 found.setdefault(text[:200], f"{where}{path}")
     for event in _kubectl_json(["get", "events", "-n", namespace]).get("items", []):
         text = f"{event.get('reason', '')} {event.get('message', '')}"
-        if SUSPICIOUS.search(text):
+        if suspicious.search(text):
             found.setdefault(text[:200], "Event")
     return found
