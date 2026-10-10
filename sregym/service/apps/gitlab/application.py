@@ -11,7 +11,7 @@ REDIS_IMAGE = "redis:7.4.2-alpine"
 class GitLabCE(PostgresApplication):
     slug = "gitlab-ce"
     frontend_port = 80
-    health_path = "/-/health"
+    health_path = "/users/sign_in"
     startup_timeout = 1500
     data_volumes = ("gitlab-config", "gitlab-data", "gitlab-redis")
     auxiliary_deployments = ("gitlab-redis",)

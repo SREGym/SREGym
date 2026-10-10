@@ -7,6 +7,20 @@ from sregym.service.apps.gitlab.recovery import GitLabRecovery
 from sregym.service.apps.stripe.configuration import StripeConfig
 
 
+def test_gitlab_workload_uses_public_route_without_relaxing_readiness():
+    app = GitLabRecovery()
+    app.apply = Mock()
+
+    app.start_workload()
+
+    deployment = app.apply.call_args.args[0][0]
+    source = deployment["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+    assert "http://gitlab-ce:80/users/sign_in" in source
+    probes = app.probes()
+    for name in ("readinessProbe", "startupProbe"):
+        assert probes[name]["exec"]["command"][-1] == "http://127.0.0.1/-/readiness?all=1"
+
+
 @pytest.mark.parametrize("tier,members", [("single", 1), ("replicated", 3)])
 def test_archives_and_configuration_have_independent_storage(tier, members):
     gitlab = GitLabRecovery(tier)

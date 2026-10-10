@@ -86,7 +86,8 @@ class SaaSOracle(ServiceEndpointMitigationOracle):
                     return self.fail("required_application_topology_changed", deployment=name)
                 if not deployment_rollout_complete(d):
                     return self.fail("required_deployment_not_rolled_out", deployment=name)
-            if self.volume_ids() != self.volumes:
+            current_volumes = self.volume_ids()
+            if any(current_volumes.get(name) != uid for name, uid in self.volumes.items()):
                 return self.fail("persistent_volumes_replaced_or_missing")
             if failed := self.verify_replication(self.baseline["token"]):
                 return failed

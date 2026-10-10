@@ -80,7 +80,8 @@ class GiteaOracle(ServiceEndpointMitigationOracle):
             deployment = json.loads(app.command("get", "deployment", "gitea", "-o", "json"))
             if deployment["spec"].get("replicas", 1) != 1:
                 return self.fail("gitea_requires_one_repository_writer")
-            if self.volume_ids() != self.volumes:
+            current_volumes = self.volume_ids()
+            if any(current_volumes.get(name) != uid for name, uid in self.volumes.items()):
                 return self.fail("persistent_volumes_replaced_or_missing")
             self.verify_replication(self.baseline["token"])
             app.run_client("verify", **self.baseline, fixture=json.loads((FIXTURES / "import-data.json").read_text()))

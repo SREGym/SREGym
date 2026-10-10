@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from sregym.conductor.oracles.gitea import GiteaOracle
 from sregym.conductor.oracles.saas import SaaSOracle
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
 
@@ -40,6 +41,53 @@ def test_recreated_storage_cannot_pass(monkeypatch):
     verdict = judge.evaluate()
     assert verdict["success"] is False
     app.check_workflow.assert_not_called()
+
+
+@pytest.mark.parametrize("oracle_class", [SaaSOracle, GiteaOracle])
+@pytest.mark.parametrize(
+    ("claims", "expected"),
+    [
+        pytest.param([("data", "original", "Bound")], True, id="original"),
+        pytest.param([("data", "original", "Bound"), ("backup", "extra", "Bound")], True, id="additional-backup"),
+        pytest.param([("backup", "extra", "Bound")], False, id="original-missing"),
+        pytest.param([("data", "replacement", "Bound"), ("backup", "extra", "Bound")], False, id="original-replaced"),
+        pytest.param([("data", "original", "Pending"), ("backup", "extra", "Bound")], False, id="original-unbound"),
+    ],
+)
+def test_original_volumes_must_survive_but_additional_volumes_are_allowed(monkeypatch, oracle_class, claims, expected):
+    app = SimpleNamespace(slug="gitea", auxiliary_deployments=(), scale_tier="replicated", members=3)
+
+    def command(*args):
+        if args[:2] == ("get", "pvc"):
+            return json.dumps(
+                {
+                    "items": [
+                        {"metadata": {"name": name, "uid": uid}, "status": {"phase": phase}}
+                        for name, uid, phase in claims
+                    ]
+                }
+            )
+        return json.dumps(READY_DEPLOYMENT)
+
+    app.command = Mock(side_effect=command)
+    app.run_client = Mock()
+    app.check_workflow = Mock(return_value={"token": "b" * 32})
+    judge = oracle_class(SimpleNamespace(app=app))
+    judge.baseline = {"token": "a" * 32}
+    judge.volumes = {"data": "original"}
+    judge.verify_replication = Mock(return_value=None)
+    monkeypatch.setattr(ServiceEndpointMitigationOracle, "evaluate", lambda self: {"success": True})
+
+    result = judge.evaluate()
+
+    assert result["success"] is expected
+    if expected:
+        app.run_client.assert_called_once()
+        app.check_workflow.assert_called_once()
+    else:
+        assert result["reason"] == "persistent_volumes_replaced_or_missing"
+        app.run_client.assert_not_called()
+        app.check_workflow.assert_not_called()
 
 
 def test_preserved_baseline_is_checked_before_fresh_writes(monkeypatch):

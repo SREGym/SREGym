@@ -35,7 +35,8 @@ GATES = (
 
 
 def command(*args, **kwargs):
-    return subprocess.run(["docker", *args], check=True, capture_output=True, text=True, **kwargs).stdout
+    kwargs.setdefault("stderr", subprocess.PIPE)
+    return subprocess.run(["docker", *args], check=True, stdout=subprocess.PIPE, text=True, **kwargs).stdout
 
 
 def validate(output, image=STRIPE_IMAGE):
@@ -128,7 +129,9 @@ def validate(output, image=STRIPE_IMAGE):
                     break
                 time.sleep(1)
             else:
-                raise RuntimeError(f"{mode} API did not become ready: " + command("logs", api)[-3000:])
+                raise RuntimeError(
+                    f"{mode} API did not become ready: " + command("logs", api, stderr=subprocess.STDOUT)[-3000:]
+                )
             runner = api
             if mode == "adapter":
                 runner = name + "-worker"
@@ -182,9 +185,9 @@ def validate(output, image=STRIPE_IMAGE):
                 }
                 result["modes"][mode] = gates
                 (output / "results.json").write_text(json.dumps(result, indent=2) + "\n")
-            (mode_out / "api.log").write_text(command("logs", api))
+            (mode_out / "api.log").write_text(command("logs", api, stderr=subprocess.STDOUT))
             if mode == "adapter":
-                (mode_out / "worker.log").write_text(command("logs", runner))
+                (mode_out / "worker.log").write_text(command("logs", runner, stderr=subprocess.STDOUT))
             command("stop", api)
             if mode == "adapter":
                 command("stop", runner)
