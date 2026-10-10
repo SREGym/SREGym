@@ -227,6 +227,21 @@ def test_tidb_uses_matching_vendored_chart_without_a_repository_lookup():
     assert deployer.operator_chart in run.call_args.args[0]
 
 
+def test_tidb_cluster_uses_a_multiarch_helper_image():
+    deployer = TiDBClusterDeployer(ROOT / "sregym/service/metadata/tidb_metadata.json")
+    applied = {}
+
+    def run_cmd(cmd):
+        if cmd.startswith("kubectl apply -f ") and " -n " in cmd:
+            applied.update(yaml.safe_load(Path(cmd.split()[3]).read_text()))
+
+    with patch.object(deployer, "run_cmd", side_effect=run_cmd):
+        deployer.deploy_tidb_cluster()
+    assert applied["kind"] == "TidbCluster"
+    assert applied["spec"]["helper"]["image"] == "busybox:1.36"
+    assert applied["spec"]["tikv"] == yaml.safe_load(Path(deployer.cluster_config_path).read_text())["spec"]["tikv"]
+
+
 def test_tidb_does_not_substitute_a_different_operator_version():
     deployer = TiDBClusterDeployer(ROOT / "sregym/service/metadata/tidb-with-operator.json")
     assert deployer.operator_version == "v1.6.0"

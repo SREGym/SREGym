@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from textwrap import dedent
@@ -9,6 +10,10 @@ import yaml
 
 from sregym.paths import BASE_DIR
 from sregym.service.helm import Helm
+
+# TiDB Operator's default helper image (the slow-log sidecar), busybox:1.26.2,
+# is published for amd64 only; this one is multi-arch, so TiDB also runs on arm64.
+TIDB_HELPER_IMAGE = "busybox:1.36"
 
 
 class TiDBClusterDeployer:
@@ -141,7 +146,14 @@ class TiDBClusterDeployer:
         print(f"Creating TiDB cluster namespace '{self.namespace_tidb_cluster}'...")
         self.create_namespace(self.namespace_tidb_cluster)
         print(f"Deploying TiDB cluster manifest from {self.cluster_config_path}...")
-        self.run_cmd(f"kubectl apply -f {self.cluster_config_path} -n {self.namespace_tidb_cluster}")
+        manifest = self.cluster_config_path
+        if Path(manifest).is_file():
+            cluster = yaml.safe_load(Path(manifest).read_text())
+            cluster.setdefault("spec", {}).setdefault("helper", {}).setdefault("image", TIDB_HELPER_IMAGE)
+            with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as handle:
+                yaml.safe_dump(cluster, handle)
+            manifest = handle.name
+        self.run_cmd(f"kubectl apply -f {manifest} -n {self.namespace_tidb_cluster}")
 
     def run_sql(self, sql_text: str):
         ns = self.namespace_tidb_cluster
