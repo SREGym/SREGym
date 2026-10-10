@@ -32,7 +32,7 @@ def validate(tier):
         oracle.capture_baseline()
         result["healthy"] = grade("healthy")
         assert result["healthy"]["success"], result["healthy"]
-        result["before_permissions"] = json.loads(app.control("safety"))
+        result["before_permissions"] = app.configuration_safety()
         assert result["before_permissions"]["source_counts"] == {"feature_old": 120, "feature_new": 120}
         problem.inject_fault()
         result["injected"] = grade("injected")

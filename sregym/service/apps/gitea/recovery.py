@@ -28,16 +28,13 @@ SELECT json_build_object(
 
 
 class GiteaRecovery(Gitea):
-    describe_archives = True
-
     @property
     def expected_volume_count(self):
         return super().expected_volume_count + 1
 
     def get_app_json(self):
         metadata = super().get_app_json()
-        if self.describe_archives:
-            metadata["Desc"] += ARCHIVE_DESCRIPTION
+        metadata["Desc"] += ARCHIVE_DESCRIPTION
         return metadata
 
     def render(self):
@@ -214,7 +211,3 @@ class GiteaRecovery(Gitea):
         )
         self.wait_database()
         self.resume_application()
-
-
-class GiteaRecoveryUnannounced(GiteaRecovery):
-    describe_archives = False

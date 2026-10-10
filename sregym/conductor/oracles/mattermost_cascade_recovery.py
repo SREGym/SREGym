@@ -28,6 +28,7 @@ class MattermostCascadeOracle(SaaSOracle):
         "gateway_capacity_below_floor": FailureClass.AGENT_ERROR,
         "capacity_automation_still_shrinking": FailureClass.AGENT_ERROR,
         "gateway_shedding_requests": FailureClass.AGENT_ERROR,
+        "gateway_request_failed": FailureClass.AGENT_ERROR,
         "gateway_latency_unresolved": FailureClass.AGENT_ERROR,
         "gateway_missing": FailureClass.AGENT_ERROR,
     }
@@ -108,6 +109,8 @@ class MattermostCascadeOracle(SaaSOracle):
                 )
 
             customer = app.probe_through_gateway()
+            if customer["failed"]:
+                return self.fail("gateway_request_failed", customer=customer)
             if customer["shed"]:
                 return self.fail("gateway_shedding_requests", customer=customer)
             budget = latency_budget(self.baseline_latency_ms)

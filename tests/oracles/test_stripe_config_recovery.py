@@ -1,12 +1,16 @@
 """Check causal recurrence, financial integrity and original delivery identity."""
 
 import copy
+import io
+import json
+from contextlib import redirect_stdout
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from sregym.conductor.oracles.stripe_config_recovery import StripeConfigRecoveryOracle, compare_state
+from sregym.service.apps.stripe.configuration import StripeConfig, _configuration_safety
 from sregym.service.apps.stripe.runtime import feature_edge as edge
 
 
@@ -64,18 +68,57 @@ def test_good_current_file_does_not_hide_next_bad_publication(tmp_path, monkeypa
     edge.write("current.json", {"features": edge.CANONICAL})
     edge.write("settings.json", {"enabled": True, "bot_management_enabled": True, "sources": ["old", "new"]})
     monkeypatch.setattr(edge, "features", lambda source: edge.CANONICAL * (2 if source == "new" else 1))
-    assert not edge.safety()["safe"]
+    assert not _configuration_safety(edge.read, edge.features, edge.CANONICAL)["safe"]
     edge.write("settings.json", {"enabled": False, "bot_management_enabled": True, "sources": ["old", "new"]})
-    assert edge.safety()["safe"]
+    assert _configuration_safety(edge.read, edge.features, edge.CANONICAL)["safe"]
 
 
 def test_empty_or_truncated_configuration_is_not_valid_containment(tmp_path, monkeypatch):
     monkeypatch.setattr(edge, "CONTROL", tmp_path)
     edge.write("current.json", {"features": []})
     edge.write("settings.json", {"enabled": False, "bot_management_enabled": True, "sources": []})
-    assert not edge.safety()["safe"]
+    assert not _configuration_safety(edge.read, edge.features, edge.CANONICAL)["safe"]
     edge.write("settings.json", {"enabled": True, "bot_management_enabled": False, "sources": []})
-    assert edge.safety()["safe"]  # Explicitly allowed emergency kill switch.
+    assert _configuration_safety(edge.read, edge.features, edge.CANONICAL)["safe"]  # Emergency kill switch.
+
+
+@pytest.mark.parametrize("expanded_source", [False, True])
+def test_private_verifier_executes_with_its_dependencies(tmp_path, monkeypatch, expanded_source):
+    monkeypatch.setenv("CONTROL_PATH", str(tmp_path))
+    monkeypatch.setattr(edge, "CONTROL", tmp_path)
+    edge.write("current.json", {"features": edge.CANONICAL})
+    edge.write("settings.json", {"enabled": True, "bot_management_enabled": True, "sources": ["old", "new"]})
+    (tmp_path / "query.sql").write_text(edge.QUERY)
+
+    def query_response(request, timeout):
+        multiple = 2 if expanded_source and request.get_header("X-clickhouse-user") == "new" else 1
+        return io.BytesIO(json.dumps({"data": edge.CANONICAL * multiple}).encode())
+
+    monkeypatch.setattr(edge.urllib.request, "urlopen", query_response)
+
+    def run_verifier(*args, input_text):
+        assert args == ("exec", "-i", "deployment/stripe-marathon", "-c", "edge", "--", "python", "-")
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exec(input_text, {})
+        return output.getvalue()
+
+    app = object.__new__(StripeConfig)
+    app.command = run_verifier
+    result = app.configuration_safety()
+    assert result["safe"] is not expanded_source
+    assert result["source_counts"] == {"old": 120, "new": 240 if expanded_source else 120}
+
+
+def test_agent_visible_runtime_excludes_grading_policy():
+    app = object.__new__(StripeConfig)
+    documents = app.application_documents()
+    scripts = next(document["data"] for document in documents if document["kind"] == "ConfigMap")
+    source = scripts["feature_edge.py"]
+    assert "def safety(" not in source
+    assert "_configuration_safety" not in source
+    assert "approved-bot-kill-switch" not in source
+    assert '"safety"' not in source
 
 
 def test_recurring_risk_is_decisive_without_mutating_business_state():

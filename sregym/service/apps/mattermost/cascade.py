@@ -35,7 +35,6 @@ CASCADE_DESCRIPTION = (
 
 class MattermostCascade(Mattermost):
     data_volumes = (*Mattermost.data_volumes, CONTROL_VOLUME)
-    describe_capacity = True
     #: Deliberately NOT in auxiliary_deployments: the shared SaaS oracle requires
     #: exactly one replica of each, and the gateway is meant to run several while
     #: deleting the scaler is a legitimate repair.
@@ -47,8 +46,7 @@ class MattermostCascade(Mattermost):
 
     def get_app_json(self):
         result = super().get_app_json()
-        if self.describe_capacity:
-            result["Desc"] += CASCADE_DESCRIPTION
+        result["Desc"] += CASCADE_DESCRIPTION
         return result
 
     def runtime_source(self, name):
@@ -293,23 +291,24 @@ class MattermostCascade(Mattermost):
         return [json.loads(line) for line in raw.splitlines() if line.strip()]
 
     def probe_through_gateway(self, attempts=12):
-        """Measure what a customer sees: shed requests and latency, via the gateway."""
+        """Measure successful ping responses, shed requests, errors, and latency."""
         script = (
             "import json,time,urllib.error,urllib.request\n"
-            "shed=served=0;lat=[]\n"
+            "shed=served=failed=0;lat=[]\n"
             f"for _ in range({attempts}):\n"
             " s=time.monotonic()\n"
             " try:\n"
-            "  urllib.request.urlopen('http://chat-gateway:8080/api/v4/system/ping',timeout=30).read()\n"
-            "  served+=1\n"
+            "  with urllib.request.urlopen('http://chat-gateway:8080/api/v4/system/ping',timeout=30) as response:\n"
+            "   if response.status==200 and json.load(response).get('status')=='OK': served+=1\n"
+            "   else: failed+=1\n"
             " except urllib.error.HTTPError as e:\n"
             "  shed+=1 if e.code==503 else 0\n"
-            "  served+=0 if e.code==503 else 1\n"
+            "  failed+=0 if e.code==503 else 1\n"
             " except Exception:\n"
-            "  shed+=1\n"
+            "  failed+=1\n"
             " lat.append(time.monotonic()-s)\n"
             "lat.sort()\n"
-            "print(json.dumps({'served':served,'shed':shed,"
+            "print(json.dumps({'served':served,'shed':shed,'failed':failed,"
             "'p50_ms':round(lat[len(lat)//2]*1000,1),'max_ms':round(lat[-1]*1000,1)}))\n"
         )
         return json.loads(
@@ -335,7 +334,3 @@ class MattermostCascade(Mattermost):
         CPU signal the capacity policy is calibrated against.
         """
         return
-
-
-class MattermostCascadeUnannounced(MattermostCascade):
-    describe_capacity = False

@@ -45,11 +45,11 @@ def validate(application, tier):
         record("reference_recovery", check(oracle.evaluate(), True, "reference recovery"))
         token = oracle.baseline["token"]
         if application == "gitlab_ce":
-            corrupt = f"UPDATE issues SET title='damaged-{token}' WHERE title='sregym-{token}';"
-            repair = f"UPDATE issues SET title='sregym-{token}' WHERE title='damaged-{token}';"
+            corrupt = f"UPDATE issues SET title='damaged-{token}' WHERE title='healthcheck-{token}';"
+            repair = f"UPDATE issues SET title='healthcheck-{token}' WHERE title='damaged-{token}';"
         elif application == "mattermost":
-            corrupt = f"UPDATE posts SET message='damaged-{token}' WHERE message='sregym-{token}';"
-            repair = f"UPDATE posts SET message='sregym-{token}' WHERE message='damaged-{token}';"
+            corrupt = f"UPDATE posts SET message='damaged-{token}' WHERE message='change-{token}';"
+            repair = f"UPDATE posts SET message='change-{token}' WHERE message='damaged-{token}';"
         else:
             customer = oracle.baseline["customer"]
             if not customer.startswith("cus_") or not customer.replace("_", "").isalnum():

@@ -4,10 +4,19 @@ The lesson of this family is that a manual scale-up is not a fix while the
 automation that shrank the service is still running. These tests pin that down.
 """
 
+import io
+import urllib.error
+import urllib.request
+from contextlib import redirect_stdout
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mattermost_cascade_recovery import MattermostCascadeOracle, latency_budget
+from sregym.conductor.oracles.saas import SaaSOracle
+from sregym.service.apps.mattermost.cascade import MattermostCascade
 from sregym.service.apps.mattermost.runtime.capacity_scaler import DEFAULT_POLICY, decide, observe
 
 
@@ -80,6 +89,7 @@ def test_latency_budget_is_calibrated_but_never_absurdly_tight():
         "gateway_capacity_below_floor",
         "capacity_automation_still_shrinking",
         "gateway_shedding_requests",
+        "gateway_request_failed",
         "gateway_latency_unresolved",
         "gateway_missing",
     ],
@@ -94,6 +104,59 @@ def test_the_shared_saas_checks_are_still_reachable():
 
     assert classes["acknowledged_record_missing"] == FailureClass.AGENT_ERROR
     assert classes["database_membership_changed"] == FailureClass.AGENT_ERROR
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "reason"),
+    [
+        (200, b'{"status":"OK","extra":"allowed"}', None),
+        (200, b'{"status":"FAIL"}', "gateway_request_failed"),
+        (200, b"{}", "gateway_request_failed"),
+        (200, b"not JSON", "gateway_request_failed"),
+        (204, b"", "gateway_request_failed"),
+        (404, b'{"status":"OK"}', "gateway_request_failed"),
+        (500, b'{"status":"OK"}', "gateway_request_failed"),
+        (503, b"", "gateway_shedding_requests"),
+        (None, b"", "gateway_request_failed"),
+    ],
+)
+def test_gateway_probe_and_oracle_require_successful_mattermost_ping(monkeypatch, status, body, reason):
+    def urlopen(url, **kwargs):
+        if status is None:
+            raise urllib.error.URLError("connection refused")
+        if status >= 400:
+            raise urllib.error.HTTPError(url, status, "request failed", {}, None)
+        response = io.BytesIO(body)
+        response.status = status
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    app = MattermostCascade.__new__(MattermostCascade)
+
+    def command(*args, input_text=None, **kwargs):
+        if input_text is None:
+            return "deployment.apps/chat-gateway"
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exec(compile(input_text, "gateway-probe", "exec"), {})
+        return output.getvalue()
+
+    app.command = command
+    probe = app.probe_through_gateway(attempts=3)
+    assert probe["served"] == (3 if reason is None else 0)
+    assert probe["shed"] == (3 if status == 503 else 0)
+    assert probe["failed"] == (3 if reason == "gateway_request_failed" else 0)
+
+    oracle = MattermostCascadeOracle(SimpleNamespace(app=app))
+    oracle.baseline, oracle.baseline_latency_ms = {"token": "abc"}, 50
+    oracle.observe_capacity = Mock(return_value=(None, [{"desired": 3, "ready": 3}]))
+    monkeypatch.setattr(SaaSOracle, "evaluate", lambda self: {"success": True})
+
+    result = oracle.evaluate()
+
+    assert result["success"] is (reason is None)
+    if reason is not None:
+        assert result["reason"] == reason
 
 
 def test_capacity_is_observed_across_more_than_one_automation_interval():

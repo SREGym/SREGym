@@ -1,14 +1,6 @@
-"""Does naming the mail subsystem explain the 3-of-3 on notification recovery?
+"""Notification recovery faults without a mail subsystem hint in the app description.
 
-Identical fault, identical grader, identical budget. The only change is that the
-application description no longer says notifications exist, so delivering them
-becomes something the responder has to notice rather than something it is told.
-
-This is the cheapest available test of the finding that a pointer is
-load-bearing: nine words naming stripe's workspace were worth 80 seconds and one
-solve. Two rungs are built so the result is not a single data point -- if only
-the lower one moves, the effect is about noticing; if both move by the same
-amount, it is about the time the search costs.
+The fault mechanisms and recovery checks match their announced variants.
 """
 
 from sregym.conductor.problems.gitlab_notification_ambiguity import GitLabNotificationAmbiguity

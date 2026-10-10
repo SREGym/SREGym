@@ -1,5 +1,6 @@
 """Stripe behind a persistent, periodically regenerated bot-configuration edge."""
 
+import inspect
 import json
 from pathlib import Path
 
@@ -8,6 +9,23 @@ from sregym.service.apps.stripe.application import StripeMarathon
 CATALOG_IMAGE = "clickhouse/clickhouse-server:25.8.12.129-alpine"
 RUNTIME_IMAGE = "python:3.12.13-alpine3.23"
 COUNTS = {"single": 6, "replicated": 24}
+
+
+def _configuration_safety(read, features, canonical):
+    """Grade current configuration and future publications without changing them."""
+    settings, current = read("settings.json"), read("current.json")
+    result = {"settings": settings, "current_features": len(current["features"]), "source_counts": {}}
+    if not settings["bot_management_enabled"]:
+        return {**result, "safe": True, "containment": "approved-bot-kill-switch"}
+    valid = sorted(current["features"], key=lambda f: f["name"]) == canonical
+    if settings["enabled"]:
+        if not settings["sources"]:
+            valid = False
+        for source in settings["sources"]:
+            rows = features(source)
+            result["source_counts"][source] = len(rows)
+            valid = valid and sorted(rows, key=lambda f: f["name"]) == canonical
+    return {**result, "safe": valid}
 
 
 class StripeConfig(StripeMarathon):
@@ -121,7 +139,8 @@ class StripeConfig(StripeMarathon):
         source = Path(__file__).with_name("runtime").joinpath("feature_edge.py").read_text()
         verifier = (
             f"import json\nscope={{'__name__': 'verifier'}}\nexec({source!r}, scope)\n"
-            "print(json.dumps(scope['safety']()))\n"
+            f"{inspect.getsource(_configuration_safety)}\n"
+            "print(json.dumps(_configuration_safety(scope['read'], scope['features'], scope['CANONICAL'])))\n"
         )
         return json.loads(
             self.command(

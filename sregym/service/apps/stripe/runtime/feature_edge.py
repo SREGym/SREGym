@@ -102,23 +102,6 @@ def producer():
         time.sleep(PERIOD)
 
 
-def safety():
-    """Inspect the deployed query under every configured rollout identity."""
-    settings, current = read("settings.json"), read("current.json")
-    result = {"settings": settings, "current_features": len(current["features"]), "source_counts": {}}
-    if not settings["bot_management_enabled"]:
-        return {**result, "safe": True, "containment": "approved-bot-kill-switch"}
-    valid = sorted(current["features"], key=lambda f: f["name"]) == CANONICAL
-    if settings["enabled"]:
-        if not settings["sources"]:
-            valid = False
-        for source in settings["sources"]:
-            rows = features(source)
-            result["source_counts"][source] = len(rows)
-            valid = valid and sorted(rows, key=lambda f: f["name"]) == CANONICAL
-    return {**result, "safe": valid}
-
-
 class Edge(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(fmt % args, flush=True)
@@ -174,15 +157,13 @@ class Edge(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("edge", "producer", "safety", "generate", "sql", "settings", "known-good"))
+    parser.add_argument("action", choices=("edge", "producer", "generate", "sql", "settings", "known-good"))
     parser.add_argument("argument", nargs="?")
     args = parser.parse_args()
     if args.action == "edge":
         ThreadingHTTPServer(("0.0.0.0", 8000), Edge).serve_forever()
     elif args.action == "producer":
         producer()
-    elif args.action == "safety":
-        print(json.dumps(safety()))
     elif args.action == "generate":
         generate(args.argument)
     elif args.action == "sql":

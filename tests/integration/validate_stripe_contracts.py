@@ -33,6 +33,25 @@ GATES = (
     "concurrency",
 )
 
+# The upstream renewal test sleeps exactly as long as Uvicorn's idle timeout.
+# Avoid racing its connection close without changing tests or adding retries.
+TRANSPORT_PLUGIN = """import pytest
+import requests
+import stripe
+
+
+@pytest.fixture(scope="session", autouse=True)
+def contract_transport():
+    previous_client = stripe.default_http_client
+    with requests.Session() as session:
+        session.headers["Connection"] = "close"
+        stripe.default_http_client = stripe.RequestsClient(session=session)
+        try:
+            yield
+        finally:
+            stripe.default_http_client = previous_client
+"""
+
 
 def command(*args, **kwargs):
     kwargs.setdefault("stderr", subprocess.PIPE)
@@ -49,8 +68,10 @@ def validate(output, image=STRIPE_IMAGE):
     with tempfile.TemporaryDirectory(prefix="stripe-contract-build-") as temporary:
         context = Path(temporary)
         shutil.copytree(ROOT / "docker/stripe-marathon/vendor/tests", context / "tests")
+        (context / "contract_transport.py").write_text(TRANSPORT_PLUGIN)
         (context / "Dockerfile").write_text(
-            f"FROM {image}\nRUN pip install --no-cache-dir stripe==10.10.0 pytest==8.4.1\nCOPY tests/ /tests/\n"
+            f"FROM {image}\nRUN pip install --no-cache-dir stripe==10.10.0 pytest==8.4.1\n"
+            "COPY tests/ /tests/\nCOPY contract_transport.py /test-support/\n"
         )
         built = subprocess.run(["docker", "build", "-t", test_image, str(context)], capture_output=True, text=True)
         (output / "build.log").write_text(built.stdout + built.stderr)
@@ -159,10 +180,14 @@ def validate(output, image=STRIPE_IMAGE):
                     [
                         "docker",
                         "exec",
+                        "-e",
+                        "PYTHONPATH=/test-support",
                         runner,
                         "python",
                         "-m",
                         "pytest",
+                        "-p",
+                        "contract_transport",
                         f"/tests/test_{gate}.py",
                         "-q",
                         "--tb=short",

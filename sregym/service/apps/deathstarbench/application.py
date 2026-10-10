@@ -20,6 +20,10 @@ from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 
 MONGO_IMAGE = "mongo:4.4.29"
+OPENRESTY_IMAGE = (
+    "ghcr.io/sregym/openresty-thrift:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+    "@sha256:fa344a1bf5320c40e57476eea23706b91819c6d6faa03b34ec846c4d2e3c0d18"
+)
 LABEL = "app.kubernetes.io/instance"
 
 
@@ -493,6 +497,11 @@ class ScaledSocialNetwork(ScaledApplication, SocialNetwork):
 
     def patch_clients(self, documents):
         for doc in documents:
+            if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "nginx-thrift":
+                # The source chart still selects an AMD64-only OpenResty image.
+                for container in doc["spec"]["template"]["spec"]["containers"]:
+                    if container["name"] == "nginx-thrift":
+                        container["image"] = OPENRESTY_IMAGE
             if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "media-frontend":
                 # Its upstream Service and nginx.conf use 8080; the declared
                 # container port is stale and would produce a broken readiness probe.

@@ -28,7 +28,6 @@ SELECT json_build_object(
 
 class GitLabRecovery(GitLabCE):
     data_volumes = (*GitLabCE.data_volumes, "gitlab-recovery-archives")
-    describe_archives = True
 
     @property
     def recovery_counts(self):
@@ -44,8 +43,7 @@ class GitLabRecovery(GitLabCE):
 
     def get_app_json(self):
         result = super().get_app_json()
-        if self.describe_archives:
-            result["Desc"] += ARCHIVE_DESCRIPTION
+        result["Desc"] += ARCHIVE_DESCRIPTION
         return result
 
     def render(self):
@@ -179,7 +177,3 @@ class GitLabRecovery(GitLabCE):
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(3)
-
-
-class GitLabRecoveryUnannounced(GitLabRecovery):
-    describe_archives = False

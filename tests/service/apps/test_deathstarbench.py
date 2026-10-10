@@ -6,6 +6,7 @@ import pytest
 
 from sregym.service.apps.deathstarbench.application import (
     LABEL,
+    OPENRESTY_IMAGE,
     SCALE_TIERS,
     ScaledHotelReservation,
     ScaledSocialNetwork,
@@ -88,6 +89,17 @@ def test_social_client_seed_list_preserves_upstream_port_append_contract():
     address = config["user-mongodb"]["addr"] + ":27017"
     assert address.split(",") == member_hosts("user-mongodb", "social-network", 3)
     assert config["user-service"]["addr"] == "user-service"
+
+
+@pytest.mark.parametrize("tier", SCALE_TIERS)
+def test_social_uses_pinned_multiarch_frontend_without_changing_the_source(tier):
+    app = ScaledSocialNetwork(tier)
+    original = app.source_documents()
+    documents = app.render()
+    deployment = next(d for d in documents if d["kind"] == "Deployment" and d["metadata"]["name"] == "nginx-thrift")
+    container = next(c for c in deployment["spec"]["template"]["spec"]["containers"] if c["name"] == "nginx-thrift")
+    assert container["image"] == OPENRESTY_IMAGE
+    assert original == app.source_documents()
 
 
 def test_authenticated_members_have_private_key_and_bounded_cache():
