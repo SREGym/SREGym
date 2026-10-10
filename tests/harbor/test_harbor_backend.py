@@ -133,6 +133,16 @@ def test_recovery_stops_waiting_at_the_timeout(make_backend):
     assert backend.grade()["mitigation"]["reason"] == "alerts_still_firing"
 
 
+def test_steady_state_comes_from_the_task_environment(monkeypatch):
+    from sregym.harbor.backend import parse_args
+
+    monkeypatch.setenv(protocol.PROBLEM_ID_ENV, "some_problem")
+    monkeypatch.delenv(protocol.STEADY_STATE_ENV, raising=False)
+    assert parse_args([]).steady_state_s == 0
+    monkeypatch.setenv(protocol.STEADY_STATE_ENV, "300")
+    assert parse_args([]).steady_state_s == 300
+
+
 @pytest.mark.parametrize(
     ("header", "valid"),
     [

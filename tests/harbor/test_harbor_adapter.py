@@ -226,6 +226,18 @@ def test_inspection_skips_problems_the_unprivileged_cluster_cannot_run():
     assert inspection.skipped == adapter.K3S_UNSUPPORTED
 
 
+def test_alert_graded_problems_run_steady_before_the_fault(tmp_path):
+    inspection = adapter.inspect_problems(["network_policy_block", "astronomy_shop_ad_service_failure"])
+    steady = {info.problem_id: info.steady_state_s for info in inspection.eligible}
+    assert steady == {"network_policy_block": 0, "astronomy_shop_ad_service_failure": adapter.ALERT_STEADY_STATE_S}
+    task = SREGymAdapter(tmp_path, backend_image="example.test/sregym:1").generate_task(
+        _info(steady_state_s=adapter.ALERT_STEADY_STATE_S)
+    )
+    dockerfile = (task / "environment/Dockerfile").read_text()
+    assert f"echo '{adapter.ALERT_STEADY_STATE_S}' > /etc/sregym/steady-state-seconds" in dockerfile
+    assert "/etc/sregym/steady-state-seconds" in dockerfile.split("chmod 600", 1)[1]
+
+
 def test_inspection_rejects_unknown_problems():
     with pytest.raises(ValueError, match="not_a_problem"):
         adapter.inspect_problems(["not_a_problem"])

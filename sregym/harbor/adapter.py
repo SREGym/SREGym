@@ -46,6 +46,12 @@ DEFAULT_AGENT_TIMEOUT_S = 1800
 DEFAULT_GRADE_TIMEOUT_S = 900
 READY_WAIT_S = 300
 READY_BUDGET_S = 3600
+# Problems graded by Prometheus alerts let the application run this long before
+# the fault is injected. AlertOracle ignores alerts already firing at injection;
+# right after deployment, chronic ones (e.g. ContainerCPUThrottling on Astronomy
+# Shop's Grafana, SREGym#745) are still pending, so they would fire later and
+# fail the grade. Alert rules wait up to 2m and Prometheus evaluates every 1m.
+ALERT_STEADY_STATE_S = 300
 
 _OFFLINE_KUBECONFIG = """\
 apiVersion: v1
@@ -76,6 +82,7 @@ class ProblemInfo:
     app_description: str
     namespaces: list[str]
     grade_timeout_s: int = DEFAULT_GRADE_TIMEOUT_S
+    steady_state_s: int = 0
 
 
 SELFTEST = ProblemInfo(
@@ -124,6 +131,7 @@ def task_name(problem_id: str) -> str:
 
 def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
     """Inspect problems. Must run with KUBECONFIG set before kubernetes is imported."""
+    from sregym.conductor.oracles.alert_oracle import AlertOracle
     from sregym.conductor.problems.registry import ProblemRegistry
 
     inspection = Inspection()
@@ -150,6 +158,9 @@ def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
             continue
         app = problem.app
         oracle_timeout = getattr(oracle, "evaluation_timeout_seconds", None) or 0
+        steady_state_s = int(getattr(problem, "baseline_duration_s", 0) or 0)
+        if isinstance(oracle, AlertOracle):
+            steady_state_s = max(steady_state_s, ALERT_STEADY_STATE_S)
         inspection.eligible.append(
             ProblemInfo(
                 problem_id=problem_id,
@@ -157,6 +168,7 @@ def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
                 app_description=str(app.description).strip(),
                 namespaces=list(getattr(app, "namespaces", None) or [app.namespace]),
                 grade_timeout_s=max(DEFAULT_GRADE_TIMEOUT_S, int(oracle_timeout) + 300),
+                steady_state_s=steady_state_s,
             )
         )
     return inspection
@@ -297,6 +309,7 @@ class SREGymAdapter:
         return {
             "task_name": task_name(info.problem_id),
             "problem_id": info.problem_id,
+            "steady_state_s": str(info.steady_state_s),
             "app_name": info.app_name,
             "app_description": info.app_description,
             "namespace_block": namespace_block,

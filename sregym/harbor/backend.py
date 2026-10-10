@@ -74,10 +74,11 @@ class ProblemSession(Protocol):
 class ConductorSession:
     """Runs one problem through SREGym's Conductor, as ``main.py`` does."""
 
-    def __init__(self, problem_id: str, *, advertise_host: str, proxy_port: int):
+    def __init__(self, problem_id: str, *, advertise_host: str, proxy_port: int, steady_state_s: int = 0):
         self.problem_id = problem_id
         self.advertise_host = advertise_host
         self.proxy_port = proxy_port
+        self.steady_state_s = steady_state_s
         self.conductor = None
 
     def setup(self) -> str:
@@ -93,6 +94,8 @@ class ConductorSession:
             k8s_proxy_listen_host="0.0.0.0",
             k8s_proxy_listen_port=self.proxy_port,
             k8s_proxy_advertise_host=self.advertise_host,
+            # None keeps the problem's own baseline_duration_s (0 for most).
+            baseline_override_s=self.steady_state_s or None,
             stages=("mitigation",),
         )
         self.conductor = Conductor(config=config)
@@ -366,6 +369,12 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("--problem", default=os.environ.get(protocol.PROBLEM_ID_ENV))
     parser.add_argument("--advertise-host", default="127.0.0.1")
+    parser.add_argument(
+        "--steady-state-s",
+        type=int,
+        default=int(os.environ.get(protocol.STEADY_STATE_ENV) or 0),
+        help="Seconds the application runs before the fault is injected",
+    )
     parser.add_argument("--api-port", type=int, default=protocol.API_PORT)
     parser.add_argument("--grade-port", type=int, default=protocol.GRADE_PORT)
     parser.add_argument("--proxy-port", type=int, default=protocol.K8S_PROXY_PORT)
@@ -404,7 +413,12 @@ def main(argv=None) -> int:
     if args.problem == selftest.PROBLEM_ID:
         session = selftest.SelfTestSession(advertise_host=args.advertise_host, proxy_port=args.proxy_port)
     else:
-        session = ConductorSession(args.problem, advertise_host=args.advertise_host, proxy_port=args.proxy_port)
+        session = ConductorSession(
+            args.problem,
+            advertise_host=args.advertise_host,
+            proxy_port=args.proxy_port,
+            steady_state_s=args.steady_state_s,
+        )
     backend = Backend(
         session,
         problem_id=args.problem,

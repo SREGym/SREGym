@@ -42,4 +42,5 @@ cd /opt/sregym
 export SREGYM_FIXED_MAC_ADDRESS=02:42:ac:11:00:02
 SREGYM_PROBLEM_ID=$(cat /etc/sregym/problem) \
 SREGYM_ORACLE_TOKEN_SHA256=$(cat /etc/sregym/oracle-token-sha256) \
+SREGYM_STEADY_STATE_S=$(cat /etc/sregym/steady-state-seconds 2>/dev/null || echo 0) \
     exec python -m sregym.harbor.backend --advertise-host 127.0.0.1 --shared-dir "$shared" --output-dir "$out"
