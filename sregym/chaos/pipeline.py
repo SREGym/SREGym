@@ -307,7 +307,12 @@ class Pipeline:
         text += (
             "Lesson from earlier sessions: fixers start from the logs of the failing services and follow the "
             "first error message that names a dependency; single-hop faults whose logs name the culprit are "
-            "solved in minutes.\n\n" + self.avoid_list() + "\n"
+            "solved in minutes. They also dump every Deployment, ConfigMap and database collection early on and "
+            "go straight for whatever is not part of the stock application: added sidecars, jobs, collections, "
+            "views, recipes or config keys were found within ten minutes however deep the machinery behind them "
+            "was. Prefer small edits to values the application already has, so that nothing new stands out "
+            "and the obvious repairs (restart, rollback, scale up, cache flush) fail or do not last.\n\n"
+            + self.avoid_list() + "\n"
         )
         brief.write_text(text)
         return brief
