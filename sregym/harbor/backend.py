@@ -54,6 +54,14 @@ RECOVERY_READY_TIMEOUT_S = 600
 # after recover_fault() returns, until rate-based alerts clear.
 RECOVERY_SETTLE_TIMEOUT_S = 600
 RECOVERY_SETTLE_INTERVAL_S = 15
+# Before the agent starts, poll the oracle until it fails, as SREGym's problem
+# validator does (tests/integration/validate_problem.py): alerts fire minutes
+# after the fault is injected, and an agent that stopped before then would pass.
+FAULT_LIVE_TIMEOUT_S = 300
+FAULT_LIVE_INTERVAL_S = 15
+# Oracle failure classes (sregym/conductor/oracles/failure.py) that say nothing
+# about the fault.
+NOT_THE_FAULT = frozenset({"environment_error", "harness_error"})
 # Written to the trial's logs when setup fails: what the cluster looked like.
 CLUSTER_SNAPSHOT_NAME = "cluster-state.txt"
 
@@ -231,6 +239,8 @@ class Backend:
         grade_token: str | None = None,
         recovery_settle_timeout_s: float = RECOVERY_SETTLE_TIMEOUT_S,
         recovery_settle_interval_s: float = RECOVERY_SETTLE_INTERVAL_S,
+        fault_live_timeout_s: float = FAULT_LIVE_TIMEOUT_S,
+        fault_live_interval_s: float = FAULT_LIVE_INTERVAL_S,
     ):
         self.session = session
         self.problem_id = problem_id
@@ -240,6 +250,8 @@ class Backend:
         self.grade_token = grade_token
         self.recovery_settle_timeout_s = recovery_settle_timeout_s
         self.recovery_settle_interval_s = recovery_settle_interval_s
+        self.fault_live_timeout_s = fault_live_timeout_s
+        self.fault_live_interval_s = fault_live_interval_s
         self.state = protocol.STATE_STARTING
         self.error: str | None = None
         # Grading, recovery and setup all act on the live cluster; never overlap them.
@@ -265,6 +277,12 @@ class Backend:
         try:
             with self._lock:
                 kubeconfig = self.session.setup()
+                checks = self._wait_until_fault_is_live()
+                if not checks:
+                    raise RuntimeError(
+                        f"the mitigation oracle had not seen the fault {self.fault_live_timeout_s:.0f}s after "
+                        "it was injected, so any agent would pass"
+                    )
             # Readable by any agent user; the file only grants the proxy's
             # filtered view of the cluster.
             shutil.copyfile(kubeconfig, self.shared_dir / protocol.KUBECONFIG_NAME)
@@ -327,6 +345,31 @@ class Backend:
                 "checks": checks,
                 "duration_s": round(time.monotonic() - started, 3),
             }
+
+    def _wait_until_fault_is_live(self) -> int:
+        """Poll the mitigation oracle after injection until it fails.
+
+        Failures the oracle blames on the environment or on SREGym itself (an
+        unreachable Prometheus, an oracle that raised) do not show the fault.
+        Returns the number of checks it took, or 0 if the oracle had not seen
+        the fault by the timeout. Nothing is cached.
+        """
+        deadline = time.monotonic() + self.fault_live_timeout_s
+        checks = 0
+        while True:
+            checks += 1
+            try:
+                verdict = self.session.grade()
+            except Exception:
+                logger.exception("[HARBOR] Mitigation check after injection raised")
+                verdict = {}
+            if verdict.get("success") is False and verdict.get("failure_class") not in NOT_THE_FAULT:
+                logger.info(f"[HARBOR] Mitigation oracle sees the fault (check {checks})")
+                return checks
+            if time.monotonic() >= deadline:
+                logger.warning(f"[HARBOR] Mitigation oracle has not seen the fault after injection: {verdict}")
+                return 0
+            time.sleep(self.fault_live_interval_s)
 
     def _wait_until_mitigated(self) -> tuple[bool, int]:
         """Poll the mitigation oracle after the reference recovery until it passes.

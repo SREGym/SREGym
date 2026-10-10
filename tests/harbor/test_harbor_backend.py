@@ -16,12 +16,17 @@ GRADE_TOKEN = "grade-token"
 
 
 class FakeSession:
-    def __init__(self, tmp_path, *, fail_setup=False, settles_after=1):
+    def __init__(self, tmp_path, *, fail_setup=False, settles_after=1, fault_seen_after=1, unseen_verdict=None):
         self.tmp_path = tmp_path
         self.fail_setup = fail_setup
         # The oracle passes from this many checks after recovery on, as when
         # alerts take a while to clear. None: never.
         self.settles_after = settles_after
+        # The oracle sees the fault from this many checks after injection on,
+        # as when alerts take a while to fire. None: never. Until then it
+        # returns unseen_verdict.
+        self.fault_seen_after = fault_seen_after
+        self.unseen_verdict = unseen_verdict or {"success": True, "reason": None}
         self.recovered = False
         self.grades = 0
         self.grades_since_recovery = 0
@@ -36,7 +41,9 @@ class FakeSession:
     def grade(self) -> dict:
         self.grades += 1
         if not self.recovered:
-            return {"success": False, "reason": "fault_present"}
+            if self.fault_seen_after is None or self.grades < self.fault_seen_after:
+                return dict(self.unseen_verdict)
+            return {"success": False, "reason": "fault_present", "failure_class": "agent_error"}
         self.grades_since_recovery += 1
         if self.settles_after is None or self.grades_since_recovery < self.settles_after:
             return {"success": False, "reason": "alerts_still_firing"}
@@ -51,7 +58,7 @@ class FakeSession:
 
 @pytest.fixture
 def make_backend(tmp_path):
-    def make(recovery_settle_timeout_s=60, **session_options):
+    def make(recovery_settle_timeout_s=60, fault_live_timeout_s=60, **session_options):
         session = FakeSession(tmp_path, **session_options)
         backend = Backend(
             session,
@@ -62,6 +69,8 @@ def make_backend(tmp_path):
             grade_token=GRADE_TOKEN,
             recovery_settle_timeout_s=recovery_settle_timeout_s,
             recovery_settle_interval_s=0,
+            fault_live_timeout_s=fault_live_timeout_s,
+            fault_live_interval_s=0,
         )
         return backend, session
 
@@ -99,7 +108,7 @@ def test_grade_runs_the_oracle_once_and_persists_the_verdict(make_backend):
     backend.setup()
     first = backend.grade()
     assert backend.grade() is first
-    assert session.grades == 1
+    assert session.grades == 2  # one check during setup, one grade
     assert first["success"] is False
     assert first["mitigation"]["reason"] == "fault_present"
     saved = json.loads((backend.output_dir / "grade.json").read_text())
@@ -123,7 +132,30 @@ def test_recovery_waits_until_the_oracle_passes(make_backend):
     assert (result["settled"], result["checks"]) == (True, 3)
     # Checks during recovery are not the grade: the verifier still runs one.
     assert backend.grade()["success"] is True
-    assert session.grades == 4
+    assert session.grades == 5  # one during setup, three during recovery, the grade
+
+
+def test_setup_waits_until_the_oracle_sees_the_fault(make_backend):
+    backend, session = make_backend(fault_seen_after=3)
+    assert backend.setup()
+    assert session.grades == 3
+    # Checks during setup are not the grade.
+    assert backend.grade()["mitigation"]["reason"] == "fault_present"
+
+
+@pytest.mark.parametrize(
+    "unseen_verdict",
+    [
+        {"success": True},
+        {"success": False, "reason": "prometheus_unreachable", "failure_class": "environment_error"},
+        {"success": False, "reason": "oracle_raised", "failure_class": "harness_error"},
+    ],
+)
+def test_setup_fails_when_the_oracle_never_sees_the_fault(make_backend, unseen_verdict):
+    backend, _ = make_backend(fault_seen_after=None, unseen_verdict=unseen_verdict, fault_live_timeout_s=0)
+    assert not backend.setup()
+    assert _state(backend) == protocol.STATE_FAILED
+    assert "any agent would pass" in json.loads((backend.shared_dir / protocol.STATUS_NAME).read_text())["error"]
 
 
 def test_recovery_stops_waiting_at_the_timeout(make_backend):
