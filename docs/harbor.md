@@ -86,8 +86,9 @@ The generated `instruction.md` never names the fault or problem ID.
 [docker/userns-k3s](../docker/userns-k3s/README.md) runs four k3s nodes inside
 one container. Each node gets its own mount, network, PID, UTS, IPC and cgroup
 namespaces and a cgroup subtree, joined by a bridge. The nodes use KIND's names,
-so SREGym treats the cluster as its emulated one. Nodes have no route out; their
-containerd pulls images through a proxy in the container.
+so SREGym treats the cluster as its emulated one, and as in KIND the control
+plane is tainted, so workloads run on the three workers. Nodes have no route
+out; their containerd pulls images through a proxy in the container.
 
 The container's root must be able to create those namespaces and mount cgroups:
 

@@ -88,10 +88,14 @@ Images come from one of two places:
   `/etc/userns-k3s/registries.yaml` to add mirrors or rewrites (see
   `registries.yaml`).
 
-`node.sh` also matches two KIND behaviors that SREGym depends on:
+`node.sh` also matches three KIND behaviors that SREGym depends on:
 
 - **Control-plane label.** It gives the control plane KIND's empty
   `node-role.kubernetes.io/control-plane` label, which SREGym's charts select.
+- **Control-plane taint.** Like a multi-node KIND cluster, the control plane is
+  tainted `NoSchedule`, so workloads run on the three workers. NetworkPolicy
+  always allows traffic from a pod's own node, so without the taint the API
+  server would reach pods on its node that a policy isolates.
 - **No disk-based eviction or image GC.** The nodes share the container's
   filesystem, so its free share says nothing about any one node.
 

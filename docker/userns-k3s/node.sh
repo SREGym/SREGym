@@ -94,7 +94,12 @@ if [ "$role" = server ]; then
         kubectl label node "$name" node-role.kubernetes.io/control-plane= --overwrite >/dev/null 2>&1; do
         sleep 2
     done) &
+    # Like a multi-node KIND cluster (kubeadm's default taint), workloads run on
+    # the workers only. It matters for NetworkPolicy too: traffic from a pod's
+    # own node is always allowed, so the API server, which runs in this node's
+    # network, would reach pods scheduled here that a policy isolates.
     exec k3s server $common --disable=traefik,servicelb,metrics-server,local-storage \
+        --node-taint=node-role.kubernetes.io/control-plane:NoSchedule \
         --write-kubeconfig-mode=600 --tls-san=${K3S_TLS_SAN:-kubernetes}
 else
     exec k3s agent $common --server=https://$server_ip:6443
