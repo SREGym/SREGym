@@ -279,12 +279,7 @@ class Backend:
         try:
             with self._lock:
                 kubeconfig = self.session.setup()
-                checks = self._wait_until_fault_is_live()
-                if not checks:
-                    raise RuntimeError(
-                        f"the mitigation oracle had not seen the fault {self.fault_live_timeout_s:.0f}s after "
-                        "it was injected, so any agent would pass"
-                    )
+                self._wait_until_fault_is_live()
             # Readable by any agent user; the file only grants the proxy's
             # filtered view of the cluster.
             shutil.copyfile(kubeconfig, self.shared_dir / protocol.KUBECONFIG_NAME)
@@ -353,8 +348,8 @@ class Backend:
 
         Failures the oracle blames on the environment or on SREGym itself (an
         unreachable Prometheus, an oracle that raised) do not show the fault.
-        Returns the number of checks it took, or 0 if the oracle had not seen
-        the fault by the timeout. Nothing is cached.
+        Returns the number of checks it took, and raises if the oracle had not
+        seen the fault by the timeout. Nothing is cached.
         """
         deadline = time.monotonic() + self.fault_live_timeout_s
         checks = 0
@@ -370,7 +365,14 @@ class Backend:
                 return checks
             if time.monotonic() >= deadline:
                 logger.warning(f"[HARBOR] Mitigation oracle has not seen the fault after injection: {verdict}")
-                return 0
+                if verdict.get("success") is True:
+                    seen = "it still passes, so any agent would"
+                else:
+                    seen = f"its last check failed with {verdict.get('reason') or verdict.get('error') or verdict}"
+                raise RuntimeError(
+                    f"the mitigation oracle had not seen the fault {self.fault_live_timeout_s:.0f}s after "
+                    f"it was injected: {seen}"
+                )
             time.sleep(self.fault_live_interval_s)
 
     def _wait_until_mitigated(self) -> tuple[bool, int]:

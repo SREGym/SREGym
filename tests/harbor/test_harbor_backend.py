@@ -155,7 +155,11 @@ def test_setup_fails_when_the_oracle_never_sees_the_fault(make_backend, unseen_v
     backend, _ = make_backend(fault_seen_after=None, unseen_verdict=unseen_verdict, fault_live_timeout_s=0)
     assert not backend.setup()
     assert _state(backend) == protocol.STATE_FAILED
-    assert "any agent would pass" in json.loads((backend.shared_dir / protocol.STATUS_NAME).read_text())["error"]
+    error = json.loads((backend.shared_dir / protocol.STATUS_NAME).read_text())["error"]
+    assert "had not seen the fault" in error
+    assert ("any agent would" in error) == unseen_verdict["success"]
+    if not unseen_verdict["success"]:
+        assert unseen_verdict["reason"] in error
 
 
 def test_recovery_stops_waiting_at_the_timeout(make_backend):
