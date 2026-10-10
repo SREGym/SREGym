@@ -57,7 +57,9 @@ RECOVERY_SETTLE_INTERVAL_S = 15
 # Before the agent starts, poll the oracle until it fails, as SREGym's problem
 # validator does (tests/integration/validate_problem.py): alerts fire minutes
 # after the fault is injected, and an agent that stopped before then would pass.
-FAULT_LIVE_TIMEOUT_S = 300
+# Longer than the validator's 5 minutes: on a 4-CPU sandbox some alerts (a
+# 5-minute rate window, then `for: 2m`) had not fired by then.
+FAULT_LIVE_TIMEOUT_S = 600
 FAULT_LIVE_INTERVAL_S = 15
 # Oracle failure classes (sregym/conductor/oracles/failure.py) that say nothing
 # about the fault.

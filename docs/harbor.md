@@ -43,10 +43,11 @@ The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
    agent, SREGym's load generators (`AlertOracle(ignore_hidden_workloads=True)`):
    the agent cannot see or fix them, and a replaced load-generator pod's alerts
    escape the baseline. The backend then polls the mitigation oracle until it
-   fails, for up to 5 minutes, as SREGym's problem validator does: alerts fire
-   a few minutes after injection, and an agent that stopped before then would
-   pass. If the oracle has not seen the fault by then, setup fails and Harbor
-   reports an error rather than a reward. Last, the backend starts SREGym's
+   fails, as SREGym's problem validator does: alerts fire minutes after
+   injection, and an agent that stopped before then would pass. It waits up to
+   10 minutes, twice the validator's default, because on a 4-CPU sandbox some
+   alerts took longer. If the oracle has not seen the fault by then, setup
+   fails and Harbor reports an error rather than a reward. Last, the backend starts SREGym's
    filtered Kubernetes API proxy and publishes the agent's kubeconfig.
 2. **Readiness.** `sregym-ready` blocks until the fault is live and the agent's
    kubeconfig works, and fails at once if setup failed. Harbor starts the agent
