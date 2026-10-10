@@ -120,7 +120,7 @@ reason:
 |---|---|---|
 | `--backend-image` | `ghcr.io/sregym/sregym-harbor:latest` | Image each task builds on (`docker/harbor`). |
 | `--agent-timeout` | `1800` | Agent time limit in seconds. |
-| `--cpus` / `--memory-mb` / `--storage-mb` | `8` / `16384` / `51200` | Resources requested for the task container. Cloud providers size the sandbox from these. Daytona's default organization limits are 4 CPUs, 8 GiB and 10 GiB, which fit Hotel Reservation problems. |
+| `--cpus` / `--memory-mb` / `--storage-mb` | `4` / `8192` / `10240` | Resources requested for the task container. Cloud providers size the sandbox from these. The defaults are Daytona's default per-sandbox limits, which refuse anything larger, and every problem was validated at this size. |
 | `--dataset-name` | `sregym/<suite>` | Harbor Hub dataset name used in the README. |
 | `--limit`, `--overwrite` | | Standard Harbor adapter flags. |
 

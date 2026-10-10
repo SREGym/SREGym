@@ -41,6 +41,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BACKEND_IMAGE = "ghcr.io/sregym/sregym-harbor:latest"
 # SREGym's own runner gives agents 1800s per attempt.
 DEFAULT_AGENT_TIMEOUT_S = 1800
+# Task container resources: the largest sandbox Daytona allows by default, the
+# size every problem was validated at. Larger requests fail to start there.
+DEFAULT_CPUS = 4
+DEFAULT_MEMORY_MB = 8192
+DEFAULT_STORAGE_MB = 10240
 # Default oracle budget: the base mitigation oracle waits up to 60s for
 # rollouts, and custom oracles can declare a longer evaluation_timeout_seconds.
 DEFAULT_GRADE_TIMEOUT_S = 900
@@ -272,9 +277,9 @@ class SREGymAdapter:
         self_test: bool = False,
         backend_image: str = DEFAULT_BACKEND_IMAGE,
         agent_timeout: int = DEFAULT_AGENT_TIMEOUT_S,
-        cpus: int = 8,
-        memory_mb: int = 16384,
-        storage_mb: int = 51200,
+        cpus: int = DEFAULT_CPUS,
+        memory_mb: int = DEFAULT_MEMORY_MB,
+        storage_mb: int = DEFAULT_STORAGE_MB,
         dataset_name: str = DEFAULT_DATASET_NAME,
     ):
         self.output_dir = output_dir
@@ -420,9 +425,13 @@ def main(argv=None) -> int:
         f"or {DEFAULT_DATASET_NAME})",
     )
     parser.add_argument("--agent-timeout", type=int, default=DEFAULT_AGENT_TIMEOUT_S, help="Agent time limit (s)")
-    parser.add_argument("--cpus", type=int, default=8, help="CPUs requested for the task container")
-    parser.add_argument("--memory-mb", type=int, default=16384, help="Memory requested for the task container")
-    parser.add_argument("--storage-mb", type=int, default=51200, help="Disk requested for the task container")
+    parser.add_argument("--cpus", type=int, default=DEFAULT_CPUS, help="CPUs requested for the task container")
+    parser.add_argument(
+        "--memory-mb", type=int, default=DEFAULT_MEMORY_MB, help="Memory requested for the task container"
+    )
+    parser.add_argument(
+        "--storage-mb", type=int, default=DEFAULT_STORAGE_MB, help="Disk requested for the task container"
+    )
     args = parser.parse_args(argv)
 
     task_ids = list(PROBLEM_SETS[args.suite]) if args.suite else args.task_ids
