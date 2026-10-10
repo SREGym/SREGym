@@ -79,6 +79,10 @@ common="--node-ip=$ip --token=${K3S_TOKEN:-userns-k3s}
     --kubelet-arg=eviction-hard=imagefs.available<0%
     --kubelet-arg=image-gc-high-threshold=100
     --kube-proxy-arg=conntrack-max-per-core=0"
+if [ -n "${NODE_RESOLV_CONF:-}" ]; then
+    # Upstream for pods with dnsPolicy Default, CoreDNS among them.
+    common="$common --resolv-conf=$NODE_RESOLV_CONF"
+fi
 if [ "$role" = server ]; then
     # KIND/kubeadm mark the control plane with an empty label value; k3s uses
     # "true". SREGym's charts select the KIND form. Kubelets cannot set

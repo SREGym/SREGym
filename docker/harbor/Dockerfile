@@ -28,7 +28,7 @@ COPY --from=k3s /bin /opt/k3s/bin
 RUN mv /opt/k3s/bin/runc /opt/k3s/bin/runc.real
 COPY docker/userns-k3s/runc-wrapper /opt/k3s/bin/runc
 COPY docker/userns-k3s/entrypoint.sh docker/userns-k3s/fabric.sh docker/userns-k3s/node.sh \
-    docker/userns-k3s/egress-proxy.py /usr/local/lib/userns-k3s/
+    docker/userns-k3s/egress-proxy.py docker/userns-k3s/dns-stub.py /usr/local/lib/userns-k3s/
 COPY docker/userns-k3s/registries.yaml /etc/userns-k3s/registries.yaml
 
 WORKDIR /opt/sregym

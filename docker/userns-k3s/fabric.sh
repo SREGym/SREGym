@@ -46,6 +46,16 @@ if [ -S /run/outer/egress.sock ]; then
     socat TCP-LISTEN:3128,bind=10.250.0.1,fork,reuseaddr UNIX-CONNECT:/run/outer/egress.sock &
     export NODE_PROXY=http://10.250.0.1:3128
 fi
+if command -v python3 >/dev/null && [ -f $lib/dns-stub.py ]; then
+    # CoreDNS's upstream. Without one it forwards to the container's resolvers,
+    # which the nodes cannot reach, and names outside the cluster take seconds
+    # to fail (see dns-stub.py).
+    python3 $lib/dns-stub.py 10.250.0.1 &
+    # Not under /run or /tmp: each node mounts its own.
+    mkdir -p /etc/userns-k3s
+    echo "nameserver 10.250.0.1" > /etc/userns-k3s/resolv.conf
+    export NODE_RESOLV_CONF=/etc/userns-k3s/resolv.conf
+fi
 
 i=2
 role=server
