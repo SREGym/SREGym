@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,8 @@ SUPPORTED_APPS = ("hotel_reservation", "social_network")
 # Leaks the fixer could read from cluster state. Scripts may use these words
 # in comments; resource names, labels and annotations may not.
 SUSPICIOUS_WORDS = ("chaos", "fault", "inject", "sregym", "benchmark")
+# Word starts only: "default" must not match "fault".
+SUSPICIOUS = re.compile(r"(?<![a-z])(" + "|".join(SUSPICIOUS_WORDS) + ")", re.I)
 # Files that can put content into the cluster (scripts, manifests, app config).
 CLUSTER_STATE_SUFFIXES = (".sh", ".py", ".yaml", ".yml", ".json", ".lua", ".conf", ".tmpl", ".cfg", ".ini", ".js")
 
@@ -81,7 +84,7 @@ class FaultArtifact:
                 continue
             for n, line in enumerate(lines, 1):
                 code = line.split("#", 1)[0] if file.suffix == ".sh" else line
-                if any(word in code.lower() for word in SUSPICIOUS_WORDS):
+                if SUSPICIOUS.search(code):
                     findings.append(f"{file.name}:{n}: {line.strip()[:160]}")
         return findings
 

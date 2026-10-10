@@ -63,3 +63,8 @@ def test_notes_are_not_linted(tmp_path):
     (path / "cm.yaml").write_text("metadata:\n  name: fault-config\n")
     findings = FaultArtifact.load(path).leak_findings()
     assert findings == ["cm.yaml:2: name: fault-config"]
+
+
+def test_default_is_not_a_leak(tmp_path):
+    inject = 'kubectl -n $NAMESPACE patch cm cfg -p "{\\"data\\":{\\"default\\":\\"1\\"}}"\n'
+    assert FaultArtifact.load(make(tmp_path, inject=inject)).leak_findings() == []

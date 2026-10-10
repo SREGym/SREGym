@@ -290,7 +290,7 @@ async def get_chaos_slo(window: int = 90):
             "slo": oracle.slo.to_dict(),
             "verdict": verdict.to_dict(),
             "new_alerts": problem.alerts.new(),
-            "log_surges": problem.log_surges(),
+            **problem.signals.changes(),
         }
 
     return await asyncio.to_thread(measure)

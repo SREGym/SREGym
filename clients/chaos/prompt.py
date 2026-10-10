@@ -71,8 +71,10 @@ unhealthy object in `kubectl get`/`describe` is solved in minutes.
 2. OBSERVABILITY: the problem must be visible in the telemetry the fixer has (Prometheus metrics and
    alerts, Loki logs, Jaeger traces, Kubernetes state/events). Checked automatically as: at least one
    NEW Prometheus alert fires, or some application container's error-like log lines (error, fail,
-   timeout, refused, unavailable, ...) surge well above their pre-fault level over a 2-minute window.
-   The /chaos/slo response reports both ("new_alerts", "log_surges"; measured since the session began).
+   timeout, refused, unavailable, ...) surge well above their pre-fault level over a 2-minute window,
+   or some application container's CPU use at least doubles (and rises by >= 0.25 cores).
+   The /chaos/slo response reports these ("new_alerts", "log_surges", "cpu_surges"; compared with the
+   start of the session).
    The signal must point toward the problem area, but it does not have to name the root cause.
 3. SOLVABILITY: a fixer with kubectl access to this cluster (namespace {namespace} and the cluster
    resources you can see) must be able to fully fix it without the original manifests. Do not make

@@ -73,3 +73,11 @@ def test_log_surges():
     before = {"frontend": 10.0, "search": 400.0}
     after = {"frontend": 200.0, "search": 500.0, "rate": 5.0}
     assert log_surges(before, after) == {"frontend": [10.0, 200.0]}
+
+
+def test_cpu_surges():
+    from sregym.chaos.telemetry import cpu_surges
+
+    before = {"compose-post-service": 0.1, "nginx": 0.5, "redis": 0.01}
+    after = {"compose-post-service": 0.9, "nginx": 0.7, "redis": 0.05}
+    assert cpu_surges(before, after) == {"compose-post-service": [0.1, 0.9]}

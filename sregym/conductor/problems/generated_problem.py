@@ -99,7 +99,8 @@ class GeneratedProblem(Problem):
         if oracle.slo is None:
             oracle.capture_baseline()
         self.alerts.capture_baseline()
-        logs_before = telemetry.error_log_counts(self.namespace, self.impact_window_s)
+        signals = telemetry.Signals(self.namespace, self.impact_window_s)
+        signals.capture_baseline()
         before = protected.snapshot(self.namespace)
 
         result = self.artifact.run("inject.sh", self.namespace)
@@ -121,7 +122,7 @@ class GeneratedProblem(Problem):
             impact=impact.to_dict(),
             impact_pass=impact.violated,
             new_alerts=self.alerts.new(),
-            log_surges=telemetry.log_surges(logs_before, telemetry.error_log_counts(self.namespace, self.impact_window_s)),
+            **signals.changes(),
             integrity=protected.compare(before, protected.snapshot(self.namespace)),
             workload_running=protected.workload_running(self.namespace),
             seconds_after_inject=round(time.time() - injected_at),
@@ -133,7 +134,9 @@ class GeneratedProblem(Problem):
             later = oracle.measure(120)
             self.gates.update(persistence=later.to_dict(), persistence_pass=later.violated)
             self.gates["new_alerts"] = sorted(set(self.gates["new_alerts"]) | set(self.alerts.new()))
-        self.gates["observability_pass"] = bool(self.gates["new_alerts"] or self.gates["log_surges"])
+        self.gates["observability_pass"] = bool(
+            self.gates["new_alerts"] or self.gates["log_surges"] or self.gates["cpu_surges"]
+        )
         self.gates["integrity_pass"] = self.gates["integrity"]["intact"] and self.gates["workload_running"]
         self._write_report("inject", self.gates)
         print(
