@@ -252,15 +252,25 @@ To publish an update, regenerate with a new image tag and the same secret, run
 
 | Check | Result |
 |---|---|
-| `network_policy_block`, oracle agent, Harbor on Daytona (4 CPUs, 8 GiB, 10 GiB) | Reward 1.0 in 6m43s |
-| `network_policy_block`, no-op agent, Harbor on Daytona | Reward 0.0 (`fault_still_present`) in 4m47s |
-| `network_policy_block` and `service_wrong_pod_selection_hotel_reservation`, SREGym's lifecycle validator in a Daytona sandbox | Both passed: deploy, inject, oracle fails, recover, oracle passes |
+| **Oracle sweep of every generated task**, Harbor on Daytona, default task size (4 CPUs, 8 GiB, 10 GiB), image `3946472e669d` | 81 of the 86 tasks scored 1.0 on the first run: Hotel Reservation 38/39, Astronomy Shop 24/27, Social Network 13/14, FleetCast 6/6. The other five all scored 1.0 when rerun: two first runs hit infrastructure errors (the cgroup error below, a Daytona start timeout) and three are flaky (below). |
+| The same sweep, problems now in `SANDBOX_UNRELIABLE` | 8 problems the cluster runs but whose reference solution failed in most runs at this size; the generator skips them (see the reasons in `sregym/harbor/adapter.py`) |
+| SREGym-Lite, oracle and no-op agents, **Harbor Oracle Sweep** workflow (`docker` environment, GitHub runners) | 17/17 at 1.0 with the oracle agent, 0.0 with the no-op agent |
+| `network_policy_block`, no-op agent, Harbor on Daytona | Reward 0.0 (`fault_still_present`) |
 | Agent isolation in a ready Daytona sandbox, probed as `agent` | Problem ID, SREGym code, cluster credentials, grade token and logs unreadable. `/grade` and `/oracle/recover` refuse without tokens. The k3s API refuses without credentials. `kubectl` works through the proxy. |
 | Self-test, oracle and no-op agents, **Harbor Self-Test** workflow (`docker` environment, GitHub runner) | Rewards 1 and 0 |
 
-Not yet validated: problems beyond those above on Daytona, other cloud
-providers, real agents, and arm64 hosts (on an arm64 Mac, the Prometheus stack
-did not become ready within the hour).
+Flaky in that sweep (the reference solution passed most runs, not all):
+`astronomy_shop_ad_service_image_slow_load` (2 of 3) and `kafka_producer_leak`
+(2 of 3), whose Prometheus alerts sometimes fire again after recovery on a
+4-CPU sandbox, and `postgres_lock_contention_product_catalog` (1 of 2).
+
+About 1 in 70 cluster starts on Daytona fails at once: moving the first node's
+`unshare` parent into its cgroup returns EIO (`cluster.log` names the node and
+the cgroup state). Harbor reports a setup error, not a reward; rerun the trial,
+e.g. with `harbor job resume --filter-error-type HealthcheckError`.
+
+Not yet validated: other cloud providers, real agents, and arm64 hosts (on an
+arm64 Mac, the Prometheus stack did not become ready within the hour).
 
 The **Harbor Oracle Sweep** workflow (`.github/workflows/harbor-oracle.yml`,
 manual) runs Harbor's oracle agent on real problems, one problem per runner,
@@ -273,11 +283,21 @@ with the local Docker environment.
 - **k3s-compatible problems only.** Problems that need real nodes, KIND node
   containers or Calico are skipped. Validate individual tasks with the oracle
   agent before relying on them.
+- **Sized for a 4-CPU, 8 GiB sandbox.** Problems that overload it (Train Ticket,
+  CPU stress on every node) or whose alerts do not clear at that size are
+  skipped (`SANDBOX_UNRELIABLE`).
+- **Alert-graded problems are graded when the agent stops.** `AlertOracle`
+  fails while any new alert fires in the namespace, and alerts lag a fix by a
+  few minutes. The reference solution waits for the oracle to pass; an agent
+  that stops right after a correct fix can still score 0, as in SREGym's own
+  runs.
 - **The agent shares the container's kernel and process table** with the
   cluster and grader. File permissions and tokens keep it away from the grader;
-  it can see process names. Harbor's sandbox, not the task, isolates trials
+  it can see process names. Its UID (48713) is one no workload runs as, so it
+  cannot signal pod processes. Harbor's sandbox, not the task, isolates trials
   from each other and from the host.
 - **Loki is not deployed**, as in `main.py --use-external-harness`. Agents read
   logs with `kubectl logs`.
 - **Setup cost.** A trial spends several minutes deploying before the agent
-  starts. The healthcheck allows up to an hour.
+  starts, five more for alert-graded problems. The healthcheck allows up to an
+  hour.
