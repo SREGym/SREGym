@@ -39,8 +39,11 @@ The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
    minutes (`main.py --baseline 300`), so alerts that fire chronically on a
    small sandbox, such as CPU throttling on Astronomy Shop's Grafana, are
    already firing when the baseline is taken and are not blamed on the agent.
-   The backend then starts SREGym's filtered Kubernetes API proxy and publishes
-   the agent's kubeconfig.
+   Their oracle also ignores alerts about workloads the proxy hides from the
+   agent, SREGym's load generators (`AlertOracle(ignore_hidden_workloads=True)`):
+   the agent cannot see or fix them, and a replaced load-generator pod's alerts
+   escape the baseline. The backend then starts SREGym's filtered Kubernetes
+   API proxy and publishes the agent's kubeconfig.
 2. **Readiness.** `sregym-ready` blocks until the fault is live and the agent's
    kubeconfig works, and fails at once if setup failed. Harbor starts the agent
    clock only after this.
