@@ -119,11 +119,16 @@ def _strings(obj, path=""):
         yield path, obj
 
 
-def leak_scan(namespace: str) -> set[str]:
-    """Fixer-visible strings in the namespace that would reveal an injected fault."""
+def leak_scan(namespace: str) -> dict[str, str]:
+    """Fixer-visible strings in the namespace that would reveal an injected fault, mapped to where.
+
+    Callers diff the keys (the text itself) against a pre-injection scan, so
+    strings that existed before (e.g. image registries) never count, even on
+    objects that were recreated under new names.
+    """
     from sregym.chaos.artifact import SUSPICIOUS
 
-    found = set()
+    found: dict[str, str] = {}
     for obj in _kubectl_json(["get", LEAK_KINDS, "-n", namespace]).get("items", []):
         meta = obj.get("metadata", {})
         meta.pop("managedFields", None)
@@ -132,9 +137,9 @@ def leak_scan(namespace: str) -> set[str]:
         where = f"{obj.get('kind')}/{meta.get('name')}"
         for path, text in _strings({"metadata": meta, "spec": obj.get("spec"), "data": obj.get("data")}):
             if SUSPICIOUS.search(text):
-                found.add(f"{where}{path}: {text[:120]}")
+                found.setdefault(text[:200], f"{where}{path}")
     for event in _kubectl_json(["get", "events", "-n", namespace]).get("items", []):
         text = f"{event.get('reason', '')} {event.get('message', '')}"
         if SUSPICIOUS.search(text):
-            found.add(f"Event: {text[:160]}")
+            found.setdefault(text[:200], "Event")
     return found

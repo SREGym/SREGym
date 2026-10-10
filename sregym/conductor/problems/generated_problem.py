@@ -125,7 +125,8 @@ class GeneratedProblem(Problem):
             new_alerts=self.alerts.new(),
             **signals.changes(),
             integrity=protected.compare(before, protected.snapshot(self.namespace)),
-            leaks=sorted(protected.leak_scan(self.namespace) - leaks_before),
+            leaks=sorted(f"{where}: {text}" for text, where in protected.leak_scan(self.namespace).items()
+                         if text not in leaks_before),
             workload_running=protected.workload_running(self.namespace),
             seconds_after_inject=round(time.time() - injected_at),
         )
