@@ -254,6 +254,7 @@ To publish an update, regenerate with a new image tag and the same secret, run
 |---|---|
 | **Oracle sweep of every generated task**, Harbor on Daytona, default task size (4 CPUs, 8 GiB, 10 GiB), image `3946472e669d` | 81 of the 86 tasks scored 1.0 on the first run: Hotel Reservation 38/39, Astronomy Shop 24/27, Social Network 13/14, FleetCast 6/6. The other five all scored 1.0 when rerun: two first runs hit infrastructure errors (the cgroup error below, a Daytona start timeout) and three are flaky (below). |
 | The same sweep, problems now in `SANDBOX_UNRELIABLE` | 8 problems the cluster runs but whose reference solution failed in most runs at this size; the generator skips them (see the reasons in `sregym/harbor/adapter.py`) |
+| SREGym-Lite plus `taint_no_toleration_social_network`, oracle agent, Harbor on Daytona, image `2610c6277410` (after merging `main` at #1077) | 18/18 at 1.0 |
 | SREGym-Lite, oracle and no-op agents, **Harbor Oracle Sweep** workflow (`docker` environment, GitHub runners) | 17/17 at 1.0 with the oracle agent, 0.0 with the no-op agent |
 | `network_policy_block`, no-op agent, Harbor on Daytona | Reward 0.0 (`fault_still_present`) |
 | Agent isolation in a ready Daytona sandbox, probed as `agent` | Problem ID, SREGym code, cluster credentials, grade token and logs unreadable. `/grade` and `/oracle/recover` refuse without tokens. The k3s API refuses without credentials. `kubectl` works through the proxy. |
