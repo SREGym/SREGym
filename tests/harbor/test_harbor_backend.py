@@ -2,13 +2,14 @@
 
 import hashlib
 import json
+import os
 import urllib.error
 import urllib.request
 
 import pytest
 
 from sregym.harbor import protocol
-from sregym.harbor.backend import Backend
+from sregym.harbor.backend import CLUSTER_SNAPSHOT_NAME, Backend
 
 TOKEN = "reference-solution-token"
 GRADE_TOKEN = "grade-token"
@@ -200,3 +201,32 @@ def test_http_routes(make_backend):
         assert _request(public, "POST", "/oracle/recover", token=TOKEN)[0] == 409
     finally:
         backend.stop_servers()
+
+
+def test_failed_setup_records_the_cluster_state(make_backend, tmp_path, monkeypatch):
+    # A stand-in kubectl: one unready pod, and each call echoes its arguments.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    kubectl = bin_dir / "kubectl"
+    pods = {
+        "items": [
+            {
+                "metadata": {"namespace": "app", "name": "ok"},
+                "status": {"phase": "Running", "containerStatuses": [{"ready": True}]},
+            },
+            {"metadata": {"namespace": "app", "name": "stuck"}, "status": {"phase": "Pending"}},
+        ]
+    }
+    kubectl.write_text(
+        "#!/bin/sh\n"
+        f"if [ \"$*\" = 'get pods -A -o json' ]; then echo '{json.dumps(pods)}'; else echo \"kubectl $*\"; fi\n"
+    )
+    kubectl.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    backend, _ = make_backend(fail_setup=True)
+    assert not backend.setup()
+    snapshot = (backend.output_dir / "logs" / CLUSTER_SNAPSHOT_NAME).read_text()
+    assert "kubectl get pods -A -o wide" in snapshot
+    assert "kubectl describe pod -n app stuck" in snapshot
+    assert "logs -n app stuck --all-containers --tail=80 --previous" in snapshot
+    assert "-n app ok" not in snapshot

@@ -31,6 +31,7 @@ import os
 import secrets
 import shutil
 import signal
+import subprocess
 import tempfile
 import threading
 import time
@@ -53,6 +54,8 @@ RECOVERY_READY_TIMEOUT_S = 600
 # after recover_fault() returns, until rate-based alerts clear.
 RECOVERY_SETTLE_TIMEOUT_S = 600
 RECOVERY_SETTLE_INTERVAL_S = 15
+# Written to the trial's logs when setup fails: what the cluster looked like.
+CLUSTER_SNAPSHOT_NAME = "cluster-state.txt"
 
 
 class ProblemSession(Protocol):
@@ -153,6 +156,52 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _pod_unready(pod: dict) -> bool:
+    status = pod.get("status") or {}
+    if status.get("phase") == "Succeeded":
+        return False
+    return status.get("phase") != "Running" or not all(c.get("ready") for c in status.get("containerStatuses") or [])
+
+
+def _write_cluster_snapshot(path: Path, max_pods: int = 10) -> None:
+    """Best effort: record nodes, pods, events and unready pods' details after a failed setup."""
+    if shutil.which("kubectl") is None:
+        return
+
+    def kubectl(*args: str) -> str:
+        try:
+            done = subprocess.run(["kubectl", *args], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"{type(exc).__name__}: {exc}\n"
+        return done.stdout + done.stderr
+
+    sections = [
+        ("kubectl get nodes -o wide", kubectl("get", "nodes", "-o", "wide")),
+        ("kubectl get pods -A -o wide", kubectl("get", "pods", "-A", "-o", "wide")),
+        (
+            "kubectl get events -A (latest 150)",
+            "\n".join(kubectl("get", "events", "-A", "--sort-by=.lastTimestamp").splitlines()[-150:]),
+        ),
+    ]
+    try:
+        pods = json.loads(kubectl("get", "pods", "-A", "-o", "json")).get("items", [])
+    except ValueError:
+        pods = []
+    for pod in [pod for pod in pods if _pod_unready(pod)][:max_pods]:
+        namespace, name = pod["metadata"]["namespace"], pod["metadata"]["name"]
+        sections.append(
+            (f"kubectl describe pod -n {namespace} {name}", kubectl("describe", "pod", "-n", namespace, name))
+        )
+        for flag in ("", "--previous"):
+            args = ["logs", "-n", namespace, name, "--all-containers", "--tail=80", *([flag] if flag else [])]
+            sections.append((f"kubectl {' '.join(args)}", kubectl(*args)))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(f"===== {title}\n{body.rstrip()}\n\n" for title, body in sections))
+    except OSError:
+        logger.exception("[HARBOR] Could not write the cluster snapshot")
+
+
 class Backend:
     """Owns the shared state files, HTTP listeners and the single grade."""
 
@@ -207,6 +256,9 @@ class Backend:
             os.chmod(self.shared_dir / protocol.KUBECONFIG_NAME, 0o644)
         except BaseException as exc:
             logger.exception("[HARBOR] Problem setup failed")
+            # Before the failed state: sregym-ready then fails the healthcheck
+            # and Harbor collects the logs.
+            _write_cluster_snapshot(self.output_dir / Path(protocol.LOG_DIR).name / CLUSTER_SNAPSHOT_NAME)
             self.set_state(protocol.STATE_FAILED, f"{type(exc).__name__}: {exc}")
             if not isinstance(exc, Exception):
                 raise
