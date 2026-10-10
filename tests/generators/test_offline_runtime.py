@@ -55,7 +55,10 @@ def test_valkey_job_starts_the_writer_without_pip(monkeypatch):
     assert "range(10)" in script
 
 
-def test_kafka_sidecar_starts_the_producer_without_pip():
+def test_kafka_sidecar_starts_the_producer_without_pip(monkeypatch):
+    probe = Mock(wait_until_available=Mock(return_value=True), check=Mock(return_value=False))
+    health_check = Mock(__enter__=Mock(return_value=probe), __exit__=Mock(return_value=False))
+    monkeypatch.setattr(inject_app, "KafkaHealthCheck", Mock(return_value=health_check))
     injector = _application_injector()
     kafka = client.V1Deployment(
         spec=client.V1DeploymentSpec(
@@ -91,7 +94,7 @@ def test_kafka_sidecar_starts_the_producer_without_pip():
     assert container.command[:3] == ["python3", "-u", "-c"]
     script = _decoded_program(container.command)
     assert "from confluent_kafka import Producer" in script
-    assert "'10000000'" in script
+    assert "'15728640'" in script
     assert "range(20)" in script
 
 

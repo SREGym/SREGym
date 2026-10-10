@@ -31,6 +31,17 @@ class JudgeParseError(Exception):
     """Raised after all retries are exhausted when parsing checklist results."""
 
 
+# Reasoning models (Gemini 2.5+/3.x, o-series, Claude with extended thinking)
+# count their hidden reasoning tokens against ``max_tokens``. A 4096 budget was
+# often consumed by reasoning alone, so the visible JSON was cut mid-string and
+# every checklist question defaulted to "No" (SREGym-Lite finalizer run: 51.9 s
+# judge call, 620-char truncated array, ``finish_reason=length``).
+DEFAULT_JUDGE_MAX_TOKENS = 16384
+# When the provider reports ``finish_reason=length`` the retry grows the budget
+# by this factor instead of repeating the same request.
+_TRUNCATION_RETRY_FACTOR = 4
+
+
 class JudgmentResult(StrEnum):
     TRUE = "True"  # Correct diagnosis - agent identified the root cause
     FALSE = "False"  # Incorrect diagnosis - agent did not identify the root cause
@@ -44,7 +55,7 @@ class LLMJudge:
         url: str | None = None,
         api_key: str | None = None,
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
     ):
         self.provider = provider
         self.model_name = model_name
@@ -247,7 +258,7 @@ fences, no preamble, no commentary.
         url: str | None = None,
         api_key: str | None = None,
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
         checklist_path: str | None = None,
     ):
         self.provider = provider
@@ -477,6 +488,7 @@ fences, no preamble, no commentary.
 
         last_error: Exception | None = None
         for attempt in range(2):
+            response = None
             try:
                 response = self.backend.inference(messages)
                 response_text = LLMJudge._content_text(response.content)
@@ -486,7 +498,17 @@ fences, no preamble, no commentary.
                 last_error = e
                 print(f"Checklist parse attempt {attempt + 1} failed: {e}")
                 if attempt == 0:
-                    if "missing" in str(e).lower() or str(self._num_questions) in str(e):
+                    if self._was_truncated(response):
+                        # The budget, not the model, caused the failure. Repeating
+                        # the same request would truncate again.
+                        new_budget = self.max_tokens * _TRUNCATION_RETRY_FACTOR
+                        print(
+                            f"Judge response hit max_tokens={self.max_tokens} "
+                            f"(finish_reason=length); retrying with max_tokens={new_budget}"
+                        )
+                        self.max_tokens = new_budget
+                        self.backend.max_tokens = new_budget
+                    elif "missing" in str(e).lower() or str(self._num_questions) in str(e):
                         messages = [
                             SystemMessage(content=self._system_prompt),
                             HumanMessage(
@@ -508,6 +530,12 @@ fences, no preamble, no commentary.
             }
             for qid in self._all_question_ids
         ]
+
+    @staticmethod
+    def _was_truncated(response) -> bool:
+        """True when the provider stopped generation because ``max_tokens`` was reached."""
+        metadata = getattr(response, "response_metadata", None) or {}
+        return str(metadata.get("finish_reason", "")).lower() == "length"
 
     @staticmethod
     def _parse_response(response_text: str, expected_question_ids: list[str]) -> list[dict]:

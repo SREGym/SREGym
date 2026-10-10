@@ -1,7 +1,11 @@
 """LLM-as-a-Judge Oracle for evaluating agent solutions using LLM judgment."""
 
 from sregym.conductor.oracles.base import Oracle
-from sregym.conductor.oracles.llm_as_a_judge.judge import DiagnosisJudge, JudgmentResult
+from sregym.conductor.oracles.llm_as_a_judge.judge import (
+    DEFAULT_JUDGE_MAX_TOKENS,
+    DiagnosisJudge,
+    JudgmentResult,
+)
 
 
 class LLMAsAJudgeOracle(Oracle):
@@ -16,7 +20,7 @@ class LLMAsAJudgeOracle(Oracle):
         url: str | None = None,
         api_key: str | None = None,
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
     ):
         super().__init__(problem)
         self.expected = expected if expected else ""

@@ -503,6 +503,7 @@ def driver_loop(
                     attempt=attempt,
                 )
                 agent_proc = None
+                conductor.agent_timeout_seconds = agent_timeout
 
                 if conductor.stage_sequence:
                     with _artifact_environment(run):
@@ -529,9 +530,10 @@ def driver_loop(
                             conductor.record_incomplete_attempt("cleanup_failed")
 
                 timed_out = False
-                agent_start_time = time.time()
+                agent_start_time = time.monotonic()
+                conductor.agent_deadline_monotonic = agent_start_time + agent_timeout
                 while not abort_campaign_after_attempt and conductor.submission_stage != "done":
-                    if time.time() - agent_start_time > agent_timeout:
+                    if time.monotonic() > conductor.agent_deadline_monotonic:
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         submission_work = conductor.close_submissions()
@@ -911,8 +913,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
         stages=tuple(args.stages) if args.stages else None,
-        baseline_override_s=args.baseline,
-        propagation_override_s=args.propagation,
+        baseline_override_s=getattr(args, "baseline", None),
+        propagation_override_s=getattr(args, "propagation", None),
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)
