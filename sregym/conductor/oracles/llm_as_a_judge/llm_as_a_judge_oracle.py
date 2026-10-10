@@ -57,7 +57,7 @@ class LLMAsAJudgeOracle(Oracle):
             accepted for interface compatibility with the base ``Oracle``).
 
         A list of expected causes is graded separately with shared incident
-        context. Every cause must pass; mean accuracy is informational only.
+        context. Every cause must pass, so accuracy is the lowest cause score.
         Per-cause reports retain the original checklist and any judge errors.
         """
         if isinstance(self.expected, list):
@@ -78,7 +78,7 @@ class LLMAsAJudgeOracle(Oracle):
             outcomes = [report["success"] for report in reports]
             return {
                 "success": False if False in outcomes else (None if None in outcomes else True),
-                "accuracy": round(sum(scores) / len(scores), 2) if all(s is not None for s in scores) else None,
+                "accuracy": min(scores) if all(s is not None for s in scores) else None,
                 "oracles": reports,
             }
         return self._evaluate_single(solution, self.expected)

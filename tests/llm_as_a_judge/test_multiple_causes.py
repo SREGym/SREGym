@@ -68,13 +68,13 @@ def test_every_cause_receives_full_answer_and_scoped_context(count):
 
 
 @pytest.mark.parametrize("count", [2, 3, 4])
-def test_one_failed_cause_fails_even_when_mean_exceeds_threshold(count):
+def test_one_failed_cause_fails_and_reports_the_lowest_score(count):
     oracle = LLMAsAJudgeOracle(None, [f"cause-{i}" for i in range(count)])
     oracle.judge.judge_detailed = Mock(side_effect=[report()] * (count - 1) + [report(0.67, JudgmentResult.FALSE)])
 
     result = oracle.evaluate("An incomplete diagnosis")
 
-    assert result["accuracy"] > 70
+    assert result["accuracy"] == 67
     assert result["success"] is False
     assert len(result["oracles"]) == count
     assert result["oracles"][-1]["success"] is False
@@ -87,7 +87,7 @@ def test_judge_error_does_not_skip_remaining_causes():
     result = oracle.evaluate("A diagnosis")
 
     assert result["success"] is False
-    assert result["accuracy"] == 66.67
+    assert result["accuracy"] == 0
     assert len(result["oracles"]) == 3
     assert result["oracles"][1]["error"] == "invalid judge response"
     assert result["oracles"][2]["success"] is True
