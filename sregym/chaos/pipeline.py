@@ -72,6 +72,8 @@ THEMES = [
     ("identity", "Credential, identity or certificate rotation left components inconsistent with each other."),
     ("metastable", "Retry, timeout or caching behaviour creates a self-sustaining degraded state."),
 ]
+# Themes that have beaten a fixer attempt get proportionally more sessions.
+THEME_WEIGHTS = {"partial": 3}
 APPS = ["hotel_reservation", "social_network"]
 
 
@@ -319,7 +321,10 @@ class Pipeline:
             "go straight for whatever is not part of the stock application: added sidecars, jobs, collections, "
             "views, recipes or config keys were found within ten minutes however deep the machinery behind them "
             "was. Prefer small edits to values the application already has, so that nothing new stands out "
-            "and the obvious repairs (restart, rollback, scale up, cache flush) fail or do not last.\n\n"
+            "and the obvious repairs (restart, rollback, scale up, cache flush) fail or do not last. "
+            "The only faults a fixer has failed on so far broke a slice of real traffic that the fixer's own "
+            "spot checks did not cover, so it repaired part of the damage, saw its probes pass and submitted "
+            "while the workload was still failing.\n\n"
             + self.avoid_list() + "\n"
         )
         brief.write_text(text)
@@ -549,7 +554,7 @@ class Pipeline:
         themes = [t for t in THEMES if not (t[0] == "code" and app != "social_network")]
         # Least-explored theme for this app first, so new themes get tried before old ones repeat.
         tried = [c["theme"][0] for c in self.ledger["candidates"].values() if c["app"] == app]
-        theme = min(themes, key=lambda t: (tried.count(t[0]), themes.index(t)))
+        theme = min(themes, key=lambda t: (tried.count(t[0]) / THEME_WEIGHTS.get(t[0], 1), themes.index(t)))
         backend = "codex"
         if self.o.claude_env_file and self.o.chaos_claude_every and n % self.o.chaos_claude_every == 1:
             backend = "claudecode"
