@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shlex
 import signal
 import socket
 import subprocess
@@ -189,8 +190,20 @@ class MCPServer:
         command line is treated as foreign, so the failure mode is a port
         conflict we report rather than someone else's process dying.
         """
-        cmdline = self._process_cmdline(pid)
-        return "port-forward" in cmdline and f"svc/{self.service_name}" in cmdline
+        try:
+            arguments = shlex.split(self._process_cmdline(pid))
+        except ValueError:
+            return False
+        expected = [
+            "port-forward",
+            f"svc/{self.service_name}",
+            f"{self.port}:9954",
+            "-n",
+            self.namespace,
+            "--address",
+            "0.0.0.0",
+        ]
+        return bool(arguments) and os.path.basename(arguments[0]) == "kubectl" and arguments[1:] == expected
 
     def start_port_forward(self):
         """Starts port-forwarding to access the MCP server."""
@@ -204,12 +217,18 @@ class MCPServer:
                 time.sleep(3)
                 continue
 
-            command = (
-                f"kubectl port-forward svc/{self.service_name} {self.port}:9954 -n {self.namespace} --address 0.0.0.0"
-            )
+            command = [
+                "kubectl",
+                "port-forward",
+                f"svc/{self.service_name}",
+                f"{self.port}:9954",
+                "-n",
+                self.namespace,
+                "--address",
+                "0.0.0.0",
+            ]
             self.port_forward_process = subprocess.Popen(
                 command,
-                shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -238,6 +257,7 @@ class MCPServer:
             except subprocess.TimeoutExpired:
                 logger.warning("Port-forward process did not terminate in time, killing...")
                 self.port_forward_process.kill()
+                self.port_forward_process.wait(timeout=5)
 
             if self.port_forward_process.stdout:
                 self.port_forward_process.stdout.close()
@@ -245,3 +265,4 @@ class MCPServer:
                 self.port_forward_process.stderr.close()
 
             logger.info("Port forwarding for MCP server stopped.")
+            self.port_forward_process = None
