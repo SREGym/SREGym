@@ -1,13 +1,14 @@
-from types import SimpleNamespace
+import random
 from unittest.mock import Mock
 
 import pytest
-import yaml
 
 import sregym.conductor.oracles.missing_stale_cache_fallback_mitigation as oracle_module
-from sregym.conductor.oracles.missing_stale_cache_fallback_mitigation import MissingStaleCacheFallbackMitigationOracle
+from sregym.conductor.oracles.missing_stale_cache_fallback_mitigation import (
+    MissingStaleCacheFallbackMitigationOracle,
+    ProbeUnavailable,
+)
 from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.conductor.problems.missing_stale_cache_fallback_astronomy_shop import MissingStaleCacheFallbackAstronomyShop
 
 CATALOG = [
     "0PUK6V6EV0",
@@ -21,6 +22,10 @@ CATALOG = [
     "LS4PSXUNUM",
     "OLJCESPC7Z",
 ]
+SERVICES = {
+    "recommendation": {"selector": {"opentelemetry.io/name": "recommendation"}, "ports": [(8080, "8080", "TCP")]},
+    "product-catalog": {"selector": {"opentelemetry.io/name": "product-catalog"}, "ports": [(8080, "8080", "TCP")]},
+}
 
 
 class Clock:
@@ -35,21 +40,34 @@ class Clock:
 
 
 class FakeShop:
-    """A recommendation service and its upstream, with the agent's fix chosen per test"""
+    """Recommendation pods behind a round-robin Service, product-catalog, and the agent's fix chosen per test"""
 
-    UPSTREAM_ADDR = "product-catalog:8080"
-
-    def __init__(self, delay_s=3.0, degraded="cache", degraded_ms=1100.0):
+    def __init__(self, delay_s=3.0, degraded="cache", degraded_ms=1100.0, max_age_s=120.0, replicas=1):
+        self.clock = Clock()
         self.delay = f"{delay_s:g}s"
         self.delay_seconds = delay_s
         self.delay_active_min_s = 0.8 * delay_s
         self.catalog = list(CATALOG)
-        self.cache = list(CATALOG)
+        self.pods = [f"recommendation-{i}" for i in range(replicas)]
+        self.caches = {pod: (list(CATALOG), 0.0) for pod in self.pods}
+        self._next_pod = 0
+        self.services = {name: dict(spec) for name, spec in SERVICES.items()}
         self.schedule = True
-        self.delayed = True
+        # Latency of the current delay in seconds, 0 while product-catalog is healthy.
+        self.latency = delay_s
         # What the fixed service does when product-catalog is delayed: cache, error, wait, hardcoded, empty.
         self.degraded = degraded
         self.degraded_ms = degraded_ms
+        # How long the cache may be served while product-catalog fails. None means forever.
+        self.max_age_s = max_age_s
+        # What the service answers once the cache is too old: error or empty.
+        self.after_expiry = "error"
+        # Refreshes in the background through product-catalog with this timeout (works while the delay is shorter).
+        self.background_timeout_s = None
+        # Reads an undelayed product-catalog copy that serves the same database.
+        self.copy_upstream = False
+        # Applies the age limit only to requests that exclude many products, like the oracle's targeted ones.
+        self.fingerprint = False
         self.healthy_ok = True
         # Every n-th answer from the cache is 1.5 s slower (background load). 0 means never.
         self.tail_every = 0
@@ -57,14 +75,19 @@ class FakeShop:
         self.refreshes = True
         self.stuck_after_fallback = False
         self.fell_back = False
-        self.bypassed = False
         self.can_lift = True
         self.can_apply = True
         self.upstream_code = "OK"
         self.exec_broken = False
         self.insert_broken = False
+        self.restart_at = None
         self.restored = []
+        self.client_released = 0
+        self.pod_probes = []
+        self._random = random.Random(7)
         self._next = 0
+
+    # The problem API the oracle uses
 
     def incident_running(self):
         return self.schedule
@@ -73,68 +96,111 @@ class FakeShop:
         self.schedule = False
         if not self.can_lift:
             raise RuntimeError("product-catalog did not answer quickly after removing the delay")
-        self.delayed = False
+        self.latency = 0
         if self.upstream_code != "OK":
             raise RuntimeError("product-catalog did not answer quickly after removing the delay")
 
-    def apply_delay(self, keep_alive):
+    def apply_delay(self, keep_alive, latency=None):
         self.schedule = keep_alive
-        self.delayed = self.can_apply
+        self.latency = float((latency or self.delay)[:-1]) if self.can_apply else 0
         self.restored.append(keep_alive)
 
     def wait_for_delay(self, active):
-        return self.delayed is active
+        return (self.latency > 0) is active
+
+    def delay_active(self):
+        return self.latency > 0
 
     def wait_until_answering(self):
+        if self.exec_broken:
+            raise ProbeUnavailable("could not probe recommendation")
         if not self.healthy_ok:
             raise RuntimeError("Recommendation is not answering")
 
     def catalog_ids(self):
         return sorted(self.catalog)
 
-    def insert_probe_product(self):
-        if self.insert_broken:
-            raise RuntimeError("psql failed")
+    def catalog_rows(self):
+        return [f"{i}|Product {i}|19" for i in sorted(self.catalog)]
+
+    def service_specs(self):
+        return {name: dict(spec) for name, spec in self.services.items()}
+
+    def rollout_pods(self):
+        return list(self.pods)
+
+    def rollout_state(self):
+        restarted = self.restart_at is not None and self.clock.now >= self.restart_at
+        return {pod: int(restarted) for pod in self.pods}
+
+    def new_product_id(self):
         product_id = f"PROBE{self._next:05d}"
         self._next += 1
+        return product_id
+
+    def insert_probe_product(self, product_id=None):
+        if self.insert_broken:
+            raise RuntimeError("psql failed")
+        product_id = product_id or self.new_product_id()
         self.catalog.append(product_id)
         return product_id
 
     def delete_product(self, product_id):
-        self.catalog.remove(product_id)
+        if product_id in self.catalog:
+            self.catalog.remove(product_id)
 
-    def measure_upstream(self, address=""):
+    def measure_upstream(self):
         if self.exec_broken:
             return None
-        slow = self.delayed and not (address == "" and self.bypassed)
-        return {
-            "addr": address or "catalog-copy:8080",
-            "s": self.delay_seconds if slow else 0.02,
-            "code": self.upstream_code,
-        }
+        return {"addr": "product-catalog:8080", "s": self.latency or 0.02, "code": self.upstream_code}
 
-    def probe_recommendations(self, count, interval_s, deadline_s, exclude_ids=None):
+    def release_client(self):
+        self.client_released += 1
+
+    def probe_recommendations(self, count, interval_s, deadline_s, exclude_ids=None, pod=None):
         if self.exec_broken:
             return [{"ok": False, "ms": 0.0, "code": "EXEC_FAILED", "error": "exec failed"}]
         exclude = set(exclude_ids or ["OLJCESPC7Z"])
-        return [self._answer(exclude, deadline_s) for _ in range(count)]
+        answers = []
+        for _ in range(count):
+            if pod:
+                self.pod_probes.append(pod)
+                target = pod
+            else:
+                target = self.pods[self._next_pod % len(self.pods)]
+                self._next_pod += 1
+            answers.append(self._answer(target, exclude, deadline_s))
+        return answers
 
-    def _answer(self, exclude, deadline_s):
-        if not self.delayed or self.bypassed:
+    # The fake recommendation service
+
+    def _refresh(self, pod):
+        self.caches[pod] = (list(self.catalog), self.clock.now)
+
+    def _answer(self, pod, exclude, deadline_s):
+        if not self.latency or self.copy_upstream:
             if not self.healthy_ok:
                 return {"ok": False, "ms": 20.0, "code": "UNKNOWN", "error": "broken"}
             if self.refreshes and not (self.stuck_after_fallback and self.fell_back):
-                self.cache = list(self.catalog)
-            ids, ms = self.cache, 15.0
+                self._refresh(pod)
+            ids, ms = self.caches[pod][0], 15.0
         elif self.degraded == "error":
-            return {"ok": False, "ms": 1000.0, "code": "UNKNOWN", "error": "Deadline Exceeded"}
+            return {"ok": False, "ms": 1000.0, "code": "UNKNOWN", "error": "StatusCode.DEADLINE_EXCEEDED"}
         elif self.degraded == "wait":
-            ids, ms = self.catalog, self.delay_seconds * 1000 + 5
+            ids, ms = self.catalog, self.latency * 1000 + 5
         elif self.degraded == "cache":
+            if self.background_timeout_s and self.latency < self.background_timeout_s:
+                self._refresh(pod)
+            cache, cached_at = self.caches[pod]
+            limited = self.max_age_s is not None and not (self.fingerprint and len(exclude) < 8)
+            if limited and self.clock.now - cached_at > self.max_age_s:
+                if self.after_expiry == "empty":
+                    return {"ok": True, "ms": 1000.0, "ids": []}
+                return {"ok": False, "ms": 1000.0, "code": "UNKNOWN", "error": "StatusCode.DEADLINE_EXCEEDED"}
             self.fell_back = True
             self._served += 1
             slow = self.tail_every and self._served % self.tail_every == 0
-            ids, ms = self.cache, self.degraded_ms + (1500.0 if slow else 0.0)
+            ids, ms = cache, self.degraded_ms + (1500.0 if slow else 0.0)
         elif self.degraded == "hardcoded":
             ids, ms = CATALOG[:5], 3.0
         elif self.degraded == "hardcoded_unfiltered":
@@ -143,28 +209,38 @@ class FakeShop:
             return {"ok": True, "ms": 3.0, "ids": []}
         if ms > deadline_s * 1000:
             return {"ok": False, "ms": deadline_s * 1000, "code": "DEADLINE_EXCEEDED", "error": "Deadline Exceeded"}
-        return {"ok": True, "ms": ms, "ids": [i for i in ids if i not in exclude][:5]}
+        candidates = [i for i in ids if i not in exclude]
+        return {"ok": True, "ms": ms, "ids": self._random.sample(candidates, min(5, len(candidates)))}
 
 
 @pytest.fixture
 def evaluate(monkeypatch):
     monkeypatch.setattr(MitigationOracle, "evaluate", lambda self: {"success": True})
-    monkeypatch.setattr(oracle_module, "time", Clock())
+    monkeypatch.setattr(MitigationOracle, "capture_baseline", lambda self: None)
 
-    def run(shop):
-        return MissingStaleCacheFallbackMitigationOracle(problem=shop).evaluate()
+    def run(shop, after_baseline=None, capture=True):
+        # The oracle and the fake service share one clock, so waiting in the oracle ages the cache.
+        monkeypatch.setattr(oracle_module, "time", shop.clock)
+        oracle = MissingStaleCacheFallbackMitigationOracle(problem=shop)
+        if capture:
+            oracle.capture_baseline()
+        if after_baseline:
+            after_baseline(shop)
+        return oracle.evaluate()
 
     return run
 
 
 def _assert_fails(result, reason, failure_class):
-    assert result["success"] is False
-    assert result["reason"] == reason
+    assert result["success"] is False, result
+    assert result["reason"] == reason, result
     assert result["failure_class"] == failure_class
 
 
 def test_cache_fallback_passes(evaluate):
-    assert evaluate(FakeShop())["success"] is True
+    shop = FakeShop()
+    assert evaluate(shop)["success"] is True
+    assert shop.client_released >= 1
 
 
 @pytest.mark.parametrize("delay_s,ms", [(3.0, 2100.0), (3.0, 2700.0), (5.0, 4000.0), (5.0, 4700.0)])
@@ -201,7 +277,7 @@ def test_waiting_out_the_delay_is_too_slow(evaluate):
 @pytest.mark.parametrize(
     "degraded,reason",
     [
-        ("hardcoded", "recommendations_empty"),
+        ("hardcoded", "recommendations_invalid"),
         ("hardcoded_unfiltered", "recommendations_invalid"),
         ("empty", "recommendations_empty"),
     ],
@@ -228,10 +304,94 @@ def test_broken_service_fails_when_healthy(evaluate):
     _assert_fails(evaluate(shop), "recommendations_failing_when_healthy", "agent_error")
 
 
+def test_every_replica_gets_the_new_catalog(evaluate):
+    shop = FakeShop(replicas=2)
+    assert evaluate(shop)["success"] is True
+    assert set(shop.pod_probes) == set(shop.pods)
+
+
 def test_undelayed_upstream_copy_fails(evaluate):
+    # Reading the catalog around the impaired product-catalog is not a fix.
     shop = FakeShop(degraded="error")
-    shop.bypassed = True
+    shop.copy_upstream = True
     _assert_fails(evaluate(shop), "upstream_bypassed", "agent_error")
+
+
+@pytest.mark.parametrize("name", ["recommendation", "product-catalog"])
+def test_service_pointed_at_other_pods_fails(evaluate, name):
+    def repoint(shop):
+        shop.services[name] = {"selector": {"app": f"{name}-v2"}, "ports": [(8080, "8080", "TCP")]}
+
+    _assert_fails(evaluate(FakeShop(), after_baseline=repoint), "upstream_bypassed", "agent_error")
+
+
+@pytest.mark.parametrize("max_age_s", [None, 600.0])
+def test_cache_served_past_the_age_limit_fails(evaluate, max_age_s):
+    _assert_fails(evaluate(FakeShop(max_age_s=max_age_s)), "stale_data_served_past_limit", "agent_error")
+
+
+@pytest.mark.parametrize("max_age_s,after_expiry", [(120.0, "error"), (60.0, "error"), (120.0, "empty")])
+def test_cache_with_an_age_limit_passes(evaluate, max_age_s, after_expiry):
+    shop = FakeShop(max_age_s=max_age_s)
+    shop.after_expiry = after_expiry
+    assert evaluate(shop)["success"] is True
+
+
+def test_age_limit_only_for_the_oracles_requests_fails(evaluate):
+    shop = FakeShop()
+    shop.fingerprint = True
+    _assert_fails(evaluate(shop), "stale_data_served_past_limit", "agent_error")
+
+
+def test_cache_refreshed_in_the_background_through_product_catalog_passes(evaluate):
+    # A 10s background fetch gets through the 3s delay, but not through the oracle's 60s one.
+    shop = FakeShop(max_age_s=None)
+    shop.background_timeout_s = 10.0
+    assert evaluate(shop)["success"] is True
+
+
+def test_restart_while_impaired_fails(evaluate):
+    shop = FakeShop()
+    shop.restart_at = 30.0
+    _assert_fails(evaluate(shop), "recommendation_restarted_under_degradation", "agent_error")
+
+
+def test_deleted_original_products_fail(evaluate):
+    result = evaluate(FakeShop(), after_baseline=lambda shop: shop.catalog.clear())
+    _assert_fails(result, "catalog_data_lost", "agent_error")
+    assert result["detail"]["ids"] == CATALOG
+
+
+def test_one_changed_original_product_fails(evaluate):
+    def change(shop):
+        rows = shop.catalog_rows
+        shop.catalog_rows = lambda: [r.replace("|19", "|0") if r.startswith("66VCHSJNUP") else r for r in rows()]
+
+    result = evaluate(FakeShop(), after_baseline=change)
+    _assert_fails(result, "catalog_data_lost", "agent_error")
+    assert result["detail"]["ids"] == ["66VCHSJNUP"]
+
+
+def test_unreadable_catalog_is_ambiguous(evaluate):
+    def break_reads(shop):
+        shop.catalog_rows = Mock(side_effect=RuntimeError("psql: connection refused"))
+
+    _assert_fails(evaluate(FakeShop(), after_baseline=break_reads), "catalog_unavailable", "ambiguous")
+
+
+def test_baseline_that_cannot_be_recorded_fails_loudly(monkeypatch):
+    monkeypatch.setattr(MitigationOracle, "capture_baseline", lambda self: None)
+    shop = FakeShop()
+    shop.catalog_rows = Mock(side_effect=RuntimeError("psql failed"))
+    monkeypatch.setattr(oracle_module, "time", shop.clock)
+    oracle = MissingStaleCacheFallbackMitigationOracle(problem=shop)
+    with pytest.raises(RuntimeError, match="could not record"):
+        oracle.capture_baseline()
+    assert shop.catalog_rows.call_count == 3
+
+
+def test_evaluation_without_a_baseline_is_environmental(evaluate):
+    _assert_fails(evaluate(FakeShop(), capture=False), "baseline_missing", "environment_error")
 
 
 def test_failing_upstream_is_ambiguous(evaluate):
@@ -276,92 +436,32 @@ def test_running_incident_is_restored(evaluate, degraded):
     shop = FakeShop(degraded=degraded)
     evaluate(shop)
     assert shop.restored[-1] is True
-    assert shop.schedule and shop.delayed
+    assert shop.schedule and shop.latency == 3.0
 
 
 def test_delay_stays_off_when_no_incident_was_running(evaluate):
     shop = FakeShop()
     shop.schedule = False
     evaluate(shop)
-    assert not shop.schedule and not shop.delayed
+    assert not shop.schedule and not shop.latency
 
 
-# The problem's own helpers, without a cluster.
+def test_expiry_answers_with_other_products_are_invalid():
+    oracle = MissingStaleCacheFallbackMitigationOracle(problem=FakeShop())
+    result = oracle._expiry_failure([{"ok": True, "ms": 5.0, "ids": ["P1", "66VCHSJNUP"]}], "P1", "P3")
+    _assert_fails(result, "recommendations_invalid", "agent_error")
 
 
-@pytest.fixture
-def problem():
-    problem = MissingStaleCacheFallbackAstronomyShop.__new__(MissingStaleCacheFallbackAstronomyShop)
-    problem.namespace = "astronomy-shop"
-    problem.delay = "3s"
-    problem.delay_seconds = 3.0
-    problem.delay_active_min_s = 2.4
-    problem.kubectl = SimpleNamespace(exec_command=Mock(return_value=""), exec_command_checked=Mock(return_value=""))
-    return problem
+def test_ordinary_answers_with_the_excluded_product_are_invalid():
+    oracle = MissingStaleCacheFallbackMitigationOracle(problem=FakeShop())
+    answers = [{"ok": True, "ms": 5.0, "ids": ["0PUK6V6EV0", "P3"]}]
+    result = oracle._ordinary_expiry_failure(answers, "0PUK6V6EV0", "P3")
+    _assert_fails(result, "recommendations_invalid", "agent_error")
 
 
-@pytest.mark.parametrize("delay", ["0s", "1.5s", "3", "3ms", "-3s"])
-def test_delay_too_short_or_malformed_is_rejected(delay):
-    with pytest.raises(ValueError):
-        MissingStaleCacheFallbackAstronomyShop._parse_delay(delay)
-
-
-@pytest.mark.parametrize("delay,seconds", [("2s", 2.0), ("3s", 3.0), ("5s", 5.0), ("2.5s", 2.5)])
-def test_delay_is_parsed(delay, seconds):
-    assert MissingStaleCacheFallbackAstronomyShop._parse_delay(delay) == seconds
-
-
-@pytest.mark.parametrize("keep_alive,kind", [(True, "Schedule"), (False, "NetworkChaos")])
-def test_delay_lives_in_the_app_namespace_and_selects_by_deployment_label(problem, keep_alive, kind):
-    problem.apply_delay(keep_alive=keep_alive)
-    manifest = yaml.safe_load(problem.kubectl.exec_command_checked.call_args.kwargs["input_data"])
-    assert manifest["kind"] == kind
-    assert manifest["metadata"]["namespace"] == "astronomy-shop"
-    spec = manifest["spec"]["networkChaos"] if keep_alive else manifest["spec"]
-    assert spec["selector"]["labelSelectors"] == {"opentelemetry.io/name": "product-catalog"}
-    assert spec["target"]["selector"]["labelSelectors"] == {"opentelemetry.io/name": "recommendation"}
-    assert spec["delay"]["latency"] == "3s"
-
-
-def test_chaos_delete_is_bounded_and_uses_full_resource_names(problem):
-    problem._delete_chaos()
-    delete = problem.kubectl.exec_command.call_args_list[0].args[0]
-    assert "schedules.chaos-mesh.org,networkchaos.chaos-mesh.org catalog-latency -n astronomy-shop" in delete
-    assert "--timeout=60s" in delete
-
-
-@pytest.mark.parametrize(
-    "measured,expected",
-    [
-        (None, None),
-        ({"addr": "a", "s": 3.01, "code": "OK"}, True),
-        ({"addr": "a", "s": 9.0, "code": "DEADLINE_EXCEEDED"}, True),
-        ({"addr": "a", "s": 0.02, "code": "OK"}, False),
-        ({"addr": "a", "s": 0.01, "code": "UNAVAILABLE"}, None),
-    ],
-)
-def test_delay_active_is_unknown_unless_measured(problem, measured, expected):
-    problem.measure_upstream = Mock(return_value=measured)
-    assert problem.delay_active() is expected
-    assert problem.measure_upstream.call_args.args[0] == "product-catalog:8080"
-
-
-def test_wait_for_delay_needs_an_explicit_answer(problem, monkeypatch):
-    monkeypatch.setattr("sregym.conductor.problems.missing_stale_cache_fallback_astronomy_shop.time", Clock())
-    problem.delay_active = Mock(return_value=None)
-    assert problem.wait_for_delay(active=False) is False
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        "failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:8080: Connection refused",
-        "failed to connect to all addresses; last error: UNKNOWN: ipv6:%5B::1%5D:8080: Failed to connect",
-    ],
-)
-def test_wait_until_answering_waits_for_the_local_port(problem, monkeypatch, error):
-    monkeypatch.setattr("sregym.conductor.problems.missing_stale_cache_fallback_astronomy_shop.time", Clock())
-    refused = {"ok": False, "ms": 1.0, "code": "UNAVAILABLE", "error": error}
-    problem.probe_recommendations = Mock(side_effect=[[refused], [refused], [{"ok": True, "ms": 5.0, "ids": []}]])
-    problem.wait_until_answering()
-    assert problem.probe_recommendations.call_count == 3
+def test_a_few_ordinary_answers_without_the_new_product_do_not_fail():
+    oracle = MissingStaleCacheFallbackMitigationOracle(problem=FakeShop())
+    answers = [{"ok": True, "ms": 5.0, "ids": ["1YMWWN1N4O"]}] * 9 + [
+        {"ok": False, "ms": 1000.0, "code": "UNKNOWN", "error": "StatusCode.DEADLINE_EXCEEDED"}
+    ] * 6
+    assert oracle._ordinary_expiry_failure(answers, "0PUK6V6EV0", "P3") is None
