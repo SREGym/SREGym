@@ -3,6 +3,7 @@ import importlib
 import json
 import re
 import shlex
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -136,13 +137,16 @@ def test_hotel_manifests_and_recovery_use_the_published_image():
 
 def test_social_network_chart_uses_published_images():
     chart = ROOT / "SREGym-applications/socialNetwork/helm-chart/socialnetwork"
+    with patch("sregym.service.apps.social_network.KubeCtl"):
+        app = SocialNetwork()
+    overrides = yaml.safe_load(Path(app.helm_configs["values_file"]).read_text())
     defaults = yaml.safe_load((chart / "values.yaml").read_text())["global"]
     services = 0
     for path in (chart / "charts").glob("*/values.yaml"):
         values = yaml.safe_load(path.read_text())
-        container = values.get("container", {})
         name = values.get("name", "")
         if name.endswith("-service") or name in {"nginx-thrift", "media-frontend"}:
+            container = values["container"] | overrides[name]["container"]
             version = container.get("imageVersion", defaults["defaultImageVersion"])
             image = f"{container.get('dockerRegistry', defaults['dockerRegistry'])}/{container['image']}:{version}"
             target = {"nginx-thrift": "openresty-thrift", "media-frontend": "media-frontend"}.get(
@@ -151,6 +155,25 @@ def test_social_network_chart_uses_published_images():
             assert image == IMAGES[target], name
             services += 1
     assert services == 13
+    rendered = subprocess.check_output(
+        [
+            "helm",
+            "template",
+            "social-network",
+            str(chart),
+            "--namespace",
+            "social-network",
+            "-f",
+            app.helm_configs["values_file"],
+        ],
+        text=True,
+    )
+    deployments = {
+        doc["metadata"]["name"]: doc for doc in yaml.safe_load_all(rendered) if doc and doc.get("kind") == "Deployment"
+    }
+    for name in overrides:
+        target = {"nginx-thrift": "openresty-thrift", "media-frontend": "media-frontend"}.get(name, "social-network")
+        assert deployments[name]["spec"]["template"]["spec"]["containers"][0]["image"] == IMAGES[target]
 
 
 def test_social_deploy_does_not_switch_images_or_accumulate_overrides():

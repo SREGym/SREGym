@@ -1,0 +1,78 @@
+# Published application images for the vendored Social Network chart.
+compose-post-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+home-timeline-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+media-frontend:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: media-frontend
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:32de5e0371ccb7f47f36e1f027ae0075a7e265e4eed374c1b1020fe213754d00
+
+media-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+nginx-thrift:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: openresty-thrift
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:fa344a1bf5320c40e57476eea23706b91819c6d6faa03b34ec846c4d2e3c0d18
+
+post-storage-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+social-graph-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+text-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+unique-id-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+url-shorten-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+user-mention-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+user-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
+
+user-timeline-service:
+  container:
+    dockerRegistry: ghcr.io/sregym
+    image: social-network
+    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:70287c4756f9187613e49409291927c342724e3974f93709b21595ed1cdf1d69
