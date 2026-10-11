@@ -172,7 +172,7 @@ class Pipeline:
             auth.chmod(0o600)
         args = [
             "docker", "run", "--rm", "--privileged", "--cgroupns=private", "--name", name,
-            "--stop-timeout", "45", "--cpus", str(self.o.cpus), "--memory", self.o.memory,
+            "--stop-timeout", "45", "--cpus", str(self.o.cpus), "--memory", self.o.memory, "--memory-swap", self.o.memory,
             "--mount", f"type=bind,src={out},dst=/opt/sregym/results",
             "--mount", f"type=bind,src={auth},dst=/root/.codex/auth.json",
             "--env", "SREGYM_CHAOS_REPORT_DIR=/opt/sregym/results/chaos_gates",
@@ -348,6 +348,10 @@ class Pipeline:
             return
         c["chaos"]["slo_violated_at_submit"] = rows[-1].get("Mitigation.success") if rows else None
         found = sorted(out.rglob("artifact/fault.json"))
+        log = out / "dind.log"
+        deploy_failed = log.exists() and "start_problem failed" in log.read_text(errors="ignore")
+        if not found and deploy_failed and self.infra_retry(c, out, "chaos"):
+            return  # the cluster never came up, so the agent never got a fair session
         if not found:
             c["status"] = "rejected"
             c["reason"] = "no artifact produced"
