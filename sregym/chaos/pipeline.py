@@ -44,6 +44,12 @@ AUTH = Path.home() / ".codex" / "auth.json"
 LOCK = threading.RLock()
 
 THEMES = [
+    ("intermittent", "Service degrades in recurring episodes driven by a plausible in-cluster mechanism (TTL "
+                     "expiry, periodic jobs, rebalancing, connection recycling), so checks made between "
+                     "episodes pass while the sustained SLO window still fails."),
+    ("compound-partial", "Two or three independent defects from one plausible change (a migration, a rollout, a "
+                         "config sweep), each breaking a different slice of traffic; repairing the slice a "
+                         "fixer probes first leaves the others failing."),
     ("misdirection", "The loudest symptoms (errors, CPU, alerts) are in a service that is healthy itself; the "
                      "cause sits upstream or downstream and only shows up as a quieter signal."),
     ("partial", "Only a slice of the traffic breaks (certain users, hotels, posts, routes or replicas), so "
@@ -73,7 +79,7 @@ THEMES = [
     ("metastable", "Retry, timeout or caching behaviour creates a self-sustaining degraded state."),
 ]
 # Themes that have beaten a fixer attempt get proportionally more sessions.
-THEME_WEIGHTS = {"partial": 3}
+THEME_WEIGHTS = {"partial": 3, "intermittent": 3, "compound-partial": 3}
 APPS = ["hotel_reservation", "social_network"]
 
 
