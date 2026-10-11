@@ -125,9 +125,16 @@ def test_main_image_selection_reuses_one_build(monkeypatch, backend, external, f
     monkeypatch.setattr(main, "set_profile", lambda _: None)
     monkeypatch.setattr(main, "run_judge_preflight_check", Mock())
     monkeypatch.setattr(main, "run_preflight_check", Mock())
-    monkeypatch.setattr(main, "Conductor", Mock(side_effect=StopBeforeCluster))
     launcher = AgentLauncher()
     monkeypatch.setattr(main, "LAUNCHER", launcher)
+    selected_images = []
+
+    def stop_before_cluster(*args, **kwargs):
+        if launcher._container_runner is not None:
+            selected_images.append(launcher._container_runner.config.image)
+        raise StopBeforeCluster
+
+    monkeypatch.setattr(main, "Conductor", stop_before_cluster)
     args = SimpleNamespace(
         judge_backend=backend,
         use_external_harness=external,
@@ -150,7 +157,8 @@ def test_main_image_selection_reuses_one_build(monkeypatch, backend, external, f
         assert not [call for call in run.call_args_list if call.args[0][0] == "bash"]
         return
 
-    expected_image = launcher._container_runner.config.image
+    assert launcher._container_runner is None, "Startup failure must release the launcher runner"
+    expected_image = selected_images[0]
     if force_build:
         assert expected_image == LOCAL_AGENT_IMAGE
     else:

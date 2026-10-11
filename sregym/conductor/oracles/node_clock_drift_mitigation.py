@@ -100,12 +100,21 @@ class NodeClockDriftMitigationOracle(Oracle):
     def _get_node_time(self, node_name: str) -> int | None:
         """Get current time from the specified node via a privileged pod."""
         pod_name = f"time-check-{int(time.time() * 1000)}"
+        import os
+
+        from sregym.service.agent_visibility_policy import VERIFIER_PROBE_NAMESPACE
+
+        namespace = VERIFIER_PROBE_NAMESPACE if os.environ.get("SREGYM_VERIFIER_CONTAINER") == "1" else "default"
+        if namespace == VERIFIER_PROBE_NAMESPACE:
+            self.problem.kubectl.exec_command_checked(
+                f"kubectl create namespace {namespace} --dry-run=client -o yaml | kubectl apply -f -"
+            )
         pod_spec = {
             "apiVersion": "v1",
             "kind": "Pod",
             "metadata": {
                 "name": pod_name,
-                "namespace": "default",
+                "namespace": namespace,
                 "labels": {"app": "time-checker"},
             },
             "spec": {
@@ -129,21 +138,21 @@ class NodeClockDriftMitigationOracle(Oracle):
             },
         }
         try:
-            self.core_v1.create_namespaced_pod("default", pod_spec)
+            self.core_v1.create_namespaced_pod(namespace, pod_spec)
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
-                pod = self.core_v1.read_namespaced_pod(pod_name, "default")
+                pod = self.core_v1.read_namespaced_pod(pod_name, namespace)
                 if pod.status.phase in ["Succeeded", "Failed"]:
                     break
                 time.sleep(2)
-            logs = self.core_v1.read_namespaced_pod_log(pod_name, "default")
+            logs = self.core_v1.read_namespaced_pod_log(pod_name, namespace)
             return int(logs.strip())
         except Exception as e:
             print(f"Error getting node time: {e}")
             return None
         finally:
             with contextlib.suppress(Exception):
-                self.core_v1.delete_namespaced_pod(pod_name, "default", grace_period_seconds=0)
+                self.core_v1.delete_namespaced_pod(pod_name, namespace, grace_period_seconds=0)
 
     def _check_pod_health(self, namespace: str, target_node: str) -> bool:
         """Check if pods on the target node are healthy with no TLS-related failures."""

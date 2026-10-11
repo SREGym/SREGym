@@ -74,6 +74,53 @@ class LauncherTests(unittest.TestCase):
         ):
             launcher.main()
 
+    def test_build_supplies_private_verifier_context_and_cleans_it_after_docker(self):
+        contexts = []
+
+        def package(root, destination):
+            self.assertEqual(root, launcher.REPO)
+            contexts.append(destination)
+            (destination / "manifest").write_text("trusted source hashes")
+
+        def docker(command):
+            self.assertEqual(command[:4], ["docker", "buildx", "build", "--load"])
+            context = command[command.index("--build-context") + 1]
+            self.assertEqual(context, f"verifier_sources={contexts[0]}")
+            self.assertEqual((contexts[0] / "manifest").read_text(), "trusted source hashes")
+            self.assertEqual(command[-1], str(launcher.REPO))
+            return 17
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(launcher, "REPO", Path(directory)),
+            patch.object(sys, "argv", ["run.py", "build"]),
+            patch.object(launcher.runpy, "run_path", return_value={"write_source_context": package}),
+            patch.object(launcher.subprocess, "call", side_effect=docker),
+        ):
+            application = launcher.REPO / "SREGym-applications"
+            application.mkdir()
+            (application / "README.md").write_text("initialized")
+            self.assertEqual(launcher.main(), 17)
+            self.assertFalse(contexts[0].exists())
+
+    def test_build_does_not_start_docker_when_verifier_packaging_fails(self):
+        def package(root, destination):
+            raise ValueError("missing verifier source")
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(launcher, "REPO", Path(directory)),
+            patch.object(sys, "argv", ["run.py", "build"]),
+            patch.object(launcher.runpy, "run_path", return_value={"write_source_context": package}),
+            patch.object(launcher.subprocess, "call") as docker,
+        ):
+            application = launcher.REPO / "SREGym-applications"
+            application.mkdir()
+            (application / "README.md").write_text("initialized")
+            with self.assertRaisesRegex(ValueError, "missing verifier source"):
+                launcher.main()
+            docker.assert_not_called()
+
     def test_shell_syntax(self):
         for name in ("entrypoint.sh", "prepare-cgroups.sh", "smoke.sh"):
             subprocess.run(["bash", "-n", str(ROOT / "docker/dind" / name)], check=True)

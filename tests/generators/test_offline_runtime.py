@@ -56,9 +56,16 @@ def test_valkey_job_starts_the_writer_without_pip(monkeypatch):
 
 
 def test_kafka_sidecar_starts_the_producer_without_pip(monkeypatch):
-    probe = Mock(wait_until_available=Mock(return_value=True), check=Mock(return_value=False))
-    health_check = Mock(__enter__=Mock(return_value=probe), __exit__=Mock(return_value=False))
-    monkeypatch.setattr(inject_app, "KafkaHealthCheck", Mock(return_value=health_check))
+    # Keep the existing delivery and fresh-OOM requirements. This is a source
+    # packaging test; its broker behavior is supplied by a controlled probe.
+    probe = Mock()
+    probe.wait_until_available.return_value = True
+    probe.check.return_value = False
+    monkeypatch.setattr(
+        inject_app,
+        "KafkaHealthCheck",
+        lambda *_: Mock(__enter__=Mock(return_value=probe), __exit__=Mock(return_value=False)),
+    )
     injector = _application_injector()
     kafka = client.V1Deployment(
         spec=client.V1DeploymentSpec(

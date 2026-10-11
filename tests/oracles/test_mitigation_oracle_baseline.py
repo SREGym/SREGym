@@ -8,6 +8,7 @@ oracle — is constructed before `deploy_app()`, so capture cannot happen in
 """
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -203,11 +204,13 @@ def test_conductor_captures_baseline_before_injecting_the_fault():
         current_problem=problem,
         logger=SimpleNamespace(info=lambda *a, **k: None),
         fault_injected=False,
+        stage_sequence=("mitigation",),
+        _get_verifier_runtime=lambda: SimpleNamespace(prepare=lambda: calls.append("prepare")),
     )
 
     Conductor._inject_fault(conductor)
 
-    assert calls == ["baseline", "inject"]
+    assert calls == ["prepare", "baseline", "inject"]
     assert conductor.fault_injected is True
 
 
@@ -228,12 +231,14 @@ def test_conductor_aborts_injection_when_baseline_capture_fails():
         current_problem=problem,
         logger=SimpleNamespace(info=lambda *a, **k: None),
         fault_injected=False,
+        stage_sequence=("mitigation",),
+        _get_verifier_runtime=lambda: SimpleNamespace(prepare=lambda: calls.append("prepare")),
     )
 
     with pytest.raises(RuntimeError, match="Prometheus unavailable"):
         Conductor._inject_fault(conductor)
 
-    assert calls == ["baseline"]
+    assert calls == ["prepare", "baseline"]
     assert conductor.fault_injected is False
 
 
@@ -244,15 +249,19 @@ def test_conductor_captures_baseline_through_nested_compounded_oracles(kubectl):
     problem.mitigation_oracle = CompoundedOracle(problem, inner_oracle)
     problem.inject_fault = lambda: None
     problem.diagnosis_oracle = None
+    verifier = SimpleNamespace(prepare=Mock())
     conductor = SimpleNamespace(
         current_problem=problem,
         logger=SimpleNamespace(info=lambda *a, **k: None),
         fault_injected=False,
+        stage_sequence=("mitigation",),
+        _get_verifier_runtime=lambda: verifier,
     )
     _deploy_two(kubectl)
 
     Conductor._inject_fault(conductor)
 
+    verifier.prepare.assert_called_once_with()
     assert all(oracle.replica_count == {"web-a": 1, "web-b": 1} for oracle in child_oracles)
     kubectl.set_state(
         [_deployment("web-a"), _deployment("web-b", replicas=0, ready=0, updated=0)],
@@ -272,8 +281,10 @@ def test_conductor_tolerates_a_problem_without_a_mitigation_oracle():
         current_problem=problem,
         logger=SimpleNamespace(info=lambda *a, **k: None),
         fault_injected=False,
+        stage_sequence=("mitigation",),
+        _get_verifier_runtime=lambda: SimpleNamespace(prepare=lambda: calls.append("prepare")),
     )
 
     Conductor._inject_fault(conductor)
 
-    assert calls == ["inject"]
+    assert calls == ["prepare", "inject"]

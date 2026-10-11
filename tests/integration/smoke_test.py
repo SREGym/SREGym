@@ -18,9 +18,19 @@ POLL_INTERVAL_S = 5
 
 
 async def _run_smoke_test():
-    # 1. Create Conductor with Loki disabled (saves CI time)
     conductor = Conductor(config=ConductorConfig(deploy_loki=False))
+    try:
+        await _exercise_smoke_test(conductor)
+    finally:
+        # Embedded runs own these resources; leave no port-forward or verifier
+        # behind even if a lifecycle assertion fails.
+        if conductor._verifier_runtime is not None:
+            conductor._verifier_runtime.cancel()
+        conductor.mcp_server.stop_port_forward()
+        conductor.k8s_proxy.stop()
 
+
+async def _exercise_smoke_test(conductor):
     # 2. Select the problem
     conductor.problem_id = PROBLEM_ID
     # Keep this smoke test independent from a developer's local tasklist.yml.
@@ -53,6 +63,11 @@ async def _run_smoke_test():
     assert conductor.results["Mitigation"]["success"] is False, (
         f"Expected mitigation success=False, got: {conductor.results['Mitigation']}"
     )
+    verdict = conductor.results["Mitigation"]
+    assert verdict.get("failure_class") not in {"harness_error", "environment_error"}, verdict
+    assert verdict.get("reason") != "verifier_execution_failed", verdict
+    assert conductor._verifier_runtime.last_log_path.is_file(), "The private verifier must actually run"
+    assert not conductor.results.get("cleanup_failed"), conductor.results.get("cleanup_error")
 
 
 @pytest.mark.integration

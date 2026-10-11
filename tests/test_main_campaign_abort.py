@@ -18,6 +18,28 @@ def _load_main_module():
     return module
 
 
+@pytest.mark.parametrize("error", [RuntimeError("preflight failed"), KeyboardInterrupt()])
+def test_startup_failure_releases_launcher_resources_without_hiding_error(monkeypatch, error):
+    benchmark_main = _load_main_module()
+    cleanup = Mock()
+    monkeypatch.setattr(benchmark_main, "configure_jev", lambda _: None)
+    monkeypatch.setattr(benchmark_main, "init_logger", lambda: None)
+    monkeypatch.setattr(benchmark_main, "LAUNCHER", SimpleNamespace(cleanup_all=cleanup))
+
+    from contextlib import nullcontext
+
+    monkeypatch.setattr(benchmark_main, "managed_judge_backend", lambda *_, **__: nullcontext("agent-image"))
+
+    def fail(*_, **__):
+        raise error
+
+    monkeypatch.setattr(benchmark_main, "_run_benchmark", fail)
+    with pytest.raises(type(error)) as caught:
+        benchmark_main.main(SimpleNamespace(use_external_harness=False, force_build=False))
+    assert caught.value is error
+    cleanup.assert_called_once_with()
+
+
 def test_driver_wrapper_preserves_partial_results_and_failure(monkeypatch):
     benchmark_main = _load_main_module()
     partial_results = [

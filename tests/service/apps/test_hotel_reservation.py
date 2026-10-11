@@ -5,7 +5,8 @@ import yaml
 from sregym.service.apps.hotel_reservation import HotelReservation
 
 
-def test_standard_rate_policy_has_headroom_above_the_default_workload():
+def test_standard_rate_policy_has_headroom_above_the_default_workload(monkeypatch):
+    monkeypatch.setattr("sregym.service.apps.hotel_reservation.KubeCtl", lambda: None)
     app = HotelReservation()
     deployment_path = Path(app.k8s_deploy_path) / "rate" / "rate-deployment.yaml"
     deployment = yaml.safe_load(deployment_path.read_text())

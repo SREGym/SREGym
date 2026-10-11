@@ -61,6 +61,34 @@ ORDINARY_SECRET = {
 }
 
 
+def test_explicit_upstream_config_overrides_ambient_incluster_credentials(monkeypatch, tmp_path):
+    selected = tmp_path / "private-config"
+    loaded = []
+
+    def load(self, kubeconfig_path):
+        loaded.append(kubeconfig_path)
+        return "selected-api", 6443, "ca", "cert", "key"
+
+    def unexpected_default():
+        raise AssertionError("Explicit credentials must not select an ambient kubeconfig")
+
+    exists = os.path.exists
+    monkeypatch.setattr(
+        os.path, "exists", lambda path: True if path == KubernetesAPIProxy._INCLUSTER_TOKEN_PATH else exists(path)
+    )
+    monkeypatch.setattr(KubernetesAPIProxy, "_load_cluster_config", load)
+    monkeypatch.setattr(KubernetesAPIProxy, "_resolve_upstream_kubeconfig", staticmethod(unexpected_default))
+    proxy = KubernetesAPIProxy(upstream_kubeconfig_path=str(selected))
+    assert loaded == [str(selected)]
+    assert (proxy.api_host, proxy.api_port, proxy.ca_cert) == ("selected-api", 6443, "ca")
+
+
+@pytest.mark.parametrize("path", ["", "   "])
+def test_empty_explicit_upstream_config_cannot_fall_back_to_ambient_credentials(path):
+    with pytest.raises(ValueError, match="must not be empty"):
+        KubernetesAPIProxy(upstream_kubeconfig_path=path)
+
+
 class FakeResponse:
     def __init__(
         self,

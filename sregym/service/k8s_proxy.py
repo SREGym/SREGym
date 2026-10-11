@@ -509,7 +509,10 @@ class KubernetesAPIProxy:
         *,
         restrict_network_access: bool = False,
         protect_workload_boundary: bool = False,
+        upstream_kubeconfig_path: str | None = None,
     ):
+        if upstream_kubeconfig_path is not None and not os.fspath(upstream_kubeconfig_path).strip():
+            raise ValueError("Explicit upstream kubeconfig must not be empty")
         self.hidden_namespaces: set[str] = (
             hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES.copy()
         ) | {NODE_MAINTENANCE_NAMESPACE}
@@ -531,7 +534,7 @@ class KubernetesAPIProxy:
         self._agent_kubeconfig_path: str | None = None
         self._server_cert_pem: str | None = None
 
-        if os.path.exists(self._INCLUSTER_TOKEN_PATH):
+        if upstream_kubeconfig_path is None and os.path.exists(self._INCLUSTER_TOKEN_PATH):
             # Running inside a Kubernetes pod — use ServiceAccount credentials
             logger.info("Detected in-cluster environment; using ServiceAccount token for upstream auth")
             with open(self._INCLUSTER_TOKEN_PATH) as f:
@@ -545,7 +548,11 @@ class KubernetesAPIProxy:
         else:
             # Running outside the cluster — load from upstream kubeconfig,
             # skipping any proxy-generated sregym-agent-kubeconfig-* files.
-            default_kubeconfig = self._resolve_upstream_kubeconfig()
+            default_kubeconfig = (
+                os.fspath(upstream_kubeconfig_path)
+                if upstream_kubeconfig_path is not None
+                else self._resolve_upstream_kubeconfig()
+            )
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
                 kubeconfig_path=default_kubeconfig
             )

@@ -25,6 +25,10 @@ WORKDIR /opt/sregym
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
+# The standard launcher supplies this source-only context and its hash manifest.
+# Keeping it separate preserves the regular DinD checkout while allowing the
+# nested verifier image to build without shipping Git metadata into the runtime.
+COPY --from=verifier_sources / /opt/sregym/
 RUN test -f SREGym-applications/README.md && uv sync --frozen --no-dev --no-build-isolation \
     && chmod +x docker/dind/entrypoint.sh docker/dind/smoke.sh
 

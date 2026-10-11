@@ -18,6 +18,7 @@ from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop im
 )
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.paths import TARGET_MICROSERVICES
+from sregym.service.verifier_runtime import VerifierRuntime
 
 NAMESPACE = "astronomy-shop"
 DEPLOYMENT = "frontend-proxy"
@@ -163,16 +164,18 @@ def test_problem_wires_hosts_mitigation_oracle_and_probe_method(monkeypatch):
 def test_lifecycle_against_a_live_cluster():
     """inject -> probe fails -> oracle fails -> recover -> probe passes -> oracle passes."""
     problem = StaleHostAliasesDNSPoisoningAstronomyShop()
-    problem.app.deploy()
-    problem.kubectl.wait_for_ready(problem.namespace)
-    problem.mitigation_oracle.capture_baseline()
-
+    verifier = VerifierRuntime(kubeconfig_path=_KUBECONFIG, timeout_seconds=600)
     hosts_oracle = problem.hosts_mitigation_oracle
 
     try:
+        verifier.prepare()
+        problem.app.deploy()
+        problem.kubectl.wait_for_ready(problem.namespace)
+        problem.mitigation_oracle.capture_baseline()
         # Pre-injection: traffic must work and oracle must pass.
         assert hosts_oracle._run_product_probe(), "pre-injection probe must succeed"
-        assert problem.mitigation_oracle.evaluate()["success"] is True, "healthy cluster should pass"
+        healthy = verifier.evaluate(problem.mitigation_oracle)
+        assert healthy["success"] is True, "healthy cluster should pass"
 
         # Inject the fault.
         problem.inject_fault()
@@ -213,7 +216,8 @@ def test_lifecycle_against_a_live_cluster():
 
         # Post-injection: carts must disagree even though both routes are healthy.
         assert not hosts_oracle._run_product_probe(), "post-injection probe must fail"
-        assert problem.mitigation_oracle.evaluate()["success"] is False, "the oracle must fail while the fault is live"
+        injected = verifier.evaluate(problem.mitigation_oracle)
+        assert injected["success"] is False, "the oracle must fail while the fault is live"
 
         # Recover.
         problem.recover_fault()
@@ -222,8 +226,8 @@ def test_lifecycle_against_a_live_cluster():
 
         # Post-recovery: traffic must work and oracle must pass.
         assert hosts_oracle._run_product_probe(), "post-recovery probe must succeed"
-        assert problem.mitigation_oracle.evaluate()["success"] is True, (
-            "the oracle must pass once the override is removed"
-        )
+        recovered = verifier.evaluate(problem.mitigation_oracle)
+        assert recovered["success"] is True, "the oracle must pass once the override is removed"
     finally:
+        verifier.cancel()
         problem.app.cleanup()

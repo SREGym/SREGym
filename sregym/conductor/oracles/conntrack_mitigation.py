@@ -1,11 +1,18 @@
 import contextlib
+import os
 import subprocess
 import time
+import uuid
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.service.agent_visibility_policy import (
+    NODE_MAINTENANCE_LABEL,
+    NODE_MAINTENANCE_ROLE,
+    VERIFIER_PROBE_NAMESPACE,
+)
 
 CONNTRACK_CMD = "cat /proc/sys/net/netfilter/nf_conntrack_count; cat /proc/sys/net/netfilter/nf_conntrack_max"
 CONNTRACK_MAX_PATH = "/proc/sys/net/netfilter/nf_conntrack_max"
@@ -52,6 +59,11 @@ def _parse_conntrack_usage(node_name: str, output: str) -> tuple[int, int]:
 
 
 def _run_node_check_pod(kubectl, node_name: str, namespace: str, command: str, *, privileged: bool = False) -> str:
+    if os.environ.get("SREGYM_VERIFIER_CONTAINER") == "1":
+        namespace = VERIFIER_PROBE_NAMESPACE
+        kubectl.exec_command_checked(
+            f"kubectl create namespace {namespace} --dry-run=client -o yaml | kubectl apply -f -"
+        )
     core_v1 = getattr(kubectl, "core_v1_api", client.CoreV1Api())
     pod_name = f"node-healthcheck-{int(time.time() * 1000)}"
     container = {
@@ -134,7 +146,7 @@ class ConntrackMitigationOracle(MitigationOracle):
         return self.problem.select_worker_nodes()[0]
 
     def _frontend_probe_succeeds(self, node_name: str) -> bool:
-        pod_name = f"service-healthcheck-{int(time.time() * 1000)}"
+        pod_name = f"service-healthcheck-{uuid.uuid4().hex}"
         script = (
             f"ok=0; fail=0; for i in $(seq 1 {self.probe_attempts}); do "
             "wget -q -T 2 -O /dev/null http://frontend:5000/ && ok=$((ok+1)) || fail=$((fail+1)); "
@@ -144,7 +156,7 @@ class ConntrackMitigationOracle(MitigationOracle):
             "metadata": {
                 "name": pod_name,
                 "namespace": self.problem.namespace,
-                "labels": {"app": "service-healthcheck"},
+                "labels": {"app": "service-healthcheck", NODE_MAINTENANCE_LABEL: NODE_MAINTENANCE_ROLE},
             },
             "spec": {
                 "restartPolicy": "Never",
@@ -153,8 +165,10 @@ class ConntrackMitigationOracle(MitigationOracle):
                 "containers": [{"name": "probe", "image": "busybox:1.36", "command": ["sh", "-c", script]}],
             },
         }
+        created = False
         try:
             self.core_v1.create_namespaced_pod(self.problem.namespace, pod)
+            created = True
             phase = self._wait_for_probe_pod(pod_name)
             logs = self.core_v1.read_namespaced_pod_log(pod_name, self.problem.namespace)
             print(logs.strip())
@@ -162,8 +176,9 @@ class ConntrackMitigationOracle(MitigationOracle):
         except ApiException:
             return False
         finally:
-            with contextlib.suppress(ApiException):
-                self.core_v1.delete_namespaced_pod(pod_name, self.problem.namespace, grace_period_seconds=0)
+            if created:
+                with contextlib.suppress(ApiException):
+                    self.core_v1.delete_namespaced_pod(pod_name, self.problem.namespace, grace_period_seconds=0)
 
     def _wait_for_probe_pod(self, pod_name: str, timeout: int = 60) -> str:
         deadline = time.monotonic() + timeout

@@ -5,6 +5,12 @@ import pytest
 from sregym.service.kubectl import KubeCtl
 
 
+@pytest.fixture(autouse=True)
+def isolated_kubernetes_bootstrap(monkeypatch):
+    # These tests exercise subprocess error handling, not cluster credentials.
+    monkeypatch.setattr("sregym.service.kubectl.config.load_kube_config", lambda: None)
+
+
 def test_checked_command_returns_stdout(monkeypatch):
     completed = subprocess.CompletedProcess(args="kubectl version", returncode=0, stdout=b"ok\n", stderr=b"")
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: completed)

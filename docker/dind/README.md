@@ -63,6 +63,14 @@ Credential files must stay outside the image. Host login directories are not
 automatically mounted. The image build excludes common secret and output paths;
 review your checkout for other private files before building.
 
+The build launcher also supplies the required `verifier_sources` named BuildKit
+context. It contains only allowlisted tracked verifier source, its explicit
+implementation files, and a SHA-256 manifest. The runtime uses this manifest to
+build its separate grader without Git metadata, rejecting missing or changed
+packaged files. Use the launcher when rebuilding the DinD image; invoking its
+Dockerfile without that context fails during the image build. Agent operation
+files in the ordinary DinD build context keep their existing behavior.
+
 Results and daemon logs survive container removal in `results/dind/<run-name>/`.
 Set `--output /absolute/path` to change this; always use a distinct directory for
 each concurrent run. Files are written by container root. Docker data uses a

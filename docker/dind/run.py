@@ -3,7 +3,9 @@
 
 import argparse
 import os
+import runpy
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -93,20 +95,31 @@ def main():
     if args.action == "build":
         if not (REPO / "SREGym-applications" / "README.md").is_file():
             raise SystemExit("Initialize applications first: git submodule update --init --recursive")
-        # BuildKit is required for the Dockerfile-specific ignore file.
-        command = [
-            "docker",
-            "buildx",
-            "build",
-            "--load",
-            "-t",
-            args.image,
-            "-f",
-            str(REPO / "docker/dind/Dockerfile"),
-            str(REPO),
-        ]
+        # BuildKit already provides the Dockerfile-specific ignore file. Supply
+        # a separate trusted context so the Git-less runtime can build graders.
+        helper = runpy.run_path(str(REPO / "sregym/service/verifier_sources.py"))
+        with tempfile.TemporaryDirectory(prefix="sregym-verifier-sources-") as directory:
+            helper["write_source_context"](REPO, Path(directory))
+            command = [
+                "docker",
+                "buildx",
+                "build",
+                "--load",
+                "--build-context",
+                f"verifier_sources={directory}",
+                "-t",
+                args.image,
+                "-f",
+                str(REPO / "docker/dind/Dockerfile"),
+                str(REPO),
+            ]
+            return call_docker(command)
     else:
         command = run_command(args)
+    return call_docker(command)
+
+
+def call_docker(command):
     try:
         return subprocess.call(command)
     except FileNotFoundError:
