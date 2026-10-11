@@ -5,6 +5,7 @@ import socket
 import ssl
 import threading
 import time
+import urllib.parse
 from datetime import timedelta
 
 import pytest
@@ -14,6 +15,10 @@ from kubernetes import config
 from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
     HELM_RELEASE_SECRET_TYPE,
+    HIDDEN_LABELS,
+    HIDDEN_NAMESPACES,
+    MCP_CONTROL_NAMESPACE,
+    VERIFIER_PROBE_NAMESPACE,
     filter_resource_list,
     is_helm_release_secret,
 )
@@ -89,6 +94,9 @@ class FakeHTTPSConnection:
         self.sock = type(self).sock
 
     def request(self, method: str, path: str, body=None, headers=None):
+        if path in self.responses:
+            # Object lookups use a separate connection from upgraded streams.
+            self.sock = None
         self.path = path
         self.requests.append((method, path, headers or {}))
 
@@ -176,6 +184,266 @@ def test_helm_release_detection_does_not_depend_on_labels():
 
     assert is_helm_release_secret(secret)
     assert not is_helm_release_secret(ORDINARY_SECRET)
+
+
+@pytest.mark.parametrize("filtered", [False, True])
+@pytest.mark.parametrize(
+    "method,suffix,body",
+    [
+        ("GET", "", None),
+        ("GET", "/log", None),
+        ("POST", "/exec?command=sh", None),
+        ("POST", "/attach", None),
+        ("DELETE", "", None),
+        ("PATCH", "", b'{"metadata":{"labels":{"operator.internal/role":null}}}'),
+        ("PUT", "", b'{"metadata":{"name":"maintenance"},"spec":{"containers":[]}}'),
+    ],
+)
+def test_private_node_helper_cannot_be_entered_read_deleted_or_relabelled(proxy, filtered, method, suffix, body):
+    proxy.restrict_network_access = filtered
+    # The fixture starts its handler before this setting changes; restart it.
+    proxy.stop()
+    proxy.start()
+    path = "/api/v1/namespaces/astronomy-shop/pods/maintenance"
+    helper = {
+        "kind": "Pod",
+        "metadata": {"name": "maintenance", "labels": {"operator.internal/role": "node-maintenance"}},
+        "spec": {
+            "containers": [{"name": "gc", "securityContext": {"privileged": True}}],
+            "volumes": [{"name": "host", "hostPath": {"path": "/"}}],
+        },
+    }
+    FakeHTTPSConnection.responses[path] = FakeResponse(json.dumps(helper).encode())
+    status, _, _ = request(proxy, path + suffix, method, headers={"Content-Type": "application/json"}, body=body)
+    assert status == 403
+    assert FakeHTTPSConnection.requests
+    assert all(
+        upstream_method == "GET" and upstream_path == path
+        for upstream_method, upstream_path, _ in FakeHTTPSConnection.requests
+    )
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_collection_delete_cannot_remove_private_helpers_but_can_remove_application_pods(proxy, private):
+    path = "/api/v1/namespaces/astronomy-shop/pods"
+    pod = {"kind": "Pod", "metadata": {"name": "frontend"}}
+    if private:
+        pod["metadata"]["labels"] = {"operator.internal/role": "node-maintenance"}
+    FakeHTTPSConnection.responses[path] = FakeResponse(json.dumps({"items": [pod]}).encode())
+    status, _, _ = request(proxy, path, "DELETE")
+    assert status == (403 if private else 200)
+    assert any(method == "DELETE" for method, _, _ in FakeHTTPSConnection.requests) is (not private)
+
+
+@pytest.mark.parametrize("method", ["GET", "PATCH", "DELETE"])
+def test_ordinary_application_pod_remains_accessible(proxy, method):
+    path = "/api/v1/namespaces/astronomy-shop/pods/frontend"
+    FakeHTTPSConnection.responses[path] = FakeResponse(
+        json.dumps({"kind": "Pod", "metadata": {"name": "frontend"}, "spec": {"containers": []}}).encode()
+    )
+    body = b'{"metadata":{"annotations":{"operator-note":"repaired"}}}' if method == "PATCH" else None
+    status, _, _ = request(proxy, path, method, headers={"Content-Type": "application/json"}, body=body)
+    assert status == 200
+    assert any(
+        upstream_method == method and upstream_path == path
+        for upstream_method, upstream_path, _ in FakeHTTPSConnection.requests
+    )
+
+
+@pytest.mark.parametrize("secure", [False, True])
+def test_workload_privilege_protection_is_independent_of_open_internet(proxy, secure):
+    proxy.stop()
+    proxy.protect_workload_boundary = secure
+    proxy.start()
+    pod = {"kind": "Pod", "spec": {"containers": [{"name": "app", "securityContext": {"privileged": True}}]}}
+    status, _, _ = request(
+        proxy,
+        "/api/v1/namespaces/default/pods",
+        "POST",
+        headers={"Content-Type": "application/json"},
+        body=json.dumps(pod).encode(),
+    )
+    assert proxy.restrict_network_access is False
+    assert status == (403 if secure else 200)
+    assert any(method == "POST" for method, _, _ in FakeHTTPSConnection.requests) is (not secure)
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ({"spec": {"containers": [{"name": "app", "command": ["replacement"]}]}}, "network_escape"),
+        ({"spec": {"hostNetwork": False}}, None),
+    ],
+)
+def test_secure_patch_checks_merged_privileges_and_permits_removing_host_access(body, expected):
+    current = {"kind": "Pod", "spec": {"hostNetwork": True, "containers": [{"name": "app"}]}}
+    assert (
+        _inspect_workload_request(
+            "/api/v1/namespaces/default/pods/app",
+            "PATCH",
+            json.dumps(body).encode(),
+            "application/merge-patch+json",
+            current=current,
+            restrict_network_access=False,
+            protect_workload_boundary=True,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("upstream_status", [403, 500])
+def test_node_helper_policy_lookup_failure_cannot_forward_agent_mutation(proxy, upstream_status):
+    path = "/api/v1/namespaces/default/pods/maintenance"
+    FakeHTTPSConnection.responses[path] = FakeResponse(b"{}", status=upstream_status)
+    status, _, _ = request(
+        proxy, path, "PATCH", headers={"Content-Type": "application/json"}, body=b'{"metadata":{"labels":{}}}'
+    )
+    assert status == 502
+    assert all(method == "GET" for method, _, _ in FakeHTTPSConnection.requests)
+
+
+@pytest.mark.parametrize(
+    "rootless,explicit_env,expected", [(False, False, False), (True, False, True), (False, True, True)]
+)
+def test_proxy_selects_workload_boundary_without_changing_internet_policy(
+    monkeypatch, rootless, explicit_env, expected
+):
+    monkeypatch.delenv("SREGYM_ROOTLESS_WORKLOAD", raising=False)
+    monkeypatch.delenv("PROTECT_WORKLOAD_BOUNDARY", raising=False)
+    if rootless:
+        monkeypatch.setenv("SREGYM_ROOTLESS_WORKLOAD", "1")
+    if explicit_env:
+        monkeypatch.setenv("PROTECT_WORKLOAD_BOUNDARY", "true")
+    monkeypatch.setattr(KubernetesAPIProxy, "_INCLUSTER_TOKEN_PATH", "/nonexistent-synthetic-token")
+    monkeypatch.setattr(KubernetesAPIProxy, "_resolve_upstream_kubeconfig", lambda self: "/synthetic-kubeconfig")
+    monkeypatch.setattr(
+        KubernetesAPIProxy, "_load_cluster_config", lambda self, **kwargs: ("kubernetes.example", 443, None, None, None)
+    )
+    instance = KubernetesAPIProxy(restrict_network_access=False)
+    assert instance.protect_workload_boundary is expected
+    assert instance.restrict_network_access is False
+
+
+@pytest.mark.parametrize("content_type", ["application/strategic-merge-patch+json", "application/apply-patch+yaml"])
+def test_secure_patch_cannot_hide_privilege_retained_in_named_container_lists(content_type):
+    current = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {"name": "app", "image": "old", "securityContext": {"privileged": True}},
+                    ]
+                }
+            }
+        }
+    }
+    replacement = {"spec": {"template": {"spec": {"containers": [{"name": "app", "image": "new"}]}}}}
+    assert (
+        _inspect_workload_request(
+            "/apis/apps/v1/namespaces/default/deployments/app",
+            "PATCH",
+            json.dumps(replacement).encode(),
+            content_type,
+            current=current,
+            restrict_network_access=False,
+            protect_workload_boundary=True,
+        )
+        == "network_escape"
+    )
+    safe_current = {"spec": {"template": {"spec": {"containers": [{"name": "app", "image": "old"}]}}}}
+    assert (
+        _inspect_workload_request(
+            "/apis/apps/v1/namespaces/default/deployments/app",
+            "PATCH",
+            json.dumps(replacement).encode(),
+            content_type,
+            current=safe_current,
+            restrict_network_access=False,
+            protect_workload_boundary=True,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("suffix", ["/exec", "/attach"])
+def test_missing_pod_cannot_be_replaced_between_exec_inspection_and_forwarding(proxy, suffix):
+    path = "/api/v1/namespaces/default/pods/missing"
+    FakeHTTPSConnection.responses[path] = FakeResponse(b"{}", status=404)
+    status, _, _ = request(proxy, path + suffix, "POST")
+    assert status == 404
+    assert [method for method, _, _ in FakeHTTPSConnection.requests] == ["GET"]
+
+
+def test_reserved_node_maintenance_namespace_is_denied_without_upstream_lookup(proxy):
+    status, _, _ = request(proxy, "/api/v1/namespaces/platform-maintenance/pods/future-helper/exec", "POST")
+    assert status == 404
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_collection_delete_adds_server_side_private_helper_exclusions(proxy):
+    path = "/api/v1/namespaces/default/pods?labelSelector=app%3Dfrontend&dryRun=All"
+    FakeHTTPSConnection.responses[path] = FakeResponse(b'{"items":[]}')
+    status, _, _ = request(proxy, path, "DELETE")
+    assert status == 200
+    forwarded = [entry[1] for entry in FakeHTTPSConnection.requests if entry[0] == "DELETE"]
+    assert len(forwarded) == 1
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(forwarded[0]).query)
+    assert query["dryRun"] == ["All"]
+    assert "app=frontend" in query["labelSelector"][0]
+    assert "operator.internal/role notin (node-maintenance)" in query["labelSelector"][0]
+
+
+@pytest.mark.parametrize("method,suffix", [("POST", "/exec?command=true"), ("PATCH", "")])
+def test_protected_open_network_allows_ordinary_pod_exec_and_image_repair(proxy, method, suffix):
+    proxy.stop()
+    proxy.protect_workload_boundary = True
+    proxy.start()
+    path = "/api/v1/namespaces/default/pods/frontend"
+    FakeHTTPSConnection.responses[path] = FakeResponse(
+        json.dumps(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "frontend", "namespace": "default"},
+                "spec": {"containers": [{"name": "app", "image": "registry.example/app:v1"}]},
+            }
+        ).encode()
+    )
+    body = b'{"spec":{"containers":[{"name":"app","image":"registry.example/app:v2"}]}}' if method == "PATCH" else None
+    status, _, _ = request(
+        proxy,
+        path + suffix,
+        method,
+        headers={"Content-Type": "application/strategic-merge-patch+json"},
+        body=body,
+    )
+    assert status == 200
+    assert any(
+        upstream_method == method and upstream_path == path + suffix
+        for upstream_method, upstream_path, _ in FakeHTTPSConnection.requests
+    )
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"hostPID": True},
+        {"hostIPC": True},
+        {"hostNetwork": True},
+        {"containers": [{"name": "app", "securityContext": {"privileged": True}}]},
+        {"volumes": [{"name": "host", "hostPath": {"path": "/"}}]},
+    ],
+)
+def test_protected_open_network_denies_exec_into_host_privileged_pod(proxy, settings):
+    proxy.stop()
+    proxy.protect_workload_boundary = True
+    proxy.start()
+    path = "/api/v1/namespaces/default/pods/unsafe"
+    pod = {"kind": "Pod", "metadata": {"name": "unsafe"}, "spec": settings}
+    FakeHTTPSConnection.responses[path] = FakeResponse(json.dumps(pod).encode())
+    status, _, _ = request(proxy, path + "/exec", "POST")
+    assert status == 403
+    assert [method for method, _, _ in FakeHTTPSConnection.requests] == ["GET"]
 
 
 def test_helm_release_type_is_hidden_even_with_an_unexpected_name():
@@ -746,6 +1014,16 @@ def test_streams_arrive_before_upstream_closes_and_watch_hides_resources(proxy, 
     upstream_response = http.client.HTTPResponse(upstream_reader)
     upstream_response.begin()
     FakeHTTPSConnection.response = upstream_response
+    FakeHTTPSConnection.responses["/api/v1/namespaces/default/pods/api"] = FakeResponse(
+        json.dumps(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "api", "namespace": "default"},
+                "spec": {"containers": [{"name": "app", "image": "registry.example/app:v1"}]},
+            }
+        ).encode()
+    )
     path = "/api/v1/pods?watch=true" if watch else "/api/v1/namespaces/default/pods/api/log?follow=true"
     try:
         with (
@@ -920,6 +1198,9 @@ def test_ordinary_secret_remains_accessible(proxy):
 
 @pytest.mark.parametrize("upgrade_protocol", ["websocket", "SPDY/3.1"])
 def test_protocol_upgrade_relays_buffered_and_subsequent_bytes_in_both_directions(proxy, upgrade_protocol):
+    FakeHTTPSConnection.responses["/api/v1/namespaces/default/pods/example"] = FakeResponse(
+        b'{"kind":"Pod","metadata":{"name":"example","namespace":"default"},"spec":{"containers":[{"name":"app","image":"registry.example/app:v1"}]}}'
+    )
     proxy_side, upstream_side = socket.socketpair()
     proxy_side.settimeout(2)
     upstream_side.settimeout(2)
@@ -978,7 +1259,7 @@ def test_protocol_upgrade_relays_buffered_and_subsequent_bytes_in_both_direction
             upstream_side.sendall(b"server frame")
             assert response.fp.read1(12) == b"server frame"
 
-            _, _, forwarded_headers = FakeHTTPSConnection.requests[0]
+            _, _, forwarded_headers = next(entry for entry in FakeHTTPSConnection.requests if "/exec?" in entry[1])
             assert forwarded_headers["Connection"] == "Upgrade"
             assert forwarded_headers["Upgrade"] == upgrade_protocol
             assert forwarded_headers["Sec-WebSocket-Key"] == "dGhlIHNhbXBsZSBub25jZQ=="
@@ -993,6 +1274,16 @@ def test_protocol_upgrade_relays_buffered_and_subsequent_bytes_in_both_direction
 def test_rejected_protocol_upgrade_uses_the_normal_response_path(proxy):
     response_body = b'{"kind":"Status","message":"pod not found"}'
     FakeHTTPSConnection.response = FakeResponse(response_body, status=404)
+    FakeHTTPSConnection.responses["/api/v1/namespaces/default/pods/missing"] = FakeResponse(
+        json.dumps(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "missing", "namespace": "default"},
+                "spec": {"containers": [{"name": "app", "image": "registry.example/app:v1"}]},
+            }
+        ).encode()
+    )
 
     status, headers, body = request(
         proxy,
@@ -1243,3 +1534,411 @@ def test_upstream_kubeconfig_merges_files_and_resolves_relative_certificates(mon
     assert proxy.api_port == 7443
     assert (proxy.ca_cert, proxy.client_cert, proxy.client_key) == ("test-ca", "test-cert", "test-key")
     assert proxy._bearer_token == "test-token"
+
+
+@pytest.mark.parametrize("namespace", [MCP_CONTROL_NAMESPACE, VERIFIER_PROBE_NAMESPACE])
+@pytest.mark.parametrize(
+    "method,suffix",
+    [("GET", "/pods"), ("GET", "/pods/control/log"), ("POST", "/pods/control/exec"), ("DELETE", "/pods/control")],
+)
+def test_control_services_cannot_be_read_executed_or_deleted_by_agent(proxy, namespace, method, suffix):
+    proxy.hidden_namespaces = HIDDEN_NAMESPACES.copy()
+    # The handler captures the policy at startup, as the actual server does.
+    proxy.stop()
+    proxy.start()
+    status, _, body = request(proxy, f"/api/v1/namespaces/{namespace}{suffix}", method=method)
+    assert status == 404
+    assert namespace.encode() not in body
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_control_bindings_are_private_without_changing_application_state():
+    binding = {
+        "metadata": {"name": "control-access"},
+        "roleRef": {"kind": "ClusterRole", "name": "mcp-server"},
+        "subjects": [{"kind": "ServiceAccount", "name": "mcp-server", "namespace": MCP_CONTROL_NAMESPACE}],
+    }
+    application = {
+        "metadata": {"name": "frontend", "namespace": "hotel-reservation"},
+        "spec": {"containers": [{"image": "registry.example/app:v1"}]},
+    }
+    result = filter_resource_list({"items": [binding, copy.deepcopy(application)]}, HIDDEN_NAMESPACES, HIDDEN_LABELS)
+    assert result["items"] == [application]
+
+
+def test_upstream_exception_does_not_leak_private_runner_paths(proxy, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("private runner /repo/SREGym/private-verifier-state")
+
+    monkeypatch.setattr(FakeHTTPSConnection, "request", fail)
+    status, _, body = request(proxy, "/api/v1/nodes")
+    assert status == 502
+    assert b"Upstream request failed" in body
+    assert b"SREGym" not in body and b"private-verifier-state" not in body
+
+
+@pytest.mark.parametrize("blocked", [None, "secret", "network"])
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+def test_binary_workload_is_decoded_without_persisting_before_policy_check(proxy, monkeypatch, blocked, method):
+    proxy.stop()
+    proxy.restrict_network_access = True
+    proxy.start()
+    spec = {"containers": [{"name": "web", "image": "nginx"}]}
+    if blocked == "secret":
+        spec["imagePullSecrets"] = [{"name": HELM_SECRET_NAME}]
+    elif blocked == "network":
+        spec["hostNetwork"] = True
+    decoded = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "web", "namespace": "demo", "uid": "dry-run-uid", "resourceVersion": "7"},
+        "spec": {"template": {"spec": spec}},
+    }
+    calls = []
+
+    def record_request(self, request_method, path, body=None, headers=None):
+        calls.append((request_method, path, body, headers or {}))
+
+    def getresponse(self):
+        if calls[-1][0] == "GET":
+            return FakeResponse(b'{"spec":{"template":{"spec":{"containers":[{"name":"web","image":"nginx"}]}}}}')
+        return FakeResponse(json.dumps(decoded).encode())
+
+    monkeypatch.setattr(FakeHTTPSConnection, "request", record_request)
+    monkeypatch.setattr(FakeHTTPSConnection, "getresponse", getresponse)
+    path = "/apis/apps/v1/namespaces/demo/deployments" + ("/web" if method == "PUT" else "")
+    status, _, _ = request(
+        proxy,
+        path + "?fieldManager=operator",
+        method=method,
+        headers={"Content-Type": "application/vnd.kubernetes.protobuf"},
+        body=b"k8s\x00public-fixture",
+    )
+    dry_call = calls[0]
+    assert dry_call[0] == method
+    assert dry_call[1] == path + "?fieldManager=operator&dryRun=All"
+    assert dry_call[2] == b"k8s\x00public-fixture"
+    assert dry_call[3]["Accept"] == "application/json"
+    real_calls = [call for call in calls if call[0] == method and call[1] == path + "?fieldManager=operator"]
+    if blocked:
+        assert status == 403
+        assert not real_calls
+    else:
+        assert status == 200
+        assert len(real_calls) == 1
+        _, _, body, headers = real_calls[0]
+        assert headers["Content-Type"] == "application/json"
+        assert "Content-Length" not in headers
+        forwarded = json.loads(body)
+        assert ("uid" in forwarded["metadata"]) is (method == "PUT")
+        assert ("resourceVersion" in forwarded["metadata"]) is (method == "PUT")
+
+
+@pytest.mark.parametrize(
+    "payload,content_type,status",
+    [
+        (b"not JSON", "application/json", 200),
+        (b"{}", "application/json", 200),
+        (b"[]", "application/json", 200),
+        (b"binary", "application/vnd.kubernetes.protobuf", 200),
+        (b'{"spec":{},"metadata":{}}', "application/json", 422),
+    ],
+)
+def test_binary_workload_decoder_failure_never_submits_real_mutation(proxy, payload, content_type, status):
+    FakeHTTPSConnection.response = FakeResponse(payload, content_type=content_type, status=status)
+    result, _, _ = request(
+        proxy,
+        "/apis/apps/v1/namespaces/demo/deployments",
+        method="POST",
+        headers={"Content-Type": "application/vnd.kubernetes.protobuf"},
+        body=b"k8s\x00public-fixture",
+    )
+    assert result == 422
+    assert len(FakeHTTPSConnection.requests) == 1
+    assert FakeHTTPSConnection.requests[0][1].endswith("?dryRun=All")
+
+
+@pytest.mark.parametrize("status", [403, 409, 422, 429, 500])
+def test_binary_dry_run_rejection_preserves_status_without_private_body(proxy, status):
+    FakeHTTPSConnection.response = FakeResponse(
+        b'{"kind":"Status","message":"system:serviceaccount:sregym:mcp-server private detail"}', status=status
+    )
+    result, _, body = request(
+        proxy,
+        "/api/v1/namespaces/demo/pods/pod",
+        method="PUT",
+        headers={"Content-Type": "application/vnd.kubernetes.protobuf"},
+        body=b"k8s\x00public-fixture",
+    )
+    assert result == status
+    assert b"sregym" not in body and b"private detail" not in body
+    assert len(FakeHTTPSConnection.requests) == 1
+    assert FakeHTTPSConnection.requests[0][1].endswith("?dryRun=All")
+
+
+@pytest.fixture
+def control_proxy(proxy):
+    proxy.stop()
+    proxy.hidden_namespaces = HIDDEN_NAMESPACES.copy()
+    proxy.hidden_labels = HIDDEN_LABELS.copy()
+    proxy.start()
+    return proxy
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("root_mode", ["absent", "generated", "explicit"])
+def test_binary_job_preserves_user_labels_and_manual_selectors(proxy, monkeypatch, method, manual, dry_run, root_mode):
+    labels = {
+        "team": "blue",
+        "controller-uid": "temporary-uid",
+        "batch.kubernetes.io/controller-uid": "temporary-uid",
+        "job-name": "job",
+        "batch.kubernetes.io/job-name": "job",
+    }
+    decoded = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {"name": "job", "namespace": "demo", "uid": "temporary-uid", "resourceVersion": "7"},
+        "spec": {
+            "manualSelector": manual,
+            "selector": {
+                "matchLabels": dict(labels) if manual else {"batch.kubernetes.io/controller-uid": "temporary-uid"}
+            },
+            "template": {
+                "metadata": {"labels": dict(labels)},
+                "spec": {"restartPolicy": "Never", "containers": [{"name": "work", "image": "busybox"}]},
+            },
+        },
+    }
+    root_labels = (
+        dict(labels) if root_mode == "generated" else {"team": "operators", "controller-uid": "operator-value"}
+    )
+    if root_mode != "absent":
+        decoded["metadata"]["labels"] = dict(root_labels)
+    calls = []
+
+    def record_request(self, request_method, path, body=None, headers=None):
+        self.path = path
+        calls.append((request_method, path, body))
+
+    monkeypatch.setattr(FakeHTTPSConnection, "request", record_request)
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(decoded).encode())
+    path = "/apis/batch/v1/namespaces/demo/jobs" + ("/job" if method == "PUT" else "")
+    if dry_run:
+        path += "?dryRun=All"
+    status, _, _ = request(
+        proxy,
+        path,
+        method=method,
+        body=b"k8s\x00public-job-fixture",
+        headers={"Content-Type": "application/vnd.kubernetes.protobuf"},
+    )
+    assert status == 200
+    forwarded = json.loads(calls[-1][2])
+    template = forwarded["spec"]["template"]["metadata"]["labels"]
+    selector = forwarded["spec"]["selector"]["matchLabels"]
+    assert template["team"] == "blue"
+    if manual:
+        assert selector["team"] == "blue"
+    else:
+        assert "team" not in selector
+    for label in ("controller-uid", "batch.kubernetes.io/controller-uid"):
+        if method == "POST" and not manual:
+            assert label not in template and label not in selector
+        else:
+            assert template[label] == "temporary-uid"
+            if manual or label == "batch.kubernetes.io/controller-uid":
+                assert selector[label] == "temporary-uid"
+    assert ("uid" in forwarded["metadata"]) is (method == "PUT")
+    if root_mode == "absent" or (root_mode == "generated" and method == "POST" and not manual):
+        assert "labels" not in forwarded["metadata"]
+    else:
+        assert forwarded["metadata"]["labels"] == root_labels
+    assert labels["controller-uid"] == "temporary-uid"
+
+
+@pytest.mark.parametrize("resource", ["clusterroles", "clusterrolebindings"])
+@pytest.mark.parametrize("method", ["GET", "PUT", "PATCH", "DELETE"])
+def test_control_rbac_name_is_blocked_before_upstream(control_proxy, resource, method):
+    status, _, _ = request(
+        control_proxy, f"/apis/rbac.authorization.k8s.io/v1/{resource}/mcp-server", method=method, body=b"{}"
+    )
+    assert status == 404
+    assert FakeHTTPSConnection.requests == []
+
+
+@pytest.mark.parametrize(
+    "resource,kind",
+    [
+        ("roles", "Role"),
+        ("rolebindings", "RoleBinding"),
+        ("clusterroles", "ClusterRole"),
+        ("clusterrolebindings", "ClusterRoleBinding"),
+    ],
+)
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+def test_binary_application_rbac_is_inspected_and_forwarded(control_proxy, monkeypatch, resource, kind, method):
+    decoded = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": kind,
+        "metadata": {"name": "application", "uid": "temporary-uid"},
+    }
+    if resource in {"roles", "rolebindings"}:
+        decoded["metadata"]["namespace"] = "demo"
+    if kind.endswith("Binding"):
+        decoded.update(
+            {
+                "roleRef": {
+                    "kind": "ClusterRole" if kind == "ClusterRoleBinding" else "Role",
+                    "name": "application-role" if kind == "ClusterRoleBinding" else "mcp-server",
+                },
+                "subjects": [{"kind": "ServiceAccount", "name": "frontend", "namespace": "demo"}],
+            }
+        )
+    else:
+        decoded["rules"] = []
+    calls = []
+
+    def record_request(self, request_method, path, body=None, headers=None):
+        self.path = path
+        calls.append((request_method, path, body, headers))
+
+    monkeypatch.setattr(FakeHTTPSConnection, "request", record_request)
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(decoded).encode())
+    prefix = "/apis/rbac.authorization.k8s.io/v1"
+    if resource in {"roles", "rolebindings"}:
+        prefix += "/namespaces/demo"
+    path = f"{prefix}/{resource}" + ("/application" if method == "PUT" else "")
+    status, _, _ = request(
+        control_proxy,
+        path,
+        method=method,
+        body=b"k8s\x00rbac-fixture",
+        headers={"Content-Type": "application/vnd.kubernetes.protobuf"},
+    )
+    assert status == 200
+    assert calls[0][1].endswith("?dryRun=All")
+    assert calls[-1][0:2] == (method, path)
+    assert calls[-1][3]["Content-Type"] == "application/json"
+    forwarded = json.loads(calls[-1][2])
+    assert forwarded["kind"] == kind
+    assert ("uid" in forwarded["metadata"]) is (method == "PUT")
+
+
+@pytest.mark.parametrize(
+    "resource,kind", [("rolebindings", "RoleBinding"), ("clusterrolebindings", "ClusterRoleBinding")]
+)
+def test_binary_private_rbac_never_persists(control_proxy, resource, kind):
+    decoded = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": kind,
+        "metadata": {"name": "private-binding", "namespace": "demo" if kind == "RoleBinding" else ""},
+        "roleRef": {"kind": "ClusterRole", "name": "view"},
+        "subjects": [{"kind": "ServiceAccount", "name": "control", "namespace": MCP_CONTROL_NAMESPACE}],
+    }
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(decoded).encode())
+    prefix = "/apis/rbac.authorization.k8s.io/v1" + ("/namespaces/demo" if kind == "RoleBinding" else "")
+    status, _, _ = request(
+        control_proxy,
+        f"{prefix}/{resource}",
+        method="POST",
+        body=b"k8s\x00rbac-fixture",
+        headers={"Content-Type": "application/vnd.kubernetes.protobuf"},
+    )
+    assert status == 403
+    assert len(FakeHTTPSConnection.requests) == 1
+    assert FakeHTTPSConnection.requests[0][1].endswith("?dryRun=All")
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+def test_private_binding_cannot_be_relabelled_or_deleted(control_proxy, method):
+    binding = {
+        "kind": "ClusterRoleBinding",
+        "metadata": {"name": "private-binding"},
+        "roleRef": {"kind": "ClusterRole", "name": "view"},
+        "subjects": [{"kind": "ServiceAccount", "name": "control", "namespace": MCP_CONTROL_NAMESPACE}],
+    }
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(binding).encode())
+    status, _, _ = request(
+        control_proxy,
+        "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/private-binding",
+        method=method,
+        body=b'{"subjects":[]}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert status == 403
+    assert [call[0] for call in FakeHTTPSConnection.requests] == ["GET"]
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_application_rbac_mutations_remain_usable(control_proxy, method):
+    binding = {
+        "kind": "RoleBinding",
+        "metadata": {"name": "application-view", "namespace": "demo"},
+        "roleRef": {"kind": "Role", "name": "mcp-server"},
+        "subjects": [{"kind": "ServiceAccount", "name": "frontend", "namespace": "demo"}],
+    }
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(binding).encode())
+    path = "/apis/rbac.authorization.k8s.io/v1/namespaces/demo/rolebindings"
+    if method != "POST":
+        path += "/application-view"
+    status, _, _ = request(
+        control_proxy,
+        path,
+        method=method,
+        body=json.dumps(binding).encode(),
+        headers={"Content-Type": "application/json" if method != "PATCH" else "application/merge-patch+json"},
+    )
+    assert status == 200
+    assert FakeHTTPSConnection.requests[-1][0] == method
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_rbac_bulk_delete_inspects_selected_objects(control_proxy, private):
+    subject_namespace = MCP_CONTROL_NAMESPACE if private else "demo"
+    binding = {
+        "kind": "RoleBinding",
+        "metadata": {"name": "selected", "namespace": "demo"},
+        "roleRef": {"kind": "Role", "name": "application-role"},
+        "subjects": [{"kind": "ServiceAccount", "name": "frontend", "namespace": subject_namespace}],
+    }
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"items": [binding]}).encode())
+    path = "/apis/rbac.authorization.k8s.io/v1/namespaces/demo/rolebindings?labelSelector=app%3Dfrontend"
+    status, _, _ = request(control_proxy, path, method="DELETE")
+    assert status == (403 if private else 200)
+    assert FakeHTTPSConnection.requests[0][1] == path
+    assert [call[0] for call in FakeHTTPSConnection.requests] == (["GET"] if private else ["GET", "DELETE"])
+
+
+@pytest.mark.parametrize("status", [403, 500])
+def test_control_rbac_lookup_failure_blocks_mutation(control_proxy, status):
+    FakeHTTPSConnection.response = FakeResponse(b'{"kind":"Status"}', status=status)
+    result, _, _ = request(
+        control_proxy, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/application", method="PATCH", body=b"{}"
+    )
+    assert result == 502
+    assert [call[0] for call in FakeHTTPSConnection.requests] == ["GET"]
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_upstream_status_and_warning_conceal_private_identity_only(control_proxy, private):
+    message = (
+        "User system:serviceaccount:sregym:mcp-server cannot list serviceaccounts"
+        if private
+        else "Invalid field spec.image"
+    )
+    payload = json.dumps({"kind": "Status", "message": message, "code": 403}).encode()
+    FakeHTTPSConnection.response = FakeResponse(
+        payload, status=403, headers=[("Content-Type", "application/json"), ("Warning", message)]
+    )
+    status, headers, body = request(control_proxy, "/api/v1/serviceaccounts")
+    assert status == 403
+    if private:
+        assert b"sregym" not in body and b"mcp-server" not in body
+        assert "Warning" not in headers
+        assert json.loads(body)["code"] == 403
+    else:
+        assert body == payload
+        assert headers["Warning"] == message
