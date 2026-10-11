@@ -137,7 +137,7 @@ fault wait, the others 10 minutes.
 
 | Problem | Oracle agent, 3 sweeps | Why |
 |---|---|---|
-| `gc_capacity_degradation` | 1.0 in all 4 runs that got through setup; setup failed in 3 of 7 | Blueprint Hotel Reservation twice did not become ready within 30 minutes while some 30 sandboxes ran at once, and once its alerts were late |
+| `gc_capacity_degradation` | 1.0 in all 5 runs that got through setup (no-op 0.0 in all 3); setup failed in 5 of 10 | its alerts had not fired within 10 minutes 3 times, also when it ran alone; Blueprint Hotel Reservation once did not become ready while some 30 sandboxes ran at once; once the cgroup error below |
 | `astronomy_shop_product_catalog_service_failure` | 1.0, 1.0; setup failed once (5-minute wait) | passes when set up, but its alerts did not fire in time in 2 of 3 no-op runs |
 | `astronomy_shop_ad_service_failure` | 1.0 once, 0.0 twice | Locust's `HighRequestErrorRate` can keep firing for 10 minutes after recovery |
 | `astronomy_shop_ad_service_high_cpu` | 1.0, 0.0, setup failed once | its alerts are slow to fire and to clear |
