@@ -4,7 +4,9 @@ from pathlib import Path
 
 from sregym.service.apps.components.postgres import PostgresApplication
 
-MATTERMOST_IMAGE = "mattermost/mattermost-team-edition:11.7.0"
+MATTERMOST_IMAGE = (
+    "ghcr.io/sregym/mattermost:11.7.0@sha256:82b758dbf24caecc7690097fa7b6a33216b2e9e4e5527fbf67033009969f4875"
+)
 
 
 class Mattermost(PostgresApplication):
