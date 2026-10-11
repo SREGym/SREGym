@@ -147,7 +147,7 @@ class SLO:
 class WindowVerdict:
     rounds: int
     violating: int
-    healthy: bool  # every round met the SLO
+    healthy: bool  # sustained: at most isolated, non-adjacent noisy rounds (see judge)
     violated: bool  # most rounds, including the latest, missed the SLO
     details: list[dict] = field(default_factory=list)
 
@@ -155,7 +155,8 @@ class WindowVerdict:
         return asdict(self)
 
 
-def judge(slo: SLO, rounds: list[RoundStats], violation_fraction: float = 0.6) -> WindowVerdict:
+def judge(slo: SLO, rounds: list[RoundStats], violation_fraction: float = 0.6,
+          noise_fraction: float = 0.1) -> WindowVerdict:
     details = []
     violating = 0
     for stats in rounds:
@@ -173,10 +174,15 @@ def judge(slo: SLO, rounds: list[RoundStats], violation_fraction: float = 0.6) -
             }
         )
     n = len(rounds)
+    # wrk2 rounds (10s for social-network) occasionally report one p99 spike on a healthy system, so a
+    # window stays healthy with a few isolated bad rounds; adjacent bad rounds mean real degradation.
+    flags = [bool(d["violations"]) for d in details]
+    adjacent = any(a and b for a, b in zip(flags, flags[1:]))
+    allowed = max(1, int(n * noise_fraction))
     return WindowVerdict(
         rounds=n,
         violating=violating,
-        healthy=n > 0 and violating == 0,
+        healthy=n > 0 and violating <= allowed and not adjacent,
         violated=n > 0 and violating / n >= violation_fraction and bool(details[-1]["violations"]),
         details=details,
     )

@@ -51,6 +51,10 @@ def test_judge_flags_errors_latency_and_throughput():
     verdict = judge(slo, [healthy, stats, stats])
     assert verdict.violated and not verdict.healthy and verdict.violating == 2
     assert judge(slo, [healthy, healthy]).healthy
+    # One isolated spike in a sustained window is wrk2 noise; adjacent or frequent ones are not.
+    assert judge(slo, [healthy] * 8 + [stats] + [healthy] * 8).healthy
+    assert not judge(slo, [healthy] * 8 + [stats, stats] + [healthy] * 8).healthy
+    assert not judge(slo, [healthy, stats, healthy, stats, healthy, healthy]).healthy
 
 
 def test_incomplete_round_is_ignored():

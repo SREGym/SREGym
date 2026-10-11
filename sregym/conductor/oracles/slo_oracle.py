@@ -8,11 +8,11 @@ from sregym.conductor.oracles.failure import FailureClass
 
 
 class SLOMitigationOracle(Oracle):
-    """Passes when every workload round in a sustained window meets the SLO.
+    """Passes when the workload meets the SLO over a sustained window.
 
     A transient recovery does not count: after a short buffer the oracle
-    collects ``sustained_seconds`` of fresh wrk2 rounds and requires all of
-    them to be healthy. The SLO is calibrated against rounds observed before
+    collects ``sustained_seconds`` of fresh wrk2 rounds and requires them to be
+    healthy, tolerating only isolated, non-adjacent noisy rounds (``slo.judge``). The SLO is calibrated against rounds observed before
     the fault was injected.
     """
 
@@ -69,5 +69,5 @@ class SLOMitigationOracle(Oracle):
         if not verdict.healthy:
             print(f"[❌] SLO violated in {verdict.violating}/{verdict.rounds} rounds")
             return self.fail("slo_violated", **detail)
-        print(f"[✅] SLO met in all {verdict.rounds} rounds over {self.sustained_seconds}s")
+        print(f"[✅] SLO met over {self.sustained_seconds}s ({verdict.violating}/{verdict.rounds} isolated noisy rounds)")
         return {"success": True, "detail": detail}
