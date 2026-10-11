@@ -175,6 +175,35 @@ def test_unrecognized_session_protocol_fails_instead_of_renaming_it():
         BUILDER["_public_session_transport"]('headers = {"sregym_ssid": session_id}')
 
 
+@pytest.mark.parametrize("header", ["sregym_ssid", "x-session-id"])
+def test_session_rewrite_replaces_stale_query_for_both_client_protocols(header):
+    from yarl import URL
+
+    text = f'transport = SSETransport(url=url, headers={{{header!r}: session_id, "Other": "kept"}})'
+    output = BUILDER["_public_session_transport"](text)
+    tree = ast.parse(output)
+    tree.body = [node for node in tree.body if not isinstance(node, ast.ImportFrom)]
+    helper = {}
+    exec(BUILDER["SESSION_HELPER"], helper)
+    namespace = {
+        "url": "http://localhost/sse?session_id=old&existing=#fragment",
+        "session_id": "one +/?&",
+        "SSETransport": lambda **kwargs: kwargs,
+        "_public_session_url": helper["session_url"],
+    }
+    exec(compile(tree, "generated", "exec"), namespace)
+    transport = namespace["transport"]
+    assert URL(transport["url"]).query.getall("session_id") == ["one +/?&"]
+    assert URL(transport["url"]).query["existing"] == ""
+    assert URL(transport["url"]).fragment == "fragment"
+    assert transport["headers"] == {"Other": "kept"}
+
+
+def test_neutral_non_sse_session_header_is_preserved():
+    text = 'headers = {"x-session-id": session_id}'
+    assert BUILDER["_public_session_transport"](text) == text
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows directory junction contract")
 def test_runtime_context_rejects_windows_junction_ancestry(tmp_path):
     outside = tmp_path / "outside"
