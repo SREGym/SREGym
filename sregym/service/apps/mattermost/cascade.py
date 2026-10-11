@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from sregym.service.apps.mattermost.application import Mattermost
+from sregym.service.apps.mattermost.runtime.capacity_scaler import SCALE_IN_STABILIZATION_SECONDS
 
 CONTROL_VOLUME = "gateway-control"
 #: The service's documented capacity floor. Below this a single rollout or node
@@ -43,6 +44,7 @@ class MattermostCascade(Mattermost):
     capacity_floor = CAPACITY_FLOOR
     gateway_workers = GATEWAY_WORKERS
     scaler_interval = SCALER_INTERVAL
+    scaler_stabilization_seconds = SCALE_IN_STABILIZATION_SECONDS
 
     def get_app_json(self):
         result = super().get_app_json()

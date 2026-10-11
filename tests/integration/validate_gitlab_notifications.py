@@ -1,7 +1,7 @@
 """Admit real GitLab mail recovery, including irreversible-effect negatives.
 
-Run independently of model campaigns, after installing CloudNativePG. The SMTP
-provider is local; all customer identities and message bodies are synthetic.
+Run independently of model campaigns. App deployment installs CloudNativePG
+when needed. The local SMTP provider uses synthetic customer identities and mail.
 """
 
 import argparse

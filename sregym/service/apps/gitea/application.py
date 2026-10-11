@@ -338,6 +338,8 @@ class Gitea(Application):
         return result
 
     def create_workload(self, rate=10, **kwargs):
+        kwargs.setdefault("dist", "fixed")
+        kwargs.setdefault("duration", 30)
         self.wrk = Wrk2WorkloadManager(
             wrk=Wrk2(rate=rate, namespace=self.namespace, **kwargs),
             payload_script=Path(__file__).with_name("workload.lua"),

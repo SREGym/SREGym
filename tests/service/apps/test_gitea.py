@@ -65,6 +65,21 @@ def test_native_git_probe_rejects_missing_acknowledged_content():
         app.check_workflow()
 
 
+def test_workload_defaults_apply_the_configured_rate_and_allow_overrides(monkeypatch):
+    from sregym.service.apps.gitea import application
+
+    wrk = Mock()
+    monkeypatch.setattr(application, "Wrk2", wrk)
+    monkeypatch.setattr(application, "Wrk2WorkloadManager", Mock())
+    app = Gitea()
+
+    app.create_workload()
+    wrk.assert_called_with(rate=10, namespace="gitea", dist="fixed", duration=30)
+
+    app.create_workload(rate=25, dist="exp", duration=60, connections=4)
+    wrk.assert_called_with(rate=25, namespace="gitea", dist="exp", duration=60, connections=4)
+
+
 def test_probe_and_verification_use_the_same_issue_and_repository_path(monkeypatch, capsys):
     issue = {"number": 1, "title": "change-abc123"}
     api = Mock(return_value=issue)

@@ -29,7 +29,7 @@ state = {"busy": 0, "completed": 0, "rejected": 0, "upstream_errors": 0, "latenc
 #: Sampled on a fixed cadence rather than computed per reader. A reader-consumed
 #: window would mean the capacity automation and an operator reading /metrics at
 #: the same moment each saw a truncated interval, or no value at all.
-cpu = {"percent": 0.0}
+cpu = {}
 
 
 def control(name, default):
@@ -82,7 +82,8 @@ def snapshot():
     if latencies:
         report["upstream_p50_ms"] = round(latencies[len(latencies) // 2] * 1000, 1)
         report["upstream_max_ms"] = round(latencies[-1] * 1000, 1)
-    report["cpu_percent"] = cpu["percent"]
+    if "percent" in cpu:
+        report["cpu_percent"] = cpu["percent"]
     return report
 
 

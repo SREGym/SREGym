@@ -39,8 +39,9 @@ class MattermostCascadeOracle(SaaSOracle):
 
     @property
     def stability_seconds(self):
-        """Long enough for the automation to act at least twice."""
-        return 2 * self.problem.app.scaler_interval + 10
+        """Include scale-in stabilization and subsequent decision intervals."""
+        app = self.problem.app
+        return app.scaler_stabilization_seconds + 2 * app.scaler_interval + 10
 
     @property
     def readiness_grace_seconds(self):

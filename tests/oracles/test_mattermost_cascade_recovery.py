@@ -17,7 +17,11 @@ from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mattermost_cascade_recovery import MattermostCascadeOracle, latency_budget
 from sregym.conductor.oracles.saas import SaaSOracle
 from sregym.service.apps.mattermost.cascade import MattermostCascade
-from sregym.service.apps.mattermost.runtime.capacity_scaler import DEFAULT_POLICY, decide, observe
+from sregym.service.apps.mattermost.runtime.capacity_scaler import (
+    DEFAULT_POLICY,
+    SCALE_IN_STABILIZATION_SECONDS,
+    decide,
+)
 
 
 def test_cpu_policy_removes_capacity_from_a_saturated_gateway():
@@ -68,13 +72,6 @@ def test_a_missing_metric_never_moves_capacity():
 
     assert target == 3
     assert why == "no metric available"
-
-
-def test_observe_averages_only_pods_that_reported():
-    samples = [{"cpu_percent": 10.0}, {"saturation_percent": 100.0}, {"cpu_percent": 20.0}]
-
-    assert observe(samples, "cpu_percent") == 15.0
-    assert observe([], "cpu_percent") is None
 
 
 def test_latency_budget_is_calibrated_but_never_absurdly_tight():
@@ -163,11 +160,13 @@ def test_capacity_is_observed_across_more_than_one_automation_interval():
     """Sampling once would pass a scale-up the policy is about to undo."""
     from types import SimpleNamespace
 
-    problem = SimpleNamespace(app=SimpleNamespace(scaler_interval=15))
+    problem = SimpleNamespace(
+        app=SimpleNamespace(scaler_interval=15, scaler_stabilization_seconds=SCALE_IN_STABILIZATION_SECONDS)
+    )
     oracle = MattermostCascadeOracle.__new__(MattermostCascadeOracle)
     oracle.problem = problem
 
-    assert oracle.stability_seconds > 2 * 15
+    assert oracle.stability_seconds > SCALE_IN_STABILIZATION_SECONDS + 2 * 15
 
 
 def test_capacity_automation_does_nothing_without_a_calibrated_policy():
@@ -193,6 +192,7 @@ def capacity_oracle(monkeypatch, samples, *, floor=3, interval=15):
     readings = list(samples)
     app = SimpleNamespace(
         scaler_interval=interval,
+        scaler_stabilization_seconds=SCALE_IN_STABILIZATION_SECONDS,
         capacity_floor=floor,
         gateway_replicas=lambda: readings.pop(0) if len(readings) > 1 else readings[0],
     )
@@ -222,6 +222,15 @@ def test_capacity_taken_away_after_reaching_the_floor_is_the_automation(monkeypa
 
     assert reason == "capacity_automation_still_shrinking"
     assert samples[-1] == {"desired": 2, "ready": 2}
+
+
+def test_delayed_scale_in_cannot_pass_before_stabilization_ends(monkeypatch):
+    oracle = capacity_oracle(monkeypatch, [(3, 3)] * 13 + [(2, 2)])
+
+    reason, samples = oracle.observe_capacity(3)
+
+    assert reason == "capacity_automation_still_shrinking"
+    assert len(samples) == 14
 
 
 def test_capacity_that_never_reaches_the_floor_is_reported_as_below_it(monkeypatch):

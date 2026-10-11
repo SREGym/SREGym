@@ -1,6 +1,7 @@
 """Scale gateway replicas from measured usage and a persistent capacity policy."""
 
 import json
+import math
 import os
 import ssl
 import time
@@ -16,6 +17,7 @@ DECISIONS = CONTROL / "scaler-decisions.jsonl"
 NAMESPACE = os.environ.get("NAMESPACE", "mattermost")
 TARGET = os.environ.get("SCALER_TARGET", "chat-gateway")
 INTERVAL = float(os.environ.get("SCALER_INTERVAL", "15"))
+SCALE_IN_STABILIZATION_SECONDS = 45
 
 API = "https://kubernetes.default.svc"
 SECRETS = Path("/var/run/secrets/kubernetes.io/serviceaccount")
@@ -54,28 +56,61 @@ def policy():
         return dict(DEFAULT_POLICY)
 
 
-def gateway_metrics():
+def gateway_metrics(expected_replicas):
     """Read every gateway pod directly. The Service would only reach one."""
     pods = api(f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3D{TARGET}")["items"]
+    pods = [
+        pod
+        for pod in pods
+        if not pod["metadata"].get("deletionTimestamp")
+        and pod.get("status", {}).get("phase") not in {"Failed", "Succeeded"}
+    ]
+    if len(pods) != expected_replicas:
+        return []
     samples = []
     for pod in pods:
-        address = pod.get("status", {}).get("podIP")
-        phase = pod.get("status", {}).get("phase")
-        if not address or phase != "Running" or pod["metadata"].get("deletionTimestamp"):
-            continue
+        status = pod.get("status", {})
+        address = status.get("podIP")
+        ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in status.get("conditions", []))
+        if not address or status.get("phase") != "Running" or not ready:
+            return []
         try:
             with urllib.request.urlopen(f"http://{address}:8080/metrics", timeout=5) as response:
-                samples.append(json.loads(response.read()))
-        except Exception:
-            continue
+                samples.append({**json.loads(response.read()), "pod_uid": pod["metadata"]["uid"]})
+        except (OSError, ValueError, TypeError):
+            return []
     return samples
 
 
 def observe(samples, metric):
-    values = [s[metric] for s in samples if metric in s]
-    if not values:
+    """Missing measurements are unknown, not evidence of spare capacity."""
+    values = [s.get(metric) for s in samples]
+    if not values or any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in values):
         return None
     return round(sum(values) / len(values), 2)
+
+
+class ScaleInStabilizer:
+    """Require sustained low usage from the same ready pod population."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.context = None
+        self.since = None
+
+    def target(self, current, requested, pod_uids, rules):
+        if requested >= current:
+            self.reset()
+            return requested
+        context = (current, tuple(sorted(pod_uids)), dict(rules))
+        now = time.monotonic()
+        if context != self.context:
+            self.context, self.since = context, now
+        if now - self.since < SCALE_IN_STABILIZATION_SECONDS:
+            return current
+        return requested
 
 
 def decide(current, observed, rules, metric):
@@ -104,33 +139,45 @@ def record(entry):
         stream.write(json.dumps({"at": time.time(), **entry}) + "\n")
 
 
+def reconcile(stabilizer):
+    rules = policy()
+    metric = "cpu_percent" if rules["metric"] == "cpu" else "saturation_percent"
+    scale_path = f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{TARGET}/scale"
+    scale = api(scale_path)
+    current = scale["spec"].get("replicas", 1)
+    if not rules["enabled"]:
+        stabilizer.reset()
+        record({"observed": None, "replicas": current, "decision": "disabled", "metric": rules["metric"]})
+        return
+    samples = gateway_metrics(current)
+    observed = observe(samples, metric)
+    requested, why = decide(current, observed, rules, rules["metric"])
+    target = stabilizer.target(current, requested, [s["pod_uid"] for s in samples], rules)
+    if target != requested:
+        why += "; waiting for stable measurements"
+    if target != current:
+        api(
+            scale_path,
+            "PATCH",
+            {"metadata": {"resourceVersion": scale["metadata"]["resourceVersion"]}, "spec": {"replicas": target}},
+        )
+    record(
+        {
+            "observed": observed,
+            "replicas": target,
+            "decision": f"{current} -> {target}: {why}",
+            "metric": rules["metric"],
+        }
+    )
+
+
 def loop():
+    stabilizer = ScaleInStabilizer()
     while True:
         try:
-            rules = policy()
-            metric = "cpu_percent" if rules["metric"] == "cpu" else "saturation_percent"
-            scale = api(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{TARGET}/scale")
-            current = scale["spec"].get("replicas", 1)
-            if not rules["enabled"]:
-                record({"observed": None, "replicas": current, "decision": "disabled", "metric": rules["metric"]})
-            else:
-                observed = observe(gateway_metrics(), metric)
-                target, why = decide(current, observed, rules, rules["metric"])
-                if target != current:
-                    api(
-                        f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{TARGET}/scale",
-                        "PATCH",
-                        {"spec": {"replicas": target}},
-                    )
-                record(
-                    {
-                        "observed": observed,
-                        "replicas": target,
-                        "decision": f"{current} -> {target}: {why}",
-                        "metric": rules["metric"],
-                    }
-                )
+            reconcile(stabilizer)
         except Exception as exc:
+            stabilizer.reset()
             record({"decision": f"error: {type(exc).__name__}: {exc}"})
         time.sleep(INTERVAL)
 
