@@ -14,6 +14,7 @@ from urllib.request import ProxyHandler, build_opener
 
 from sregym.agent_registry import get_agent
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
+from sregym.service.docker_runtime import docker_command, trusted_docker_host
 from sregym.service.internet_policy import InternetPolicy
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def _subscription_environment(backend: str) -> dict[str, str]:
     return {variable: os.environ[variable]}
 
 
-def _wait_for_bridge(proc: subprocess.Popen, container: str, log_path: Path) -> str:
+def _wait_for_bridge(proc: subprocess.Popen, container: str, log_path: Path, *, docker_host: str | None = None) -> str:
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     opener = build_opener(ProxyHandler({}))
     url = None
@@ -52,7 +53,7 @@ def _wait_for_bridge(proc: subprocess.Popen, container: str, log_path: Path) -> 
             raise RuntimeError(f"Judge container exited {proc.returncode}; see {log_path}")
         if url is None:
             port = subprocess.run(
-                ["docker", "port", container, f"{BRIDGE_PORT}/tcp"],
+                docker_command("port", container, f"{BRIDGE_PORT}/tcp", host=docker_host),
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -92,6 +93,8 @@ def managed_judge_backend(backend: str = "api", *, force_build: bool = False) ->
     shutil.copyfile(repo_root / "llm_backend/judge_bridge.py", logs / "judge_bridge.py")
     runner = ContainerRunner(
         ContainerConfig(
+            docker_host=trusted_docker_host(),
+            isolate_mounts=False,
             network_mode="bridge",
             internet_policy=InternetPolicy.from_mode("open"),
             logs_path=logs,
@@ -113,7 +116,12 @@ def managed_judge_backend(backend: str = "api", *, force_build: bool = False) ->
             runner.ensure_image_exists()
         with (logs / "container.log").open("w") as output:
             proc = subprocess.Popen(runner.build_docker_command(request), stdout=output, stderr=subprocess.STDOUT)
-            url = _wait_for_bridge(proc, request.container_name, logs / "container.log")
+            url = _wait_for_bridge(
+                proc,
+                request.container_name,
+                logs / "container.log",
+                **({"docker_host": runner.config.docker_host} if runner.config.docker_host else {}),
+            )
             os.environ["SREGYM_JUDGE_BRIDGE_URL"] = url
             logger.info("Using %s for the judge; CLI logs: %s", backend, logs)
             yield runner.config.image
@@ -124,7 +132,10 @@ def managed_judge_backend(backend: str = "api", *, force_build: bool = False) ->
             os.environ["SREGYM_JUDGE_BRIDGE_URL"] = previous_url
         try:
             if request.container_name:
-                runner.stop_container(request.container_name)
+                runner.stop_container(
+                    request.container_name,
+                    **({"docker_host": runner.config.docker_host} if runner.config.docker_host else {}),
+                )
             if proc is not None:
                 try:
                     proc.wait(timeout=5)
