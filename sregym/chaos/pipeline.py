@@ -44,6 +44,14 @@ AUTH = Path.home() / ".codex" / "auth.json"
 LOCK = threading.RLock()
 
 THEMES = [
+    ("misdirection", "The loudest symptoms (errors, CPU, alerts) are in a service that is healthy itself; the "
+                     "cause sits upstream or downstream and only shows up as a quieter signal."),
+    ("partial", "Only a slice of the traffic breaks (certain users, hotels, posts, routes or replicas), so "
+                "spot checks and most probes look healthy while the SLO is still violated."),
+    ("backfire", "The standard repairs (restart, rollback, scale up, cache flush) make the incident worse or "
+                 "return it a few minutes later; only the actual cause restores service."),
+    ("accumulation", "State that builds up over time (queues, leaked connections, growing documents, timeline "
+                     "fan-out, cache entries) degrades service even though no setting looks wrong."),
     ("data", "State in a datastore (MongoDB, Memcached, Redis) or seeded application data makes requests "
              "fail or slow down, while every pod stays Running and Ready."),
     ("discovery", "Service discovery or routing: requests reach the wrong backend, a stale endpoint, or "
@@ -63,14 +71,6 @@ THEMES = [
              "command lines) contains a realistic bug, like a bad code change."),
     ("identity", "Credential, identity or certificate rotation left components inconsistent with each other."),
     ("metastable", "Retry, timeout or caching behaviour creates a self-sustaining degraded state."),
-    ("misdirection", "The loudest symptoms (errors, CPU, alerts) are in a service that is healthy itself; the "
-                     "cause sits upstream or downstream and only shows up as a quieter signal."),
-    ("partial", "Only a slice of the traffic breaks (certain users, hotels, posts, routes or replicas), so "
-                "spot checks and most probes look healthy while the SLO is still violated."),
-    ("backfire", "The standard repairs (restart, rollback, scale up, cache flush) make the incident worse or "
-                 "return it a few minutes later; only the actual cause restores service."),
-    ("accumulation", "State that builds up over time (queues, leaked connections, growing documents, timeline "
-                     "fan-out, cache entries) degrades service even though no setting looks wrong."),
 ]
 APPS = ["hotel_reservation", "social_network"]
 
