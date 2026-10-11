@@ -9,7 +9,7 @@ from sregym.conductor.oracles.gitlab_database_recovery import GitLabDatabaseReco
 from sregym.service.apps.gitlab.notifications import NOTIFICATION_REASON
 
 
-def notification_report(expected, messages, reason=NOTIFICATION_REASON):
+def notification_report(expected, messages, reason=NOTIFICATION_REASON, *, new_issues=None):
     """Public identity and intended content matter; SQL row IDs may change."""
     by_identity = {(str(r["project"]), str(r["iid"])): r for r in expected}
     counts, wrong = Counter(), []
@@ -19,9 +19,20 @@ def notification_report(expected, messages, reason=NOTIFICATION_REASON):
             continue
         identity = (headers.get("x-gitlab-project-id"), headers.get("x-gitlab-issue-iid"))
         receipt = by_identity.get(identity)
+        if receipt is None:
+            issue = (new_issues or {}).get(identity)
+            if (
+                issue is not None
+                and len(message["recipients"]) == 1
+                and message["recipients"][0] in issue["recipients"]
+                and issue["title"] in message["subject"]
+                and issue["description"] in message["body"]
+            ):
+                continue
+            wrong.append(message["id"])
+            continue
         if (
-            receipt is None
-            or message["recipients"] != [receipt["recipient"]]
+            message["recipients"] != [receipt["recipient"]]
             or receipt["title"] not in message["subject"]
             or receipt["description"] not in message["body"]
         ):
@@ -55,7 +66,28 @@ class GitLabNotificationRecoveryOracle(GitLabDatabaseRecoveryOracle):
             return result
         app, problem = self.problem.app, self.problem
         try:
-            report = notification_report(problem.notifications, app.messages())
+
+            def incident_report():
+                messages = app.messages()
+                expected = {(str(r["project"]), str(r["iid"])) for r in problem.notifications}
+                unknown = {
+                    (m["headers"].get("x-gitlab-project-id"), m["headers"].get("x-gitlab-issue-iid"))
+                    for m in messages
+                    if m["headers"].get("x-gitlab-notificationreason") == NOTIFICATION_REASON
+                } - expected
+                # Verify later mail against GitLab, not only its own headers.
+                original = problem.expected["issues"] if problem.expected else []
+                new_issues = (
+                    {
+                        (str(r["project"]), str(r["iid"])): r
+                        for r in app.notification_issues(list(unknown), exclude=original)
+                    }
+                    if unknown
+                    else {}
+                )
+                return notification_report(problem.notifications, messages, new_issues=new_issues)
+
+            report = incident_report()
             if report["duplicates"] or report["wrong_deliveries"]:
                 return self.fail("notification_delivery_violation", notifications=report)
             if report["missing"]:
@@ -73,7 +105,7 @@ class GitLabNotificationRecoveryOracle(GitLabDatabaseRecoveryOracle):
                 ],
             )[0]
             probe["recipient"] = "tenant-user-1@example.test"
-            jobs = app.enqueue_notification_probe(probe, probe_reason)
+            jobs = app.enqueue_notification_probe(probe, probe_reason, incident_notifications=problem.notifications)
             if jobs["pending_incident_jobs"]:
                 return self.fail("notification_jobs_unreconciled", pending=jobs["pending_incident_jobs"])
             deadline = time.monotonic() + 90
@@ -85,7 +117,7 @@ class GitLabNotificationRecoveryOracle(GitLabDatabaseRecoveryOracle):
                     return self.fail("fresh_notification_failed", notifications=fresh)
                 time.sleep(2)
             # The fresh job also gives already-running work time to finish.
-            report = notification_report(problem.notifications, app.messages())
+            report = incident_report()
             if not complete(report):
                 return self.fail("notification_delivery_violation", notifications=report)
         except Exception as exc:

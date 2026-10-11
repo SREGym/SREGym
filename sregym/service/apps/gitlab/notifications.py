@@ -156,15 +156,46 @@ class GitLabNotificationRecovery(GitLabRecovery):
         self.command("rollout", "status", "deployment/gitlab-ce", "--timeout=180s", timeout=200)
         self.wait_for_api()
 
-    def enqueue_notification_probe(self, receipt, reason):
+    def notification_issues(self, identities, *, exclude=()):
+        """Use GitLab's actual issue content and authorization for later mail."""
+        original = [[str(r["project_id"]), str(r["iid"])] for r in exclude]
+        return self.rails(f"""
+original = JSON.parse({json.dumps(json.dumps(original))})
+identities = JSON.parse({json.dumps(json.dumps(identities))})
+users = User.active.to_a
+issues = identities.filter_map do |project, iid|
+  next if original.include?([project, iid])
+  issue = Issue.find_by(project_id: project, iid: iid)
+  next unless issue
+  readers = users.select {{ |user| Ability.allowed?(user, :read_issue, issue) }}
+  {{project: issue.project_id, iid: issue.iid, title: issue.title,
+    description: issue.description.to_s, recipients: readers.map(&:email)}}
+end
+puts 'RESULT:' + issues.to_json
+""")
+
+    def enqueue_notification_probe(self, receipt, reason, *, incident_notifications=()):
         return self.rails(f"""
 require 'sidekiq/api'
+records = JSON.parse({json.dumps(json.dumps(incident_notifications))})
+job_ids = records.flat_map {{ |r| [r['job_id'], r['provider_job_id']] }}.compact
+issue_ids = records.map {{ |r| Issue.find_by!(project_id: r.fetch('project'), iid: r.fetch('iid')).id }}
+incident_job = lambda do |payload|
+  payload = JSON.parse(payload) if payload.is_a?(String)
+  active_job = payload.fetch('args', []).first
+  next job_ids.include?(payload['jid']) unless active_job.is_a?(Hash)
+  arguments = active_job.fetch('arguments', [])
+  mail_args = arguments[3].is_a?(Hash) ? arguments[3].fetch('args', []) : []
+  job_ids.include?(payload['jid']) || job_ids.include?(active_job['job_id']) ||
+    (arguments[0..1] == ['Notify', 'new_issue_email'] &&
+     mail_args[2] == {json.dumps(NOTIFICATION_REASON)} && issue_ids.include?(mail_args[1]))
+end
 sets = Sidekiq::Queue.all + [Sidekiq::RetrySet.new, Sidekiq::ScheduledSet.new, Sidekiq::DeadSet.new]
 pending = 0
 sets.each do |set|
-  set.each {{ |job| pending += 1 if job.item.fetch('args', []).to_json.include?({json.dumps(NOTIFICATION_REASON)}) }}
+  set.each {{ |job| pending += 1 if incident_job.call(job.item) }}
 end
-Sidekiq::WorkSet.new.each {{ |_, _, work| pending += 1 if work.payload.to_json.include?({json.dumps(NOTIFICATION_REASON)}) }}
+Sidekiq::WorkSet.new.each {{ |_, _, work| pending += 1 if incident_job.call(work.payload) }}
 r = JSON.parse({json.dumps(json.dumps(receipt))})
 issue = Issue.find_by!(project_id: r.fetch('project'), iid: r.fetch('iid'))
 recipient = User.find_by!(email: r.fetch('recipient'))
