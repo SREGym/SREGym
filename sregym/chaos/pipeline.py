@@ -335,12 +335,14 @@ class Pipeline:
         started = time.time()
         code = self.dind(
             f"chaos-{job.cid}", out,
-            self.main_cmd(f"chaos_canvas_{c['app']}", backend, model, 1, self.o.chaos_timeout, ["--force-build"]),
+            self.main_cmd(f"chaos_canvas_{c['app']}", backend, model, 1, self.o.chaos_timeout,
+                          ["--force-build", *(["--reasoning-effort", self.o.chaos_effort] if self.o.chaos_effort else [])]),
             {"CHAOS_BRIEF_FILE": "/opt/sregym/chaos-brief.md"},
             [(brief, "/opt/sregym/chaos-brief.md")],
             self.o.chaos_timeout + 3600, claude=backend == "claudecode",
         )
-        c["chaos"] = {"exit": code, "minutes": round((time.time() - started) / 60, 1)}
+        c["chaos"] = {"exit": code, "minutes": round((time.time() - started) / 60, 1),
+                      "effort": self.o.chaos_effort or "default"}
         rows = self.csv_rows(out)
         if not rows and self.infra_retry(c, out, "chaos"):
             return
@@ -509,7 +511,7 @@ class Pipeline:
         c = self.cand(cid)
         meta = json.loads((dest / "fault.json").read_text())
         meta["generation"] = {
-            "tier": tier, "chaos_backend": c["chaos_backend"], "theme": c["theme"][0],
+            "tier": tier, "chaos_backend": c["chaos_backend"], "chaos_effort": c.get("chaos", {}).get("effort"), "theme": c["theme"][0],
             "solve_rate": c["solve_rate"], "panel": c["panel"]["attempts"], "validated": c["validate"]["checks"],
             "accepted": now(),
         }
@@ -650,7 +652,9 @@ def main() -> int:
     parser.add_argument("--max-hardening", type=int, default=2, help="hardening generations per lineage")
     parser.add_argument("--replays", type=int, default=2, help="fresh-deployment replays in validation")
     parser.add_argument("--persistence", type=int, default=300, help="seconds the fault must persist unattended")
-    parser.add_argument("--chaos-timeout", type=int, default=4200)
+    parser.add_argument("--chaos-timeout", type=int, default=6000)
+    parser.add_argument("--chaos-effort", default="xhigh",
+                        help="reasoning effort for chaos sessions; the panel keeps the agent default")
     parser.add_argument("--max-sessions", type=int, default=1000)
     parser.add_argument("--registry-mirrors", default="http://172.17.0.1:5000")
     parser.add_argument("--export-easy", action="store_true",
