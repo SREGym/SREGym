@@ -1,0 +1,56 @@
+{
+  "app": "hotel_reservation",
+  "title": "Supplier score defaults turn regional recommendations into profile fanout",
+  "fault_layer": "data",
+  "fault_primitive": "Cross-catalog supplier import with tied recommendation extrema",
+  "root_cause_class": "supplier_score_default_tie_fanout",
+  "incident_class": "Supplier onboarding violates recommendation result cardinality and booking eligibility contracts",
+  "affected_components": [
+    "recommendation",
+    "profile",
+    "memcached-profile",
+    "mongodb-profile",
+    "mongodb-recommendation",
+    "frontend"
+  ],
+  "symptoms": "Recommendation price and rating requests return thousands of tied IDs. Profile fanout saturates CPU and cache access, frontend errors surge, and shared profile capacity also delays hotel search. Throughput and tail latency violate the SLO.",
+  "why_hard": "The expensive service is profile rather than recommendation. Both existing catalogs contain matching, normally shaped records with intact indexes, so the previous profile-membership repair removes nothing. The recommender returns every exact tie; its compact ID response triggers far larger downstream work. Cache timeout panics and profile restarts are consequences, not a cache configuration cause. Restarting, cache flushing, deployment rollback, and recommendation scaling preserve the durable input. Diagnosis requires correlating mode-specific recommendation cardinality, shared profile pressure, and the independent room inventory.",
+  "expected_agent_pitfalls": [
+    "Treat profile cache timeout or restart as the initiating failure",
+    "Tune profile cache connections or scale profile without bounding work",
+    "Prune recommendation records using profile membership, which now admits every imported hotel",
+    "Investigate MongoDB indexes while the costly path is per-result enrichment",
+    "Remove durable records without retiring the in-memory recommendation snapshot and pending profile work"
+  ],
+  "mitigation_summary": "Read positive room inventory from reservation-db.number, prune both existing catalogs to those eligible hotel IDs, reload recommendation and profile, clear the profile cache, and retire old service registrations. No saved state is used by the fix.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "capacity",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 50.8,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "607.4462921619415",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit the required empty payload once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deployments -n hotel-reservation; ls -la /logs'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deployment/profile --previous --tail=80; kubectl describe pod -n hotel-reservation profile-85c6f67954-tfw6l'\nRUNS: /bin/bash -lc 'kubectl get deployment profile recommendation -n hotel-reservation -o yaml; kubectl logs -n hotel-reservation deployment/frontend --tail=45; kubectl get svc -n hotel-reservation'\nRUNS: /bin/bash -lc \"kubectl logs -n hotel-reservation deployment/profile --previous --tail=55 | cut -c1-450; kubectl get configmap -n hotel-reservation; kubectl exec -n hotel-reservation deployment/frontend -- ls /; kubectl exec -n hotel-reservation deployment/mongodb-recommendation -- mongo --quiet --ev\nRUNS: /bin/bash -lc 'kubectl get cm failure-admin-geo failure-admin-rate mongo-geo-script mongo-rate-script -n hotel-reservation -o yaml; kubectl exec -n hotel-reservation deployment/frontend -- cat /go/src/github.com/harlow/go-micro-services/services/profile/server.go'\nRUNS: /bin/bash -lc \"kubectl logs -n hotel-reservation deployment/profile --previous | python -c 'import sys; [print(l[-70\n[...]\nbash -lc \"kubectl exec -n hotel-reservation recommendation-67c7576d6b-hcpnj -c build-bounded-recommendations -- ps -eo pid,comm,etime | tail -10; kubectl get pods -n hotel-reservation -l io.kompose.service=recommendation; curl -s --max-time 5 -o /logs/rec-probe.json -w '%{http_code} %{time_tota\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,json,subprocess url='http://localhost:18500/v1/agent/' pods=json.loads(subprocess.check_output(['kubectl','get','pods','-n','hotel-reservation','-o','json'])) live={p['status'].get('podIP') for p in pods['items'] if not p['metadata'].get('deletion\nRUNS: /bin/bash -lc 'kubectl top pods -n hotel-reservation; kubectl top nodes; kubectl logs -n hotel-reservation deployment/frontend --since=15s --tail=8; kubectl logs -n hotel-reservation deployment/profile --since=15s --tail=8; curl -s http://host.docker.internal:8000/status'\nSAYS: The catalog scan is now removed from rating and price requests, and nearby recommendations use the spatial index. I also cleared cached empty profiles left by the earlier overload. The latest checks are succeeding, with no new profile crashes or frontend errors. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deployment/frontend -- curl -s -o /dev/null -w '%{http_code} %{time_total}\\\\n' 'http://localhost:5000/recommendations?require=price&lat=37.7835&lon=-122.41'; kubectl exec -n hotel-reservation deployment/frontend -- curl -s -o /dev/null -w '%{http_code\nRUNS: /bin/bash -lc \"kubectl get pods -n hotel-reservation; kubectl logs -n hotel-reservation deployment/frontend --since=30s --tail=10; kubectl logs -n hotel-reservation deployment/profile --since=30s --tail=10; kubectl rollout status deployment/recommendation -n hotel-reservation --timeout=5s; curl -s h\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,json,concurrent.futures,statistics paths=['/recommendations?require=rate&lat=37.7835&lon=-122.41','/recommendations?require=price&lat=37.7835&lon=-122.41','/recommendations?require=dis&lat=37.7835&lon=-122.41','/hotels?inDate=2015-04-09&outDa\nSAYS: All 60 repeated search and recommendation checks succeeded. Direct requests inside the application completed in roughly 6\u201319 ms, and all pods are ready. I\u2019m submitting the required empty payload now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' --data '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Mitigation applied: capped recommendations, cached rating and price results, added spatial indexing, and recovered profile service.  All 60 verification requests succeeded; direct latency was 6\u201319 ms. Required empty submission accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

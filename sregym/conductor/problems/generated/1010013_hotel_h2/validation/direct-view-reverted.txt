@@ -1,0 +1,17 @@
+{
+	"time" : ISODate("2026-10-10T12:21:53.210Z"),
+	"join" : {
+		"from" : "supplier_terms_current",
+		"localField" : "supplier.hotelCode",
+		"foreignField" : "provider.hotelCode",
+		"as" : "terms"
+	},
+	"inventory" : 20507,
+	"source" : 80,
+	"largestDocument" : [
+		{
+			"_id" : "6aca27646ac48acfb2e6e0e6:standard-100",
+			"bytes" : 3891
+		}
+	]
+}

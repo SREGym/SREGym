@@ -1,0 +1,13 @@
+{
+  "time": 1791627910.7628946,
+  "before": {
+    "index": "64",
+    "receipts": "64"
+  },
+  "deleted": "1",
+  "http_status": "500",
+  "after": {
+    "index": "64",
+    "receipts": "64"
+  }
+}

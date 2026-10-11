@@ -1,0 +1,53 @@
+{
+  "app": "social_network",
+  "title": "Thrift connection pool aliases destinations sharing an RPC port",
+  "fault_layer": "app-code",
+  "fault_primitive": "OpenResty cosocket pool identity omits destination hostname",
+  "root_cause_class": "rpc_connection_pool_identity_collision",
+  "incident_class": "Transport pooling refactor routes reused connections to unrelated services",
+  "affected_components": [
+    "nginx-thrift",
+    "compose-post-service",
+    "user-timeline-service",
+    "home-timeline-service"
+  ],
+  "symptoms": "Intermittent HTTP 500s across compose and timeline requests; nginx logs Invalid method name Thrift exceptions while all backend pods and service endpoints remain healthy.",
+  "why_hard": "Only reused connections are misrouted. New connections resolve the correct hostname and reach the correct service. Endpoint, DNS, image and IDL checks therefore look correct, and traces can lack the intended backend span. The defect lives in startup Lua in a ConfigMap, surviving restarts and deployment rollback; the common RPC port makes apparently reasonable port-based pooling unsafe.",
+  "expected_agent_pitfalls": [
+    "Treat unknown-method exceptions as an incompatible backend image or generated Thrift IDL",
+    "Change Services or DNS despite correct endpoints",
+    "Restart or scale backend services",
+    "Roll back the frontend Deployment without correcting its ConfigMap",
+    "Validate one cold request and miss pooled connection reuse"
+  ],
+  "mitigation_summary": "Include both destination hostname and port in the Lua cosocket pool key, then roll frontend workers to apply startup code and discard previously pooled connections.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "discovery",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 17.5,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "333.1652934551239",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster health, apply a mitigation, and submit it once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'kubectl get deploy nginx-thrift -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=70'\nRUNS: /bin/bash -lc 'ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get svc -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl get cm nginx-thrift -n social-network -o yaml; kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/nginx/lua-scripts/wrk2-api/user-timeline/read.lua'\nRUNS: /bin/bash -lc 'kubectl get cm -n social-network; kubectl logs -n social-network deploy/user-timeline-service --tail=15'\nRUNS: /bin/bash -lc \"kubectl get cm nginx-thrift -n social-network -o json | python -c 'import sys,json; print(json.load(sys.stdin)[\\\"data\\\"][\\\"nginx.conf\\\"])'\"\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/nginx/lua-scripts/GenericObjectPool.lua'\nRUNS: /bin/bash -lc 'kubectl get endpoints -n social-network; kubectl exec -n social-network deploy/nginx-thrift -- cat /etc/hosts'\nSAYS: The frontend reuses Thrift connections across different services because its connection pool key contains only the port. These services all use port 9090, so requests reach the wrong backend and fail with \u201cInvalid method name.\u201d I\u2019ll include the hostname in the pool key and restart the frontend to clear the existing connections. \nRUNS: /bin/bash -lc \"python - <<'PY' import subprocess,json ns='social-network' c=json.loads(subprocess.check_output(['kubectl','get','cm','nginx-thrift','-n',ns,'-o','json'])) open('/logs/nginx-thrift-before.json','w').write(json.dumps(c)) s=c['data']['nginx.conf'] assert 'local pool_key = tostring(self.\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/nginx-thrift -c nginx-thrift -- cat /usr/local/openresty/lualib/thrift/GenericObjectPool.lua'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -c nginx-thrift -- sh -c 'for path in user-timeline home-timeline; do curl -s -o /dev/null -w \\\"HTTP %{http_code} latency %{time_total}s\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/\"'$path/read?user_id=1&start=0&stop=10\"; done; curl -s -o /\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift -c nginx-thrift --since=30s --tail=10'\nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -l service=nginx-thrift; kubectl logs -n social-network deploy/nginx-thrift -c nginx-thrift --since=60s --tail=10'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -c nginx-thrift -- sh -c 'for i in \"'$(seq 1 30); do for path in user-timeline home-timeline; do curl -s -o /dev/null -w \"%{http_code} %{time_total}'\"\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/\"'$path/read?user_id=$i&start=0&stop=10\"; don\nSAYS: The fix is deployed. All 60 timeline checks returned HTTP 200 over 30 seconds, with latency below 80 ms; composing a post also succeeded. The frontend has logged no new errors. I\u2019m submitting the mitigation now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Fixed Thrift connection pooling to key connections by hostname and port, preventing requests from reaching the wrong service.  Verified successful timeline reads and post creation with low latency and no new frontend errors. Submitted the required empty solution once; submission accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

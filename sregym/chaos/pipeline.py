@@ -63,6 +63,14 @@ THEMES = [
              "command lines) contains a realistic bug, like a bad code change."),
     ("identity", "Credential, identity or certificate rotation left components inconsistent with each other."),
     ("metastable", "Retry, timeout or caching behaviour creates a self-sustaining degraded state."),
+    ("misdirection", "The loudest symptoms (errors, CPU, alerts) are in a service that is healthy itself; the "
+                     "cause sits upstream or downstream and only shows up as a quieter signal."),
+    ("partial", "Only a slice of the traffic breaks (certain users, hotels, posts, routes or replicas), so "
+                "spot checks and most probes look healthy while the SLO is still violated."),
+    ("backfire", "The standard repairs (restart, rollback, scale up, cache flush) make the incident worse or "
+                 "return it a few minutes later; only the actual cause restores service."),
+    ("accumulation", "State that builds up over time (queues, leaked connections, growing documents, timeline "
+                     "fan-out, cache entries) degrades service even though no setting looks wrong."),
 ]
 APPS = ["hotel_reservation", "social_network"]
 
@@ -482,18 +490,29 @@ class Pipeline:
             self.accept(cid)
         return jobs
 
-    def accept(self, cid: str) -> None:
+    def accept(self, cid: str, tier: str = "hard") -> None:
         dest = GENERATED_ROOT / cid
         shutil.rmtree(dest, ignore_errors=True)
         shutil.copytree(self.work / "candidates" / cid, dest)
         c = self.cand(cid)
         meta = json.loads((dest / "fault.json").read_text())
         meta["generation"] = {
-            "chaos_backend": c["chaos_backend"], "theme": c["theme"][0], "solve_rate": c["solve_rate"],
-            "panel": c["panel"]["attempts"], "validated": c["validate"]["checks"], "accepted": now(),
+            "tier": tier, "chaos_backend": c["chaos_backend"], "theme": c["theme"][0],
+            "solve_rate": c["solve_rate"], "panel": c["panel"]["attempts"], "validated": c["validate"]["checks"],
+            "accepted": now(),
         }
         (dest / "fault.json").write_text(json.dumps(meta, indent=2) + "\n")
-        self.log(f"ACCEPTED {cid} solve_rate={c['solve_rate']} -> {dest}")
+        self.log(f"ACCEPTED {cid} tier={tier} solve_rate={c['solve_rate']} -> {dest}")
+
+    def export_easy(self) -> None:
+        """Register candidates that passed every validity gate but failed the difficulty filter."""
+        for cid, c in self.ledger["candidates"].items():
+            if c["status"] != "rejected" or not str(c.get("reason", "")).startswith("too easy"):
+                continue
+            valid = [a for a in c["panel"]["attempts"] if a["valid"]]
+            c["solve_rate"] = f"{sum(a['solved'] for a in valid)}/{len(valid)}"
+            self.accept(cid, tier="easy")
+        self.save()
 
     def new_candidate(self) -> Job:
         n = self.ledger["sessions"]
@@ -510,7 +529,9 @@ class Pipeline:
                 return Job("chaos", cid, 2, f"harden {pid}")
         app = APPS[n % len(APPS)]
         themes = [t for t in THEMES if not (t[0] == "code" and app != "social_network")]
-        theme = themes[(n // len(APPS)) % len(themes)]
+        # Least-explored theme for this app first, so new themes get tried before old ones repeat.
+        tried = [c["theme"][0] for c in self.ledger["candidates"].values() if c["app"] == app]
+        theme = min(themes, key=lambda t: (tried.count(t[0]), themes.index(t)))
         backend = "codex"
         if self.o.claude_env_file and self.o.chaos_claude_every and n % self.o.chaos_claude_every == 1:
             backend = "claudecode"
@@ -620,9 +641,14 @@ def main() -> int:
     parser.add_argument("--chaos-timeout", type=int, default=4200)
     parser.add_argument("--max-sessions", type=int, default=1000)
     parser.add_argument("--registry-mirrors", default="http://172.17.0.1:5000")
+    parser.add_argument("--export-easy", action="store_true",
+                        help="register valid but too-easy candidates as tier=easy problems, then exit")
     opts = parser.parse_args()
     opts.work = opts.work.resolve()
     opts.work.mkdir(parents=True, exist_ok=True)
+    if opts.export_easy:
+        Pipeline(opts).export_easy()
+        return 0
     Pipeline(opts).run()
     return 0
 

@@ -1,0 +1,58 @@
+{
+  "app": "hotel_reservation",
+  "title": "Canonical catalog adapters turn a legacy enrichment join into a null-key cross product",
+  "fault_layer": "data",
+  "fault_primitive": "MongoDB view schema migration with missing-key lookup equality, durable view reconciliation, incremental materialization and non-expiring rate cache",
+  "root_cause_class": "catalog_canonical_adapter_null_join",
+  "incident_class": "Partial schema migration changes join-key envelopes before a legacy enrichment stage consumes them",
+  "affected_components": [
+    "mongodb-rate",
+    "catalog-agent",
+    "memcached-rate",
+    "rate",
+    "search",
+    "frontend"
+  ],
+  "symptoms": "Search requests time out or fail with rate RPC ResourceExhausted while all pods remain Running and Ready. Catalog and cache contain hundreds of ordinary, current-dated rate rows per hotel, generating aggregate RPC responses above the receive limit.",
+  "why_hard": "The raw source schemas make the join field names appear correct, but two canonical adapter views have already removed those envelopes. MongoDB treats both missing fields as null, joining every terms row to every rate card. The visible compatibility export is a harmless projection, with no archive union. Editing the lower view is reverted from persisted job definitions; repairing definitions does not delete obsolete materialized IDs; database-only repair leaves zero-expiration cache entries. The decisive evidence requires comparing raw documents, actual view output, multiple view definitions, the durable job registry, the publisher merge semantics and rate cache behavior.",
+  "expected_agent_pitfalls": [
+    "Tune rate QPS, queues, retries or CPU in response to deadline and admission errors",
+    "Search for historical dates or oversized individual BSON records",
+    "Inspect raw rate cards and supplier terms and conclude the lookup fields are correct",
+    "Deduplicate physical inventory or flush cache while the publisher remains active",
+    "Edit system.views without updating the durable catalog_jobs definition",
+    "Fix the lookup and run the incremental merge, leaving previously generated IDs",
+    "Repair MongoDB but retain non-expiring cached aggregates or in-flight cache writers"
+  ],
+  "mitigation_summary": "Quiesce the publisher and rate workers, update the persisted enrichment job to join both canonical hotelRef fields, recreate compatibility views, replace rather than merge the materialized inventory, disable obsolete incremental publication, flush shared cache and resume rate workers. No saved state is used.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "data",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 47.8,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "548.8030960559845",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit it for validation once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deploy -n hotel-reservation; ls -la /logs'\nRUNS: /bin/bash -lc 'kubectl get deploy rate mongodb-rate memcached-rate search -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc 'kubectl get cm -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/rate --tail=60; kubectl logs -n hotel-reservation deploy/search --tail=30; kubectl get svc -n hotel-reservation'\nSAYS: Search requests are timing out in the rate service. I\u2019m checking its database queries and catalog publication jobs to find what is slowing them down. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-rate -c hotel-reserv-rate-mongo -- mongo --quiet -u admin -p admin --authenticationDatabase admin rate-db --eval 'printjson(db.getCollectionInfos()); printjson(db.catalog_jobs.find().toArray()); printjson(db.currentOp({active:true}));';\nRUNS: /bin/bash -lc \"curl -s --max-time 10 http://10.96.102.47:9091/metrics; curl -s --max-time 10 'http://10.96.38.203:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194' -w '\\\\n%{http_code} %{time_total}\\\\n'\"\nRUNS: /bin/bash -lc \"kubectl\n[...]\npublication -n hotel-reservation -o json > /tmp/catalog-cm.json'\nRUNS: /bin/bash -lc \"cat > /tmp/fix-catalog.js <<'EOF' var job=db.catalog_jobs.findOne({_id:'rate-card-projection'}); var pipeline=JSON.parse(job.pipelineJson); pipeline[0].\"'$lookup.localField='\"'hotelRef'; pipeline[0].\"'$lookup.foreignField='\"'hotelRef'; assert.commandWorked(db.catalog_jobs.updateOne({_\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-rate -c hotel-reserv-rate-mongo -- mongo --quiet -u admin -p admin --authenticationDatabase admin rate-db --eval 'var j=db.catalog_jobs.findOne({_id:\\\"rate-card-projection\\\"}); var p=JSON.parse(j.pipelineJson); var i=db.getCollectionInf\nRUNS: /bin/bash -lc \"curl -s --max-time 10 'http://127.0.0.1:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194' -o /tmp/hotels-response.json -w '%{http_code} %{time_total} %{size_download}\\\\n'; kubectl rollout status deployment/rate -n hotel-reservation --timeout=60s\"\nSAYS: The corrected catalog now produces 80 inventory rows, and a hotel search returned HTTP 200 in 336 ms. I\u2019m checking repeated requests across the publisher\u2019s 30-second cycle to verify that the fix holds. \nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/mongodb-rate -c catalog-agent --tail=8; kubectl logs -n hotel-reservation deploy/search --since=30s --tail=5; kubectl get pods -n hotel-reservation -l io.kompose.service=rate'\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-rate -c hotel-reserv-rate-mongo -- mongo --quiet -u admin -p admin --authenticationDatabase admin rate-db --eval 'print(\\\"inventory=\\\"+db.inventory.count()); printjson(db.catalog_jobs.findOne({_id:\\\"rate-card-projection\\\"}));'; kubectl \nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures,statistics url='http://127.0.0.1:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194' def get(_):  t=time.monotonic()  try:   with urllib.request.urlopen(url,timeout=5) as r: r.read(); return r.statu\nSAYS: All 320 verification requests succeeded, with median latency of 150 ms and p95 latency of 302 ms. Inventory remained at 80 rows after publication ran again. I\u2019m submitting the mitigation now. \nRUNS: /bin/bash -lc \"curl -sS --max-time 30 -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Fixed the catalog join, rebuilt inventory from 20,480 rows to 80, cleared the rate cache, and restarted the rate service.  Verified 320 successful requests with zero failures; p95 latency was 302 ms.  Submitted once with `{\"solution\": \"\"}`. Validation submission accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

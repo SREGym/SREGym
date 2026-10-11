@@ -1,0 +1,64 @@
+{
+  "injected-1": {
+    "healthy": false,
+    "violated": true,
+    "rounds": 11,
+    "violating": 11,
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        133.0
+      ]
+    }
+  },
+  "injected-2": {
+    "healthy": false,
+    "violated": true,
+    "rounds": 11,
+    "violating": 11,
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        154.0
+      ]
+    }
+  },
+  "mitigated": {
+    "healthy": true,
+    "violated": false,
+    "rounds": 11,
+    "violating": 0,
+    "log_surges": {}
+  },
+  "recovered": {
+    "healthy": true,
+    "violated": false,
+    "rounds": 11,
+    "violating": 0,
+    "log_surges": {}
+  },
+  "replay-1": {
+    "healthy": false,
+    "violated": true,
+    "rounds": 11,
+    "violating": 11,
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        139.0
+      ]
+    }
+  },
+  "replay-2": {
+    "healthy": false,
+    "violated": true,
+    "rounds": 11,
+    "violating": 11,
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        158.0
+      ]
+    }
+  }
+}

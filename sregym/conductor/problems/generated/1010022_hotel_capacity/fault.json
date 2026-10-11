@@ -1,0 +1,65 @@
+{
+  "app": "hotel_reservation",
+  "title": "Global recommendation catalog overwhelms regional scoring capacity",
+  "fault_layer": "data",
+  "fault_primitive": "Expansion of the existing recommendation catalog beyond locally bookable inventory",
+  "root_cause_class": "unbounded_recommendation_catalog_scan",
+  "incident_class": "Supplier catalog scope expansion exceeds synchronous scoring capacity",
+  "affected_components": [
+    "recommendation",
+    "mongodb-recommendation",
+    "frontend"
+  ],
+  "symptoms": "Recommendation requests queue behind CPU-bound full-catalog scoring. Frontend tail latency and timeouts rise while application pods remain Running and Ready; recommendation CPU increases sharply.",
+  "why_hard": "The MongoDB documents are ordinary hotel records, indexes are intact, and local results are still correct. Database activity falls after startup because the expensive computation uses an in-memory map. Restarting reloads the same durable catalog; rolling back deployments does not change it. Fixing database indexes or flushing profile caches does not address the computation. Restoring service requires identifying the scope mismatch between recommendation eligibility and locally bookable inventory, then replacing the in-memory snapshot. Scoring loops do not check request cancellation, so expired requests keep consuming computation until the snapshot is replaced.",
+  "expected_agent_pitfalls": [
+    "Increase database capacity despite no database work on the hot path",
+    "Restart the recommender and reload the same oversized snapshot",
+    "Focus on frontend timeouts or profile caches",
+    "Prune MongoDB rows but leave the old in-memory scoring map active",
+    "Increase CPU without bounding catalog admission"
+  ],
+  "mitigation_summary": "Derive eligible hotel IDs from the existing profile catalog, remove recommendation records for hotels outside that inventory, and reload the recommender while retiring its old Consul registrations.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "capacity",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 1,
+        "minutes": 15.5,
+        "valid": false,
+        "solved": false,
+        "reason": null,
+        "ttm": null,
+        "timed_out": null,
+        "digest": ""
+      },
+      {
+        "agent": "codex",
+        "round": 2,
+        "exit": 0,
+        "minutes": 52.2,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "403.76640939712524",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a fix, and submit the required empty solution once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deploy -n hotel-reservation'\nRUNS: /bin/bash -lc 'ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=70; kubectl logs -n hotel-reservation deploy/recommendation --tail=70'\nRUNS: /bin/bash -lc 'kubectl get deploy recommendation -n hotel-reservation -o yaml; kubectl get svc -n hotel-reservation; kubectl get events -n hotel-reservation --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'kubectl port-forward -n hotel-reservation svc/consul 18500:8500 >/tmp/consul-pf.log 2>&1 & kubectl port-forward -n hotel-reservation svc/frontend 15000:5000 >/tmp/frontend-pf.log 2>&1 & kubectl port-forward -n hotel-reservation svc/jaeger-out 16686:16686 >/tmp/jaeger-pf.log 2>&1 &'\nRUNS: /bin/bash -lc \"curl -s http://localhost:18500/v1/health/service/srv-recommendation; curl -s http://localhost:18500/v1/agent/services; curl -s -m 15 -w '\\\\nHTTP %{http_code} time %{time_total}\\\\n' 'http://localhost:15000/recommendations?require=dis&lat=37.7749&lon=-122.4194'; kubectl get networkpolic\nSAYS: The recommendation pod was recently rep\n[...]\nhem. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo --quiet profile-db --eval 'print(db.hotels.count()); printjson(db.hotels.find({}, {hotelId:1}).limit(3).toArray());'; kubectl exec -n hotel-reservation deploy/mongodb-recommendation -- mongo --quiet recommendation-db --\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=12; kubectl logs -n hotel-reservation deploy/recommendation --tail=8; curl -s http://localhost:18500/v1/catalog/service/srv-recommendation'\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-recommendation -- mongo --quiet recommendation-db --eval 'db.recommendation.dropIndex(\\\"hotelId_1\\\"); db.recommendation.createIndex({hotelId:1});'; kubectl delete pod -n hotel-reservation -l io.kompose.service=recommendation; kubectl ro\nRUNS: /bin/bash -lc \"curl -s http://localhost:18500/v1/catalog/service/srv-recommendation; curl -s -m 5 -w '\\\\n%{http_code} %{time_total}\\\\n' 'http://localhost:15000/recommendations?require=dis&lat=37.7749&lon=-122.4194'; kubectl logs -n hotel-reservation deploy/recommendation --tail=5\"\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,json for i in range(12):  for mode in ['dis','rate','price']:   t=time.monotonic()   try:    with urllib.request.urlopen('http://localhost:15000/recommendations?require='+mode+'&lat=37.7749&lon=-122.4194',timeout=8) as r:     data=json.load(r\nRUNS: /bin/bash -lc 'kubectl top pod -n hotel-reservation -l io.kompose.service=recommendation; kubectl get pods -n hotel-reservation -l io.kompose.service=recommendation'\nRUNS: /bin/bash -lc \"curl -s -X PUT http://localhost:18500/v1/agent/service/deregister/3fe7bd1d-19e8-42a0-b3d4-069ef1b4799d; python - <<'PY' import urllib.request,time,json latencies=[] for i in range(15):  for mode in ['dis','rate','price']:   t=time.monotonic()   with urllib.request.urlopen('http://loca\nSAYS: Recommendations now pass repeated checks across distance, rating, and price: all 45 requests succeeded, with average latency of 95 ms and a maximum of 200 ms. The oversized collection is preserved, and the stale service registration is removed. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Restored the recommendation dataset to 80 valid hotels, preserved the oversized collection as a backup, restarted the service, and removed its stale registration.  All 45 verification requests succeeded; average latency was 95 ms. Submitted the required empty solution once; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

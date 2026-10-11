@@ -1,0 +1,54 @@
+{
+  "app": "social_network",
+  "title": "Streaming codec rollout violates two Thrift wire contracts",
+  "fault_layer": "app-code",
+  "fault_primitive": "OpenResty startup overrides mis-size Thrift frames and truncate binary strings",
+  "root_cause_class": "thrift_streaming_codec_wire_contract_regression",
+  "incident_class": "RPC serialization adapter regression during streaming codec rollout",
+  "affected_components": [
+    "nginx-thrift",
+    "compose-post-service",
+    "user-timeline-service",
+    "home-timeline-service"
+  ],
+  "symptoms": "Pods remain Running and Ready. Frontend RPC calls fail with generic transport exceptions; backend connection handlers report oversized or invalid frames. Repairing frame lengths exposes malformed response decoding and timeline rendering failures.",
+  "why_hard": "Failures span independent healthy backend services and resemble a server transport or connection reuse problem. Two separate codec contracts were changed by the same startup adapter: the request frame length excludes a header that was never in its payload buffer, while the response reader treats a KiB segment budget as a string byte limit and leaves unread bytes in the frame. Fixing either contract alone leaves service degraded. The active methods differ from the image's library files because startup code replaces them; pod restarts, deployment rollback, scaling and backend tuning preserve the ConfigMap implementation.",
+  "expected_agent_pitfalls": [
+    "Investigate oversized-frame messages as oversized application requests or backend frame limits",
+    "Tune RPC timeouts or restart dependencies",
+    "Inspect unchanged image library files without checking startup overrides",
+    "Fix the frame encoder and miss the separate decoder regression",
+    "Treat downstream timeline object errors as MongoDB or cache corruption"
+  ],
+  "mitigation_summary": "Remove the streaming codec overrides from the live nginx-thrift ConfigMap and recreate frontend pods, restoring the image's original frame encoder and binary string decoder without changing application data.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "multi-cause",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 45.5,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "345.5643584728241",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the service health and cluster state, apply a mitigation, and submit it for validation once the application has recovered. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide; kubectl get deployments -n social-network'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=60; kubectl get deploy nginx-thrift -n social-network -o yaml; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get cm nginx-thrift -n social-network -o yaml; kubectl get networkpolicy,svc -n social-network; kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/lualib/thrift/TSocket.lua; kubectl logs -n social-network deploy/home-timeline-service --tail=15'\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/lualib/thrift/TFramedTransport.lua; kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/lualib/thrift/TBinaryProtocol.lua'\nSAYS: The frontend configuration overrides Thrift serialization incorrectly: it shortens frame lengths by four bytes and truncates decoded strings to eight bytes. Backend logs show repeated frame errors. I\u2019ll remove those overrides to restore the standard Thrift codec. \nRUNS: /bin/bash -lc \"python - <<'PY' import json, subprocess cm=json.loads(subprocess.check_output(['kubectl','get','cm','nginx-thrift','-n','social-network','-o','json'])) conf=cm['data']['nginx.conf'] start=conf.index('    -- Streaming codec segment budget') end=conf.index('    local config = ngx.shared\nRUNS: /bin/bash -lc \"kubectl get pods -n social-network -l service=nginx-thrift; kubectl exec -n social-network deploy/home-timeline-service -- sh -c 'command -v curl'; kubectl get svc -n observe\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for path in user-timeline home-timeline; do curl -s -o /tmp/check-body -w \\\"HTTP %{http_code} latency %{time_total}s\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/\"'$path/read?user_id=1&start=0&stop=10\"; head -c 150 /tmp/check-body;\nSAYS: The corrected frontend is deployed. Timeline reads and post creation now return HTTP 200, with sampled latency between 5 and 38 ms. I\u2019m checking continued recovery before submitting the mitigation. \nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --since=20s --tail=5; kubectl logs -n social-network deploy/home-timeline-service --since=20s --tail=5'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'curl -s -o /tmp/compose-result -w \\\"compose HTTP %{http_code} latency %{time_total}s\\\\n\\\" -X POST http://127.0.0.1:8080/wrk2-api/post/compose --data-urlencode username=username_1 --data-urlencode user_id=1 --data-urlencode t\nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Removed faulty Thrift codec overrides and restarted the frontend. Post creation and all 30 sampled timeline reads succeeded with HTTP 200; read latency stayed at 4\u201342 ms.  Submitted the required empty solution exactly once. Validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "app": "hotel_reservation",
+  "title": "Profile batch coalescing exhausts effective RPC concurrency",
+  "fault_layer": "app-code",
+  "fault_primitive": "ConfigMap-delivered bounded Go RPC executor exhausts all 64 worker slots after a request-coalescing mutex/channel lock inversion",
+  "root_cause_class": "request_coalescer_lock_inversion",
+  "incident_class": "Concurrency regression in a cache-stampede and duplicate-work suppression rollout",
+  "affected_components": [
+    "profile",
+    "frontend"
+  ],
+  "symptoms": "Hotel search and recommendation requests return profile RPC ResourceExhausted errors after initial timeouts. Profile remains Running and Ready with low CPU and healthy cache/database connectivity. Profile logs report worker capacity exhausted, frontend logs report failed profile RPCs, and goroutine diagnostics show stranded mutex and channel waits.",
+  "why_hard": "A bounded 64-worker executor initially appears properly provisioned. Duplicate batch coalescing strands every worker through a producer/waiter lock inversion, so increasing worker count only delays recurrence. The apparent capacity symptom appears at frontend/profile RPC boundaries while the dependencies remain healthy. Restarts clear process state briefly, but production overlap recreates the deadlock. Source is compiled from a projected ConfigMap at every start and there is no retained Deployment revision to undo.",
+  "expected_agent_pitfalls": [
+    "Treat canceled frontend profile RPCs as MongoDB or memcached latency",
+    "Restart profile and mistake a short recovery for resolution",
+    "Raise worker count, scale replicas, or raise CPU limits despite a producer/waiter lock cycle",
+    "Try Deployment rollback rather than repairing the mounted runtime source",
+    "Change RPC deadlines, which cannot resolve the producer/waiter mutex cycle"
+  ],
+  "mitigation_summary": "Disable shared profile batches in the live runtime ConfigMap and restart profile to compile the ordinary traced handler. Remove stale Consul profile registrations for retired pod addresses using live Kubernetes state. A durable code repair releases the map mutex before awaiting batch.ready.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "capacity",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 43.9,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "340.8944582939148",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a fix, then submit the mitigation for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'kubectl get deploy,svc -n hotel-reservation -o wide; kubectl logs -n hotel-reservation deploy/frontend --tail=70; kubectl logs -n hotel-reservation deploy/profile --tail=70'\nRUNS: /bin/bash -lc 'kubectl get deploy profile -n hotel-reservation -o yaml; kubectl get cm -n hotel-reservation; kubectl rollout history deploy/profile -n hotel-reservation; ls -la /logs'\nRUNS: /bin/bash -lc 'kubectl get cm profile-runtime -n hotel-reservation -o yaml'\nSAYS: The profile service is deadlocked: a duplicate request holds the batch mutex while waiting for a result, preventing the original request from publishing that result. This exhausts all 64 worker slots and causes hotel searches to fail. I\u2019ll release the mutex before waiting and roll out the corrected code. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/profile -- sh -c 'wget -qO- http://127.0.0.1:6060/debug/pprof/goroutine?debug=2' | head -100\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'which curl; which wget; sed -n \\\"180,245p\\\" /go/src/github.com/harlow/go-micro-services/services/frontend/server.go'\"\nRUNS: /bin/bash -lc \"kubectl get cm profile-runtime -n hotel-reservation -o json > /tmp/profile-runtime.json python3 - <<'PY' import json p='/tmp/profile-runtime.json' x=json.load(open(p)) s=x['data']['admission.go'] s=s.replace('''        // Keep the entry stable while consuming the published result.    \nRUNS: /bin/bash -lc \"python3 - <<'PY' import urllib.request,time,concurrent.futures,collections url='http://127.0.0.1:15000/hotels?lat=37.7749&lon=-122.4194&inDate=2015-04-09&outDate=2015-04-10' def check(i):  t=time.monotonic()  try:   with urllib.request.urlopen(url,timeout=5) as r:    b=r.read()    ret\nSAYS: The corrected profile service is running. All 400 concurrent test requests returned HTTP 200, and the profile worker-exhaustion errors have stopped. I\u2019ll submit the mitigation now for sustained validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' --data '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Fixed the profile service deadlock and completed the rollout. All 400 test requests succeeded with HTTP 200.  Submitted `{\"solution\": \"\"}` once; validation accepted the submission."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

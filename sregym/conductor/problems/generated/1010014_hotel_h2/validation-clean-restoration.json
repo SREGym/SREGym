@@ -1,0 +1,7 @@
+{
+  "search_template": true,
+  "consul_template": true,
+  "frontend_template": true,
+  "consul_ports": true,
+  "consul_strategy": true
+}

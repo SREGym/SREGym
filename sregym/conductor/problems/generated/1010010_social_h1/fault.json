@@ -1,0 +1,55 @@
+{
+  "app": "social_network",
+  "title": "Partial RPC lease migration strands capacity in a durable reservation journal",
+  "fault_layer": "app-code",
+  "fault_primitive": "Transport admission writes SHA-1 lease identities to a Redis journal and occupancy index while the legacy pool completion adapter retires raw request identities",
+  "root_cause_class": "rpc_lease_identity_schema_partial_migration",
+  "incident_class": "Partial distributed semaphore schema migration with incompatible acquisition and completion protocols",
+  "affected_components": [
+    "nginx-thrift",
+    "social-graph-redis",
+    "compose-post-service",
+    "home-timeline-service",
+    "user-timeline-service"
+  ],
+  "symptoms": "Ready frontend pods return HTTP 500 with Thrift connection timeout exceptions naming healthy RPC backends. Redis occupancy indexes reach 64 entries per upstream despite collapsed backend activity; a durable receipt journal restores indexes after they are cleared.",
+  "why_hard": "The nginx connection pool shipped in the image remains intact. Acquisition occurs in worker-initialized transport code, separately from the completion adapter in master initialization. The release adapter looks successful because Redis ZREM/HDEL return zero without error. Removing the pool customization used by the earlier fixer leaves transport admission active and still saturated. Deleting occupancy indexes alone reconstitutes them from receipts. Both code stages and the actual Redis member identity must be correlated; pod restarts and Deployment rollback preserve the ConfigMap and shared state.",
+  "expected_agent_pitfalls": [
+    "Follow connection timeout messages into healthy timeline services or network paths",
+    "Remove the pool completion adapter and assume the image pool disables distributed admission",
+    "Clear only rpc:sessions:* indexes and see them reappear from the reservation receipt journal",
+    "Fix SHA-1 normalization for new completions without retiring existing orphaned reservations",
+    "Restart, roll back or scale the frontend while retaining worker startup code and shared capacity"
+  ],
+  "mitigation_summary": "Remove both transport admission and legacy completion startup blocks from the existing nginx ConfigMap, replace frontend pods to load the image transport and pool, then delete only the two obsolete Redis reservation key families.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "capacity",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 41.0,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "300.61993885040283",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a mitigation, and submit once the fix is in place. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json; ls -la /logs'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=100; kubectl get deploy nginx-thrift -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl get deploy,svc,cm -n social-network -o wide; kubectl get events -n social-network --sort-by=.lastTimestamp'\nRUNS: /bin/bash -lc \"kubectl get networkpolicy -A; kubectl get cm nginx-thrift -n social-network -o jsonpath='{.data.nginx\\\\.conf}'\"\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/home-timeline-service --tail=20; kubectl logs -n social-network deploy/compose-post-service --tail=20; kubectl exec -n social-network deploy/nginx-thrift -- cat /etc/resolv.conf; kubectl get svc -n kube-system'\nSAYS: The gateway\u2019s Lua code is rejecting RPCs before they reach the backend services. Its Redis session limiter stores hashed reservation IDs but releases unhashed IDs, leaving stale reservations that exhaust the limit. I\u2019ll remove the faulty limiter and restore direct Thrift connections. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/social-graph-redis -- redis-cli --scan --pattern 'rpc:*'; kubectl exec -n social-network deploy/nginx-thrift -- curl -s -o /dev/null -w '%{http_code} %{time_total}\\\\n' 'http://localhost:8080/wrk2-api/home-timeline/read?user_id=1&start=0&stop=10'\"\nRUNS: /bin/bash -lc \"python - <<'PY' import subprocess,json,re cm=json.loads(subprocess.check_output(['kubectl','get','cm','nginx-thrift','-n','social-network','-o','json'])) open('/logs/nginx-thrift-before.json','w').write(json.dumps(cm)) s=cm['data']['nginx.conf'] s,n=re.subn(r'    -- RPC completion ada\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for path in home-timeline user-timeline; do curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://localhost:8080/wrk2-api/\"'$path/read?user_id=1&start=0&stop=10\"; done'\"'; kubectl exec -n social-network deploy/n\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- python - <<'PY' PY\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for i in \"'$(seq 1 20); do curl -s -o /dev/null -w \"%{http_code} %{time_total}'\"\\\\n\\\" \\\"http://localhost:8080/wrk2-api/home-timeline/read?user_id=\"'$i&start=0&stop=10\"; curl -s -o /dev/null -w \"%{http_code} %{time_total}'\"\\\\\nSAYS: The gateway rollout is complete. All 40 timeline checks and the post creation check returned HTTP 200 in 8\u201358 ms, with no gateway errors during verification. I\u2019m submitting the mitigation for sustained validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Removed the faulty Redis RPC session limiter and rolled out the gateway fix.  Verification: 41 requests succeeded with HTTP 200 and 8\u201358 ms latency. Submitted exactly once with `{\"solution\": \"\"}`; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": false,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

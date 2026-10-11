@@ -1,0 +1,75 @@
+{
+  "live_soak_seconds": 1204.5,
+  "steady_samples": 17,
+  "all_steady_samples_violated": true,
+  "final_verdict": {
+    "rounds": 4,
+    "violating": 4,
+    "healthy": false,
+    "violated": true,
+    "details": [
+      {
+        "time": 1791676961.814742,
+        "requests": 2088,
+        "rps": 69.5,
+        "error_ratio": 0.5776,
+        "timeout_ratio": 0.0905,
+        "p99_ms": 17300.0,
+        "violations": [
+          "error_ratio=0.578>0.050",
+          "p99=17300ms>1000ms",
+          "rps=69.5<70.0"
+        ]
+      },
+      {
+        "time": 1791676992.905385,
+        "requests": 2070,
+        "rps": 68.9,
+        "error_ratio": 0.5836,
+        "timeout_ratio": 0.0889,
+        "p99_ms": 15690.0,
+        "violations": [
+          "error_ratio=0.584>0.050",
+          "p99=15690ms>1000ms",
+          "rps=68.9<70.0"
+        ]
+      },
+      {
+        "time": 1791677024.027358,
+        "requests": 2009,
+        "rps": 66.9,
+        "error_ratio": 0.5958,
+        "timeout_ratio": 0.1015,
+        "p99_ms": 16440.0,
+        "violations": [
+          "error_ratio=0.596>0.050",
+          "p99=16440ms>1000ms",
+          "rps=66.9<70.0"
+        ]
+      },
+      {
+        "time": 1791677055.123107,
+        "requests": 2064,
+        "rps": 68.7,
+        "error_ratio": 0.5809,
+        "timeout_ratio": 0.095,
+        "p99_ms": 16550.0,
+        "violations": [
+          "error_ratio=0.581>0.050",
+          "p99=16550ms>1000ms",
+          "rps=68.7<70.0"
+        ]
+      }
+    ]
+  },
+  "final_log_surges": {
+    "hotel-reserv-search": [
+      0.0,
+      5146.0
+    ]
+  },
+  "repair_all_rounds_healthy": true,
+  "cleanup_all_rounds_healthy": true,
+  "original_template_exactly_restored_during_cleanup": true,
+  "repeated_script_runs_succeeded": true
+}

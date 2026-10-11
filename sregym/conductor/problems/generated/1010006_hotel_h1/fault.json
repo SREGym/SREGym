@@ -1,0 +1,57 @@
+{
+  "app": "hotel_reservation",
+  "title": "Historical catalog materializer repeatedly expands live rate inventory",
+  "fault_layer": "data",
+  "fault_primitive": "MongoDB union view materialized into live inventory by a recurring catalog refresh sidecar",
+  "root_cause_class": "rate_catalog_archive_materialization_scope",
+  "incident_class": "Catalog migration compatibility projection omits temporal partition boundary",
+  "affected_components": [
+    "mongodb-rate",
+    "catalog-refresh",
+    "memcached-rate",
+    "rate",
+    "search",
+    "frontend"
+  ],
+  "symptoms": "Searches fail with dependency errors and rate RPC ResourceExhausted or deadlines while database and application pods remain ready. Small valid documents aggregate into an excessive response; non-expiring cached results preserve the excess after source repair.",
+  "why_hard": "Individual BSON documents are small and contain ordinary booking terms, not inline media. The physical inventory is a derived collection: deleting historical rows fixes only one copy, and a recurring materializer restores them from an archive union view. The legacy query ignores arrival and departure dates. Diagnosis requires correlating source view metadata, date/count distributions, the refresh script, deployed query code and non-expiring cache behavior. Restart and deployment rollback do not repair persistent source scope.",
+  "expected_agent_pitfalls": [
+    "Treat ResourceExhausted as backend admission pressure",
+    "Search for large individual BSON records or inline images",
+    "Repair prices or current descriptions but leave the archive union",
+    "Clear cache without repairing the compatibility view",
+    "Repair the view without draining workers and invalidating non-expiring cache",
+    "Delete archived dates from materialized inventory without repairing the source view and stopping its refresh process"
+  ],
+  "mitigation_summary": "Remove the archive union from the live source view, stop the catalog materializer, rebuild inventory from its preserved current backing collection, drain rate workers and invalidate cache. Recovery removes the introduced catalog objects and restores modified runtime settings from existing last-applied configuration.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "data",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 50.0,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "521.2946569919586",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit it for validation once service health is restored. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deployments -n hotel-reservation'\nRUNS: /bin/bash -lc \"ls -la /logs; env | sort | rg -i 'kube|host|proxy'; curl -s --max-time 10 http://host.docker.internal:8000/openapi.json\"\nRUNS: /bin/bash -lc 'kubectl get deploy -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/rate --tail=70; kubectl logs -n hotel-reservation deploy/search --tail=40; kubectl logs -n hotel-reservation deploy/frontend --tail=40; kubectl get svc -A'\nRUNS: /bin/bash -lc \"kubectl get deploy -n hotel-reservation -o json > /tmp/deploy.json; python - <<'PY' import json for d in json.load(open('/tmp/deploy.json'))['items']:  s=d['spec']['template']['spec']; print(d['metadata']['name'], 'revision',d['metadata']['annotations'].get('deployment.kubernetes.io/r\nRUNS: /bin/bash -lc 'kubectl get configmap -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc \"curl -s localhost:19091/metrics; curl -s -w '\\\\n%{http_code} %{time_total}\\\\n' --max-time 10 'http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'; kubectl exec -n hotel-reservation deploy/mongodb-rate -c hotel\n[...]\ntabase admin rate-db --eval 'var ids=db.inventory_current.distinct(\\\"_id\\\"); printjson(db.inventory.deleteMany({_id:{\"'$nin:ids}})); print(\"live invent\nRUNS: /bin/bash -lc \"curl -s -w '\\\\n%{http_code} %{time_total}\\\\n' --max-time 10 'http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'; kubectl exec -n hotel-reservation deploy/mongodb-rate -c catalog-refresh -- cat /catalog/refresh.sh\"\nRUNS: /bin/bash -lc \"python - <<'PY' import socket s=socket.create_connection(('127.0.0.1',11211)); s.sendall(b'flush_all\\\\r\\\\n'); print(s.recv(100)); s.close() PY curl -s localhost:19092/metrics; kubectl logs -n hotel-reservation deploy/rate --tail=10\"\nSAYS: The live inventory now contains only 27 current records, and the rate queue has drained. Initial checks still timed out, so I cleared the cache again after the old rate pod stopped. I\u2019m checking whether requests now recover consistently. \nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures u='http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194' def check(i):  t=time.monotonic()  try:   r=urllib.request.urlopen(u,timeout=5); r.read(); return r.status,round(time.monotoni\nRUNS: /bin/bash -lc \"curl -s localhost:19092/metrics; kubectl top pods -n hotel-reservation | rg 'rate|search'; kubectl exec -n hotel-reservation deploy/mongodb-rate -c hotel-reserv-rate-mongo -- mongo --quiet -u admin -p admin --authenticationDatabase admin rate-db --eval 'print(\\\"live=\\\"+db.inventory.co\nRUNS: /bin/bash -lc 'curl -s localhost:19092/metrics'\nSAYS: All 48 verification requests succeeded. After recovery, search latency settled at roughly 84\u2013191 ms, with no new rate expirations or rejections. The inventory remains at 27 current records after refresh, and all 20,480 historical records are preserved. I\u2019m submitting the mitigation now. \nRUNS: /bin/bash -lc \"curl -sS --max-time 30 -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures u='http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194' def check(i):  t=time.monotonic()  try:   r=urllib.request.urlopen(u,timeout=5); r.read(); return r.status,round(time.monotoni\nSAYS: Fixed the catalog refresh that copied historical rates into live inventory, cleaned the inventory, and cleared the cache.  All 48 verification requests succeeded; latency settled at 84\u2013191 ms. Historical records were preserved.  Submitted the required empty solution once; validation accepted the submission."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": false,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

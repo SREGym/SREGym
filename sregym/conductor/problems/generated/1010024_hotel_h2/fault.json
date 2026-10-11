@@ -1,0 +1,55 @@
+{
+  "app": "hotel_reservation",
+  "title": "Retained supplier aliases cross a scalar catalog reader contract",
+  "fault_layer": "data",
+  "fault_primitive": "MongoDB multikey alias revisions shadow scalar hotel profiles while BSON address cardinality changes from object to array",
+  "root_cause_class": "supplier_multikey_revision_cardinality_contract",
+  "incident_class": "Partial supplier catalog schema migration against a legacy reader",
+  "affected_components": [
+    "mongodb-profile",
+    "profile",
+    "memcached-profile",
+    "frontend"
+  ],
+  "symptoms": "Search and recommendation responses trigger frontend nil-address serialization panics despite successful profile RPCs and healthy pods. Frontend runtime-error logs surge.",
+  "why_hard": "Every current scalar profile remains intact. Retained revisions have complete addresses and no retirement markers, but use arrays for supplier aliases and address cardinality. MongoDB scalar equality matches their multikey IDs; the Go BSON reader silently drops incompatible array fields and caches an incomplete successful response indefinitely. Missing-address checks find zero rows and the parent's duplicate-ID aggregation finds zero duplicate groups because scalar and array keys group separately. Restoring scalar profiles, restarting services, flushing caches, deleting lifecycle-retired rows, and adding a unique ID index do not repair the persisted schema mismatch. Diagnosis requires correlating MongoDB equality and grouping semantics, BSON types, cached JSON, and the legacy protobuf model.",
+  "expected_agent_pitfalls": [
+    "Remove records missing addresses or marked retired and find none",
+    "Inspect canonical scalar profiles and dismiss storage",
+    "Trust an empty duplicate-ID aggregation",
+    "Try a unique ID index without resolving multikey alias overlap",
+    "Flush cache or restart profile and repopulate incompatible revisions",
+    "Treat successful profile spans as proof of complete responses"
+  ],
+  "mitigation_summary": "Find array-valued identity revisions, verify that exactly one alias has an intact scalar canonical profile, remove only those incompatible revisions, then flush the profile cache. No saved state is required.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "controller",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 43.6,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "358.0717771053314",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a fix, and verify recovery before submitting for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'ls -la /logs'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=70'\nRUNS: /bin/bash -lc 'kubectl get svc,deploy,networkpolicy -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'kubectl get deploy/profile -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/recommendation --tail=40'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/profile --tail=60'\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo --quiet --eval 'db.adminCommand({listDatabases:1})'\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'ls; cat services/frontend/server.go | tail -80; cat services/profile/server.go | tail -100'\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo profile-db --quiet --eval 'db.getCollectionNames().forEach(function(c){print(c);print(db[c].count());printjson(db[c].findOne())})'\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-recommendation -- \n[...]\nstr,range(1,101)))+'\\\\r\\\\n').encode());b=b'' while not b.endswith(b'END\\\\r\\\\n'): b+=s.recv(65536) print(b.decode()) for p in ['/recommendations?require=dis&\nSAYS: The frontend panics when it receives hotel profiles without addresses. I found malformed duplicate records for hotels 2\u20136 in MongoDB, plus invalid profiles in the cache. I\u2019ll remove the malformed duplicates, retain the valid records, and clear the affected cache entries. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo profile-db --quiet --eval 'printjson(db.hotels.find({id:{\"'$in:[\"2\",\"3\",\"4\",\"5\",\"6\"]}}).toArray())'\"'\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo profile-db --quiet --eval 'printjson(db.hotels.deleteMany({id:{\"'$type:\"array\"}}));print(db.hotels.count())'\"'\"\nRUNS: /bin/bash -lc \"python - <<'PY' import socket s=socket.create_connection(('localhost',11211));s.sendall(b'delete 2\\\\r\\\\ndelete 3\\\\r\\\\ndelete 4\\\\r\\\\ndelete 5\\\\r\\\\ndelete 6\\\\r\\\\nquit\\\\r\\\\n');b=b'' while True:  x=s.recv(4096)  if not x:break  b+=x print(b.decode()) PY\"\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --since=20s --tail=10'\nRUNS: /bin/bash -lc \"python - <<'PY' import socket,json s=socket.create_connection(('localhost',11211));s.sendall(b'get 1 2 3 4 5 6\\\\r\\\\n');b=b'' while not b.endswith(b'END\\\\r\\\\n'):b+=s.recv(65536) for line in b.decode().splitlines():  if line.startswith('{'):   h=json.loads(line);print(h.get('Id'),h.get(\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --since=10s --tail=5'\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures paths=['/recommendations?require='+r+'&lat=37.7749&lon=-122.4194' for r in ['dis','rate','price']]+['/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'] def check(p):  t=time.monotonic()  try:   with ur\nRUNS: /bin/bash -lc \"curl -s -o /dev/null -w '%{http_code} %{time_total}\\\\n' 'http://localhost:5000/recommendations?require=dis&lat=37.7749&lon=-122.4194'\"\nSAYS: The malformed records and cached profiles are cleared. All 120 search and recommendation checks succeeded, with a maximum latency of 528 ms, and recent frontend logs show no new panics. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Removed five malformed duplicate hotel profiles and cleared affected cache entries. All 120 verification requests succeeded without new frontend panics.  Submitted the required empty solution; validation accepted the submission."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

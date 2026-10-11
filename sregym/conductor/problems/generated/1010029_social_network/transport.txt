@@ -1,0 +1,8 @@
+    local TSocket = require 'TSocket'
+    function TSocket:write(buf)
+      local batch_size = 256
+      local batches = math.max(1, math.floor(#buf / batch_size))
+      for batch = 0, batches - 1 do
+        self.handle:send(string.sub(buf, batch * batch_size + 1, (batch + 1) * batch_size))
+      end
+    end

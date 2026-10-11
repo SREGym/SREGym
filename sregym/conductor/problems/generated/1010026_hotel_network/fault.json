@@ -1,0 +1,53 @@
+{
+  "app": "hotel_reservation",
+  "title": "HTTP/2 receive-credit batching exceeds the static connection window",
+  "fault_layer": "app-code",
+  "fault_primitive": "the static-window branch of the vendored HTTP/2 client assigns a connection WINDOW_UPDATE batching threshold of four windows instead of one quarter",
+  "root_cause_class": "http2_connection_credit_batching_watermark",
+  "incident_class": "transport tuning regression causing persistent multiplexed RPC flow-control starvation",
+  "affected_components": [
+    "search",
+    "rate",
+    "frontend"
+  ],
+  "symptoms": "All application pods remain Running and Ready. Searches initially succeed then time out on the rate RPC, while recommendations, login, and booking paths continue. Search emits sustained downstream request failed / DeadlineExceeded logs; frontend reports failed hotel searches; search rate-attempt and timeout metrics grow despite successful rate-side work.",
+  "why_hard": "The root cause is on the client side of the named rate dependency, in cumulative HTTP/2 connection credit accounting. Fresh connections briefly pass checks; TCP and Consul remain healthy; completed rate-side spans can mislead responders. A normal default masks the ratio error in the static-window override. Restarts replenish a finite budget, and Deployment rollback keeps the shared ConfigMap contents.",
+  "expected_agent_pitfalls": [
+    "Following search DeadlineExceeded logs into rate capacity, MongoDB, or memcached although rate work completes",
+    "Increasing rate QPS capacity or search deadlines without restoring HTTP/2 receive credit",
+    "Trusting a successful probe on a newly opened TCP/gRPC connection",
+    "Restarting/scaling search and trusting its brief warmup recovery",
+    "Rolling back the latest Deployment without reverting the shared source ConfigMap"
+  ],
+  "mitigation_summary": "Change the live http2_client.go static-window updateThreshold assignment from uint32(icwz)*4 to uint32(icwz)/4 in search-runtime, then rebuild/restart search. No saved manifests or values are required.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "network",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 1,
+        "minutes": 47.9,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "341.2439799308777",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a fix, and submit the mitigation once it\u2019s verified. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'kubectl get deploy,svc -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/search --tail=100; kubectl logs -n hotel-reservation deploy/frontend --tail=60; kubectl get events -n hotel-reservation --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get deploy search rate -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/rate --tail=35; kubectl get cm -n hotel-reservation; kubectl top pods -n hotel-reservation'\nRUNS: /bin/bash -lc \"kubectl get cm search-runtime -n hotel-reservation -o json > /tmp/search-runtime.json; kubectl exec -n hotel-reservation deploy/search -- sh -c 'cat dialer/dialer.go; sed -n \\\"1,300p\\\" services/search/server.go'\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/search -- sh -c 'wget -qO- http://rate:9091/metrics; wget -qO- http://localhost:9092/metrics'\"\nSAYS: Search requests are timing out when calling the rate service, although rate reports completing its requests without queueing or rejection. I\u2019m checking the search pod\u2019s modified gRPC transport for a response-delivery problem. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/rate -- cat vendor/google.golang.org/grpc/transport/control.go > /tmp/control-original.go; kubectl exec -n hotel-reservation deploy/rate -- cat vendor/google.golang.org/grpc/transport/http2_client.go > /tmp/http2-original.go; python - <<'PY' im\nRUNS: /bin/bash -lc \"kubectl patch deployment search -n hotel-reservation --type=json -p='[{\\\"op\\\":\\\"replace\\\",\\\"path\\\":\\\"/spec/template/spec/containers/0/command\\\",\\\"value\\\":[\\\"search\\\"]},{\\\"op\\\":\\\"remove\\\",\\\"path\\\":\\\"/spec/template/spec/containers/0/volumeMounts\\\"},{\\\"op\\\":\\\"remove\\\",\\\"path\\\":\\\"/spec/te\nSAYS: The modified gRPC transport waits for a flow-control update threshold four times larger than its receive window. That can stall responses and cause the observed timeouts. I\u2019ve restored search to the original application binary, removing the modified transport, and am checking recovery. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/search -- sh -c 'wget -qO- http://localhost:9092/metrics'; kubectl logs -n hotel-reservation deploy/search --tail=5\"\nRUNS: /bin/bash -lc 'kubectl exec -n hotel-reservation deploy/search -- wget -qO- http://localhost:9092/metrics'\nSAYS: The rollout is complete. All 60 hotel-search checks returned HTTP 200; the latest checks took 74\u2013199 ms. Search has also completed over 1,800 rate calls with zero timeouts or failures. I\u2019m submitting the mitigation now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures u='http://localhost:15000/hotels?lat=37.7749&lon=-122.4194&inDate=2015-04-09&outDate=2015-04-10' def check(_):  t=time.monotonic()  try:   r=urllib.request.urlopen(u,timeout=5); b=r.read(); return r.status,round(time.monoto\nSAYS: Restored search\u2019s original binary, removing a modified gRPC flow-control implementation that stalled responses.  Verified 60 successful hotel-search requests and over 1,800 rate calls with zero timeouts or failures. Submitted the required empty solution once; validation accepted the submission."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

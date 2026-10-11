@@ -1,0 +1,8 @@
+{
+  "duration_seconds": 1802.428706407547,
+  "stable_violation": true,
+  "settled_samples": 27,
+  "all_settled_pods_ready": true,
+  "observability_seen": true,
+  "completed_utc": "2026-10-10T19:19:10.799341+00:00"
+}

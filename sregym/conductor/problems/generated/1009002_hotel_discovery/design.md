@@ -1,0 +1,17 @@
+# Orphaned regional service registration
+
+A registrar migration leaves a `srv-rate` record on an external Consul node. Its upstream address was copied from the user-service gateway, and its last TCP check is still passing. The orphan has no live agent or expiring TTL to revoke that stale status. This mirrors out-of-band service catalog integrations that fail to deregister retired entries or reuse a shared upstream mapping incorrectly.
+
+The Go application's gRPC resolver reads passing Consul health records, not Kubernetes EndpointSlices. Round robin therefore sends roughly half of rate calls to the healthy user gRPC backend. Its transport works, but the rate method is unknown. Search records `grpc_code=Unimplemented`, increments its rate-failure metric, and returns a generic dependency-unavailable error to the frontend. The real rate backend and every Kubernetes object remain healthy. No deployed application configuration is modified.
+
+An expert follows the failed frontend/search trace, distinguishes a non-retryable method mismatch from a timeout, and enumerates `GET /v1/health/service/srv-rate?passing=true`. Comparing the advertised addresses and ports with rate pods reveals the external-node registration pointing at the user ClusterIP. The appropriate repair is catalog deregistration, including the obsolete empty node. Local agent deregistration is insufficient for a record owned by another catalog node. The reference mitigation derives valid addresses from live Kubernetes state and does not depend on the deliberately chosen ID.
+
+The injection uses a deterministic node/service key, making repeated registration an upsert. Neither a workload rollout nor scaling a backend removes an external-node record. The catalog has no TTL and does not automatically prune this external node. A restart of the dev-mode Consul server alone also loses legitimate dynamic registrations and does not restore service; it requires coordinated backend re-registration. No helper resources remain. Recovery performs the same targeted deletion as mitigation and leaves original catalog records intact.
+
+## Live validation
+
+The initial settled window showed approximately 30% end-user errors. Two checks more than 60 seconds apart reported `violated=true`; the second followed deletion and recreation of the rate and search pods. Search metrics showed equal successful and failed rate calls with zero rate timeouts. Mitigation was executed twice, followed by an entirely healthy four-round SLO window with zero errors. Recovery was executed twice and the four-round window remained healthy. Injection was then executed twice again for final replay validation. All scripts passed shell syntax checks. The scenario is observable through search warnings and its exposed failure metrics; the SLO endpoint reported no new Prometheus alerts.
+
+The catalog entry has no TTL, no live owning agent, and no deregistration timer. Its duration is indefinite until an operator deletes the record or clears the entire registry. The scripts use only kubectl and Python's standard library, including Python available in the existing frontend image for access to the in-cluster Consul HTTP API. They create no helper workloads or files in application containers.
+
+Final replay validation: all four measured rounds violated the error SLO (approximately 30% errors), and two replay checks more than 60 seconds apart returned `violated=true`. The incident was left active for submission.

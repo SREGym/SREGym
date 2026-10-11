@@ -1,0 +1,54 @@
+{
+  "app": "hotel_reservation",
+  "title": "Retained catalog tombstones shadow current supplier revisions",
+  "fault_layer": "data",
+  "fault_primitive": "Duplicate business-key retirement records precede valid revisions in an existing nonunique MongoDB index",
+  "root_cause_class": "supplier_retention_tombstone_business_key_shadowing",
+  "incident_class": "Supplier catalog compaction retains tombstones in a collection consumed by a legacy unversioned reader",
+  "affected_components": [
+    "mongodb-profile",
+    "profile",
+    "memcached-profile",
+    "frontend"
+  ],
+  "symptoms": "Search and recommendation requests panic in frontend response serialization. Profile RPCs succeed, catalog contains every current profile, and all pods remain healthy. Frontend runtime-error logs surge.",
+  "why_hard": "No added Kubernetes objects, controllers, collections, or indexes identify the change. Unlike the parent, no profiles are missing: all 80 complete current records exist. Five retained retirement revisions share their IDs and precede them in the existing nonunique index. The profile reader selects one revision without lifecycle filtering and caches it forever. Restoring the existing current records, restarting services, and flushing cache do not remove the shadow revisions. Diagnosis requires correlating successful RPCs, raw cached profiles, and all database revisions for a failing ID.",
+  "expected_agent_pitfalls": [
+    "Treat frontend serialization panic as a release issue",
+    "Verify complete current records or hotel 1 and dismiss storage",
+    "Restore current records by their original ObjectIds without removing duplicate retirement revisions",
+    "Restart profile or flush cache and repopulate the same retired revision",
+    "Look for the parent's retention controller or TTL index, neither of which exists"
+  ],
+  "mitigation_summary": "Remove retired revisions only when an intact active counterpart exists, remove migration metadata from current rows, then flush memcached-profile. The repair uses only visible cluster data.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "controller",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 43.3,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "381.3969099521637",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the workload and service health, apply a fix, and submit it for validation once the application is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=70; kubectl logs -n hotel-reservation deploy/search --tail=40'\nRUNS: /bin/bash -lc 'kubectl get svc,deploy,networkpolicy -n hotel-reservation; kubectl top pods -n hotel-reservation'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/profile --tail=80; kubectl get deploy profile -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo --quiet --eval 'db.adminCommand({listDatabases:1})'; kubectl get cm -n hotel-reservation -o yaml\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo --quiet profile-db --eval 'printjson(db.getCollectionNames()); db.getCollectionNames().forEach(function(c){print(c);print(db[c].count());printjson(db[c].findOne());printjson(db[c].find({hotelid:\\\"1\\\"}).toArray())})'\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/profile -- ls /; kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'ls /go/src/github.com/\n[...]\n.go\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo --quiet profile-db --eval 'printjson(db.hotels.find({address:{\"'$exists:false}}).toArray()); printjson(db.hotels.find({address:null}).toArray())'\"'; kubectl exec -n hotel-reservation deploy/frontend -- curl -sv 'http://\nSAYS: The frontend is crashing while formatting hotel profiles. MongoDB contains retired records for hotels 2\u20136 without addresses, and the profile service can select and cache them. I\u2019ll check the current records, then remove the stale duplicates and clear the affected cache entries. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo --quiet profile-db --eval 'printjson(db.hotels.find({id:\\\"2\\\"}).toArray()); printjson(db.hotels.getIndexes()); printjson(db.hotels.aggregate([{\"'$group:{_id:\"$id\",n:{$sum:1}}},{$match:{n:{$gt:1}}}]).toArray())'\"'; kubec\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo --quiet profile-db --eval 'var q={lifecycle:\\\"retired\\\",address:{\"'$exists:false},id:{$in:[\"2\",\"3\",\"4\",\"5\",\"6\"]}}; var stale=db.hotels.find(q).toArray(); stale.forEach(function(d){if(!db.hotels.findOne({id:d.id,lifecycl\nSAYS: The five stale records are removed, the affected cache entries are cleared, and a unique hotel-ID index now prevents duplicate profiles. I\u2019m checking search and recommendation requests under the ongoing load before submitting. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- curl -s 'http://consul:8500/v1/health/service/srv-profile?passing=true'; kubectl exec -n hotel-reservation deploy/mongodb-profile -- mongo --quiet profile-db --eval 'print(\\\"Profiles without addresses: \\\"+db.hotels.count({address:{\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- python3 -c 'import urllib.request,time; urls=[\\\"/recommendations?require=\\\"+r+\\\"&lat=37.7749&lon=-122.4194\\\" for r in [\\\"dis\\\",\\\"rate\\\",\\\"price\\\"]]+[\\\"/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194\\\"]; start=\nSAYS: All 624 search and recommendation checks succeeded over 40 seconds, with a maximum latency of 136 ms and no new frontend panic logs. I\u2019m submitting the mitigation now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Fixed stale duplicate hotel profiles causing frontend crashes, cleared affected cache entries, and enforced unique hotel IDs.  Verified 624 successful requests over 40 seconds; maximum latency was 136 ms.  Submitted the required empty solution once; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

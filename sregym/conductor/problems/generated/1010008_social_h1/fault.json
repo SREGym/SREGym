@@ -1,0 +1,55 @@
+{
+  "app": "social_network",
+  "title": "Endpoint codec prototypes retain request-owned OpenResty sockets",
+  "fault_layer": "app-code",
+  "fault_primitive": "Recursive cloning of cached Thrift codec graphs preserves request-owned cosocket userdata",
+  "root_cause_class": "rpc_cosocket_request_scope_violation",
+  "incident_class": "Allocation optimization pools request-scoped transport objects across HTTP requests",
+  "affected_components": [
+    "nginx-thrift",
+    "compose-post-service",
+    "user-timeline-service",
+    "home-timeline-service"
+  ],
+  "symptoms": "Frontend RPC acquisition fails with low-level TSocket connect bad request errors, widespread HTTP 500s, and a large nginx error-log surge. All pods remain Running and Ready; backend destinations and socket pool identities are correct.",
+  "why_hard": "The previous hostname-and-port fix is already satisfied. A separate cache helper recursively clones all Lua tables, preserves class metatables and resets frame buffers; the factory returns fresh generated clients. However, recursively copying ordinary tables preserves the cosocket resource userdata owned by the first HTTP request. Endpoint isolation, fresh clients and buffer resets cannot make that handle valid in another request. The low-level error says bad request and points to the unchanged TSocket implementation rather than naming an unhealthy dependency. Diagnosis requires correlating the startup module registration, factory cache, recursive copy semantics and OpenResty request ownership rules. Pod recreation and frontend image rollback retain the ConfigMap startup code.",
+  "expected_agent_pitfalls": [
+    "Interpret bad request as malformed HTTP input or workload arguments",
+    "Investigate DNS, Services, backend availability or Thrift compatibility",
+    "Change pool keys despite correct destination isolation",
+    "Reset frame buffers or allocate new generated clients while retaining the cached socket wrapper",
+    "Restart or scale services and mistake cold successes for recovery",
+    "Roll back the frontend image while retaining the mounted factory override"
+  ],
+  "mitigation_summary": "Remove the codec cache and factory preload registration from the existing nginx ConfigMap and recreate workers. This restores the installed per-request transport factory and discards cached resource handles; recover.sh also removes the restart annotation to restore the original pod template.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "discovery",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 40.6,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "315.9622049331665",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a mitigation, then submit the required empty solution for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'ls -la /logs'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=70'\nRUNS: /bin/bash -lc 'kubectl get deploy,svc,cm -n social-network'\nRUNS: /bin/bash -lc 'kubectl get deploy nginx-thrift -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl get cm nginx-thrift -n social-network -o yaml'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'cat /usr/local/openresty/lualib/thrift/TSocket.lua; cat /usr/local/openresty/nginx/conf/nginx.conf'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'cat /usr/local/openresty/nginx/lua-scripts/RpcClientFactory.lua; cat /usr/local/openresty/nginx/lua-scripts/RpcClient.lua; cat /usr/local/openresty/lualib/thrift/TSocket.lua; cat /usr/local/openresty/lualib/thrift/GenericObj\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'cat /usr/local/openresty/lualib/thrift/RpcClientFactory.lua; cat /usr/local/openresty/lualib/thrift/RpcClient.lua'\"\nSAYS: The nginx configuration caches Thrift protocol objects that contain sockets tied to earlier requests. Reusing those sockets causes \u201cbad request\u201d errors across timeline reads and post creation. I\u2019ll remove that override to restore the original client factory and its connection pooling. \nRUNS: /bin/bash -lc \"python - <<'PY' import json,subprocess cm=json.loads(subprocess.check_output(['kubectl','get','cm','nginx-thrift','-n','social-network','-o','json'])) open('/logs/nginx-thrift-before.json','w').write(json.dumps(cm)) s=cm['data']['nginx.conf'] a=s.index('    -- RPC codec setup\\\\n') b=s\nRUNS: /bin/bash -lc 'kubectl rollout restart deploy/nginx-thrift -n social-network'\nRUNS: /bin/bash -lc 'kubectl rollout status deploy/nginx-thrift -n social-network --timeout=60s'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --since=30s --tail=25'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for route in home-timeline user-timeline; do for i in 1 2 3 4 5; do curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/\"'$route/read?user_id=1&start=0&stop=10\"; done; done'\"'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'cat /usr/local/openresty/nginx/lua-scripts/wrk2-api/post/compose.lua'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'curl -s -w \\\"\\\\n%{http_code} %{time_total}\\\\n\\\" -d \\\"user_id=1&username=username_1&post_type=0&text=SRE%20mitigation%20verification\\\" http://127.0.0.1:8080/wrk2-api/post/compose; for i in \"'$(seq 1 100); do curl -s -o /dev/n\nSAYS: The fix is deployed. All 110 timeline checks returned HTTP 200 in 2\u201314 ms, and post creation succeeded in 48 ms. The new nginx pod has logged no errors. I\u2019m submitting the required empty solution now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Removed the faulty Thrift socket cache override and rolled out nginx. Timeline reads and post creation now return HTTP 200 with low latency.  Submitted `{\"solution\": \"\"}` exactly once; the mitigation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": false,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "app": "hotel_reservation",
+  "title": "Textual discovery revisions resurrect a retired endpoint in a durable snapshot",
+  "fault_layer": "app-code",
+  "fault_primitive": "Lexicographic journal replay followed by durable endpoint materialization shared by API and client readers",
+  "root_cause_class": "discovery_journal_text_revision_materialization",
+  "incident_class": "Discovery snapshot migration applies retirement records out of order and commits a corrupt view at the correct high-water mark",
+  "affected_components": [
+    "consul",
+    "search",
+    "rate",
+    "geo",
+    "frontend"
+  ],
+  "symptoms": "Intermittent hotel search failures with rate Unimplemented warnings. All application pods are Ready. Native Consul catalog and health responses identify the real rate server; the materialized discovery view also contains a retired endpoint now serving a different RPC capability.",
+  "why_hard": "The correct catalog and correct revision watermark obscure the corrupt view. Revisions 9, 10, 11 replay as 10, 11, 9, resurrecting an endpoint after retirement. API and client independently consume the durable view. Bypassing the facade leaves the client affected; rolling back the client leaves the facade affected. Correcting replay ordering retains the committed bad view; clearing it alone lets the buggy migration recreate it.",
+  "expected_agent_pitfalls": [
+    "Treating Unimplemented as a wrong rate image or protobuf release",
+    "Changing legitimate native Consul registrations",
+    "Routing Consul directly to port 8500 and restarting search",
+    "Rolling back only the client deployment",
+    "Trusting revision 11 as proof retirement revision 10 was applied correctly",
+    "Fixing the comparator without rebuilding persisted endpoints",
+    "Deleting the snapshot without fixing journal replay"
+  ],
+  "mitigation_summary": "Repair the deployed resolver comparator to order revisions numerically, reconstruct the materialized endpoint set from the live journal, and roll search and frontend to refresh connections. No saved baseline or original manifests are needed.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "discovery",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 45.2,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "361.94752502441406",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a fix, and submit the mitigation for validation once service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deployments -n hotel-reservation'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=60; kubectl logs -n hotel-reservation deploy/search --tail=60; kubectl get deploy consul frontend search -n hotel-reservation -o yaml; kubectl get svc -n hotel-reservation'\nRUNS: /bin/bash -lc 'kubectl get cm discovery-client -n hotel-reservation -o json; kubectl get svc consul -n hotel-reservation -o yaml; kubectl logs -n hotel-reservation deploy/rate --tail=15'\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/consul -c discovery-api -- python3 -c 'import urllib.request,json,base64; u=\\\"http://127.0.0.1:8500\\\"; print(urllib.request.urlopen(u+\\\"/v1/health/service/srv-rate\\\").read().decode()); p=json.load(urllib.request.urlopen(u+\\\"/v1/kv/service-disco\nSAYS: The search service is sending rate requests to the geo service, which returns gRPC `Unimplemented` errors. Discovery replay sorts revision numbers as strings, so revision 9 overrides the retirement at revision 10; the resulting bad endpoint list is then cached. I\u2019ll fix the ordering, repair the cached list, and restart search. \nRUNS: /bin/bash -lc \"curl -sS --max-time 10 -w '\\\\nstatus=%{http_code} latency=%{time_total}\\\\n' 'http://127.0.0.1:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'; kubectl get pods -n hotel-reservation -l io.kompose.service=search; kubectl logs -n hotel-reservation deploy/sear\nRUNS: /bin/bash -lc \"mkdir -p /logs/mitigation; kubectl get cm discovery-client -n hotel-reservation -o json > /logs/mitigation/discovery-before.json python3 - <<'PY' import json p=json.load(open('/logs/mitigation/discovery-before.json')) s=p['data']['consul.go'] s=s.replace('return entries[i].Revision < \nRUNS: /bin/bash -lc \"curl -sS --max-time 5 -o /logs/mitigation/response.json -w 'status=%{http_code} latency=%{time_total}\\\\n' 'http://127.0.0.1:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'; kubectl logs -n hotel-reservation deploy/search --since=40s --tail=8\"\nRUNS: /bin/bash -lc \"python3 - <<'PY' import urllib.request,time url='http://127.0.0.1:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194' for i in range(20):  t=time.monotonic()  try:   r=urllib.request.urlopen(url,timeout=5); data=r.read(); print(i,r.status,round(time.monotonic(\nSAYS: The fix is deployed. All 20 consecutive hotel-search checks returned HTTP 200, with latency between 26 and 175 ms. The new search pod has no downstream errors in its recent logs. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS --max-time 30 -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Fixed discovery revision ordering and repaired the cached rate endpoints, then redeployed search.  Verified 20 consecutive successful requests at 26\u2013175 ms. Submitted the required empty solution; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

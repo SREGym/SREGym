@@ -1,0 +1,53 @@
+{
+  "app": "hotel_reservation",
+  "title": "Durable profile batch claims outlive their completion records",
+  "fault_layer": "app-code",
+  "fault_primitive": "MongoDB-backed batch coalescer writes claim and completion under incompatible digest encodings and compares millisecond lease deadlines against epoch seconds",
+  "root_cause_class": "durable_batch_identity_lease_schema_mismatch",
+  "incident_class": "Serialization and timestamp contract regression during distributed cache-stampede suppression rollout",
+  "affected_components": [
+    "profile",
+    "mongodb-profile",
+    "frontend"
+  ],
+  "symptoms": "Search and recommendation requests time out waiting for profile materialization. Pods remain ready; MongoDB contains both completed batches and orphaned pending claims. Frontend and profile error logs surge.",
+  "why_hard": "Unlike the parent mutex regression, no local lock cycle exists. Successful producers persist results, but not under the identity consumers poll. Pending claims survive every pod restart and scale-out. Repairing completion identity alone cannot take over old claims because lease units disagree. Clearing the collection without repairing the writers recreates the incident. Diagnosis requires correlating the claim reader, completion writer, persisted records, and clock units.",
+  "expected_agent_pitfalls": [
+    "Apply the parent's mutex repair despite the absence of a mutex cycle",
+    "Restart or scale profile while durable pending claims remain",
+    "Tune MongoDB latency or RPC deadlines because consumers poll the database",
+    "Repair completion encoding without repairing lease expiry or clearing old claims",
+    "Clear pending claims without repairing completion encoding"
+  ],
+  "mitigation_summary": "Unify completion and claim batch identities, compare lease deadlines in milliseconds, restart profile, remove orphaned pending claims, and retire stale Consul pod registrations.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "capacity",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 44.8,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "318.70246601104736",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, fix the cause of the degraded service, and submit the mitigation for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deployments -n hotel-reservation'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get deploy profile -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=65'\nRUNS: /bin/bash -lc 'kubectl get events -n hotel-reservation --sort-by=.lastTimestamp; kubectl top pods -n hotel-reservation'\nRUNS: /bin/bash -lc 'ls -la /logs'\nRUNS: /bin/bash -lc 'kubectl get configmap profile-runtime -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs deploy/profile -n hotel-reservation --tail=25'\nRUNS: /bin/bash -lc 'kubectl get svc -n hotel-reservation; kubectl get networkpolicy -n hotel-reservation'\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/profile -- sh -c 'command -v profile; cat services/profile/server.go'\"\nSAYS: The profile service\u2019s custom cache code writes completed results under a different key from the one it reads, and compares lease timestamps in mismatched units. Requests repeatedly time out while waiting for those records. I\u2019ll restore the original profile binary to bypass the broken code. \nRUNS: /bin/bash -lc \"kubectl patch deployment profile -n hotel-reservation --type=json -p='[{\\\"op\\\":\\\"replace\\\",\\\"path\\\":\\\"/spec/template/spec/containers/0/command\\\",\\\"value\\\":[\\\"profile\\\"]},{\\\"op\\\":\\\"remove\\\",\\\"path\\\":\\\"/spec/template/spec/containers/0/volumeMounts\\\"},{\\\"op\\\":\\\"remove\\\",\\\"path\\\":\\\"/spec/\nRUNS: /bin/bash -lc 'kubectl rollout status deployment/profile -n hotel-reservation --timeout=60s'\nRUNS: /bin/bash -lc \"curl -sS --max-time 10 -o /tmp/hotel-response.json -w 'status=%{http_code} latency=%{time_total}\\\\n' 'http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'; head -c 400 /tmp/hotel-response.json\"\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --since=10s --tail=10; kubectl get pods -n hotel-reservation -l io.kompose.service=profile'\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures u='http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194' def check(_):  t=time.monotonic()  with urllib.request.urlopen(u,timeout=5) as r:   r.read()   return r.status,time.monotonic(\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --since=5s --tail=5; kubectl top pod -n hotel-reservation -l io.kompose.service=profile'\nSAYS: The restored profile service is ready. All 50 search checks returned HTTP 200, with a maximum latency of 305 ms, and recent frontend logs show no errors. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Restored the original profile service, bypassing broken cache code that caused timeouts.  Verified 50 successful search requests; maximum latency was 305 ms. Submitted the required empty solution once; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": false,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "app": "social_network",
+  "title": "BSON media identifier widening strands native database client leases",
+  "fault_layer": "data",
+  "fault_primitive": "Lossless BSON int64-to-Decimal128 conversion of nested media IDs combined with a 16-client MongoDB pool; JSON decode exceptions bypass native lease return",
+  "root_cause_class": "bson_numeric_widening_exception_path_lease_attrition",
+  "incident_class": "Partial numeric schema migration exposes non-exception-safe bounded connection pool ownership",
+  "affected_components": [
+    "post-storage-mongodb",
+    "post-storage-service",
+    "post-storage-memcached",
+    "user-timeline-service",
+    "compose-post-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "All application pods remain Ready. A small fraction of timeline reads initially return JSON numeric type exceptions. Post storage subsequently becomes silent and stalls with its database pool occupied, although MongoDB has abundant available connections. Gateway compose RPC read timeouts dominate and throughput collapses.",
+  "why_hard": "The gateway and Thrift Lua code are entirely stock. The visible timeout is on compose RPCs, whereas rare timeline reads consume native MongoDB client leases during nested media decoding. Decimal128 preserves every media identifier numerically but changes its BSON-to-JSON representation. The cause is persistent data in an existing collection and a plausible existing pool setting, with no new Kubernetes objects or database collections. Restarts and cache flushes replay the same exception path. Repairing the BSON data alone cannot reclaim already lost client leases; changing the pool budget alone leaves the leak active.",
+  "expected_agent_pitfalls": [
+    "Debug or roll back the stock gateway transport after compose read timeouts",
+    "Treat an idle MongoDB with ample available connections as proof that database access is healthy",
+    "Raise the connection budget or restart the backend and mistake temporary recovery for a complete repair",
+    "Inspect top-level post fields while overlooking nested media identifier BSON types",
+    "Flush Memcached without repairing the durable BSON representation",
+    "Normalize media identifiers but leave the existing process blocked on permanently checked-out clients"
+  ],
+  "mitigation_summary": "Convert only Decimal128 media IDs back to exact BSON int64 values, restore the application default MongoDB pool budget, flush regenerable post encodings, and replace the post-storage process to reclaim stranded client leases.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "capacity",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 45.4,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "366.2054445743561",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, then submit the required empty solution for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'kubectl get deployment post-storage-service -n social-network -o yaml kubectl top pods -n social-network kubectl get events -n social-network --sort-by=.lastTimestamp'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get configmap post-storage-service -n social-network -o yaml kubectl get svc -n social-network kubectl get networkpolicy -n social-network'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/post-storage-service --tail=60 kubectl logs -n social-network deploy/compose-post-service --tail=30 kubectl logs -n social-network deploy/nginx-thrift --tail=20'\nRUNS: /bin/bash -lc \"kubectl get cm compose-post-service -n social-network -o json | python -c 'import sys,json; c=json.load(sys.stdin); print(json.loads(c[\\\"data\\\"][\\\"service-config.json\\\"])[\\\"post-storage-mongodb\\\"])' kubectl exec -n social-network deploy/post-storage-service -- sh -c 'ls /social-networ\nSAYS: Post composition requests are timing out. The post-storage service\u2019s MongoDB connection pool is set to 16, while the application\u2019s other configuration copies specify 512\n[...]\n_types=%5B%5D&pos\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for i in 1 2 3 4 5; do curl -s -o /dev/null --max-time 10 -w \\\"compose status=%{http_code} latency=%{time_total}\\\\n\\\" -X POST http://localhost:8080/wrk2-api/post/compose -d \\\"username=username_1&user_id=1&text=mitigation_tes\nRUNS: /bin/bash -lc \"kubectl logs -n social-network deploy/post-storage-service --tail=25 kubectl logs -n social-network deploy/user-timeline-service --tail=20 kubectl exec -n social-network deploy/post-storage-mongodb -- mongo --quiet --eval 'db=db.getSiblingDB(\\\"post\\\"); printjson(db.getCollectionNames(\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/post-storage-mongodb -- mongo --quiet --eval 'db=db.getSiblingDB(\\\"post\\\"); printjson(db.post.aggregate([{\"'$unwind:\"$media\"},{$group:{_id:{$type:\"$media.media_id\"},n:{$sum:1}}}]).toArray()); printjson(db.post.countDocuments({}));'\"' kubectl get p\nSAYS: Post composition now succeeds in 24\u201345 ms, but timeline reads still fail. Stored posts contain decimal media IDs that the service cannot parse. I\u2019ll convert those IDs to the expected 64-bit integer type, preserving their values. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/post-storage-mongodb -- mongo --quiet --eval 'db=db.getSiblingDB(\\\"post\\\"); printjson(db.post.updateMany({\\\"media.media_id\\\":{\"'$type:\"decimal\"}},[{$set:{media:{$map:{input:\"$media\",as:\"m\",in:{$mergeObjects:[\"$$m\",{media_id:{$convert:{input:\"$$m.m\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/post-storage-mongodb -- mongo --quiet --eval 'db=db.getSiblingDB(\\\"post\\\"); printjson(db.post.countDocuments({\\\"media.media_id\\\":{\"'$type:\"decimal\"}}));'\"' kubectl logs -n social-network deploy/nginx-thrift --since=20s --tail=10\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for i in 1 2 3 4 5 6; do curl -s -o /dev/null --max-time 5 -w \\\"home status=%{http_code} latency=%{time_total}\\\\n\\\" \\\"http://localhost:8080/wrk2-api/home-timeline/read?user_id=459&start=0&stop=10\\\"; curl -s -o /dev/null --ma\nSAYS: Both fixes are applied. Timeline and composition checks returned HTTP 200 throughout the 30-second check, with latencies of 7\u201392 ms and no recent nginx errors. I\u2019m submitting the required empty solution now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Restored the MongoDB connection pool to 512 and corrected media ID types in 956 posts.  Requests returned HTTP 200 at 7\u201392 ms during verification. Submitted `{\"solution\":\"\"}` exactly once; the mitigation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

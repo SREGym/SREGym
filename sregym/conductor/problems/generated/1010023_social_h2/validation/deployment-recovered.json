@@ -1,0 +1,202 @@
+{
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+        "annotations": {
+            "deployment.kubernetes.io/revision": "9",
+            "meta.helm.sh/release-name": "social-network",
+            "meta.helm.sh/release-namespace": "social-network"
+        },
+        "creationTimestamp": "2026-10-10T20:22:40Z",
+        "generation": 9,
+        "labels": {
+            "app.kubernetes.io/managed-by": "Helm",
+            "service": "nginx-thrift"
+        },
+        "name": "nginx-thrift",
+        "namespace": "social-network",
+        "resourceVersion": "8627",
+        "uid": "78ac5df2-d74b-4165-89ff-388c5f0b19c4"
+    },
+    "spec": {
+        "progressDeadlineSeconds": 600,
+        "replicas": 1,
+        "revisionHistoryLimit": 10,
+        "selector": {
+            "matchLabels": {
+                "service": "nginx-thrift"
+            }
+        },
+        "strategy": {
+            "rollingUpdate": {
+                "maxSurge": "25%",
+                "maxUnavailable": "25%"
+            },
+            "type": "RollingUpdate"
+        },
+        "template": {
+            "metadata": {
+                "creationTimestamp": null,
+                "labels": {
+                    "app": "nginx-thrift",
+                    "service": "nginx-thrift"
+                }
+            },
+            "spec": {
+                "containers": [
+                    {
+                        "env": [
+                            {
+                                "name": "fqdn_suffix",
+                                "value": ".social-network.svc.cluster.local"
+                            }
+                        ],
+                        "image": "docker.io/yg397/openresty-thrift:xenial",
+                        "imagePullPolicy": "IfNotPresent",
+                        "name": "nginx-thrift",
+                        "ports": [
+                            {
+                                "containerPort": 8080,
+                                "protocol": "TCP"
+                            }
+                        ],
+                        "resources": {},
+                        "terminationMessagePath": "/dev/termination-log",
+                        "terminationMessagePolicy": "File",
+                        "volumeMounts": [
+                            {
+                                "mountPath": "/usr/local/openresty/nginx/jaeger-config.json",
+                                "name": "nginx-thrift-config",
+                                "subPath": "jaeger-config.json"
+                            },
+                            {
+                                "mountPath": "/usr/local/openresty/nginx/conf/nginx.conf",
+                                "name": "nginx-thrift-config",
+                                "subPath": "nginx.conf"
+                            },
+                            {
+                                "mountPath": "/usr/local/openresty/nginx/lua-scripts",
+                                "name": "lua-scripts"
+                            },
+                            {
+                                "mountPath": "/usr/local/openresty/lualib/thrift",
+                                "name": "lua-thrift"
+                            },
+                            {
+                                "mountPath": "/usr/local/openresty/nginx/pages",
+                                "name": "pages"
+                            },
+                            {
+                                "mountPath": "/gen-lua",
+                                "name": "gen-lua"
+                            },
+                            {
+                                "mountPath": "/keys",
+                                "name": "keys"
+                            }
+                        ]
+                    }
+                ],
+                "dnsPolicy": "ClusterFirst",
+                "hostname": "nginx-thrift",
+                "initContainers": [
+                    {
+                        "args": [
+                            "-c",
+                            "cp -r /opt/social-network/gen-lua/. /gen-lua/ \u0026\u0026 cp -r /opt/social-network/lua-thrift/. /lua-thrift/ \u0026\u0026 cp -r /opt/social-network/nginx/lua-scripts/. /lua-scripts/ \u0026\u0026 cp -r /opt/social-network/nginx/pages/. /pages/ \u0026\u0026 cp -r /opt/social-network/keys/. /keys/"
+                        ],
+                        "command": [
+                            "/bin/sh"
+                        ],
+                        "image": "ghcr.io/sregym/social-network-assets:v1",
+                        "imagePullPolicy": "IfNotPresent",
+                        "name": "alpine-container",
+                        "resources": {},
+                        "terminationMessagePath": "/dev/termination-log",
+                        "terminationMessagePolicy": "File",
+                        "volumeMounts": [
+                            {
+                                "mountPath": "/lua-scripts",
+                                "name": "lua-scripts"
+                            },
+                            {
+                                "mountPath": "/lua-thrift",
+                                "name": "lua-thrift"
+                            },
+                            {
+                                "mountPath": "/pages",
+                                "name": "pages"
+                            },
+                            {
+                                "mountPath": "/gen-lua",
+                                "name": "gen-lua"
+                            },
+                            {
+                                "mountPath": "/keys",
+                                "name": "keys"
+                            }
+                        ]
+                    }
+                ],
+                "restartPolicy": "Always",
+                "schedulerName": "default-scheduler",
+                "securityContext": {},
+                "terminationGracePeriodSeconds": 30,
+                "volumes": [
+                    {
+                        "configMap": {
+                            "defaultMode": 420,
+                            "name": "nginx-thrift"
+                        },
+                        "name": "nginx-thrift-config"
+                    },
+                    {
+                        "emptyDir": {},
+                        "name": "lua-scripts"
+                    },
+                    {
+                        "emptyDir": {},
+                        "name": "pages"
+                    },
+                    {
+                        "emptyDir": {},
+                        "name": "gen-lua"
+                    },
+                    {
+                        "emptyDir": {},
+                        "name": "lua-thrift"
+                    },
+                    {
+                        "emptyDir": {},
+                        "name": "keys"
+                    }
+                ]
+            }
+        }
+    },
+    "status": {
+        "availableReplicas": 1,
+        "conditions": [
+            {
+                "lastTransitionTime": "2026-10-10T20:33:20Z",
+                "lastUpdateTime": "2026-10-10T20:33:20Z",
+                "message": "Deployment has minimum availability.",
+                "reason": "MinimumReplicasAvailable",
+                "status": "True",
+                "type": "Available"
+            },
+            {
+                "lastTransitionTime": "2026-10-10T20:22:40Z",
+                "lastUpdateTime": "2026-10-10T20:47:40Z",
+                "message": "ReplicaSet \"nginx-thrift-5d54468559\" has successfully progressed.",
+                "reason": "NewReplicaSetAvailable",
+                "status": "True",
+                "type": "Progressing"
+            }
+        ],
+        "observedGeneration": 9,
+        "readyReplicas": 1,
+        "replicas": 1,
+        "updatedReplicas": 1
+    }
+}

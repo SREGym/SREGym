@@ -1,0 +1,1 @@
+{"database":"profile-db","collection":"staging.hotels","historyCollection":"hotel_catalog_versions","catalogIds":["2","3","4","5","6"],"legacyImportEpoch":"1970-01-01T00:00:00Z","retentionSeconds":86400,"reconcileSeconds":10}

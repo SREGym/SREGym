@@ -1,0 +1,538 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "annotations": {
+                    "deployment.kubernetes.io/revision": "6",
+                    "kompose.cmd": "kompose convert",
+                    "kompose.version": "1.22.0 (955b78124)",
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"rate\"},\"name\":\"rate\",\"namespace\":\"hotel-reservation\"},\"spec\":{\"replicas\":1,\"selector\":{\"matchLabels\":{\"io.kompose.service\":\"rate\"}},\"strategy\":{},\"template\":{\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\",\"sidecar.istio.io/statsInclusionPrefixes\":\"cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager\",\"sidecar.istio.io/statsInclusionRegexps\":\"http.*\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"rate\"}},\"spec\":{\"containers\":[{\"command\":[\"rate\"],\"env\":[{\"name\":\"JAEGER_SAMPLE_RATIO\",\"value\":\"1\"},{\"name\":\"RATE_BACKEND_QPS_LIMIT\",\"value\":\"500\"},{\"name\":\"RATE_QUEUE_CAPACITY\",\"value\":\"256\"}],\"image\":\"ghcr.io/sregym/hotel-reservation:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:1c685e1c4c304f327952397b3a99c54dadb086607774d71f222b200ec0d2e65e\",\"imagePullPolicy\":\"IfNotPresent\",\"name\":\"hotel-reserv-rate\",\"ports\":[{\"containerPort\":8084},{\"containerPort\":9091,\"name\":\"metrics\"}],\"resources\":{\"limits\":{\"cpu\":\"1000m\"},\"requests\":{\"cpu\":\"100m\"}}}],\"restartPolicy\":\"Always\"}}},\"status\":{}}\n"
+                },
+                "creationTimestamp": "2026-10-10T11:50:52Z",
+                "generation": 28,
+                "labels": {
+                    "io.kompose.service": "rate"
+                },
+                "name": "rate",
+                "namespace": "hotel-reservation",
+                "resourceVersion": "11708",
+                "uid": "62687364-80b1-4af9-9727-d605b5a80b6a"
+            },
+            "spec": {
+                "progressDeadlineSeconds": 600,
+                "replicas": 1,
+                "revisionHistoryLimit": 10,
+                "selector": {
+                    "matchLabels": {
+                        "io.kompose.service": "rate"
+                    }
+                },
+                "strategy": {
+                    "rollingUpdate": {
+                        "maxSurge": "25%",
+                        "maxUnavailable": "25%"
+                    },
+                    "type": "RollingUpdate"
+                },
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kompose.cmd": "kompose convert",
+                            "kompose.version": "1.22.0 (955b78124)",
+                            "sidecar.istio.io/statsInclusionPrefixes": "cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager",
+                            "sidecar.istio.io/statsInclusionRegexps": "http.*"
+                        },
+                        "creationTimestamp": null,
+                        "labels": {
+                            "io.kompose.service": "rate"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "command": [
+                                    "rate"
+                                ],
+                                "env": [
+                                    {
+                                        "name": "JAEGER_SAMPLE_RATIO",
+                                        "value": "1"
+                                    },
+                                    {
+                                        "name": "RATE_BACKEND_QPS_LIMIT",
+                                        "value": "500"
+                                    },
+                                    {
+                                        "name": "RATE_QUEUE_CAPACITY",
+                                        "value": "256"
+                                    }
+                                ],
+                                "image": "ghcr.io/sregym/hotel-reservation:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:1c685e1c4c304f327952397b3a99c54dadb086607774d71f222b200ec0d2e65e",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "hotel-reserv-rate",
+                                "ports": [
+                                    {
+                                        "containerPort": 8084,
+                                        "protocol": "TCP"
+                                    },
+                                    {
+                                        "containerPort": 9091,
+                                        "name": "metrics",
+                                        "protocol": "TCP"
+                                    }
+                                ],
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1"
+                                    },
+                                    "requests": {
+                                        "cpu": "100m"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File"
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Always",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30
+                    }
+                }
+            },
+            "status": {
+                "availableReplicas": 1,
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-10-10T12:31:52Z",
+                        "lastUpdateTime": "2026-10-10T12:31:52Z",
+                        "message": "Deployment has minimum availability.",
+                        "reason": "MinimumReplicasAvailable",
+                        "status": "True",
+                        "type": "Available"
+                    },
+                    {
+                        "lastTransitionTime": "2026-10-10T11:50:52Z",
+                        "lastUpdateTime": "2026-10-10T12:31:54Z",
+                        "message": "ReplicaSet \"rate-b6dc6465f\" has successfully progressed.",
+                        "reason": "NewReplicaSetAvailable",
+                        "status": "True",
+                        "type": "Progressing"
+                    }
+                ],
+                "observedGeneration": 28,
+                "readyReplicas": 1,
+                "replicas": 1,
+                "updatedReplicas": 1
+            }
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "annotations": {
+                    "deployment.kubernetes.io/revision": "5",
+                    "kompose.cmd": "kompose convert",
+                    "kompose.version": "1.22.0 (955b78124)",
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"search\"},\"name\":\"search\",\"namespace\":\"hotel-reservation\"},\"spec\":{\"replicas\":1,\"selector\":{\"matchLabels\":{\"io.kompose.service\":\"search\"}},\"strategy\":{},\"template\":{\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\",\"sidecar.istio.io/statsInclusionPrefixes\":\"cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager\",\"sidecar.istio.io/statsInclusionRegexps\":\"http.*\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"search\"}},\"spec\":{\"containers\":[{\"command\":[\"search\"],\"env\":[{\"name\":\"JAEGER_SAMPLE_RATIO\",\"value\":\"1\"},{\"name\":\"RATE_RPC_TIMEOUT_MS\",\"value\":\"1000\"},{\"name\":\"RATE_RPC_MAX_ATTEMPTS\",\"value\":\"2\"},{\"name\":\"RATE_RPC_INITIAL_BACKOFF_MS\",\"value\":\"100\"},{\"name\":\"RATE_RPC_BACKOFF_MULTIPLIER\",\"value\":\"2.0\"},{\"name\":\"RATE_RPC_JITTER\",\"value\":\"0.2\"}],\"image\":\"ghcr.io/sregym/hotel-reservation:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:1c685e1c4c304f327952397b3a99c54dadb086607774d71f222b200ec0d2e65e\",\"imagePullPolicy\":\"IfNotPresent\",\"name\":\"hotel-reserv-search\",\"ports\":[{\"containerPort\":8082},{\"containerPort\":9092,\"name\":\"metrics\"}],\"resources\":{\"limits\":{\"cpu\":\"1000m\"},\"requests\":{\"cpu\":\"100m\"}}}],\"restartPolicy\":\"Always\"}}},\"status\":{}}\n"
+                },
+                "creationTimestamp": "2026-10-10T11:50:56Z",
+                "generation": 5,
+                "labels": {
+                    "io.kompose.service": "search"
+                },
+                "name": "search",
+                "namespace": "hotel-reservation",
+                "resourceVersion": "11769",
+                "uid": "dea516c2-b615-4ef4-86bf-85c47e640190"
+            },
+            "spec": {
+                "progressDeadlineSeconds": 600,
+                "replicas": 1,
+                "revisionHistoryLimit": 10,
+                "selector": {
+                    "matchLabels": {
+                        "io.kompose.service": "search"
+                    }
+                },
+                "strategy": {
+                    "rollingUpdate": {
+                        "maxSurge": "25%",
+                        "maxUnavailable": "25%"
+                    },
+                    "type": "RollingUpdate"
+                },
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kompose.cmd": "kompose convert",
+                            "kompose.version": "1.22.0 (955b78124)",
+                            "sidecar.istio.io/statsInclusionPrefixes": "cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager",
+                            "sidecar.istio.io/statsInclusionRegexps": "http.*"
+                        },
+                        "creationTimestamp": null,
+                        "labels": {
+                            "io.kompose.service": "search"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "command": [
+                                    "search"
+                                ],
+                                "env": [
+                                    {
+                                        "name": "JAEGER_SAMPLE_RATIO",
+                                        "value": "1"
+                                    },
+                                    {
+                                        "name": "RATE_RPC_TIMEOUT_MS",
+                                        "value": "1000"
+                                    },
+                                    {
+                                        "name": "RATE_RPC_MAX_ATTEMPTS",
+                                        "value": "2"
+                                    },
+                                    {
+                                        "name": "RATE_RPC_INITIAL_BACKOFF_MS",
+                                        "value": "100"
+                                    },
+                                    {
+                                        "name": "RATE_RPC_BACKOFF_MULTIPLIER",
+                                        "value": "2.0"
+                                    },
+                                    {
+                                        "name": "RATE_RPC_JITTER",
+                                        "value": "0.2"
+                                    }
+                                ],
+                                "image": "ghcr.io/sregym/hotel-reservation:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:1c685e1c4c304f327952397b3a99c54dadb086607774d71f222b200ec0d2e65e",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "hotel-reserv-search",
+                                "ports": [
+                                    {
+                                        "containerPort": 8082,
+                                        "protocol": "TCP"
+                                    },
+                                    {
+                                        "containerPort": 9092,
+                                        "name": "metrics",
+                                        "protocol": "TCP"
+                                    }
+                                ],
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1"
+                                    },
+                                    "requests": {
+                                        "cpu": "100m"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File"
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Always",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30
+                    }
+                }
+            },
+            "status": {
+                "availableReplicas": 1,
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-10-10T11:53:25Z",
+                        "lastUpdateTime": "2026-10-10T11:53:25Z",
+                        "message": "Deployment has minimum availability.",
+                        "reason": "MinimumReplicasAvailable",
+                        "status": "True",
+                        "type": "Available"
+                    },
+                    {
+                        "lastTransitionTime": "2026-10-10T11:50:56Z",
+                        "lastUpdateTime": "2026-10-10T12:32:02Z",
+                        "message": "ReplicaSet \"search-7d996cf85b\" has successfully progressed.",
+                        "reason": "NewReplicaSetAvailable",
+                        "status": "True",
+                        "type": "Progressing"
+                    }
+                ],
+                "observedGeneration": 5,
+                "readyReplicas": 1,
+                "replicas": 1,
+                "updatedReplicas": 1
+            }
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "annotations": {
+                    "deployment.kubernetes.io/revision": "5",
+                    "kompose.cmd": "kompose convert",
+                    "kompose.version": "1.22.0 (955b78124)",
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"memcached-rate\"},\"name\":\"memcached-rate\",\"namespace\":\"hotel-reservation\"},\"spec\":{\"replicas\":1,\"selector\":{\"matchLabels\":{\"io.kompose.service\":\"memcached-rate\"}},\"strategy\":{},\"template\":{\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\",\"sidecar.istio.io/statsInclusionPrefixes\":\"cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager\",\"sidecar.istio.io/statsInclusionRegexps\":\"http.*\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"memcached-rate\"}},\"spec\":{\"containers\":[{\"env\":[{\"name\":\"MEMCACHED_CACHE_SIZE\",\"value\":\"128\"},{\"name\":\"MEMCACHED_THREADS\",\"value\":\"2\"}],\"image\":\"memcached\",\"imagePullPolicy\":\"IfNotPresent\",\"name\":\"hotel-reserv-rate-mmc\",\"ports\":[{\"containerPort\":11211}],\"resources\":{\"limits\":{\"cpu\":\"1000m\"},\"requests\":{\"cpu\":\"100m\"}}}],\"restartPolicy\":\"Always\"}}},\"status\":{}}\n"
+                },
+                "creationTimestamp": "2026-10-10T11:50:52Z",
+                "generation": 5,
+                "labels": {
+                    "io.kompose.service": "memcached-rate"
+                },
+                "name": "memcached-rate",
+                "namespace": "hotel-reservation",
+                "resourceVersion": "11641",
+                "uid": "04417b64-84df-426f-b6c1-0b9310b0e1a2"
+            },
+            "spec": {
+                "progressDeadlineSeconds": 600,
+                "replicas": 1,
+                "revisionHistoryLimit": 10,
+                "selector": {
+                    "matchLabels": {
+                        "io.kompose.service": "memcached-rate"
+                    }
+                },
+                "strategy": {
+                    "rollingUpdate": {
+                        "maxSurge": "25%",
+                        "maxUnavailable": "25%"
+                    },
+                    "type": "RollingUpdate"
+                },
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kompose.cmd": "kompose convert",
+                            "kompose.version": "1.22.0 (955b78124)",
+                            "sidecar.istio.io/statsInclusionPrefixes": "cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager",
+                            "sidecar.istio.io/statsInclusionRegexps": "http.*"
+                        },
+                        "creationTimestamp": null,
+                        "labels": {
+                            "io.kompose.service": "memcached-rate"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "env": [
+                                    {
+                                        "name": "MEMCACHED_CACHE_SIZE",
+                                        "value": "128"
+                                    },
+                                    {
+                                        "name": "MEMCACHED_THREADS",
+                                        "value": "2"
+                                    }
+                                ],
+                                "image": "memcached",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "hotel-reserv-rate-mmc",
+                                "ports": [
+                                    {
+                                        "containerPort": 11211,
+                                        "protocol": "TCP"
+                                    }
+                                ],
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1"
+                                    },
+                                    "requests": {
+                                        "cpu": "100m"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File"
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Always",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30
+                    }
+                }
+            },
+            "status": {
+                "availableReplicas": 1,
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-10-10T11:51:12Z",
+                        "lastUpdateTime": "2026-10-10T11:51:12Z",
+                        "message": "Deployment has minimum availability.",
+                        "reason": "MinimumReplicasAvailable",
+                        "status": "True",
+                        "type": "Available"
+                    },
+                    {
+                        "lastTransitionTime": "2026-10-10T11:50:52Z",
+                        "lastUpdateTime": "2026-10-10T12:31:48Z",
+                        "message": "ReplicaSet \"memcached-rate-5b59cb5d9d\" has successfully progressed.",
+                        "reason": "NewReplicaSetAvailable",
+                        "status": "True",
+                        "type": "Progressing"
+                    }
+                ],
+                "observedGeneration": 5,
+                "readyReplicas": 1,
+                "replicas": 1,
+                "updatedReplicas": 1
+            }
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "annotations": {
+                    "deployment.kubernetes.io/revision": "6",
+                    "kompose.cmd": "kompose convert",
+                    "kompose.version": "1.22.0 (955b78124)",
+                    "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"mongodb-rate\"},\"name\":\"mongodb-rate\",\"namespace\":\"hotel-reservation\"},\"spec\":{\"replicas\":1,\"selector\":{\"matchLabels\":{\"io.kompose.service\":\"mongodb-rate\"}},\"strategy\":{\"type\":\"Recreate\"},\"template\":{\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\",\"sidecar.istio.io/statsInclusionPrefixes\":\"cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager\",\"sidecar.istio.io/statsInclusionRegexps\":\"http.*\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"mongodb-rate\"}},\"spec\":{\"containers\":[{\"args\":[\"--auth\"],\"image\":\"mongo:4.4.6\",\"imagePullPolicy\":\"IfNotPresent\",\"name\":\"hotel-reserv-rate-mongo\",\"ports\":[{\"containerPort\":27017}],\"resources\":{\"limits\":{\"cpu\":\"1000m\"},\"requests\":{\"cpu\":\"100m\"}},\"volumeMounts\":[{\"mountPath\":\"/data/db\",\"name\":\"rate\"},{\"mountPath\":\"/docker-entrypoint-initdb.d\",\"name\":\"init-script\"}]}],\"volumes\":[{\"name\":\"rate\",\"persistentVolumeClaim\":{\"claimName\":\"rate-pvc\"}},{\"configMap\":{\"name\":\"mongo-rate-script\"},\"name\":\"init-script\"}]}}},\"status\":{}}\n"
+                },
+                "creationTimestamp": "2026-10-10T11:50:52Z",
+                "generation": 6,
+                "labels": {
+                    "io.kompose.service": "mongodb-rate"
+                },
+                "name": "mongodb-rate",
+                "namespace": "hotel-reservation",
+                "resourceVersion": "11056",
+                "uid": "2a796360-6a44-42cb-938e-0798fbb09b61"
+            },
+            "spec": {
+                "progressDeadlineSeconds": 600,
+                "replicas": 1,
+                "revisionHistoryLimit": 10,
+                "selector": {
+                    "matchLabels": {
+                        "io.kompose.service": "mongodb-rate"
+                    }
+                },
+                "strategy": {
+                    "type": "Recreate"
+                },
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kompose.cmd": "kompose convert",
+                            "kompose.version": "1.22.0 (955b78124)",
+                            "sidecar.istio.io/statsInclusionPrefixes": "cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager",
+                            "sidecar.istio.io/statsInclusionRegexps": "http.*"
+                        },
+                        "creationTimestamp": null,
+                        "labels": {
+                            "io.kompose.service": "mongodb-rate"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "args": [
+                                    "--auth"
+                                ],
+                                "image": "mongo:4.4.6",
+                                "imagePullPolicy": "IfNotPresent",
+                                "name": "hotel-reserv-rate-mongo",
+                                "ports": [
+                                    {
+                                        "containerPort": 27017,
+                                        "protocol": "TCP"
+                                    }
+                                ],
+                                "resources": {
+                                    "limits": {
+                                        "cpu": "1"
+                                    },
+                                    "requests": {
+                                        "cpu": "100m"
+                                    }
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "terminationMessagePolicy": "File",
+                                "volumeMounts": [
+                                    {
+                                        "mountPath": "/data/db",
+                                        "name": "rate"
+                                    },
+                                    {
+                                        "mountPath": "/docker-entrypoint-initdb.d",
+                                        "name": "init-script"
+                                    },
+                                    {
+                                        "mountPath": "/scripts",
+                                        "name": "failure-script"
+                                    }
+                                ]
+                            }
+                        ],
+                        "dnsPolicy": "ClusterFirst",
+                        "restartPolicy": "Always",
+                        "schedulerName": "default-scheduler",
+                        "securityContext": {},
+                        "terminationGracePeriodSeconds": 30,
+                        "volumes": [
+                            {
+                                "name": "rate",
+                                "persistentVolumeClaim": {
+                                    "claimName": "rate-pvc"
+                                }
+                            },
+                            {
+                                "configMap": {
+                                    "defaultMode": 420,
+                                    "name": "mongo-rate-script"
+                                },
+                                "name": "init-script"
+                            },
+                            {
+                                "configMap": {
+                                    "defaultMode": 420,
+                                    "name": "failure-admin-rate"
+                                },
+                                "name": "failure-script"
+                            }
+                        ]
+                    }
+                }
+            },
+            "status": {
+                "availableReplicas": 1,
+                "conditions": [
+                    {
+                        "lastTransitionTime": "2026-10-10T11:50:52Z",
+                        "lastUpdateTime": "2026-10-10T12:01:45Z",
+                        "message": "ReplicaSet \"mongodb-rate-84f4447675\" has successfully progressed.",
+                        "reason": "NewReplicaSetAvailable",
+                        "status": "True",
+                        "type": "Progressing"
+                    },
+                    {
+                        "lastTransitionTime": "2026-10-10T12:28:09Z",
+                        "lastUpdateTime": "2026-10-10T12:28:09Z",
+                        "message": "Deployment has minimum availability.",
+                        "reason": "MinimumReplicasAvailable",
+                        "status": "True",
+                        "type": "Available"
+                    }
+                ],
+                "observedGeneration": 6,
+                "readyReplicas": 1,
+                "replicas": 1,
+                "updatedReplicas": 1
+            }
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}

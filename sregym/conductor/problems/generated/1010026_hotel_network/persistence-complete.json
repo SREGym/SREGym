@@ -1,0 +1,97 @@
+{
+  "stage": "final static-rate-path reinjection persistence",
+  "time": 1791677106.5734744,
+  "elapsed_seconds": 1204.5,
+  "metrics": {
+    "search_requests_total": 53619.0,
+    "search_rate_attempts_total": 105543.0,
+    "search_rate_timeouts_total": 103973.0,
+    "search_rate_failures_total": 52481.0,
+    "search_rate_successes_total": 880.0
+  },
+  "response": {
+    "slo": {
+      "target_rps": 100.0,
+      "max_error_ratio": 0.05,
+      "p99_floor_ms": 1000.0,
+      "p99_baseline_multiplier": 5.0,
+      "min_throughput_fraction": 0.7,
+      "timeout_floor": 0.15,
+      "timeout_margin": 0.1,
+      "baseline_p99_ms": 43.07,
+      "baseline_timeout_ratio": 0.0640981929764746,
+      "baseline_error_ratio": 0.0,
+      "p99_limit_ms": 1000.0,
+      "timeout_limit": 0.1640981929764746,
+      "error_limit": 0.05
+    },
+    "verdict": {
+      "rounds": 4,
+      "violating": 4,
+      "healthy": false,
+      "violated": true,
+      "details": [
+        {
+          "time": 1791676961.814742,
+          "requests": 2088,
+          "rps": 69.5,
+          "error_ratio": 0.5776,
+          "timeout_ratio": 0.0905,
+          "p99_ms": 17300.0,
+          "violations": [
+            "error_ratio=0.578>0.050",
+            "p99=17300ms>1000ms",
+            "rps=69.5<70.0"
+          ]
+        },
+        {
+          "time": 1791676992.905385,
+          "requests": 2070,
+          "rps": 68.9,
+          "error_ratio": 0.5836,
+          "timeout_ratio": 0.0889,
+          "p99_ms": 15690.0,
+          "violations": [
+            "error_ratio=0.584>0.050",
+            "p99=15690ms>1000ms",
+            "rps=68.9<70.0"
+          ]
+        },
+        {
+          "time": 1791677024.027358,
+          "requests": 2009,
+          "rps": 66.9,
+          "error_ratio": 0.5958,
+          "timeout_ratio": 0.1015,
+          "p99_ms": 16440.0,
+          "violations": [
+            "error_ratio=0.596>0.050",
+            "p99=16440ms>1000ms",
+            "rps=66.9<70.0"
+          ]
+        },
+        {
+          "time": 1791677055.123107,
+          "requests": 2064,
+          "rps": 68.7,
+          "error_ratio": 0.5809,
+          "timeout_ratio": 0.095,
+          "p99_ms": 16550.0,
+          "violations": [
+            "error_ratio=0.581>0.050",
+            "p99=16550ms>1000ms",
+            "rps=68.7<70.0"
+          ]
+        }
+      ]
+    },
+    "new_alerts": [],
+    "log_surges": {
+      "hotel-reserv-search": [
+        0.0,
+        5146.0
+      ]
+    },
+    "cpu_surges": {}
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "app": "hotel_reservation",
+  "title": "Inline media in a supplier rate catalog exceeds the aggregate RPC payload budget",
+  "fault_layer": "data",
+  "fault_primitive": "MongoDB rate-plan import containing inline base64 image content, propagated to non-expiring Memcached entries",
+  "root_cause_class": "catalog_inline_media_expansion",
+  "incident_class": "Supplier feed schema mapping regression with persistent cache amplification",
+  "affected_components": [
+    "mongodb-rate",
+    "memcached-rate",
+    "rate",
+    "search",
+    "frontend"
+  ],
+  "symptoms": "Hotel searches return HTTP 500 while pods remain Running and Ready. Search logs report ResourceExhausted from rate. Individual cached rate entries fit the item limit, but a normal five-hotel gRPC result exceeds the default 4 MiB receive limit. Large rate payloads also increase serialization work.",
+  "why_hard": "The visible incident resembles insufficient rate capacity or aggressive search retries, but increasing capacity cannot make an oversized gRPC message valid. The imported documents are valid BSON, indexes and credentials are intact, and prices and dates look normal. Cache entries have no expiration: repairing MongoDB alone leaves stale oversized entries, while clearing or restarting Memcached alone repopulates them from MongoDB. Application restarts and deployment rollback do not undo persistent catalog state.",
+  "expected_agent_pitfalls": [
+    "Tune rate QPS, queue depth, search deadlines, or retry count without checking catalog document sizes",
+    "Scale or restart rate after seeing CPU pressure and downstream timeouts",
+    "Roll back the visible CPU and runtime tuning while leaving the imported data in MongoDB",
+    "Clear the shared cache without removing the inline media records in MongoDB",
+    "Repair MongoDB without invalidating already populated non-expiring cache entries",
+    "Increase the gRPC receive limit and retain excessive serialization and cache churn"
+  ],
+  "mitigation_summary": "Remove imported inventory rows whose room descriptions contain inline base64 images, drain old rate workers, then invalidate the shared rate cache. Recovery restores original rate runtime settings, search retry count, and cache arguments from existing last-applied configuration.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "data",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 48.6,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "527.5313587188721",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a fix, and submit once the service is healthy. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deployments -n hotel-reservation; ls /logs'\nRUNS: /bin/bash -lc 'kubectl get deploy search rate memcached-rate -n hotel-reservation -o yaml; kubectl get svc -n hotel-reservation; kubectl get events -n hotel-reservation --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=60; kubectl logs -n hotel-reservation deploy/search --tail=60; kubectl logs -n hotel-reservation deploy/rate --tail=60'\nRUNS: /bin/bash -lc 'kubectl port-forward -n hotel-reservation svc/rate 19091:9091 >/tmp/rate-pf.log 2>&1 & kubectl port-forward -n hotel-reservation svc/frontend 15000:5000 >/tmp/front-pf.log 2>&1 & kubectl port-forward -n hotel-reservation svc/consul 18500:8500 >/tmp/consul-pf.log 2>&1 &'\nRUNS: /bin/bash -lc 'curl -s --max-time 5 http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc \"curl -s --max-time 5 http://localhost:19091/metrics | rg 'rate_|grpc_|queue'; curl -s --max-time 5 'http://localhost:18500/v1/health/service/srv-rate?passing=1'; curl -s --max-time 5 -w '\\\\n%{http_code} %{time_total}\\\\n' 'http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04\nSAYS: Sea\n[...]\nnventory.count({\\\"roomType.roomDescription\\\":/data:image/})); print(db.inventory_mitigation_backup.count());'\"\nRUNS: /bin/bash -lc \"curl -s --max-time 5 -o /tmp/hotel-response -w '%{http_code} %{time_total}\\\\n' 'http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'\"\nRUNS: /bin/bash -lc \"python - <<'PY' import socket s=socket.create_connection(('127.0.0.1',11211));s.sendall(b'flush_all\\\\r\\\\n');print(s.recv(100));s.close() PY kubectl rollout restart deployment/rate -n hotel-reservation kubectl rollout status deployment/rate -n hotel-reservation --timeout=60s\"\nRUNS: /bin/bash -lc \"python - <<'PY' import json,urllib.request,subprocess pods=json.loads(subprocess.check_output(['kubectl','get','pods','-n','hotel-reservation','-o','json'])) ips={p['status'].get('podIP') for p in pods['items'] if not p['metadata'].get('deletionTimestamp')} services=json.load(urllib.r\nRUNS: /bin/bash -lc \"kubectl top pods -n hotel-reservation | rg 'rate|search'; kubectl logs -n hotel-reservation deploy/search --since=20s --tail=5\"\nSAYS: All 80 oversized descriptions have been cleaned and backed up, and the cache has been flushed. I\u2019m verifying that the restarted rate service stays healthy and that concurrent hotel searches succeed. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -l io.kompose.service=rate; kubectl logs -n hotel-reservation deploy/rate --tail=18; curl -s http://localhost:18500/v1/health/service/srv-rate?passing=1'\nRUNS: /bin/bash -lc \"curl -s http://localhost:19092/metrics; kubectl top pods -n hotel-reservation | rg '\"'^rate'\"'; kubectl logs -n hotel-reservation deploy/search --since=30s --tail=5\"\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures url='http://localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194' def check(i):  t=time.monotonic()  try:   r=urllib.request.urlopen(url,timeout=3);r.read();return r.status,round(time.monoto\nSAYS: Hotel searches are succeeding, and the rate service has completed 2,353 requests with no expirations or rejections. Its queue is empty, and memory usage has fallen from about 8 GB to 8 MB. I\u2019m submitting the mitigation now. \nRUNS: /bin/bash -lc \"curl -sS --max-time 30 -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Mitigation applied and submitted once with an empty solution.  Removed oversized embedded images from 80 room descriptions, preserved backups, refreshed the cache, and cleared stale discovery entries. Searches now succeed; rate metrics show 2,353 completed requests with zero expirations or rejections."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

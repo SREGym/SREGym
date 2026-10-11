@@ -1,0 +1,56 @@
+{
+  "app": "hotel_reservation",
+  "title": "Blocking discovery queries share a collection-scoped response cache",
+  "fault_layer": "app-code",
+  "fault_primitive": "Service-name omission in a Consul blocking-query cache key",
+  "root_cause_class": "blocking_discovery_response_cache_scope_collision",
+  "incident_class": "Discovery API cache migration aliases sibling service resources and retains stale resolver snapshots",
+  "affected_components": [
+    "consul",
+    "search",
+    "geo",
+    "rate",
+    "frontend"
+  ],
+  "symptoms": "Hotel searches fail with generic dependency unavailable responses. Search logs rate/Unimplemented despite a correct rate catalog and correct ordinary passing-health queries. All pods remain Running and Ready. Indexed health queries advertise geo endpoints for rate.",
+  "why_hard": "The previous catalog-inspection and deregistration path finds only legitimate registrations. Ordinary health queries also look correct, including initial resolver snapshots after restart. Only subsequent blocking queries traverse the colliding response cache. Search restart or rollback briefly resets resolution, then reintroduces the incorrect endpoint. Catalog edits do not invalidate the cached snapshot. The actual mismatch requires reproducing the Go resolver query shape and comparing it to the native API before inspecting the cache key.",
+  "expected_agent_pitfalls": [
+    "Deleting or rewriting healthy rate registrations",
+    "Assuming a correct passing-health response rules out discovery corruption",
+    "Restarting or rolling back search and rate",
+    "Treating Unimplemented as a wrong rate image while the real rate server is healthy",
+    "Changing retry or timeout settings",
+    "Inspecting Consul via localhost, which bypasses the affected facade"
+  ],
+  "mitigation_summary": "Route the existing Consul HTTP Service directly to its healthy native API on port 8500, then refresh the search resolver connections. Retain all legitimate registrations; no remembered endpoint addresses or source manifests are needed.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "discovery",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 43.7,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "350.23548913002014",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit it for validation once service health is restored. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'kubectl get deploy,svc,endpoints -n hotel-reservation; kubectl logs -n hotel-reservation deploy/frontend --tail=70; kubectl logs -n hotel-reservation deploy/search --tail=70'\nRUNS: /bin/bash -lc 'ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get deploy search rate consul -n hotel-reservation -o yaml; kubectl get configmap -n hotel-reservation -o yaml; kubectl logs -n hotel-reservation deploy/rate --tail=25'\nRUNS: /bin/bash -lc 'kubectl get svc -A; curl -s http://host.docker.internal:8000/get_app'\nRUNS: /bin/bash -lc \"kubectl get svc consul -n hotel-reservation -o json; kubectl exec -n hotel-reservation deploy/consul -c query-cache -- python3 -c 'import urllib.request,json; base=\\\"http://127.0.0.1:\\\"; paths=[(8500,\\\"/v1/health/service/srv-rate?passing=true\\\"),(8500,\\\"/v1/health/service/srv-geo?pass\nSAYS: The discovery cache is returning the geo service address for rate lookups, causing search requests to fail with gRPC `Unimplemented` errors. I\u2019ll route discovery directly to Consul and restart search to clear its cached address. \nRUNS: /bin/bash -lc \"kubectl patch svc consul -n hotel-reservation --type=json -p='[{\\\"op\\\":\\\"replace\\\",\\\"path\\\":\\\"/spec/ports/2/targetPort\\\",\\\"value\\\":8500}]'; kubectl rollout restart deploy/search -n hotel-reservation; kubectl rollout status deploy/search -n hotel-reservation --timeout=60s\"\nRUNS: /bin/bash -lc \"kubectl logs -n hotel-reservation deploy/search --since=1m --tail=10; kubectl exec -n hotel-reservation deploy/consul -c query-cache -- python3 -c 'import urllib.request; print(urllib.request.urlopen(\\\"http://search:9092/metrics\\\").read().decode())'\"\nSAYS: Search is healthy after the change: 120 test requests returned HTTP 200 in 21\u2013178 ms, and service metrics show zero rate failures or timeouts. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/consul -c query-cache -- python3 -c 'import urllib.request,time,concurrent.futures; url=\\\"http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194\\\";  def check(i):  t=time.monotonic()  try:   r=urllib.request.\nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Mitigated the discovery-cache collision by routing directly to Consul and restarting search.  Verified 120 successful requests at 21\u2013178 ms, with zero rate failures or timeouts. Submitted the required empty solution; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": false,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

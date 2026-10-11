@@ -1,0 +1,51 @@
+{
+  "app": "social_network",
+  "title": "Partial Thrift writes after bounded TCP batching rollout",
+  "fault_layer": "app-code",
+  "fault_primitive": "Lua TCP send batching drops the final partial batch",
+  "root_cause_class": "tcp_send_batch_count_rounding",
+  "incident_class": "Transport optimization regression causing size-dependent incomplete RPC requests",
+  "affected_components": [
+    "nginx-thrift",
+    "compose-post-service"
+  ],
+  "symptoms": "Pods remain Ready. Larger compose RPCs stall; frontend emits TCP read timeouts and generic Thrift exceptions. Small timeline RPCs work, but blocked requests reduce throughput.",
+  "why_hard": "The timeout is on receive although the defect is on send. Backend handlers never receive complete requests. Failure depends on serialized size including tracing metadata. The Deployment is unchanged; rollback cannot revert the startup ConfigMap. Restart, scaling and cache clearing preserve the algorithm. Diagnosis requires recognizing missing residual TCP bytes.",
+  "expected_agent_pitfalls": [
+    "Investigating backend dependencies for frontend receive timeouts",
+    "Increasing read timeouts or pool sizes",
+    "Rolling back Deployments without repairing the startup ConfigMap",
+    "Checking only small RPCs or TCP connectivity"
+  ],
+  "mitigation_summary": "Change send batch count from floor to ceil in nginx startup Lua and recreate frontend pods.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "network",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 43.3,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "324.0068984031677",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a mitigation, and submit the required empty payload once the fix is in place. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'kubectl get deploy nginx-thrift -n social-network -o yaml; kubectl logs -n social-network deploy/nginx-thrift --tail=80; kubectl get configmaps -n social-network; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get cm compose-post-service -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl get svc,endpoints,networkpolicy -n social-network'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/compose-post-service --tail=60'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/home-timeline-service --tail=30'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/compose-post-service | head -45; kubectl get pods,svc -A; kubectl top pods -n social-network; kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/nginx/lua-scripts/wrk2-api/post/compose.lua'\nRUNS: /bin/bash -lc \"kubectl get deploy -n social-network -o json > /tmp/deploys.json python - <<'PY' import json for d in json.load(open('/tmp/deploys.json'))['items']:  print(d['metadata']['name'],[(c['image'],c.get('command'),c.get('args'),c.get('env')) for c in d['spec']['template']['spec']['container\nSAYS: Post creation requests are timing out while the pods remain healthy and lightly loaded. I\u2019m checking the RPC path and downstream connections to locate what is blocking those requests. \nRUNS: /bin/bash -lc \"kubectl get cm nginx-thrift -n social-network -o yaml kubectl exec -n social-network deploy/compose-post-service -- sh -c 'ls /social-network-microservices; cat /proc/1/status; cat /proc/net/tcp'\"\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/lualib/thrift/TSocket.lua'\nSAYS: I found a socket-write override in the Nginx configuration that drops the final bytes of Thrift messages longer than 256 bytes. This leaves the backend waiting for an incomplete request and causes the timeouts. I\u2019ll remove the override to restore the standard write function. \nRUNS: /bin/bash -lc \"python - <<'PY' import json,subprocess cm=json.loads(subprocess.check_output(['kubectl','get','cm','nginx-thrift','-n','social-network','-o','json'])) s=cm['data']['nginx.conf'] start=s.index(\\\"    local TSocket = require 'TSocket'\\\") end=s.index('    local config = ngx.shared.config;\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,urllib.parse,time,concurrent.futures body=urllib.parse.urlencode({'username':'username_1','user_id':'1','post_type':'0','text':'Mitigation verification '+ 'a'*600}).encode() def test(i):  t=time.monotonic()  try:   r=urllib.request.urlopen(urllib.\nSAYS: The fix is deployed. All 12 concurrent post-creation checks succeeded, including messages over 256 bytes, and both timeline reads returned HTTP 200. I\u2019ll check recovery briefly before submitting. \nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,urllib.parse,time body=urllib.parse.urlencode({'username':'username_1','user_id':'1','post_type':'0','text':'Recovery check '+ 'b'*600}).encode() lat=[] for i in range(20):  t=time.monotonic()  r=urllib.request.urlopen('http://127.0.0.1:18080/wrk2\nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' --data '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Removed the Nginx socket-write override that truncated Thrift requests and caused timeouts.  Verification: 32/32 post requests succeeded; both timeline reads returned HTTP 200. The sustained check averaged 129 ms.  Submitted `{\"solution\": \"\"}` exactly once; mitigation submission accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

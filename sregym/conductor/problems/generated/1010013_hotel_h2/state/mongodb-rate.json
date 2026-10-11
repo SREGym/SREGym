@@ -1,0 +1,142 @@
+{
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+        "annotations": {
+            "deployment.kubernetes.io/revision": "2",
+            "kompose.cmd": "kompose convert",
+            "kompose.version": "1.22.0 (955b78124)",
+            "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"mongodb-rate\"},\"name\":\"mongodb-rate\",\"namespace\":\"hotel-reservation\"},\"spec\":{\"replicas\":1,\"selector\":{\"matchLabels\":{\"io.kompose.service\":\"mongodb-rate\"}},\"strategy\":{\"type\":\"Recreate\"},\"template\":{\"metadata\":{\"annotations\":{\"kompose.cmd\":\"kompose convert\",\"kompose.version\":\"1.22.0 (955b78124)\",\"sidecar.istio.io/statsInclusionPrefixes\":\"cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager\",\"sidecar.istio.io/statsInclusionRegexps\":\"http.*\"},\"creationTimestamp\":null,\"labels\":{\"io.kompose.service\":\"mongodb-rate\"}},\"spec\":{\"containers\":[{\"args\":[\"--auth\"],\"image\":\"mongo:4.4.6\",\"imagePullPolicy\":\"IfNotPresent\",\"name\":\"hotel-reserv-rate-mongo\",\"ports\":[{\"containerPort\":27017}],\"resources\":{\"limits\":{\"cpu\":\"1000m\"},\"requests\":{\"cpu\":\"100m\"}},\"volumeMounts\":[{\"mountPath\":\"/data/db\",\"name\":\"rate\"},{\"mountPath\":\"/docker-entrypoint-initdb.d\",\"name\":\"init-script\"}]}],\"volumes\":[{\"name\":\"rate\",\"persistentVolumeClaim\":{\"claimName\":\"rate-pvc\"}},{\"configMap\":{\"name\":\"mongo-rate-script\"},\"name\":\"init-script\"}]}}},\"status\":{}}\n"
+        },
+        "creationTimestamp": "2026-10-10T11:50:52Z",
+        "generation": 2,
+        "labels": {
+            "io.kompose.service": "mongodb-rate"
+        },
+        "name": "mongodb-rate",
+        "namespace": "hotel-reservation",
+        "resourceVersion": "5678",
+        "uid": "2a796360-6a44-42cb-938e-0798fbb09b61"
+    },
+    "spec": {
+        "progressDeadlineSeconds": 600,
+        "replicas": 1,
+        "revisionHistoryLimit": 10,
+        "selector": {
+            "matchLabels": {
+                "io.kompose.service": "mongodb-rate"
+            }
+        },
+        "strategy": {
+            "type": "Recreate"
+        },
+        "template": {
+            "metadata": {
+                "annotations": {
+                    "kompose.cmd": "kompose convert",
+                    "kompose.version": "1.22.0 (955b78124)",
+                    "sidecar.istio.io/statsInclusionPrefixes": "cluster.outbound,cluster_manager,listener_manager,http_mixer_filter,tcp_mixer_filter,server,cluster.xds-grp,listener,connection_manager",
+                    "sidecar.istio.io/statsInclusionRegexps": "http.*"
+                },
+                "creationTimestamp": null,
+                "labels": {
+                    "io.kompose.service": "mongodb-rate"
+                }
+            },
+            "spec": {
+                "containers": [
+                    {
+                        "args": [
+                            "--auth"
+                        ],
+                        "image": "mongo:4.4.6",
+                        "imagePullPolicy": "IfNotPresent",
+                        "name": "hotel-reserv-rate-mongo",
+                        "ports": [
+                            {
+                                "containerPort": 27017,
+                                "protocol": "TCP"
+                            }
+                        ],
+                        "resources": {
+                            "limits": {
+                                "cpu": "1"
+                            },
+                            "requests": {
+                                "cpu": "100m"
+                            }
+                        },
+                        "terminationMessagePath": "/dev/termination-log",
+                        "terminationMessagePolicy": "File",
+                        "volumeMounts": [
+                            {
+                                "mountPath": "/data/db",
+                                "name": "rate"
+                            },
+                            {
+                                "mountPath": "/docker-entrypoint-initdb.d",
+                                "name": "init-script"
+                            },
+                            {
+                                "mountPath": "/scripts",
+                                "name": "failure-script"
+                            }
+                        ]
+                    }
+                ],
+                "dnsPolicy": "ClusterFirst",
+                "restartPolicy": "Always",
+                "schedulerName": "default-scheduler",
+                "securityContext": {},
+                "terminationGracePeriodSeconds": 30,
+                "volumes": [
+                    {
+                        "name": "rate",
+                        "persistentVolumeClaim": {
+                            "claimName": "rate-pvc"
+                        }
+                    },
+                    {
+                        "configMap": {
+                            "defaultMode": 420,
+                            "name": "mongo-rate-script"
+                        },
+                        "name": "init-script"
+                    },
+                    {
+                        "configMap": {
+                            "defaultMode": 420,
+                            "name": "failure-admin-rate"
+                        },
+                        "name": "failure-script"
+                    }
+                ]
+            }
+        }
+    },
+    "status": {
+        "availableReplicas": 1,
+        "conditions": [
+            {
+                "lastTransitionTime": "2026-10-10T11:53:51Z",
+                "lastUpdateTime": "2026-10-10T11:53:51Z",
+                "message": "Deployment has minimum availability.",
+                "reason": "MinimumReplicasAvailable",
+                "status": "True",
+                "type": "Available"
+            },
+            {
+                "lastTransitionTime": "2026-10-10T11:50:52Z",
+                "lastUpdateTime": "2026-10-10T11:53:51Z",
+                "message": "ReplicaSet \"mongodb-rate-56cc8659c9\" has successfully progressed.",
+                "reason": "NewReplicaSetAvailable",
+                "status": "True",
+                "type": "Progressing"
+            }
+        ],
+        "observedGeneration": 2,
+        "readyReplicas": 1,
+        "replicas": 1,
+        "updatedReplicas": 1
+    }
+}

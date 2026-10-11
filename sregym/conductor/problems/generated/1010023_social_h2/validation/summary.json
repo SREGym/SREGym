@@ -1,0 +1,18 @@
+{
+  "injection_checks": [
+    "validation/injected-full-1.json",
+    "validation/injected-full-2-rollback.json"
+  ],
+  "mitigation": "validation/mitigated-full.json",
+  "recovery": "validation/recovered-full.json",
+  "final_checks": [
+    "validation/final-progress.json",
+    "validation/final-violation.json"
+  ],
+  "rollback_preserved_incident": true,
+  "injection_executed_twice": true,
+  "mitigation_executed_twice": true,
+  "recovery_executed_twice": true,
+  "final_check_spacing_seconds": 95,
+  "all_pods_running_ready": true
+}

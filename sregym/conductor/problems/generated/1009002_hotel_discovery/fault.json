@@ -1,0 +1,54 @@
+{
+  "app": "hotel_reservation",
+  "title": "Orphaned regional rate registration advertises a different gRPC capability",
+  "fault_layer": "data",
+  "fault_primitive": "Consul catalog registration with a stale passing check and a cross-service endpoint",
+  "root_cause_class": "orphaned_external_service_registration",
+  "incident_class": "Service catalog migration leaves an obsolete external registration eligible for client-side load balancing",
+  "affected_components": [
+    "consul",
+    "search",
+    "rate",
+    "user",
+    "frontend"
+  ],
+  "symptoms": "About half of hotel-search rate RPCs reach the user gRPC server and return Unimplemented. Search translates these into dependency unavailable responses; end-user error ratio is approximately 30%. All Kubernetes pods remain Running and Ready, and the advertised Consul check remains passing.",
+  "why_hard": "Kubernetes rate Service selectors, ports, EndpointSlices, deployments, and the real rate backend are correct. Clients bypass these routes and use Consul. The orphan lives on an external catalog node, so application restarts and rollbacks cannot remove it. TCP connectivity and catalog health appear good. Successful and failing calls alternate, while the frontend sees only a generic dependency failure. Diagnosis requires comparing Consul registration addresses and gRPC capabilities with actual backend endpoints.",
+  "expected_agent_pitfalls": [
+    "Repairing the healthy rate Kubernetes Service or EndpointSlices",
+    "Restarting or scaling search and rate; the external catalog record survives",
+    "Tuning rate timeouts or retry limits despite non-retryable Unimplemented errors",
+    "Deregistering only local-agent services, which cannot remove an external-node catalog record",
+    "Treating a passing discovery health check as proof of the advertised gRPC capability"
+  ],
+  "mitigation_summary": "Enumerate srv-rate catalog entries, compare their address and port against live rate pods and the rate ClusterIP, and deregister incompatible entries through the Consul catalog API. Remove any now-empty external catalog node. No manifests, remembered IDs, or saved original values are needed.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "discovery",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 42.5,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "352.3759174346924",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a mitigation, and submit it for validation once the service is healthy. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=70; kubectl logs -n hotel-reservation deploy/search --tail=40; ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get svc,deploy,networkpolicy -n hotel-reservation -o wide; kubectl get events -n hotel-reservation --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'kubectl get deploy search rate -n hotel-reservation -o yaml; kubectl get configmap -n hotel-reservation -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/rate --tail=45; kubectl exec -n hotel-reservation deploy/consul -- wget -qO- http://localhost:8500/v1/catalog/service/srv-rate; kubectl get svc rate -n hotel-reservation -o yaml'\nSAYS: Search requests are reaching the user service through an incorrect `srv-rate` entry in Consul, causing gRPC `Unimplemented` errors. I\u2019ll remove that entry and verify that searches succeed consistently. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/consul -- wget -qO- http://localhost:8500/v1/catalog/node/regional-gateway-01; kubectl exec -n hotel-reservation deploy/consul -- wget -qO- http://localhost:8500/v1/catalog/services; kubectl exec -n hotel-reservation deploy/consul -- sh -c 'wge\nRUNS: /bin/bash -lc \"curl -fsS -X PUT http://localhost:18500/v1/catalog/deregister -H 'Content-Type: application/json' -d '{\\\"Node\\\":\\\"regional-gateway-01\\\",\\\"ServiceID\\\":\\\"rate-regional-01\\\"}'; curl -fsS http://localhost:18500/v1/catalog/service/srv-rate; curl -sS --max-time 10 -w '\\\\nstatus=%{http_code}\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/search --since=30s --tail=10; curl -fsS http://localhost:18500/v1/catalog/nodes; kubectl get pods -n hotel-reservation --no-headers | wc -l'\nRUNS: /bin/bash -lc 'date -u; kubectl logs -n hotel-reservation deploy/search --since=10s --tail=5'\nSAYS: The incorrect Consul entry is removed, and recent search logs show no new downstream errors. I\u2019m checking repeated end-user requests for success and latency before submitting. \nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures,statistics url='http://localhost:15000/hotels?lat=37.7749&lon=-122.4194&inDate=2015-04-09&outDate=2015-04-10' def check(_):  t=time.monotonic()  try:   with urllib.request.urlopen(url,timeout=5) as r: return r.status,time.m\nRUNS: /bin/bash -lc \"curl -fsS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Removed an incorrect Consul `srv-rate` entry that routed requests to the user service and caused gRPC errors.  Verified 150/150 successful hotel searches, with 206 ms p95 latency. Submitted the mitigation once with the required empty solution; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

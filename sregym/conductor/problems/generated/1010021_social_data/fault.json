@@ -1,0 +1,54 @@
+{
+  "app": "social_network",
+  "title": "Selective timeline index loses the user-only lookup access path",
+  "fault_layer": "data",
+  "fault_primitive": "MongoDB partial index predicate excludes the application query shape after a historical timeline import",
+  "root_cause_class": "timeline_partial_index_query_implication_gap",
+  "incident_class": "historical data migration with an incompatible hot-record index optimization",
+  "affected_components": [
+    "user-timeline-mongodb",
+    "user-timeline-service",
+    "compose-post-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "Posting becomes slow or times out while pods remain Running and Ready. Timeline MongoDB spends CPU scanning historical empty timelines for each active user's synchronous update; slow operation logs show collection scans.",
+  "why_hard": "The normal unique user_id_1 index still exists with the correct key, and active users actually meet its nonempty-timeline predicate. Nevertheless MongoDB cannot select it for user_id-only application queries. Cache hits do not bypass synchronous timeline writes, and persistent database state survives pod restarts. The cause is an index eligibility rule rather than missing capacity or corrupt post documents. Existing compose-service OTLP exporter DNS failures provide a legitimate misleading error stream, while the incident itself primarily appears as latency and MongoDB CPU.",
+  "expected_agent_pitfalls": [
+    "Assume user_id_1 proves equality updates are indexed",
+    "Increase RPC timeouts or service replicas, adding concurrent collection scans",
+    "Flush Redis or Memcached although writes always reach MongoDB",
+    "Restart the database without changing the durable partial index",
+    "Delete archival records instead of correcting the query/index contract"
+  ],
+  "mitigation_summary": "Replace the selective user_id_1 index with the application's complete unique user_id index, retaining both live and historical timelines. Verify that the user-only lookup uses an indexed plan.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "data",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 1,
+        "minutes": 47.4,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "305.5976643562317",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit it for validation once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=60; kubectl logs -n social-network deploy/user-timeline-service --tail=80'\nRUNS: /bin/bash -lc 'kubectl get deploy,svc,cm -n social-network; kubectl get events -n social-network --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'kubectl get svc -n observe; curl -s http://host.docker.internal:8000/status; ls -la /logs'\nRUNS: /bin/bash -lc 'kubectl get deploy user-timeline-service -n social-network -o yaml; kubectl get svc user-timeline-mongodb -n social-network -o yaml; kubectl get cm user-timeline-service -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl get deploy user-timeline-mongodb -n social-network -o yaml; kubectl get cm user-timeline-mongodb -n social-network -o yaml; kubectl logs -n social-network deploy/user-timeline-mongodb --tail=40'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/user-timeline-mongodb -- mongo --quiet --eval 'var c=db.getSiblingDB(\\\"user-timeline\\\").getCollection(\\\"user-timeline\\\"); printjson(c.getIndexes()); printjson(c.findOne({}, {user_id:1}));'\"\nSAYS: User-timeline reads and writes are scanning about two million MongoDB documents and taking several seconds. The existing `user_id` index is partial and cannot serve these queries. I\u2019ll add a full index to make the lookups fast. \nRUNS: /bin/bash -lc \"curl -sG http://10.96.157.53/api/v1/query --data-urlencode 'query=count by (__name__) ({__name__=~\\\".*(latency|duration|requests).*\\\"})'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/user-timeline-mongodb -- mongo --quiet --eval 'printjson(db.getSiblingDB(\\\"user-timeline\\\").getCollection(\\\"user-timeline\\\").createIndex({user_id:1},{name:\\\"user_id_full\\\"}));'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'command -v curl; command -v wget'; kubectl get pods -n social-network -l service=user-timeline-mongodb\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/user-timeline-mongodb -- mongo --quiet --eval 'printjson(db.getSiblingDB(\\\"user-timeline\\\").getCollection(\\\"user-timeline\\\").createIndex({user_id:1,_id:1},{name:\\\"user_id_lookup\\\"}));'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- curl -s -o /dev/null -w 'HTTP %{http_code} latency %{time_total}s\\\\n' 'http://127.0.0.1:8080/wrk2-api/user-timeline/read?user_id=812&start=0&stop=10'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/user-timeline-mongodb -- mongo --quiet --eval 'var c=db.getSiblingDB(\\\"user-timeline\\\").getCollection(\\\"user-timeline\\\"); var e=c.find({user_id:NumberLong(812)},{posts:{\"'$slice:[0,10]}}).explain(\"executionStats\"); printjson(e.queryPlanner.winning\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for u in 22 447 812 259 750 14 500 943 76 339; do curl -s -o /dev/null -w \\\"HTTP %{http_code} latency %{time_total}s\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/user-timeline/read?user_id=\"'$u&start=0&stop=10\"; done'\"'; kubectl lo\nSAYS: The new index is active: a timeline query now examines one document instead of two million. All ten sampled requests returned HTTP 200 in 7\u201332 ms, with no recent application errors. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Added a full MongoDB lookup index to eliminate costly user-timeline collection scans.  Verified ten requests returned HTTP 200 in 7\u201332 ms. Submitted the required empty solution once; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

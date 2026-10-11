@@ -1,0 +1,54 @@
+{
+  "app": "social_network",
+  "title": "Scalar text policy expands into every overlapping display window",
+  "fault_layer": "app-config",
+  "fault_primitive": "MongoDB collection validator with unit-stride nested codepoint ranges",
+  "root_cause_class": "scalar_text_window_boundary_expansion",
+  "incident_class": "Database validation policy compilation regression causing write amplification",
+  "affected_components": [
+    "post-storage-mongodb",
+    "post-storage-service",
+    "compose-post-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "Pods remain Running and Ready. Valid post inserts consume excessive database CPU, compose requests become slow, and end-user throughput falls below target. Cached timeline reads can remain fast. MongoDB CPU rises sharply; traces and slow operations lead to post insertion without naming the expensive collection policy.",
+  "why_hard": "The configuration is native collection metadata, absent from Deployment/ConfigMap dumps and ordinary document dumps. Valid documents are accepted, so there is no schema rejection naming the policy. The expensive work comes from overlapping text windows rather than larger documents, additional traffic, missing indexes, or unhealthy dependencies. Restarting application pods and changing connection pools cannot remove the durable validator. Each apparent text limit is reasonable; the defect is the cardinality of the candidate boundaries.",
+  "expected_agent_pitfalls": [
+    "Treating database CPU as evidence of a missing read index",
+    "Increasing RPC deadlines or connection counts",
+    "Restarting RPC services or flushing caches",
+    "Inspecting documents without inspecting collection validation options",
+    "Relaxing the byte or token limits while leaving both unit-stride ranges in place"
+  ],
+  "mitigation_summary": "Read the live validator and extract its byte, codepoint, and token limits. Replace overlapping-substring checks with one check of each limit against the complete text, preserving independent policy clauses. No original manifests or saved state are required.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "app-config",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 42.8,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "319.536297082901",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, fix the cause of the degradation, then submit the required validation request. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/nginx-thrift --tail=70'\nRUNS: /bin/bash -lc 'kubectl get svc,configmaps,networkpolicies -n social-network; kubectl top pods -n social-network'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/post-storage-mongodb --tail=35'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/post-storage-service --tail=40; kubectl get deployment post-storage-mongodb -n social-network -o yaml'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-mongodb -- mongo --quiet --eval 'db.adminCommand({listDatabases:1});'; kubectl get svc -n observe\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-mongodb -- sh -c 'ps aux; cat /social-network-microservices/config/mongod.conf'; kubectl exec -n social-network deployment/post-storage-mongodb -- mongo --quiet --eval 'printjson(db.adminCommand({getParameter:1, \\\"failpoint.*\\\":1}\nSAYS: Post-storage MongoDB is consuming about two CPU cores, and inserts are taking hundreds of milliseconds to over a second. I\u2019m checking its collection settings to identify what is making writes expensive. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-mongodb -- mongo --quiet post --eval 'printjson(db.post.getIndexes()); printjson(db.getCollectionInfos()); printjson(db.post.stats()); printjson(db.adminCommand({getParameter:\\\"*\\\"}));'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-mongodb -- mongo --quiet post --eval 'printjson(db.adminCommand({ping:1})); printjson(db.runCommand({collMod:\\\"post\\\",validator:{\"'$expr:{$and:[{$lte:[{$strLenBytes:\"$text\"},4096]},{$lte:[{$strLenCP:\"$text\"},2048]},{$lte:[{$size:{\nRUNS: /bin/bash -lc \"curl -s http://10.96.195.94:16686/api/services; curl -s http://10.96.90.179/api/v1/query --get --data-urlencode 'query=rate(container_cpu_usage_seconds_total{namespace=\\\"social-network\\\",pod=~\\\"post-storage-mongodb.*\\\"}[1m])'\"\nSAYS: The collection validator was checking every substring of each post, making inserts unnecessarily expensive. I replaced it with equivalent checks on the full text, preserving the limits and strict validation. I\u2019m verifying latency and request success before submitting. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-mongodb -- mongo --quiet post --eval 'var a=db.serverStatus().opLatencies.writes; sleep(10000); var b=db.serverStatus().opLatencies.writes; printjson({writes:b.ops-a.ops,meanWriteLatencyMs:(b.latency-a.latency)/(b.ops-a.ops)/1000}\nSAYS: MongoDB writes now average 0.52 ms, CPU usage has fallen to 20 millicores, and a timeline request returned HTTP 200 in 21 ms. I\u2019m submitting the mitigation for sustained validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Fixed the expensive MongoDB validator while preserving its validation limits.  Writes now average 0.52 ms; a timeline request succeeded in 21 ms. Submitted the required empty solution, and the endpoint accepted it for validation."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

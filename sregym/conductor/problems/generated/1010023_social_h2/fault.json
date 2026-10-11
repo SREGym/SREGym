@@ -1,0 +1,54 @@
+{
+  "app": "social_network",
+  "title": "Vendor codec schema cache confuses nested field scopes and list item schemas",
+  "fault_layer": "app-code",
+  "fault_primitive": "ConfigMap-bundled Thrift decoder caches field descriptors by numeric tag and treats the list item schema as a fixed container extent",
+  "root_cause_class": "thrift_schema_descriptor_scope_and_container_cardinality",
+  "incident_class": "Partial generated-schema and RPC runtime compatibility migration",
+  "affected_components": [
+    "nginx-thrift",
+    "user-timeline-service",
+    "home-timeline-service"
+  ],
+  "symptoms": "Timeline reads return HTTP 500, including empty results; post creation succeeds. All application pods stay Running and Ready. Edge logs show generic TProtocolException errors at the stock Thrift exception helper, with successful backend operations.",
+  "why_hard": "The prior incident was diagnosed from a conspicuous init-container rewrite and repaired by Deployment rollback plus removal of a short schema normalization. This version leaves the Deployment asset copier, protocol enums, frame boundaries and generated files unchanged. The active decoder is a vendor-bundled module in the existing nginx configuration, shadowing the correct runtime file through the Lua preload registry. Two schema representation assumptions are wrong: field IDs are scoped to structs, and a one-element item descriptor does not prescribe list cardinality. File inspection and wire enum repair find correct contracts; rollback and pod replacement retain the ConfigMap source. The error points at the standard exception helper instead of the loaded decoder.",
+  "expected_agent_pitfalls": [
+    "Roll back the frontend Deployment and assume the original asset copier restores the runtime",
+    "Inspect Thrift.lua and TBinaryProtocol.lua on disk and conclude the codec is correct",
+    "Investigate timeline datastores or post-storage because writes work and reads fail",
+    "Repair the endpoint exception handling or reduce requested timeline lengths",
+    "Fix container cardinality validation but miss field descriptor collisions on nested populated replies",
+    "Flush caches or restart backends without correcting the frontend loader"
+  ],
+  "mitigation_summary": "Remove the bundled TBinaryProtocol preload from the live nginx ConfigMap and roll the frontend to load the existing stock runtime. This restores per-message container lengths and unmodified per-struct field IDs without saved manifests or data changes.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "multi-cause",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 40.7,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "284.6097135543823",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, fix the cause of the degradation, then submit the required empty solution for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get deploy nginx-thrift -n social-network -o yaml; kubectl get configmaps -n social-network'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=70; kubectl get events -n social-network --sort-by=.lastTimestamp'\nRUNS: /bin/bash -lc 'kubectl get cm nginx-thrift -n social-network -o yaml; kubectl get svc -n social-network'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/home-timeline-service --tail=15; kubectl logs -n social-network deploy/user-timeline-service --tail=15; kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/nginx/lua-scripts/wrk2-api/home-timeline/read.lua'\nSAYS: The nginx configuration overrides Thrift\u2019s decoder with invalid checks on field types and list lengths. Those checks reject valid timeline responses and produce the observed HTTP 500 errors. I\u2019ll remove the override to restore the bundled decoder. \nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/nginx-thrift -- head -45 /usr/local/openresty/lualib/thrift/TBinaryProtocol.lua; kubectl get cm nginx-thrift -n social-network -o json > /tmp/nginx-before.json'\nRUNS: /bin/bash -lc \"python - <<'PY' import json p=json.load(open('/tmp/nginx-before.json')) s=p['data']['nginx.conf'] a=s.index('    do\\\\n      package.preload[\\\"TBinaryProtocol\\\"]') b=s.index('    local bridge_tracer',a) s=s[:a]+s[b:] json.dump({'data':{'nginx.conf':s}},open('/tmp/nginx-fix.json','w')) \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- python -c 'import urllib2,time; samples=[] for i in range(60):  t=time.time(); r=urllib2.urlopen(\\\"http://127.0.0.1:8080/wrk2-api/\\\"+(\\\"home-timeline\\\" if i%2 else \\\"user-timeline\\\")+\\\"/read?user_id=\\\"+str(i+1)+\\\"&start=0&stop=10\\\"\nRUNS: /bin/bash -lc \"kubectl get pods -n social-network -l service=nginx-thrift; curl -s -o /tmp/timeline-response -w '%{http_code} %{time_total}\\\\n' 'http://10.96.225.107:8080/wrk2-api/home-timeline/read?user_id=1&start=0&stop=10' --max-time 5\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network nginx-thrift-5d78444447-m8475 -- sh -c 'for i in 1 2 3 4 5; do curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/home-timeline/read?user_id=\"'$i&start=0&stop=10\"; curl -s -o /dev/null -w \"%{http_code} %{time_total\nSAYS: The updated nginx pod returns HTTP 200 for both timeline endpoints, with sampled latency of 3\u201338 ms and no errors in its logs. I\u2019m submitting the mitigation for sustained validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Removed the faulty Thrift decoder override and restarted nginx. Both timeline endpoints now return HTTP 200, with sampled latency of 3\u201338 ms.  Submitted the required empty solution once; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

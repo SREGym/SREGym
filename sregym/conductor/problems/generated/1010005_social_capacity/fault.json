@@ -1,0 +1,54 @@
+{
+  "app": "social_network",
+  "title": "Distributed RPC admission permits stranded by a keepalive API contract mismatch",
+  "fault_layer": "app-code",
+  "fault_primitive": "ConfigMap startup Lua installs a Redis-backed per-upstream concurrency guard whose permit release depends on a discarded keepalive return value",
+  "root_cause_class": "rpc_admission_permit_return_contract",
+  "incident_class": "Concurrency-control rollout leaks distributed capacity reservations across frontend lifecycles",
+  "affected_components": [
+    "nginx-thrift",
+    "social-graph-redis",
+    "compose-post-service",
+    "home-timeline-service",
+    "user-timeline-service"
+  ],
+  "symptoms": "Pods remain Running and Ready. Compose and timeline HTTP requests fail with 500 after the 64-per-upstream admission ledger fills. Frontend logs report RPC request queues unavailable; backend request activity collapses while Redis remains responsive.",
+  "why_hard": "The concurrency setting looks reasonable; the defect is an interface mismatch between the new controller and the existing transport wrapper. A successful underlying setkeepalive returns a value which TSocketBase:setKeepAlive discards. Redis therefore retains every lease for an hour. State survives nginx restarts and replica changes, and Deployment rollback still reads the changed ConfigMap. Clearing leases alone produces only seconds of recovery.",
+  "expected_agent_pitfalls": [
+    "Treating queue saturation as a slow or unavailable RPC backend",
+    "Restarting or scaling frontend and backend pods without repairing startup configuration",
+    "Rolling back the Deployment while leaving the ConfigMap controller enabled",
+    "Increasing admission capacity, postponing recurrence rather than stopping the leak",
+    "Deleting the Redis admission ledger without correcting the permit-return path"
+  ],
+  "mitigation_summary": "Remove the admission override from the existing nginx ConfigMap, roll out nginx to resume the image-provided GenericObjectPool, then retire only obsolete rpc:admission:* keys in social-graph Redis. No original manifest or saved state is needed.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "capacity",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 25.6,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "362.86923003196716",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit once the service is recovering. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide; kubectl get deployments -n social-network; ls -la /logs'\nRUNS: /bin/bash -lc 'kubectl get deployment nginx-thrift -n social-network -o yaml; kubectl logs -n social-network deployment/nginx-thrift --tail=60; kubectl get configmaps -n social-network; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc \"kubectl get configmap nginx-thrift -n social-network -o jsonpath='{.data.nginx\\\\.conf}'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- cat /usr/local/openresty/nginx/lua-scripts/GenericObjectPool.lua; kubectl exec -n social-network deployment/social-graph-redis -- redis-cli --scan --pattern 'rpc:admission:*'; kubectl get svc -n social-network nginx-thrift -o w\nSAYS: The gateway is rejecting timeline RPCs because its custom admission registry has exhausted its concurrency budget. The registry can retain slots for an hour when connections fail to return. I\u2019ll remove that override and restore the application\u2019s original connection pool. \nRUNS: /bin/bash -lc 'kubectl exec -n social-network deployment/nginx-thrift -- find /usr/local/openresty -name GenericObjectPool.lua; kubectl exec -n social-network deployment/social-graph-redis -- redis-cli ZCARD rpc:admission:home-timeline-service.social-network.svc.cluster.local:9090; kubectl exec -n s\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deployment/nginx-thrift -- cat /usr/local/openresty/lualib/thrift/GenericObjectPool.lua; kubectl get configmap nginx-thrift -n social-network -o json > /logs/nginx-thrift-before.json'\nRUNS: /bin/bash -lc \"python - <<'PY' import json,subprocess p='/logs/nginx-thrift-before.json' c=json.load(open(p))['data']['nginx.conf'] a=c.index('    -- RPC admission control\\\\n') b=c.index('    -- End RPC admission control\\\\n',a)+len('    -- End RPC admission control\\\\n') c=c[:a]+c[b:] patch={'data':{\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- curl -s -o /dev/null -w 'home: %{http_code} %{time_total}s\\\\n' 'http://127.0.0.1:8080/wrk2-api/home-timeline/read?user_id=651&start=0&stop=10'; kubectl exec -n social-network deployment/nginx-thrift -- curl -s -o /dev/null -w '\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- sh -c 'for i in \"'$(seq 1 30); do curl -s -o /dev/null -w \"%{http_code} %{time_total}'\"\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/home-timeline/read?user_id=\"'$i&start=0&stop=10\"; curl -s -o /dev/null -w \"%{http_code} %{time_total}\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/nginx-thrift --since=45s --tail=10'\nSAYS: The original connection pool is restored and the gateway rollout is complete. All 60 timeline checks returned HTTP 200 in 2\u201358 ms, with no new gateway errors. I\u2019ll now submit the required empty solution for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Removed the faulty RPC admission override and restored the original connection pool. All 60 timeline checks succeeded at 2\u201358 ms latency.  Submitted `{\"solution\": \"\"}` once; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

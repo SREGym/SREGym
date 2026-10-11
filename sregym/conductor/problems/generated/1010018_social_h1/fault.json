@@ -1,0 +1,55 @@
+{
+  "app": "social_network",
+  "title": "Client IDL migration misclassifies replies and renumbers success envelopes",
+  "fault_layer": "app-code",
+  "fault_primitive": "Thrift message discriminator transposition in materialized Lua runtime plus incompatible generated result field-tag normalization",
+  "root_cause_class": "thrift_message_enum_and_result_envelope_partial_migration",
+  "incident_class": "Partial client IDL/runtime compatibility migration",
+  "affected_components": [
+    "nginx-thrift",
+    "compose-post-service",
+    "user-timeline-service",
+    "home-timeline-service"
+  ],
+  "symptoms": "All pods remain Running and Ready. Backend operations succeed but the edge returns HTTP 500. Frontend logs report attempts to concatenate an exception table in ordinary endpoint error handling. Repairing reply classification restores post creation but timeline reads still fail, including empty results.",
+  "why_hard": "The initial error names an ordinary frontend error handler, not a dependency or codec. Requests, frame lengths, connections and backend work are valid. The materialized runtime transposes REPLY and EXCEPTION, causing successful results to be decoded as empty exceptions. A separate startup generator normalization moves timeline success field 0 to 2, although Thrift reserves 0 for result envelopes. Files inspected on disk retain the correct tag, unlike loaded classes. Deployment rollback repairs the enum mapping but leaves the ConfigMap normalization; removing normalization alone leaves enum classification broken. Both contracts must be repaired, and the secondary handler error masks both with the same signature.",
+  "expected_agent_pitfalls": [
+    "Repair Lua exception formatting because it is the first logged error",
+    "Investigate backend exceptions although server operations succeed",
+    "Remove the visible schema normalization and stop before checking materialized runtime enums",
+    "Inspect stock frame lengths and string readers",
+    "Roll back the Deployment, see successful post creation, and miss persistent read failures",
+    "Compare generated files on disk without checking the startup-loaded result classes"
+  ],
+  "mitigation_summary": "Remove the init rewrite to restore REPLY=2 and EXCEPTION=3, remove generated result-tag normalization from the live nginx ConfigMap, and recreate frontend pods. No application data repair is needed.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "multi-cause",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 40.9,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "342.2914776802063",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the workloads and service health, apply a fix, then submit the mitigation for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'kubectl get deploy nginx-thrift -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=70'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get rs -n social-network -l service=nginx-thrift -o json'\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/nginx-thrift -- cat /usr/local/openresty/lualib/thrift/Thrift.lua'\nSAYS: The frontend\u2019s latest deployment swapped the Thrift reply and exception codes, causing successful RPC replies to fail across timeline reads and post creation. I\u2019ll restore the previous deployment and verify requests through the frontend. \nRUNS: /bin/bash -lc 'kubectl rollout undo deployment/nginx-thrift -n social-network --to-revision=1'\nRUNS: /bin/bash -lc 'kubectl rollout status deployment/nginx-thrift -n social-network --timeout=120s'\nRUNS: /bin/bash -lc 'kubectl get svc -n social-network nginx-thrift -o wide'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for route in home-timeline user-timeline; do curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\\n[...]\n/local/openresty -name Thrift.lua'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'head -65 /usr/local/openresty/nginx/lua-scripts/wrk2-api/home-timeline/read.lua; ls /gen-lua; find /usr/local/openresty/nginx/lua-scripts -iname \\\"*pool*\\\"'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'sed -i \\\"s/ .. ret)/ .. tostring(ret.__type) .. tostring(ret.errorCode) .. (ret.__tostring and ret:__tostring() or tostring(ret)))/g\\\" /usr/local/openresty/nginx/lua-scripts/wrk2-api/home-timeline/read.lua; /usr/local/openre\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- curl -s -w '\\\\n%{http_code}\\\\n' 'http://127.0.0.1:8080/wrk2-api/home-timeline/read?user_id=796&start=0&stop=10'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'find / -name Thrift.lua 2>/dev/null; cat /usr/local/openresty/nginx/conf/nginx.conf | head -70'\"\nRUNS: /bin/bash -lc \"kubectl get cm nginx-thrift -n social-network -o json > /tmp/nginx-cm.json python - <<'PY' import json x=json.load(open('/tmp/nginx-cm.json')) s=x['data']['nginx.conf'] a=s.index('    -- Normalize generated result field identifiers') b=s.index('\\\\n',s.index('    end',a))+1 print(s[a:b\nSAYS: Post creation now succeeds. Timeline reads still fail because the frontend configuration also rewrites Thrift result field IDs incorrectly. I\u2019ll remove that rewrite and roll out the corrected configuration. \nRUNS: /bin/bash -lc 'kubectl apply -f /tmp/nginx-cm-fixed.json kubectl rollout restart deployment/nginx-thrift -n social-network'\nRUNS: /bin/bash -lc 'kubectl rollout status deployment/nginx-thrift -n social-network --timeout=120s'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for round in 1 2 3; do for route in home-timeline user-timeline; do curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/\"'$route/read?user_id=796&start=0&stop=10\"; done; done; curl -s -\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --since=15s --tail=10'\nSAYS: Both timeline endpoints and post creation now return HTTP 200, with measured latency of 10\u201335 ms. The rollout is complete and recent frontend logs show no errors. I\u2019ll submit the mitigation for validation now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Fixed two frontend Thrift configuration errors. Timeline reads and post creation now return HTTP 200 at 10\u201335 ms.  Submitted the required empty-string mitigation; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

@@ -1,0 +1,21 @@
+hotelRef
+{ "ok" : 1 }
+{
+	"time" : ISODate("2026-10-10T12:20:39.291Z"),
+	"view" : {
+		"$lookup" : {
+			"from" : "supplier_terms_current",
+			"localField" : "hotelRef",
+			"foreignField" : "hotelRef",
+			"as" : "terms"
+		}
+	},
+	"registry" : {
+		"$lookup" : {
+			"from" : "supplier_terms_current",
+			"localField" : "supplier.hotelCode",
+			"foreignField" : "provider.hotelCode",
+			"as" : "terms"
+		}
+	}
+}

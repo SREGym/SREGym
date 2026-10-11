@@ -1,0 +1,13 @@
+# Profile serialization and negative-cache contract
+
+The previous fixer followed profile timeouts to a new ConfigMap and restored the stock binary. This version changes no application code or Kubernetes configuration. A catalog export/import encodes existing `hotels.address` BSON documents as JSON scalar strings. Identity, inventory and full address content are preserved. This mirrors an ORM JSON field crossing a document-store boundary without its decoder.
+
+The stock reader matches the correct hotel by ID but cannot decode its address string into a protobuf address pointer. It logs the failure, nevertheless returns the partial hotel in a successful RPC, and caches it under the ordinary key without expiration. The frontend fails later while reading `h.Address.Lon` in GeoJSON rendering. HTTP recovers each panic, keeping the frontend ready. Once cached, RPCs and cache reads succeed and profile logs fall quiet while frontend errors continue.
+
+There are no new collections, scripts, controllers, sidecars, config keys or deployment overrides. The existing catalog still has 80 logically complete records. Restoring the stock binary is ineffective because it is already running; startup does not rewrite existing IDs. Restart, rollback, scaling and cache eviction do not correct the durable representation. Repairing MongoDB alone leaves partial cache entries. Flushing cache alone recreates them.
+
+An expert correlates the frontend `geoJSONResponse` stack with profile responses missing addresses, inspects a cache value, then evaluates BSON address types on live records and reads the ignored decode-error path. Parse strings into embedded objects, then invalidate the profile cache. Mitigation uses only current cluster data and standard contracts, preserving every address field. Recovery restores a per-document snapshot and clears derived cache. Scripts are idempotent; injection creates no traffic and waits on no races. Validation is recorded in `validation.jsonl`.
+
+This adds two repair boundaries to the parent serialization incident without a conspicuous custom runtime. Difficulty remains an empirical question for replay evaluators.
+
+Validation completed: injection, mitigation and recovery each ran twice. The stock profile service was restarted twice without restoring service. Database-only repair left all four rounds at 100% errors. Full mitigation restored all four rounds to zero errors and roughly 97–99 RPS; recovery restored original address content exactly and all rounds remained healthy. Final reinjection produced two violated checks 90.0 seconds apart, each with four violating rounds and a frontend log surge. The fault is left active.

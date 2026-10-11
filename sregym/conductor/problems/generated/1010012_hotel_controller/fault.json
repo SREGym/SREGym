@@ -1,0 +1,56 @@
+{
+  "app": "hotel_reservation",
+  "title": "Collection namespace normalization redirects staging retention into the live hotel catalog",
+  "fault_layer": "app-code",
+  "fault_primitive": "ConfigMap-deployed maintenance controller truncates a dotted MongoDB collection name, repeatedly reapplying TTL cleanup and cache invalidation",
+  "root_cause_class": "retention_collection_namespace_truncation",
+  "incident_class": "A controller qualified-name parser drops a MongoDB collection namespace and applies staging retention to live data",
+  "affected_components": [
+    "mongodb-profile",
+    "profile",
+    "memcached-profile",
+    "frontend"
+  ],
+  "symptoms": "Hotel search and some recommendations close HTTP connections with recovered nil-address panics. Profile RPCs can succeed with empty profiles. Most catalog documents, all services, and all application pods remain healthy. Frontend runtime-error logs surge.",
+  "why_hard": "Recovered frontend serialization panics occur several hops from a successful profile RPC. Only five of eighty live documents vanish, so ordinary counts and hotel-1 checks pass. The policy correctly names staging.hotels, hiding the root cause from a config-only review; a SQL-style qualified-name parser actually chooses hotels. MongoDB misses become immortal empty memcached profiles. The companion recreates indexes, deletes republished records, and invalidates cache keys, so restarts, index removal, data restoration, and cache flushing alone fail.",
+  "expected_agent_pitfalls": [
+    "Treat frontend panics as a frontend release issue because upstream RPCs finish successfully",
+    "Inspect hotel 1 or catalog counts and conclude profile storage is healthy",
+    "Restart the profile service to regenerate its sample catalog without correcting retention scope",
+    "Drop the TTL index without stopping the periodic reconciliation that recreates it",
+    "Restore missing documents but overlook immortal empty profile entries in memcached",
+    "Flush memcached without correcting the controller and restoring missing records",
+    "Accept the correct-looking staging.hotels policy without checking how the companion resolves MongoDB collection names"
+  ],
+  "mitigation_summary": "Repair the mounted controller to preserve the full MongoDB collection name, reload it, remove the live TTL index, restore revisions from hotel_catalog_versions, and flush memcached-profile. All required information is in the cluster.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "controller",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 44.3,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "401.8671181201935",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, then submit the required empty solution for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'kubectl get deployment mongodb-profile -n hotel-reservation -o yaml; kubectl logs -n hotel-reservation deployment/profile --tail=60; kubectl logs -n hotel-reservation deployment/frontend --tail=30'\nRUNS: /bin/bash -lc \"kubectl get configmap catalog-retention -n hotel-reservation -o yaml; kubectl exec -n hotel-reservation deployment/mongodb-profile -c hotel-reserv-profile-mongo -- mongo --quiet --eval 'db.getMongo().getDBNames().forEach(function(n){var d=db.getSiblingDB(n); print(n); d.getCollectionN\nSAYS: The retention job is deleting live hotel profiles: it turns `staging.hotels` into `hotels`, then expires records using a 1970 fallback date. The missing profiles cause frontend request panics. I\u2019ll correct the collection target and restore the five deleted profiles from the job\u2019s archive. \nRUNS: /bin/bash -lc \"python - <<'PY' import json,subprocess ns='hotel-reservation' c=json.loads(subprocess.check_output(['kubectl','get','cm','catalog-retention','-n',ns,'-o','json'])) s=c['data']['retention.js'].replace('policy.collection.split(\\\".\\\").pop()', 'policy.collection') subprocess.run(['kubectl\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time urls=['/recommendations?require=dis&lat=37.7749&lon=-122.4194','/recommendations?require=rate&lat=37.7749&lon=-122.4194','/recommendations?require=price&lat=37.7749&lon=-122.4194','/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=\nRUNS: /bin/bash -lc \"kubectl logs -n hotel-reservation deployment/frontend --since=1m --tail=65; kubectl logs -n hotel-reservation deployment/recommendation --since=1m --tail=20; python - <<'PY' import urllib.request,time urls=['/recommendations?require=dis&lat=37.7749&lon=-122.4194','/recommendations?req\nSAYS: The five profiles are restored, the live collection\u2019s TTL index is removed, and retention now targets `staging.hotels`. I also cleared cached empty profiles. Search and all three recommendation modes are returning HTTP 200; I\u2019m checking that recovery holds before submitting. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deployment/mongodb-profile -c catalog-retention -- bash -c 'exec 3<>/dev/tcp/memcached-profile/11211; printf \\\"flush_all\\\\r\\\\n\\\" >&3; head -n 1 <&3'; python - <<'PY' import urllib.request,time urls=['/recommendations?require=dis&lat=37.7749&lon=-122.4\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deployment/mongodb-profile -c hotel-reserv-profile-mongo -- mongo profile-db --quiet --eval 'print(\\\"hotel count=\\\"+db.hotels.count());'; kubectl logs -n hotel-reservation deployment/frontend --since=30s --tail=5; curl -sS -X POST http://host.docker.i\nSAYS: Fixed retention targeting the live hotel collection, restored five deleted profiles, removed its TTL index, and cleared stale cache entries.  All 24 verification requests returned HTTP 200 in 39\u2013233 ms. Submitted `{\"solution\": \"\"}` exactly once; validation endpoint acknowledged receipt."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:06"
+  }
+}

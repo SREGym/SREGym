@@ -1,0 +1,58 @@
+{
+  "app": "social_network",
+  "title": "Coalesced RPC dispatch lanes rebind in-flight Thrift sockets",
+  "fault_layer": "app-code",
+  "fault_primitive": "Endpoint-scoped frame batches and late-bound transport views share a mutable socket owner",
+  "root_cause_class": "rpc_inflight_dispatch_lane_alias",
+  "incident_class": "RPC microbatching rollout omits exclusive ownership and reply demultiplexing",
+  "affected_components": [
+    "nginx-thrift",
+    "home-timeline-service",
+    "user-timeline-service",
+    "compose-post-service"
+  ],
+  "symptoms": "Timeline reads and post composition show HTTP failures, missing RPC replies, multi-second tails and throughput far below target. Frontend logs report socket ownership errors, read timeouts or unknown transport exceptions in the unchanged TSocket implementation. Pods stay Running and Ready and backend connectivity remains valid.",
+  "why_hard": "The original factory, nginx startup code, and socket implementation are intact. Fresh clients, framed transports and sockets are allocated with correct endpoint identity. A separately mounted framed-transport module queues complete wire frames in an endpoint lane during a 250 ms coalescing window. Each fresh socket rebinds the lane. The queued batch is sent through the newest socket, while independent client views also resolve that socket dynamically for reads and cleanup. Frame encoding is valid, but replies have no exclusive owner or demultiplexer. Failures occur in unchanged socket code and can resemble backend latency, connection exhaustion or protocol corruption. Removing the previous startup override, changing pool identity, resetting buffers, restarting or rolling back the frontend image retains the adapter. Single sequential calls can succeed. Diagnosis requires correlating module mount provenance, queue flushing, late-bound closures, request ownership and overlapping calls. The same rollout consolidates workers; restoring worker parallelism alone leaves the batching throughput collapse, while removing the batching delay alone leaves the in-flight lane alias. The repair must restore request ownership rather than tune one symptom.",
+  "expected_agent_pitfalls": [
+    "Treat bad request as invalid HTTP arguments",
+    "Inspect the unchanged client factory and conclude transport ownership is correct",
+    "Investigate backend service health or Thrift compatibility",
+    "Change TCP pool identities or frame buffers",
+    "Roll back the application image while retaining the mounted transport implementation",
+    "Treat the 250 ms batching interval as the complete cause, overlooking mutable socket ownership and missing reply demultiplexing",
+    "Repair socket dispatch for reads while leaving shared frame batching on the newest connection",
+    "Use successful sequential probes as evidence of recovery",
+    "Restore worker parallelism while retaining the blocking batch window, or remove only the batch delay while retaining mutable lane ownership"
+  ],
+  "mitigation_summary": "Remove the two transport-module mounts and ConfigMap source keys to restore the installed per-request transport from the existing assets init container, then recreate frontend workers. Mitigation uses live cluster state and does not depend on saved originals. Restore the default automatic worker setting.",
+  "generation": {
+    "tier": "easy",
+    "chaos_backend": "codex",
+    "theme": "discovery",
+    "solve_rate": "1/1",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 42.7,
+        "valid": true,
+        "solved": true,
+        "reason": null,
+        "ttm": "344.16343808174133",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, fix the cause of the degradation, then submit once for validation.\nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get deployment nginx-thrift -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/nginx-thrift --tail=70'\nRUNS: /bin/bash -lc 'kubectl get cm,svc -n social-network; kubectl top pods -n social-network'\nRUNS: /bin/bash -lc 'kubectl get cm nginx-thrift -n social-network -o json'\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deployment/nginx-thrift -- cat /usr/local/openresty/lualib/thrift/TSocket.lua'\nSAYS: The frontend\u2019s Thrift transport shares a mutable socket across concurrent requests and adds a 250 ms delay. This causes requests to use another request\u2019s socket, matching the timeouts and \u201cbad request\u201d errors in the logs. I\u2019ll restore a separate transport for each request and roll out the fix.\nRUNS: /bin/bash -lc \"python - <<'PY' import subprocess,json cm=json.loads(subprocess.check_output(['kubectl','get','cm','nginx-thrift','-n','social-network','-o','json'])) with open('/logs/nginx-thrift-before.json','w') as f: json.dump(cm,f) s=cm['data']['TFramedTransport.lua'] assert \\\"  obj.trans = RpcC\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deployment/nginx-thrift -- cat /usr/local/openresty/nginx/lua-scripts/wrk2-api/post/compose.lua'\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,urllib.parse,concurrent.futures,time,collections base='http://127.0.0.1:18080' def req(i):  path=['/wrk2-api/home-timeline/read?user_id=1&start=0&stop=10','/wrk2-api/user-timeline/read?user_id=1&start=0&stop=10','/wrk2-api/post/compose'][i%3]  dat\nSAYS: The fix is deployed. All 300 concurrent requests across post creation and both timelines succeeded, and the new frontend has logged no errors. I\u2019m finishing a latency check before submitting for sustained validation.\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,statistics lat=[] for i in range(50):  t=time.monotonic()  with urllib.request.urlopen('http://127.0.0.1:18080/wrk2-api/home-timeline/read?user_id=710&start=0&stop=10',timeout=5) as r:   assert r.status==200;r.read()  lat.append(time.monotoni\nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Fixed the frontend\u2019s shared Thrift socket bug and removed its 250 ms delay.  Verified 350/350 requests succeeded; the final latency check measured 80 ms median and 178 ms maximum.  Submitted once with an empty solution. Validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-10 21:17:07"
+  }
+}

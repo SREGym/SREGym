@@ -1,0 +1,78 @@
+{
+  "slo": {
+    "target_rps": 100.0,
+    "max_error_ratio": 0.05,
+    "p99_floor_ms": 1000.0,
+    "p99_baseline_multiplier": 5.0,
+    "min_throughput_fraction": 0.7,
+    "timeout_floor": 0.15,
+    "timeout_margin": 0.1,
+    "baseline_p99_ms": 32.7,
+    "baseline_timeout_ratio": 0.06327835745540222,
+    "baseline_error_ratio": 0.0,
+    "p99_limit_ms": 1000.0,
+    "timeout_limit": 0.16327835745540223,
+    "error_limit": 0.05
+  },
+  "verdict": {
+    "rounds": 4,
+    "violating": 4,
+    "healthy": false,
+    "violated": true,
+    "details": [
+      {
+        "time": 1791643567.502609,
+        "requests": 2898,
+        "rps": 96.5,
+        "error_ratio": 0.305,
+        "timeout_ratio": 0.0687,
+        "p99_ms": 51.62,
+        "violations": [
+          "error_ratio=0.305>0.050"
+        ]
+      },
+      {
+        "time": 1791643598.582212,
+        "requests": 2933,
+        "rps": 97.8,
+        "error_ratio": 0.2942,
+        "timeout_ratio": 0.0634,
+        "p99_ms": 56.86,
+        "violations": [
+          "error_ratio=0.294>0.050"
+        ]
+      },
+      {
+        "time": 1791643629.626492,
+        "requests": 2934,
+        "rps": 97.7,
+        "error_ratio": 0.2989,
+        "timeout_ratio": 0.0631,
+        "p99_ms": 65.79,
+        "violations": [
+          "error_ratio=0.299>0.050"
+        ]
+      },
+      {
+        "time": 1791643660.689969,
+        "requests": 2933,
+        "rps": 97.6,
+        "error_ratio": 0.2963,
+        "timeout_ratio": 0.0638,
+        "p99_ms": 48.1,
+        "violations": [
+          "error_ratio=0.296>0.050"
+        ]
+      }
+    ]
+  },
+  "new_alerts": [],
+  "log_surges": {
+    "hotel-reserv-search": [
+      0.0,
+      3360.0
+    ]
+  },
+  "cpu_surges": {},
+  "checked_at": 1791643708.131578
+}

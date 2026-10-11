@@ -1,0 +1,20 @@
+NAME                                      READY   STATUS    RESTARTS      AGE
+consul-5c767d7459-sz525                   1/1     Running   0             49m
+frontend-bc766b7fc-bd9z4                  1/1     Running   0             49m
+geo-766c64f6b4-448dq                      1/1     Running   3 (47m ago)   49m
+jaeger-67445b6dd6-zjsd7                   1/1     Running   0             49m
+memcached-profile-679775b4d4-hk6l9        1/1     Running   0             49m
+memcached-rate-7c8675fc5d-k44sm           1/1     Running   0             5m35s
+memcached-reserve-6c889f84d4-q5gcn        1/1     Running   0             49m
+mongodb-geo-5ff578bcb8-zhdqt              1/1     Running   0             49m
+mongodb-profile-758cb77f9f-mhmml          1/1     Running   0             49m
+mongodb-rate-84f4447675-zz52f             2/2     Running   0             4m50s
+mongodb-recommendation-55699465f7-42v22   1/1     Running   0             49m
+mongodb-reservation-5994859869-px6km      1/1     Running   0             49m
+mongodb-user-969c6c449-z2t6l              1/1     Running   0             49m
+profile-85c6f67954-lpzsm                  1/1     Running   2 (47m ago)   49m
+rate-5bffc6876-f9bdd                      1/1     Running   0             3m44s
+recommendation-6bf7689fdb-kwq6q           1/1     Running   2 (47m ago)   49m
+reservation-57b8ccd5dc-f2sgr              1/1     Running   2 (47m ago)   49m
+search-8484788b97-g8mrx                   1/1     Running   0             5m44s
+user-5c4d969c85-gcm88                     1/1     Running   2 (47m ago)   49m
