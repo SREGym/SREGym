@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:22.04 AS dependencies
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -48,21 +48,29 @@ RUN python3 -m pip install --break-system-packages -r /tmp/requirements-containe
 # ───────────────────────────────────────────────
 # 5. Application code
 # ───────────────────────────────────────────────
-COPY clients/        /opt/sregym/clients/
-COPY logger/         /opt/sregym/logger/
-COPY llm_backend/    /opt/sregym/llm_backend/
-COPY sregym/__init__.py sregym/paths.py /opt/sregym/sregym/
-COPY sregym/service/__init__.py sregym/service/kubectl.py sregym/service/helm.py /opt/sregym/sregym/service/
-COPY sregym/service/apps/base.py sregym/service/apps/helpers.py /opt/sregym/sregym/service/apps/
-COPY docker/agents/install-scripts/ /opt/sregym/install-scripts/
-RUN chmod +x /opt/sregym/install-scripts/*.sh
+FROM dependencies AS public-runtime
+WORKDIR /sources
+COPY clients/ clients/
+COPY logger/ logger/
+COPY llm_backend/ llm_backend/
+COPY sregym/__init__.py sregym/paths.py sregym/
+COPY sregym/service/__init__.py sregym/service/kubectl.py sregym/service/helm.py sregym/service/
+COPY sregym/service/apps/base.py sregym/service/apps/helpers.py sregym/service/apps/
+COPY docker/agents/install-scripts/ docker/agents/install-scripts/
+COPY docker/agents/runtime_context.py docker/agents/runtime_context.py
+RUN python3 docker/agents/runtime_context.py /public --root /sources
+
+FROM dependencies
+COPY --from=public-runtime /public/ /opt/runtime/
+RUN chmod +x /opt/runtime/install-scripts/*.sh
 
 # ───────────────────────────────────────────────
 # 6. Runtime setup
 # ───────────────────────────────────────────────
-ENV PYTHONPATH="/opt/sregym"
+ENV PYTHONPATH="/opt/runtime"
+LABEL io.incident.runtime.root="/opt/runtime"
 
-# SREGym-applications/ is bind-mounted at runtime, not baked in.
+# Application utilities are mounted at runtime, not baked in.
 RUN mkdir -p /logs
 WORKDIR /logs
 

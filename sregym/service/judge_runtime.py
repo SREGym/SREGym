@@ -102,15 +102,16 @@ def managed_judge_backend(backend: str = "api", *, force_build: bool = False) ->
         )
     )
     driver = f"python /logs/judge_bridge.py --backend {backend} --host 0.0.0.0 --port {BRIDGE_PORT}"
-    command = runner.build_composite_command(registration.install_script, registration.agent_version, driver)
-    request = ExecInput(command=command, label=f"judge-{backend}")
     previous_url = os.environ.get("SREGYM_JUDGE_BRIDGE_URL")
+    request = None
     proc = None
     try:
         if force_build:
             runner.build_image()
         else:
             runner.ensure_image_exists()
+        command = runner.build_composite_command(registration.install_script, registration.agent_version, driver)
+        request = ExecInput(command=command, label=f"judge-{backend}")
         with (logs / "container.log").open("w") as output:
             proc = subprocess.Popen(runner.build_docker_command(request), stdout=output, stderr=subprocess.STDOUT)
             url = _wait_for_bridge(proc, request.container_name, logs / "container.log")
@@ -123,7 +124,7 @@ def managed_judge_backend(backend: str = "api", *, force_build: bool = False) ->
         else:
             os.environ["SREGYM_JUDGE_BRIDGE_URL"] = previous_url
         try:
-            if request.container_name:
+            if request is not None and request.container_name:
                 runner.stop_container(request.container_name)
             if proc is not None:
                 try:

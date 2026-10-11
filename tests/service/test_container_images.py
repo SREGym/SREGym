@@ -10,17 +10,28 @@ def test_cached_image_needs_no_pull_or_build(monkeypatch):
     run = Mock(return_value=subprocess.CompletedProcess([], 0))
     monkeypatch.setattr(subprocess, "run", run)
     runner = ContainerRunner(ContainerConfig())
+    runner._prepare_public_runtime = Mock()
     runner.ensure_image_exists()
     run.assert_called_once_with(["docker", "image", "inspect", DEFAULT_AGENT_IMAGE], capture_output=True)
+    runner._prepare_public_runtime.assert_called_once_with()
 
 
 @pytest.mark.parametrize("image", [DEFAULT_AGENT_IMAGE, "example.org/custom-agent:v1"])
 def test_missing_release_is_pulled_not_rebuilt(monkeypatch, image):
-    run = Mock(side_effect=[subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 0)])
+    run = Mock(
+        side_effect=[
+            subprocess.CompletedProcess([], 1),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 0),
+        ]
+    )
     monkeypatch.setattr(subprocess, "run", run)
     runner = ContainerRunner(ContainerConfig(image=image))
+    runner._prepare_public_runtime = Mock()
     runner.ensure_image_exists()
-    assert run.call_args.args[0] == ["docker", "pull", image]
+    assert run.call_args_list[1].args[0] == ["docker", "pull", image]
+    assert run.call_args_list[2].args[0] == ["docker", "image", "inspect", image]
+    assert runner._prepare_public_runtime.call_count == int(image == DEFAULT_AGENT_IMAGE)
 
 
 def test_failed_pull_does_not_silently_build_different_code(monkeypatch):
