@@ -118,7 +118,7 @@ class WorkloadVolumes:
             self._run("rm", "-f", name)
             self._carriers.discard(name)
 
-    def rewrite(self, args: list[str], outputs: set[Path]) -> list[str]:
+    def rewrite(self, args: list[str], outputs: set[Path], *, writable_inputs: set[Path] | None = None) -> list[str]:
         """Replace absolute bind sources with volumes, grouping file parents."""
         result, groups = [], {}
         index = 0
@@ -135,8 +135,11 @@ class WorkloadVolumes:
                 result.extend(["-v", binding])
                 continue
             readonly = mode == ["ro"]
+            writable_copy = readonly and path.is_file() and path.resolve() in (writable_inputs or set())
+            if writable_copy:
+                readonly = False
             destination = path.resolve() if path.resolve() in outputs and not readonly else None
-            if not readonly and destination is None:
+            if not readonly and destination is None and not writable_copy:
                 raise ValueError("Rootless agents may write only their output volumes")
             if path.is_symlink() or not path.exists():
                 raise ValueError("Agent volume input must exist and must not be a symlink")
@@ -147,7 +150,7 @@ class WorkloadVolumes:
             group = groups.setdefault(mount, {"readonly": readonly, "output": destination, "inputs": []})
             if (group["readonly"], group["output"]) != (readonly, destination):
                 raise ValueError("Conflicting agent volume destinations")
-            if readonly:
+            if readonly or writable_copy:
                 group["inputs"].append((path, "" if path.is_dir() else container_path.name))
         try:
             for mount, group in groups.items():

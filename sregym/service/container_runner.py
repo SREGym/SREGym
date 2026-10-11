@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -16,8 +17,10 @@ from urllib.parse import urlsplit, urlunsplit
 import yaml
 
 from sregym.service.docker_egress import DEFAULT_EGRESS_PROXY_IMAGE, DockerEgress
+from sregym.service.docker_runtime import docker_command, rootless_workload_enabled, runner_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.provider_endpoints import provider_endpoint_rules
+from sregym.service.workload_volumes import WorkloadVolumes
 
 logger = logging.getLogger("all.sregym.container_runner")
 
@@ -74,6 +77,8 @@ def _codex_subscription_auth_available(auth_path: Path) -> bool:
 
 def get_container_host_bind_address() -> str:
     """Return a host bind address reachable from the agent container."""
+    if rootless_workload_enabled():
+        return runner_address()
     if platform.system() != "Linux":
         # Docker Desktop exposes the host to containers through
         # host.docker.internal. The proxy must therefore bind beyond the host
@@ -121,6 +126,8 @@ class ContainerConfig:
     published_ports: list[str] = field(default_factory=list)
     forward_host_credentials: bool = True
     codex_auth: Literal["copy", "shared", "none"] = "copy"
+    docker_host: str | None = None
+    isolate_mounts: bool = field(default_factory=rootless_workload_enabled)
 
 
 class ContainerRunner:
@@ -279,9 +286,26 @@ class ContainerRunner:
 
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
+        if self.config.isolate_mounts and self.config.docker_host is None:
+            self.config.docker_host = os.environ.get("DOCKER_HOST") or None
+        if self.config.isolate_mounts and not self.config.docker_host:
+            raise ValueError("Isolated workload containers require an explicit Docker endpoint")
+        self._owned_containers: dict[str, str | None] = {}
         self._credential_tmps: list[str] = []
-        self._egress = DockerEgress(self.config.egress_proxy_image, k8s_proxy_port=self.config.k8s_proxy_port)
+        self._writable_credential_inputs: set[Path] = set()
+        self._egress = DockerEgress(
+            self.config.egress_proxy_image,
+            k8s_proxy_port=self.config.k8s_proxy_port,
+            docker_host=self.config.docker_host,
+            isolate_mounts=self.config.isolate_mounts,
+        )
         self._agent_tools_volume: str | None = None
+        self._volumes = (
+            WorkloadVolumes(self.config.image, self.config.docker_host) if self.config.isolate_mounts else None
+        )
+
+    def _docker_command(self):
+        return docker_command(host=self.config.docker_host)
 
     @property
     def internet_access_mode(self) -> str:
@@ -303,12 +327,29 @@ class ContainerRunner:
     def close(self) -> None:
         """Release all per-run resources, including after partial startup."""
         try:
-            self.cleanup_egress_proxy()
+            self._stop_owned_containers()
         finally:
             try:
-                self.cleanup_credential_tmps()
+                self.cleanup_egress_proxy()
             finally:
-                self.cleanup_agent_tools()
+                try:
+                    if self._owned_containers:
+                        self.cleanup_credential_tmps(collect=False)
+                    else:
+                        self.cleanup_credential_tmps()
+                finally:
+                    self.cleanup_agent_tools()
+
+    def _stop_owned_containers(self) -> None:
+        failures = []
+        for name, endpoint in tuple(self._owned_containers.items()):
+            try:
+                self.stop_container(name, timeout=5, docker_host=endpoint, strict=True)
+                self._owned_containers.pop(name)
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("Owned workload containers could not be stopped", failures)
 
     def _configured_egress_rules(self, env_vars: dict[str, str]) -> tuple[EndpointRule, ...]:
         rules = {
@@ -348,29 +389,39 @@ class ContainerRunner:
 
         suffix = uuid.uuid4().hex[:8]
         volume = f"evaluation-agent-tools-{suffix}"
-        self._run_docker_checked(["docker", "volume", "create", volume], "create the agent tools volume")
         self._agent_tools_volume = volume
+        setup_name = f"agent-tool-setup-{suffix}"
         version = agent_version or "latest"
         command = f"AGENT_VERSION={shlex.quote(version)} /opt/sregym/install-scripts/{shlex.quote(install_script)}"
         try:
-            result = subprocess.run(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "--network=bridge",
-                    "-v",
-                    f"{volume}:{AGENT_TOOLS_CONTAINER_PATH}",
-                    "-e",
-                    f"NPM_CONFIG_PREFIX={AGENT_TOOLS_CONTAINER_PATH}",
-                    "-e",
-                    f"PATH={CONTAINER_PATH}",
-                    self.config.image,
-                    command,
-                ],
-                capture_output=True,
-                text=True,
+            self._run_docker_checked(
+                [*self._docker_command(), "volume", "create", volume], "create the agent tools volume"
             )
+            self._owned_containers[setup_name] = self.config.docker_host
+            try:
+                result = subprocess.run(
+                    [
+                        *self._docker_command(),
+                        "run",
+                        "--rm",
+                        "--name",
+                        setup_name,
+                        "--network=bridge",
+                        "-v",
+                        f"{volume}:{AGENT_TOOLS_CONTAINER_PATH}",
+                        "-e",
+                        f"NPM_CONFIG_PREFIX={AGENT_TOOLS_CONTAINER_PATH}",
+                        "-e",
+                        f"PATH={CONTAINER_PATH}",
+                        self.config.image,
+                        command,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+            finally:
+                self.stop_container(setup_name, timeout=5, docker_host=self.config.docker_host, strict=True)
+                self._owned_containers.pop(setup_name)
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout).strip()
                 raise RuntimeError(f"Could not install the agent CLI: {detail}")
@@ -381,9 +432,9 @@ class ContainerRunner:
 
     def cleanup_agent_tools(self) -> None:
         if self._agent_tools_volume:
-            subprocess.run(
-                ["docker", "volume", "rm", "-f", self._agent_tools_volume],
-                capture_output=True,
+            self._run_docker_checked(
+                [*self._docker_command(), "volume", "rm", "-f", self._agent_tools_volume],
+                "remove owned agent tools volume",
             )
         self._agent_tools_volume = None
 
@@ -405,6 +456,8 @@ class ContainerRunner:
             return
 
         if self.config.codex_auth == "shared":
+            if self.config.isolate_mounts:
+                raise ValueError("Shared host credential refresh is limited to trusted, non-isolated runners")
             args.extend(["-v", f"{auth_src.resolve()}:/root/.codex/auth.json:rw"])
             return
 
@@ -414,6 +467,8 @@ class ContainerRunner:
 
         args.extend(["-v", f"{auth_dst}:/root/.codex/auth.json:ro"])
         self._credential_tmps.append(tmp)
+        if self.config.isolate_mounts:
+            self._writable_credential_inputs.add(auth_dst.resolve())
 
     def _run_uses_aws(self, extra_env: dict[str, str] | None = None) -> bool:
         """Whether this run resolves AWS credentials, and so needs ~/.aws."""
@@ -437,11 +492,14 @@ class ContainerRunner:
         # model id is the only signal left that an AWS run needs the mount.
         return any(is_aws_model(lookup(var)) for var in self.MODEL_ID_VARS)
 
-    def cleanup_credential_tmps(self) -> None:
+    def cleanup_credential_tmps(self, *, collect: bool = True) -> None:
         """Remove throwaway credential directories."""
         for tmp in self._credential_tmps:
             shutil.rmtree(tmp, ignore_errors=True)
         self._credential_tmps = []
+        self._writable_credential_inputs.clear()
+        if self._volumes:
+            self._volumes.close(collect=collect)
 
     def _build_env_vars(self, extra_env: dict[str, str] | None = None) -> dict[str, str]:
         env_vars = dict(self.config.env_vars)
@@ -472,7 +530,7 @@ class ContainerRunner:
         # Docker Desktop and filtered containers cannot reach host loopback
         # directly. Rewrite every forwarded provider endpoint that points to a
         # loopback address, not only the primary agent endpoint.
-        if _docker_uses_separate_host() or self.config.internet_policy.is_filtered:
+        if _docker_uses_separate_host() or self.config.internet_policy.is_filtered or self.config.isolate_mounts:
             for key, value in list(env_vars.items()):
                 if not isinstance(value, str) or not (
                     key.endswith(("_API_BASE", "_BASE_URL", "_URL", "_ENDPOINT"))
@@ -483,9 +541,11 @@ class ContainerRunner:
 
         # Agent containers use Docker's host alias to reach SREGym services
         # running on the host, including the MCP port-forward.
-        if self.config.network_mode == "host" or self.config.internet_policy.is_filtered:
+        # Internal service routing remains necessary without provider keys.
+        # Keep the egress allowlist and URL on the same active forwarded port.
+        mcp_port = env_vars.setdefault("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
+        if self.config.network_mode == "host" or self.config.internet_policy.is_filtered or self.config.isolate_mounts:
             env_vars["API_HOSTNAME"] = "host.docker.internal"
-            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
 
         if self._agent_tools_volume is not None:
@@ -506,7 +566,7 @@ class ContainerRunner:
 
     def _build_base_docker_args(self, extra_env: dict[str, str] | None = None) -> list[str]:
         args = [
-            "docker",
+            *self._docker_command(),
             "run",
             "--rm",
             f"--cpus={self.config.cpus}",
@@ -573,10 +633,26 @@ class ContainerRunner:
                 if host_path.exists():
                     args.extend(["-v", f"{host_path.resolve()}:/opt/sregym/SREGym-applications/{subdir}:ro"])
 
+        if self.config.isolate_mounts:
+            address = runner_address()
+            args = [
+                f"--add-host=host.docker.internal:{address}"
+                if argument == "--add-host=host.docker.internal:host-gateway"
+                else argument
+                for argument in args
+            ]
+            if not any(argument.startswith("--add-host=host.docker.internal:") for argument in args):
+                args.append(f"--add-host=host.docker.internal:{address}")
+            outputs = {path.resolve() for path in (self.config.logs_path, self.config.workspace_path) if path}
+            self._volumes.image = self.config.image
+            if self._writable_credential_inputs:
+                args = self._volumes.rewrite(args, outputs, writable_inputs=self._writable_credential_inputs)
+            else:
+                args = self._volumes.rewrite(args, outputs)
         return args
 
     def _prepare_kubeconfig(self, source: Path) -> Path:
-        if not self.config.internet_policy.is_filtered:
+        if not self.config.internet_policy.is_filtered and not self.config.isolate_mounts:
             return source
 
         with source.open(encoding="utf-8") as handle:
@@ -606,8 +682,10 @@ class ContainerRunner:
         self._ensure_filtered_egress(env_vars)
         cmd = self._build_base_docker_args(exec_input.env)
         suffix = uuid.uuid4().hex[:8]
-        if exec_input.label:
-            container_name = f"sregym-{exec_input.label}-{suffix}"
+        if exec_input.label or self.config.isolate_mounts:
+            label = exec_input.label or "agent"
+            prefix = "agent" if self.config.isolate_mounts else "sregym"
+            container_name = f"{prefix}-{label}-{suffix}"
             cmd.extend(["--name", container_name])
             exec_input.container_name = container_name
         cmd.extend(self._build_env_flags(exec_input.env))
@@ -656,9 +734,11 @@ class ContainerRunner:
         checks (e.g. model validation) that must complete before the main
         agent container is launched.
         """
-        cmd = self.build_docker_command(exec_input)
-
+        cleanup_attempted = False
         try:
+            cmd = self.build_docker_command(exec_input)
+            if self.config.isolate_mounts and exec_input.container_name:
+                self._owned_containers[exec_input.container_name] = self.config.docker_host
             return subprocess.run(
                 cmd,
                 capture_output=True,
@@ -666,30 +746,49 @@ class ContainerRunner:
                 timeout=exec_input.timeout,
             )
         except (KeyboardInterrupt, subprocess.TimeoutExpired):
-            if exec_input.container_name:
-                ContainerRunner.stop_container(exec_input.container_name, timeout=5)
+            if exec_input.container_name and not self.config.isolate_mounts:
+                ContainerRunner.stop_container(
+                    exec_input.container_name,
+                    timeout=5,
+                    **({"docker_host": self.config.docker_host} if self.config.docker_host else {}),
+                )
+            cleanup_attempted = True
+            self.close()
+            raise
+        except BaseException:
+            cleanup_attempted = True
+            self.close()
             raise
         finally:
-            self.cleanup_credential_tmps()
+            if not cleanup_attempted:
+                try:
+                    self._stop_owned_containers()
+                finally:
+                    self.cleanup_credential_tmps(collect=not self._owned_containers)
 
     def run_async(self, exec_input: ExecInput) -> subprocess.Popen:
         """Start an agent in a container asynchronously. Returns Popen handle."""
-        cmd = self.build_docker_command(exec_input)
-        logger.info(f"Starting containerized agent [{exec_input.label}]: {exec_input.command[:80]}...")
-
-        return subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
+        try:
+            cmd = self.build_docker_command(exec_input)
+            if self.config.isolate_mounts and exec_input.container_name:
+                self._owned_containers[exec_input.container_name] = self.config.docker_host
+            logger.info(f"Starting containerized agent [{exec_input.label}]: {exec_input.command[:80]}...")
+            return subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except BaseException:
+            self.close()
+            raise
 
     def ensure_image_exists(self) -> None:
         """Pull the selected release, or build the explicit local-development tag."""
         image = self.config.image
         result = subprocess.run(
-            ["docker", "image", "inspect", image],
+            [*self._docker_command(), "image", "inspect", image],
             capture_output=True,
         )
         if result.returncode == 0:
@@ -699,7 +798,7 @@ class ContainerRunner:
             self.build_image()
             return
         logger.info("Pulling agent image '%s'...", image)
-        self._run_docker_checked(["docker", "pull", image], f"pull agent image '{image}'")
+        self._run_docker_checked([*self._docker_command(), "pull", image], f"pull agent image '{image}'")
 
     def build_image(self) -> None:
         """Build (or rebuild) the container image using docker/agents/build.sh."""
@@ -721,7 +820,11 @@ class ContainerRunner:
         result = subprocess.run(
             ["bash", str(build_script)],
             cwd=str(repo_root),
-            env={**os.environ, "SREGYM_AGENT_IMAGE": image},
+            env={
+                **os.environ,
+                "SREGYM_AGENT_IMAGE": image,
+                **({"DOCKER_HOST": self.config.docker_host} if self.config.docker_host else {}),
+            },
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to build container image '{image}'. Check the build output above for errors.")
@@ -729,27 +832,55 @@ class ContainerRunner:
         logger.info(f"✅ Container image '{image}' built successfully.")
 
     @staticmethod
-    def stop_container(container_name: str, timeout: int = 10) -> None:
+    def stop_container(
+        container_name: str, timeout: int = 10, *, docker_host: str | None = None, strict: bool = False
+    ) -> None:
         """Stop a running container by name. Used for cleanup."""
         try:
-            subprocess.run(
-                ["docker", "stop", "-t", str(timeout), container_name],
+            result = subprocess.run(
+                docker_command("stop", "-t", str(timeout), container_name, host=docker_host),
                 capture_output=True,
                 timeout=timeout + 5,
             )
+            if result.returncode != 0:
+                raise RuntimeError("Docker stop failed")
         except Exception:
             # Force remove if stop fails
             try:
-                subprocess.run(
-                    ["docker", "rm", "-f", container_name],
+                result = subprocess.run(
+                    docker_command("rm", "-f", container_name, host=docker_host),
                     capture_output=True,
                     timeout=5,
                 )
+                if result.returncode != 0:
+                    raise RuntimeError("Docker removal failed")
             except Exception:
+                if strict:
+                    # --rm may already have removed a completed container. A
+                    # successful daemon query proves absence; a transport
+                    # failure must remain retryable rather than being hidden.
+                    remaining = subprocess.run(
+                        docker_command(
+                            "container",
+                            "ls",
+                            "--all",
+                            "--filter",
+                            f"name=^/{re.escape(container_name)}$",
+                            "--format",
+                            "{{.Names}}",
+                            host=docker_host,
+                        ),
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if remaining.returncode == 0 and container_name not in remaining.stdout.splitlines():
+                        return
+                    raise
                 # Force remove if stop fails
                 with contextlib.suppress(Exception):
                     subprocess.run(
-                        ["docker", "rm", "-f", container_name],
+                        docker_command("rm", "-f", container_name, host=docker_host),
                         capture_output=True,
                         timeout=5,
                     )
