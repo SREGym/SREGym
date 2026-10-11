@@ -137,10 +137,8 @@ if CT_LANE not in {"chat", "rca_flow"}:
     raise SystemExit(f"CT_LANE must be 'chat' or 'rca_flow', got {CT_LANE!r}")
 # Absolute, because this runs with the SREGym root as cwd while the script lives
 # in the CloudThinker checkout and must import its sibling workspace module.
-CT_RCA_SCRIPT = os.environ.get(
-    "CT_RCA_SCRIPT",
-    str(Path(CT_REPO_DIR or ".") / ".agents/skills/sregym-bench-internal/scripts/rca_run.py"),
-)
+_rca_scripts = sorted((Path(CT_REPO_DIR or ".") / ".agents/skills").glob("*/scripts/rca_run.py"))
+CT_RCA_SCRIPT = os.environ.get("CT_RCA_SCRIPT", str(_rca_scripts[0]) if len(_rca_scripts) == 1 else "")
 # Fail at import, not at the first problem, and only on the lane that uses it. A default
 # that names a moved file makes every run in the chain abort as a harness failure hours
 # later, and the driver log that would have said so is zero-length.
@@ -681,7 +679,7 @@ def rca_flow_diagnosis(message: str, logs_dir: Path) -> dict:
         CT_RCA_SCRIPT,
         CT_WORKSPACE,
         "--title",
-        "SREGym benchmark incident",
+        "Service incident",
         "--description-file",
         str(prompt_path),
         "--json-out",

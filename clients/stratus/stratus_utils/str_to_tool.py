@@ -34,7 +34,7 @@ def get_client(session_id: str | None = None):
     mcp_base_url = os.getenv("MCP_SERVER_URL", f"http://{api_hostname}:{mcp_server_port}")
     transport = SSETransport(
         url=f"{mcp_base_url}/kubectl/sse",
-        headers={"sregym_ssid": session_id},
+        headers={"x-session-id": session_id},
         sse_read_timeout=sse_timeout,
     )
     client = Client(transport)
