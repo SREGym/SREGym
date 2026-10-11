@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 import yaml
+from kubernetes.client import ApiClient
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
@@ -96,15 +97,37 @@ except grpc.RpcError as e:
 print(json.dumps({"addr": address, "s": round(time.monotonic() - start, 3), "code": code}))
 """
 
+# Asks the frontend for recommendations the way the shop's product page does, so the request reaching recommendation
+# has the frontend's own client, metadata and shape. The frontend answers with up to 4 product objects.
+# argv: count, interval_s, deadline_s, product id to exclude, frontend address.
+_FRONTEND_SCRIPT = r"""
+import json, sys, time, urllib.error, urllib.request
+count, interval, deadline, exclude, address = int(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), sys.argv[4], sys.argv[5]
+url = f"http://{address}/api/recommendations?productIds={exclude}&sessionId=check&currencyCode=USD"
+for i in range(count):
+    start = time.monotonic()
+    try:
+        with urllib.request.urlopen(url, timeout=deadline) as reply:
+            ids = [p["id"] for p in json.loads(reply.read())]
+        print(json.dumps({"ok": True, "ms": (time.monotonic() - start) * 1000, "ids": ids}), flush=True)
+    except urllib.error.HTTPError as e:
+        print(json.dumps({"ok": False, "ms": (time.monotonic() - start) * 1000, "code": f"HTTP_{e.code}", "error": str(e)}), flush=True)
+    except Exception as e:
+        print(json.dumps({"ok": False, "ms": (time.monotonic() - start) * 1000, "code": "UNAVAILABLE", "error": str(e)}), flush=True)
+    if i < count - 1:
+        time.sleep(interval)
+"""
+
 
 class MissingStaleCacheFallbackAstronomyShop(Problem):
     RECOMMENDATION = "recommendation"
     PRODUCT_CATALOG = "product-catalog"
-    # The chart's addresses. Probes call recommendation through its Service, as the frontend does, and time
-    # product-catalog directly to confirm the delay.
+    # The chart's addresses. Probes call recommendation through its Service, as the frontend does, or ask the
+    # frontend itself. The delay is confirmed by timing product-catalog's pods directly.
     RECOMMENDATION_ADDR = "recommendation:8080"
-    UPSTREAM_ADDR = "product-catalog:8080"
+    FRONTEND_ADDR = "frontend:8080"
     LOCAL_ADDR = "localhost:8080"
+    UPSTREAM_PORT = 8080
     # The client pod runs the stock image with no app labels, so neither the Service nor the delay selects it,
     # and nothing the agent changed in the recommendation container can touch the probe.
     CLIENT_CONTAINER = "client"
@@ -293,12 +316,18 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
 
     def measure_upstream(self) -> dict | None:
         """
-        Time one ListProducts call from the recommendation pod to product-catalog: {"addr", "s", "code"},
-        or None if exec failed.
+        Time one ListProducts call from the recommendation pod to a product-catalog pod: {"addr", "s", "code"},
+        or None if that cannot be done.
+
+        It goes to the pod IP, not the name, so a hostAliases or DNS change in the recommendation pod can't make a
+        product-catalog copy look like the delayed original.
         """
         timeout_s = 3 * self.delay_seconds + 5
         try:
-            out = self._exec_in_rollout(_UPSTREAM_SCRIPT, [self.UPSTREAM_ADDR, str(timeout_s)], timeout=timeout_s + 30)
+            addresses = self.upstream_addrs()
+            if not addresses:
+                return None
+            out = self._exec_in_rollout(_UPSTREAM_SCRIPT, [addresses[0], str(timeout_s)], timeout=timeout_s + 30)
             return json.loads(out.strip().splitlines()[-1])
         except (RuntimeError, ValueError, IndexError):
             return None
@@ -353,6 +382,20 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         results = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
         return results or [{"ok": False, "ms": 0.0, "code": "NO_OUTPUT", "error": out[-500:]}]
 
+    def probe_frontend(self, count: int, interval_s: float, deadline_s: float, exclude_id: str) -> list[dict]:
+        """
+        Ask the frontend for recommendations for one product, from the client pod. Same result shape as
+        probe_recommendations(), with the frontend's product ids.
+        """
+        args = [str(count), str(interval_s), str(deadline_s), exclude_id, self.FRONTEND_ADDR]
+        try:
+            out = self._exec_in_client(_FRONTEND_SCRIPT, args, timeout=count * (interval_s + deadline_s) + 60)
+        except RuntimeError as exc:
+            return [{"ok": False, "ms": 0.0, "code": "EXEC_FAILED", "error": str(exc)}]
+
+        results = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+        return results or [{"ok": False, "ms": 0.0, "code": "NO_OUTPUT", "error": out[-500:]}]
+
     def wait_until_answering(self, timeout_s: float = 90) -> None:
         """
         Wait until the gRPC port accepts calls. `rollout status` finishes 5s before it does
@@ -390,9 +433,10 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             for p in self._rollout_pod_objects()
         }
 
-    def service_specs(self) -> dict:
+    def routing_specs(self) -> dict:
         """
-        Selector and ports of the recommendation and product-catalog Services, the paths the delay is built on.
+        How traffic reaches recommendation and product-catalog, which the delay is built on: both Services'
+        selector, ports and session affinity, and how the recommendation pods resolve names.
         """
         specs = {}
         for name in (self.RECOMMENDATION, self.PRODUCT_CATALOG):
@@ -406,8 +450,37 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             specs[name] = {
                 "selector": dict(svc.spec.selector or {}),
                 "ports": sorted((p.port, str(p.target_port), p.protocol) for p in svc.spec.ports or []),
+                "session_affinity": svc.spec.session_affinity,
             }
+        try:
+            deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(self.RECOMMENDATION, self.namespace)
+        except ApiException as exc:
+            raise RuntimeError(f"could not read deployment/{self.RECOMMENDATION}: {exc.status} {exc.reason}") from exc
+        pod_spec = deployment.spec.template.spec
+        specs["recommendation-dns"] = ApiClient().sanitize_for_serialization(
+            {
+                "host_aliases": pod_spec.host_aliases,
+                "dns_policy": pod_spec.dns_policy,
+                "dns_config": pod_spec.dns_config,
+            }
+        )
         return specs
+
+    def upstream_addrs(self) -> list[str]:
+        """
+        ip:port of every running product-catalog pod (the pods the delay selects).
+        """
+        try:
+            pods = self.kubectl.core_v1_api.list_namespaced_pod(
+                self.namespace, label_selector=f"{self.SELECTOR_LABEL}={self.PRODUCT_CATALOG}"
+            ).items
+        except ApiException as exc:
+            raise RuntimeError(f"could not list product-catalog pods: {exc.status} {exc.reason}") from exc
+        return [
+            f"{pod.status.pod_ip}:{self.UPSTREAM_PORT}"
+            for pod in pods
+            if pod.metadata.deletion_timestamp is None and pod.status.phase == "Running" and pod.status.pod_ip
+        ]
 
     def release_client(self) -> None:
         """
