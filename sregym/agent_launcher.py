@@ -12,6 +12,7 @@ from pathlib import Path
 
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
+from sregym.service.docker_runtime import rootless_workload_enabled
 from sregym.service.internet_policy import InternetPolicy
 
 from .agent_registry import AgentRegistration
@@ -25,6 +26,8 @@ class AgentProcess:
         self.proc = proc
         self.started_at = datetime.now(UTC)
         self.container_name: str | None = None  # set when running in container mode
+        self.docker_host: str | None = None
+        self.isolate_mounts = False
         self.pgid = pgid  # process group of shell-launched agents, for tree cleanup
         self.egress_blocked_start = 0
 
@@ -59,6 +62,12 @@ class AgentLauncher:
         self, force_build: bool = False, *, k8s_proxy_port: int = 16443, image: str | None = None
     ):
         """Initialize the container runner and build/check the image."""
+        if (
+            rootless_workload_enabled()
+            and self._container_runner is not None
+            and not self._container_runner.config.isolate_mounts
+        ):
+            raise RuntimeError("Rootless agents require an isolated workload runner")
         if not self._container_runner:
             config = ContainerConfig(
                 kubeconfig_path=Path(self._agent_kubeconfig_path) if self._agent_kubeconfig_path else None,
@@ -84,8 +93,20 @@ class AgentLauncher:
     def prepare_agent(self, reg: AgentRegistration | None, *, force_build: bool = False) -> None:
         """Prepare isolated tools and validate credentials before a run."""
         try:
+            if (
+                rootless_workload_enabled()
+                and reg is not None
+                and not (self._use_containers and reg.container_isolation)
+            ):
+                raise RuntimeError("Rootless runs require agent execution inside the workload boundary")
             if reg is None or reg.container_isolation:
                 self.enable_container_isolation(force_build=force_build)
+            if (
+                rootless_workload_enabled()
+                and self._container_runner is not None
+                and not self._container_runner.config.isolate_mounts
+            ):
+                raise RuntimeError("Rootless agents require an isolated workload runner")
             if reg is not None and self._container_runner is not None:
                 self._container_runner.prepare_agent_tools(reg.install_script, reg.agent_version)
                 self._run_preflight(reg)
@@ -137,14 +158,26 @@ class AgentLauncher:
     async def ensure_started(self, reg: AgentRegistration) -> AgentProcess | None:
         if not reg or not reg.kickoff_command:
             return None
+        if rootless_workload_enabled() and not (self._use_containers and reg.container_isolation):
+            raise RuntimeError("Rootless runs cannot execute agent-selected commands as the trusted host user")
         existing = self._procs.get(reg.name)
 
         if existing:
+            if rootless_workload_enabled() and not existing.isolate_mounts:
+                raise RuntimeError("Rootless runs cannot reuse a trusted host agent")
             existing.proc.poll()
             if existing.proc.returncode is None:
                 return existing
+            if existing.isolate_mounts:
+                self.cleanup_agent(reg.name)
 
         if self._use_containers and reg.container_isolation:
+            if (
+                rootless_workload_enabled()
+                and self._container_runner is not None
+                and not self._container_runner.config.isolate_mounts
+            ):
+                raise RuntimeError("Rootless agents require an isolated workload runner")
             return await self._start_containerized(reg)
 
         if self._internet_policy.is_filtered:
@@ -241,6 +274,8 @@ class AgentLauncher:
         proc = self._container_runner.run_async(exec_input)
         ap = AgentProcess(reg.name, proc)
         ap.container_name = exec_input.container_name  # track for cleanup
+        ap.docker_host = self._container_runner.config.docker_host
+        ap.isolate_mounts = self._container_runner.config.isolate_mounts
         ap.egress_blocked_start = blocked_start
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)
@@ -249,13 +284,21 @@ class AgentLauncher:
 
     def cleanup_all(self, timeout: int = 10) -> None:
         """Terminate and cleanup all tracked agent processes/containers."""
+        errors = []
         for name in list(self._procs):
-            self.cleanup_agent(name, timeout=timeout)
+            try:
+                self.cleanup_agent(name, timeout=timeout)
+            except Exception as exc:
+                errors.append(exc)
         if self._container_runner:
             try:
                 self._container_runner.close()
-            finally:
+            except Exception as exc:
+                errors.append(exc)
+            else:
                 self._container_runner = None
+        if errors:
+            raise ExceptionGroup("Agent cleanup failed", errors)
 
     def internet_policy_result(self, process: AgentProcess | None = None) -> dict[str, object]:
         """Snapshot the audit after stopping the agent, before proxy cleanup."""
@@ -286,6 +329,8 @@ class AgentLauncher:
         # Check if already terminated
         existing.proc.poll()
         if existing.proc.returncode is not None:
+            if existing.container_name and existing.isolate_mounts:
+                self._stop_agent_container(existing, timeout)
             del self._procs[agent_name]
             self._cleanup_container_runner_tmps()
             return
@@ -294,7 +339,7 @@ class AgentLauncher:
         # shell-launched agent has none and must be killed as a process group.
         container_name = getattr(existing, "container_name", None)
         if container_name:
-            ContainerRunner.stop_container(container_name, timeout=timeout)
+            self._stop_agent_container(existing, timeout)
             self._wait_for_process_exit(existing.proc, timeout)
         else:
             self._terminate_process_group(existing, timeout)
@@ -302,6 +347,20 @@ class AgentLauncher:
         if agent_name in self._procs:
             del self._procs[agent_name]
         self._cleanup_container_runner_tmps()
+
+    def _stop_agent_container(self, process: AgentProcess, timeout: int) -> None:
+        options = {"docker_host": process.docker_host} if process.docker_host else {}
+        if process.isolate_mounts:
+            options["strict"] = True
+        ContainerRunner.stop_container(process.container_name, timeout=timeout, **options)
+        runner = self._container_runner
+        if (
+            process.isolate_mounts
+            and runner is not None
+            and process.container_name in runner._owned_containers
+            and runner._owned_containers[process.container_name] == process.docker_host
+        ):
+            runner._owned_containers.pop(process.container_name)
 
     @staticmethod
     def _wait_for_process_exit(proc: subprocess.Popen, timeout: int) -> None:
@@ -313,6 +372,10 @@ class AgentLauncher:
 
     def _cleanup_container_runner_tmps(self) -> None:
         if self._container_runner:
+            # Other agents may still be writing the runner's shared output
+            # volumes. Collect only after every owned container is stopped.
+            if self._container_runner.config.isolate_mounts is True and self._container_runner._owned_containers:
+                return
             self._container_runner.cleanup_credential_tmps()
 
     def _terminate_process_group(self, ap: AgentProcess, timeout: int) -> None:
