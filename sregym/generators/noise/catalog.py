@@ -9,6 +9,7 @@ Each template is a dict with:
 Only experiments with tangible, observable effects are included.
 Removed: IOChaos (volumePath "/" is a no-op), container-kill (redundant
 with pod-kill), network-duplicate (too subtle), low-intensity stress tests.
+Pod-failure is excluded because it replaces the target container's visible image.
 """
 
 EXPERIMENT_CATALOG = [
@@ -23,17 +24,6 @@ EXPERIMENT_CATALOG = [
             "selector": {"namespaces": ["{target_namespace}"]},
             "gracePeriod": 0,
             "duration": "{duration}",
-        },
-    },
-    # Pod-failure: makes a pod unavailable (injected pause) → CrashLoopBackOff
-    {
-        "name": "pod-failure",
-        "kind": "PodChaos",
-        "spec": {
-            "action": "pod-failure",
-            "mode": "one",
-            "selector": {"namespaces": ["{target_namespace}"]},
-            "duration": "45s",
         },
     },
     # ── Network faults ────────────────────────────────────────────────

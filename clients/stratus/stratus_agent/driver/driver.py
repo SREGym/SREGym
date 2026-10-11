@@ -46,7 +46,7 @@ from clients.stratus.stratus_agent.mitigation_agent import (  # noqa: E402
 )
 from clients.stratus.stratus_agent.rollback_agent import perform_rollback  # noqa: E402
 from clients.stratus.tools.submit_tool import manual_submit_tool  # noqa: E402
-from clients.stratus.weak_oracles.alert_oracle import AlertOracle  # noqa: E402
+from clients.stratus.weak_oracles.alert_oracle import AlertOracle, get_validation_deadline  # noqa: E402
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult  # noqa: E402
 from clients.stratus.weak_oracles.cluster_state_oracle import ClusterStateOracle  # noqa: E402
 
@@ -213,18 +213,29 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
         return None
 
 
-def validate_oracles(oracles: list[BaseOracle]) -> list[bool | list[OracleResult]]:
+def validate_oracles(
+    oracles: list[BaseOracle], *, deadline: float | None = None
+) -> tuple[bool | None, list[OracleResult]]:
     results = []
     attempt_failed = False
+    attempt_inconclusive = False
     for oracle in oracles:
+        if deadline is not None and time.monotonic() >= deadline:
+            results.append(OracleResult(None, ["Validation budget exhausted; submit for final grading"]))
+            return False if attempt_failed else None, results
         logger.info(f"[Oracle] validating oracle: {oracle}")
         res: OracleResult = oracle.validate()
-        if not res.success:
+        if res.success is None:
+            attempt_inconclusive = True
+            results.append(res)
+        elif res.success is False:
             attempt_failed = True
             results.append(res)
     if attempt_failed:
-        return [False, results]
-    return [True, results]
+        return False, results
+    if attempt_inconclusive:
+        return None, results
+    return True, results
 
 
 def mitigation_submission_requested(last_state) -> bool:
@@ -448,17 +459,14 @@ async def mitigation_task_main(diagnosis_summary):
     llm_summarization_prompt = yaml.safe_load(llm_summarization_prompt_file.read_text())["mitigation_retry_prompt"]
     mitigation_agent_prompts = yaml.safe_load(mitigation_agent_prompt_path.read_text())
 
-    # oracle
-    logger.info("setting up oracles")
-    cluster_state_oracle = ClusterStateOracle()
-    oracles = [cluster_state_oracle]
-
-    # setting up workload oracle, need to interact with benchmark.
+    # Fetch the application namespace before creating its oracles.
     logger.info("getting app info")
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
+    logger.info("setting up oracles")
+    oracles = [ClusterStateOracle(app_namespace)]
     # if app_name not in ["Social Network", "Hotel Reservation"]:
     #     logger.info("Current app does not support workload oracle")
     # else:
@@ -468,7 +476,8 @@ async def mitigation_task_main(diagnosis_summary):
     #     oracles.append(workload_oracle)
 
     logger.info(f"adding alert oracle for namespace [{app_namespace}]")
-    oracles.append(AlertOracle(app_namespace))
+    validation_deadline = get_validation_deadline()
+    oracles.append(AlertOracle(app_namespace, deadline=validation_deadline))
 
     # defining the first set of messages that all retry mode share
     first_run_initial_messages = [
@@ -546,18 +555,22 @@ async def mitigation_task_main(diagnosis_summary):
 
             # getting oracle result
             try:
-                oracle_results = validate_oracles(oracles)
+                oracle_results = validate_oracles(oracles, deadline=validation_deadline)
                 oracle_results_lst.append(str(oracle_results))
                 logger.info(f"oracle results: {oracle_results}")
-                has_succeeded = oracle_results[0] is True
+                oracle_verdict = oracle_results[0]
             except Exception as e:
                 logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
-                oracle_results = [False, []]
+                oracle_results = (None, [OracleResult(success=None, issues=[str(e)])])
                 oracle_results_lst.append(f"Oracle error: {str(e)}")
-                has_succeeded = False
+                oracle_verdict = None
 
-            if has_succeeded:
-                logger.info("Oracles succeeded; making real submission.")
+            budget_exhausted = validation_deadline is not None and time.monotonic() >= validation_deadline
+            if oracle_verdict is not False or budget_exhausted:
+                logger.info(
+                    "Making real submission: %s.",
+                    "validation budget exhausted" if budget_exhausted else f"oracle verdict {oracle_verdict}",
+                )
                 await manual_submit_tool("", stage="mitigation")
                 break
 
@@ -656,17 +669,21 @@ async def mitigation_task_main(diagnosis_summary):
 
             # getting oracle result
             try:
-                oracle_results = validate_oracles(oracles)
+                oracle_results = validate_oracles(oracles, deadline=validation_deadline)
                 oracle_results_lst.append(str(oracle_results))
-                has_succeeded = oracle_results[0]
+                oracle_verdict = oracle_results[0]
             except Exception as e:
                 logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
-                oracle_results = [False, []]
+                oracle_results = (None, [OracleResult(success=None, issues=[str(e)])])
                 oracle_results_lst.append(f"Oracle error: {str(e)}")
-                has_succeeded = False
+                oracle_verdict = None
 
-            if has_succeeded:
-                logger.info("Oracles succeeded; making real submission.")
+            budget_exhausted = validation_deadline is not None and time.monotonic() >= validation_deadline
+            if oracle_verdict is not False or budget_exhausted:
+                logger.info(
+                    "Making real submission: %s.",
+                    "validation budget exhausted" if budget_exhausted else f"oracle verdict {oracle_verdict}",
+                )
                 await manual_submit_tool("", stage="mitigation")
                 break
 

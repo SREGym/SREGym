@@ -103,7 +103,7 @@ class ObserverSetupReached(Exception):
 @pytest.fixture
 def startup(conductor, monkeypatch):
     conductor._baseline_captured = True
-    conductor.problem = SimpleNamespace(requires_khaos=lambda: False)
+    conductor.problem = SimpleNamespace()
     conductor.prometheus = MagicMock()
     conductor.prometheus.deploy.side_effect = ObserverSetupReached
     conductor._metrics_server_configured = MagicMock(return_value=True)

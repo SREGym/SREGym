@@ -4,19 +4,24 @@ import json
 import socket
 import ssl
 import threading
+import time
 from datetime import timedelta
 
 import pytest
 from cryptography import x509
+from kubernetes import config
 
-from sregym.service.k8s_proxy import (
+from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
     HELM_RELEASE_SECRET_TYPE,
+    filter_resource_list,
+    is_helm_release_secret,
+)
+from sregym.service.k8s_proxy import (
     KubernetesAPIProxy,
-    _filter_resource_list,
     _inspect_workload_request,
     _is_cluster_egress_control_mutation,
-    _is_helm_release_secret,
+    _is_filtered_object_read,
     _is_helm_release_secret_request,
     _is_hidden_namespace_request,
     _is_secret_collection_delete,
@@ -77,16 +82,18 @@ class FakeResponse:
 class FakeHTTPSConnection:
     requests: list[tuple[str, str, dict[str, str]]] = []
     response = FakeResponse(b"{}")
+    responses: dict[str, FakeResponse] = {}
     sock: socket.socket | None = None
 
     def __init__(self, *args, **kwargs):
         self.sock = type(self).sock
 
     def request(self, method: str, path: str, body=None, headers=None):
+        self.path = path
         self.requests.append((method, path, headers or {}))
 
     def getresponse(self) -> FakeResponse:
-        return self.response
+        return self.responses.get(self.path, self.response)
 
     def close(self):
         if self.sock is not None:
@@ -98,6 +105,7 @@ class FakeHTTPSConnection:
 def proxy(monkeypatch):
     FakeHTTPSConnection.requests = []
     FakeHTTPSConnection.response = FakeResponse(b"{}")
+    FakeHTTPSConnection.responses = {}
     FakeHTTPSConnection.sock = None
     monkeypatch.setattr(http.client, "HTTPSConnection", FakeHTTPSConnection)
 
@@ -166,19 +174,19 @@ def test_helm_release_detection_does_not_depend_on_labels():
     secret = copy.deepcopy(HELM_SECRET)
     secret["metadata"]["labels"] = {}
 
-    assert _is_helm_release_secret(secret)
-    assert not _is_helm_release_secret(ORDINARY_SECRET)
+    assert is_helm_release_secret(secret)
+    assert not is_helm_release_secret(ORDINARY_SECRET)
 
 
 def test_helm_release_type_is_hidden_even_with_an_unexpected_name():
     secret = copy.deepcopy(HELM_SECRET)
     secret["metadata"]["name"] = "unexpected-name"
 
-    assert _is_helm_release_secret(secret)
+    assert is_helm_release_secret(secret)
 
 
 def test_resource_lists_hide_helm_records_but_keep_ordinary_secrets():
-    result = _filter_resource_list(
+    result = filter_resource_list(
         {"items": [copy.deepcopy(HELM_SECRET), copy.deepcopy(ORDINARY_SECRET)]},
         hidden_namespaces=set(),
         hidden_labels={},
@@ -194,7 +202,7 @@ def test_resource_lists_still_hide_configured_labels_and_namespaces():
     }
     chaos_pod = {"metadata": {"name": "chaos", "namespace": "chaos-mesh"}}
 
-    result = _filter_resource_list(
+    result = filter_resource_list(
         {"items": [ordinary_pod, load_generator, chaos_pod]},
         hidden_namespaces={"chaos-mesh"},
         hidden_labels={"app": {"load-generator"}},
@@ -203,8 +211,87 @@ def test_resource_lists_still_hide_configured_labels_and_namespaces():
     assert result["items"] == [ordinary_pod]
 
 
+def test_chaos_control_plane_and_events_are_hidden_but_normal_events_remain():
+    chaos_crd = {"kind": "CustomResourceDefinition", "metadata": {"name": "podchaos.chaos-mesh.org"}}
+    chaos_event = {
+        "kind": "Event",
+        "metadata": {"name": "chaos-event", "namespace": "astronomy-shop"},
+        "reportingComponent": "chaos-controller-manager",
+    }
+    network_chaos_event = {
+        "metadata": {
+            "name": "network-chaos-event",
+            "namespace": "astronomy-shop",
+            "annotations": {"chaos-mesh.org/type": "updated"},
+        },
+        "source": {"component": "podnetworkchaos"},
+        "involvedObject": {"apiVersion": "chaos-mesh.org/v1alpha1", "kind": "PodNetworkChaos"},
+    }
+    kubelet_event = {
+        "kind": "Event",
+        "metadata": {"name": "pod-restarted", "namespace": "astronomy-shop"},
+        "source": {"component": "kubelet"},
+        "message": "Container restarted",
+    }
+
+    result = filter_resource_list(
+        {"items": [chaos_crd, chaos_event, network_chaos_event, kubelet_event]}, {"chaos-mesh"}, {}
+    )
+
+    assert result["items"] == [kubelet_event]
+
+
+def test_visible_pod_keeps_real_image_while_chaos_bookkeeping_is_removed():
+    pod = {
+        "kind": "Pod",
+        "metadata": {
+            "name": "checkout",
+            "namespace": "astronomy-shop",
+            "annotations": {"chaos-mesh.org/injected": "true", "team": "checkout"},
+            "managedFields": [{"manager": "chaos-controller-manager"}, {"manager": "kubectl"}],
+        },
+        "spec": {"containers": [{"name": "checkout", "image": "registry.k8s.io/pause:3.9"}]},
+    }
+
+    result = filter_resource_list({"items": [pod]}, {"chaos-mesh"}, {})["items"][0]
+
+    assert result["metadata"]["annotations"] == {"team": "checkout"}
+    assert result["metadata"]["managedFields"] == [{"manager": "kubectl"}]
+    assert result["spec"]["containers"][0]["image"] == "registry.k8s.io/pause:3.9"
+
+
+def test_direct_objects_require_json_but_streaming_subresources_do_not():
+    assert _is_filtered_object_read("/api/v1/namespaces/app/pods/frontend")
+    assert _is_filtered_object_read("/api/v1/namespaces/app/pods/frontend/status")
+    assert not _is_filtered_object_read("/api/v1/namespaces/app/pods/frontend/log")
+    assert not _is_filtered_object_read("/api/v1/namespaces/app/pods/frontend/exec")
+
+
+def test_direct_pod_read_sanitizes_metadata_without_changing_image(proxy):
+    FakeHTTPSConnection.response = FakeResponse(
+        json.dumps(
+            {
+                "kind": "Pod",
+                "metadata": {
+                    "name": "checkout",
+                    "namespace": "astronomy-shop",
+                    "annotations": {"chaos-mesh.org/injected": "true", "team": "checkout"},
+                },
+                "spec": {"containers": [{"image": "registry.k8s.io/pause:3.9"}]},
+            }
+        ).encode()
+    )
+
+    status, _, body = request(proxy, "/api/v1/namespaces/astronomy-shop/pods/checkout")
+    pod = json.loads(body)
+
+    assert status == 200
+    assert pod["metadata"]["annotations"] == {"team": "checkout"}
+    assert pod["spec"]["containers"][0]["image"] == "registry.k8s.io/pause:3.9"
+
+
 def test_table_responses_hide_helm_records():
-    result = _filter_resource_list(
+    result = filter_resource_list(
         {"rows": [{"object": copy.deepcopy(HELM_SECRET)}, {"object": copy.deepcopy(ORDINARY_SECRET)}]},
         hidden_namespaces=set(),
         hidden_labels={},
@@ -213,8 +300,21 @@ def test_table_responses_hide_helm_records():
     assert result["rows"] == [{"object": ORDINARY_SECRET}]
 
 
+def test_table_responses_hide_chaos_objects_and_preserve_ordinary_rows():
+    table = {
+        "rows": [
+            {"cells": ["podchaos.chaos-mesh.org"], "object": {"metadata": {"name": "podchaos.chaos-mesh.org"}}},
+            {"cells": ["checkout"], "object": {"metadata": {"name": "checkout", "namespace": "app"}}},
+        ]
+    }
+
+    result = filter_resource_list(table, {"chaos-mesh"}, {})
+
+    assert result["rows"] == [{"cells": ["checkout"], "object": {"metadata": {"name": "checkout", "namespace": "app"}}}]
+
+
 def test_uninspectable_table_rows_fail_closed():
-    result = _filter_resource_list(
+    result = filter_resource_list(
         {"rows": [{"cells": [HELM_SECRET_NAME], "object": None}]},
         hidden_namespaces=set(),
         hidden_labels={},
@@ -246,6 +346,119 @@ def test_namespaced_and_encoded_lists_are_filtered():
 def test_encoded_hidden_namespace_path_is_blocked():
     path = "/api/v1/%6eamespaces/chaos-mesh/pods"
     assert _is_hidden_namespace_request(path, {"chaos-mesh"})
+
+
+def test_hidden_namespace_looks_absent_to_agent(proxy):
+    status, _, body = request(proxy, "/api/v1/namespaces/chaos-mesh")
+
+    assert status == 404
+    assert b"chaos-mesh" not in body
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_api_discovery_does_not_advertise_chaos_mesh(proxy):
+    FakeHTTPSConnection.response = FakeResponse(
+        json.dumps(
+            {
+                "kind": "APIGroupList",
+                "groups": [{"name": "chaos-mesh.org"}, {"name": "apps"}],
+            }
+        ).encode()
+    )
+
+    status, _, body = request(proxy, "/apis")
+
+    assert status == 200
+    assert json.loads(body)["groups"] == [{"name": "apps"}]
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "expected"),
+    [
+        (
+            "/openapi/v3",
+            {"paths": {"apis/chaos-mesh.org/v1alpha1": {"serverRelativeURL": "hidden"}, "api/v1": {}}},
+            {"paths": {"api/v1": {}}},
+        ),
+        (
+            "/openapi/v2",
+            {
+                "definitions": {"org.chaos-mesh.v1alpha1.PodChaos": {}, "io.k8s.api.core.v1.Pod": {}},
+                "paths": {"/apis/chaos-mesh.org/v1alpha1/podchaos": {}, "/api/v1/pods": {}},
+            },
+            {"definitions": {"io.k8s.api.core.v1.Pod": {}}, "paths": {"/api/v1/pods": {}}},
+        ),
+    ],
+)
+def test_openapi_discovery_hides_chaos_schemas(proxy, path, payload, expected):
+    content_type = "text/plain; charset=utf-8" if path == "/openapi/v3" else "application/json"
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(payload).encode(), content_type=content_type)
+
+    status, _, body = request(proxy, path)
+
+    assert status == 200
+    assert json.loads(body) == expected
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/apis/chaos-mesh.org/v1alpha1",
+        "/apis/%63haos-mesh.org/v1alpha1/namespaces/astronomy-shop/podchaos",
+        "/openapi/v3/apis/chaos-mesh.org/v1alpha1",
+        "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/podchaos.chaos-mesh.org",
+        "/apis/rbac.authorization.k8s.io/v1/clusterroles/chaos-mesh-controller-manager",
+    ],
+)
+def test_direct_chaos_control_plane_requests_do_not_reach_upstream(proxy, path):
+    status, _, body = request(proxy, path)
+
+    assert status == 404
+    assert b"chaos-mesh" not in body
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_direct_chaos_event_looks_absent(proxy):
+    FakeHTTPSConnection.response = FakeResponse(
+        json.dumps(
+            {
+                "metadata": {"name": "network-event", "namespace": "astronomy-shop"},
+                "involvedObject": {"apiVersion": "chaos-mesh.org/v1alpha1", "kind": "PodNetworkChaos"},
+            }
+        ).encode()
+    )
+
+    status, _, body = request(proxy, "/api/v1/namespaces/astronomy-shop/events/network-event")
+
+    assert status == 404
+    assert b"chaos-mesh" not in body
+
+
+def test_direct_event_read_does_not_accept_uninspectable_protobuf(proxy):
+    FakeHTTPSConnection.response = FakeResponse(b"opaque event", "application/vnd.kubernetes.protobuf")
+
+    status, _, _ = request(
+        proxy,
+        "/api/v1/namespaces/astronomy-shop/events/network-event",
+        headers={"Accept": "application/vnd.kubernetes.protobuf"},
+    )
+
+    assert status == 502
+    assert FakeHTTPSConnection.requests[-1][2]["Accept"] == "application/json"
+
+
+def test_upstream_error_does_not_expose_chaos_admission_component(proxy):
+    FakeHTTPSConnection.response = FakeResponse(
+        b'{"message":"chaos-mesh webhook denied this request"}',
+        status=403,
+    )
+
+    status, headers, body = request(proxy, "/api/v1/namespaces/astronomy-shop/pods")
+
+    assert status == 403
+    assert headers["Content-Type"] == "application/json"
+    assert b"chaos-mesh" not in body
+    assert json.loads(body)["kind"] == "Status"
 
 
 @pytest.mark.parametrize("watch_value", ["true", "TRUE", "1"])
@@ -508,7 +721,14 @@ def test_streams_arrive_before_upstream_closes_and_watch_hides_resources(proxy, 
     proxy.start()
     upstream_reader, upstream_writer = socket.socketpair()
     finish = threading.Event()
-    visible = {"type": "ADDED", "object": {"metadata": {"name": "api"}}}
+    visible = {
+        "type": "ADDED",
+        "object": {"metadata": {"name": "api", "annotations": {"chaos-mesh.org/injected": "true", "team": "api"}}},
+    }
+    expected_visible = {
+        "type": "ADDED",
+        "object": {"metadata": {"name": "api", "annotations": {"team": "api"}}},
+    }
     hidden = {"type": "ADDED", "object": {"metadata": {"name": "load", "labels": {"app": "load-generator"}}}}
     first = (json.dumps(hidden) + "\n" + json.dumps(visible) + "\n").encode() if watch else b"first log line\n"
     content_type = "application/json" if watch else "text/plain"
@@ -539,7 +759,7 @@ def test_streams_arrive_before_upstream_closes_and_watch_hides_resources(proxy, 
             response.begin()
             line = response.readline()
             assert response.status == 200 and not finish.is_set()
-            assert (json.loads(line) == visible) if watch else (line == first)
+            assert (json.loads(line) == expected_visible) if watch else (line == first)
             finish.set()
             assert response.read() == b""
     finally:
@@ -784,3 +1004,242 @@ def test_rejected_protocol_upgrade_uses_the_normal_response_path(proxy):
     assert status == 404
     assert headers["Content-Length"] == str(len(response_body))
     assert body == response_body
+
+
+def _connect_without_tls_handshake(proxy: KubernetesAPIProxy) -> socket.socket:
+    """Open a TCP connection to the proxy and send no TLS data."""
+    idle_client = socket.create_connection(("127.0.0.1", proxy.server.server_address[1]))
+    # Give the accept loop time to take the connection.
+    time.sleep(0.3)
+    return idle_client
+
+
+def test_stop_returns_while_a_client_has_not_finished_its_tls_handshake(proxy):
+    idle_client = _connect_without_tls_handshake(proxy)
+    stopper = threading.Thread(target=proxy.stop, daemon=True)
+    try:
+        stopper.start()
+        stopper.join(timeout=5)
+        stopped_in_time = not stopper.is_alive()
+    finally:
+        # Closing the idle connection unblocks an accept loop that waits for its handshake.
+        idle_client.close()
+        stopper.join(timeout=5)
+
+    assert stopped_in_time
+
+
+def test_requests_are_served_while_another_client_has_not_finished_its_tls_handshake(proxy):
+    FakeHTTPSConnection.response = FakeResponse(b'{"kind":"PodList","items":[]}')
+    statuses = []
+    idle_client = _connect_without_tls_handshake(proxy)
+    client = threading.Thread(
+        target=lambda: statuses.append(request(proxy, "/api/v1/namespaces/default/pods")[0]),
+        daemon=True,
+    )
+    try:
+        client.start()
+        client.join(timeout=5)
+        served_in_time = not client.is_alive()
+    finally:
+        idle_client.close()
+        client.join(timeout=5)
+
+    assert served_in_time
+    assert statuses == [200]
+
+
+def test_events_for_hidden_workloads_are_filtered_from_lists_and_direct_reads(proxy):
+    loadgen_event = {
+        "metadata": {"name": "load-generator-5d945c566-2lbl4.18a1", "namespace": "astronomy-shop"},
+        "involvedObject": {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "wrk2-job-check",
+            "namespace": "astronomy-shop",
+        },
+        "reason": "Scheduled",
+        "message": "Successfully assigned astronomy-shop/load-generator-5d945c566-2lbl4 to worker",
+    }
+    frontend_event = {
+        "metadata": {"name": "frontend-abc.18a1", "namespace": "astronomy-shop"},
+        "involvedObject": {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "frontend-abc",
+            "namespace": "astronomy-shop",
+        },
+        "reason": "Scheduled",
+        "message": "Successfully assigned astronomy-shop/frontend-abc to worker",
+    }
+    proxy.hidden_labels["job"] = {"workload"}
+    FakeHTTPSConnection.responses["/api/v1/namespaces/astronomy-shop/pods/wrk2-job-check"] = FakeResponse(
+        json.dumps({"metadata": {"name": "wrk2-job-check", "labels": {"job": "workload"}}}).encode()
+    )
+    FakeHTTPSConnection.responses["/api/v1/namespaces/astronomy-shop/pods/frontend-abc"] = FakeResponse(b"{}")
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"items": [loadgen_event, frontend_event]}).encode())
+    status, _, body = request(proxy, "/api/v1/namespaces/astronomy-shop/events")
+    assert status == 200
+    assert json.loads(body)["items"] == [frontend_event]
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(loadgen_event).encode())
+    status, _, _ = request(proxy, "/api/v1/namespaces/astronomy-shop/events/load-generator-5d945c566-2lbl4.18a1")
+    assert status == 404
+
+
+@pytest.mark.parametrize("reference_field", ["involvedObject", "regarding"])
+@pytest.mark.parametrize("format", ["list", "table", "direct", "direct-table"])
+def test_event_visibility_uses_labels_not_name_prefixes(proxy, reference_field, format):
+    pod = {
+        "kind": "Pod",
+        "metadata": {"name": "load-generator-diagnostic", "uid": "pod-1", "labels": {"app": "diagnostic"}},
+    }
+    event = {
+        "kind": "Event",
+        "metadata": {"name": "check", "namespace": "app"},
+        reference_field: {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "load-generator-diagnostic",
+            "namespace": "app",
+            "uid": "pod-1",
+        },
+    }
+    FakeHTTPSConnection.responses["/api/v1/namespaces/app/pods/load-generator-diagnostic"] = FakeResponse(
+        json.dumps(pod).encode()
+    )
+    payload = (
+        {"items": [event]}
+        if format == "list"
+        else {"kind": "Table", "rows": [{"object": event}]}
+        if format in {"table", "direct-table"}
+        else event
+    )
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(payload).encode())
+    path = "/api/v1/namespaces/app/events" + ("/check" if format.startswith("direct") else "")
+    status, _, body = request(proxy, path)
+    assert status == 200
+    assert json.loads(body) == payload
+
+
+def test_deleted_event_reference_uses_uid_and_live_label_changes_override_cache(proxy):
+    pod_path = "/api/v1/namespaces/app/pods/worker"
+    event = {
+        "kind": "Event",
+        "metadata": {"name": "check", "namespace": "app"},
+        "involvedObject": {"apiVersion": "v1", "kind": "Pod", "name": "worker", "namespace": "app", "uid": "old"},
+    }
+    pod = {
+        "kind": "Pod",
+        "metadata": {"name": "worker", "namespace": "app", "uid": "old", "labels": {"app": "load-generator"}},
+    }
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(json.dumps(pod).encode())
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(event).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 404
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(b"{}", status=404)
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 404
+    pod["metadata"]["uid"] = "new"
+    pod["metadata"]["labels"] = {"app": "diagnostic"}
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(json.dumps(pod).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 404
+    event["involvedObject"]["uid"] = "new"
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(event).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 200
+    pod["metadata"]["labels"] = {"app": "load-generator"}
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(json.dumps(pod).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 404
+    pod["metadata"]["labels"] = {"app": "diagnostic"}
+    FakeHTTPSConnection.responses[pod_path] = FakeResponse(json.dumps(pod).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 200
+
+
+def test_event_reference_lookup_error_fails_closed(proxy):
+    event = {"involvedObject": {"apiVersion": "v1", "kind": "Pod", "name": "worker", "namespace": "app"}}
+    FakeHTTPSConnection.responses["/api/v1/namespaces/app/pods/worker"] = FakeResponse(b"{}", status=503)
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"items": [event]}).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events")[0] == 502
+
+
+@pytest.mark.parametrize("resource", ["pods", "events"])
+def test_direct_table_reads_do_not_expose_hidden_objects(proxy, resource):
+    pod = {"kind": "Pod", "metadata": {"name": "worker", "namespace": "app", "labels": {"app": "load-generator"}}}
+    event = {"involvedObject": {"apiVersion": "v1", "kind": "Pod", "name": "worker", "namespace": "app"}}
+    FakeHTTPSConnection.responses["/api/v1/namespaces/app/pods/worker"] = FakeResponse(json.dumps(pod).encode())
+    obj = pod if resource == "pods" else event
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"kind": "Table", "rows": [{"object": obj}]}).encode())
+    assert request(proxy, f"/api/v1/namespaces/app/{resource}/check")[0] == 404
+
+
+def test_unknown_deleted_reference_does_not_guess_from_name(proxy):
+    event = {
+        "involvedObject": {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "load-generator-diagnostic",
+            "namespace": "app",
+            "uid": "unseen",
+        }
+    }
+    FakeHTTPSConnection.responses["/api/v1/namespaces/app/pods/load-generator-diagnostic"] = FakeResponse(
+        b"{}", status=404
+    )
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(event).encode())
+    assert request(proxy, "/api/v1/namespaces/app/events/check")[0] == 200
+
+
+def test_resolve_upstream_kubeconfig_honors_env_and_skips_agent_proxy_files(monkeypatch, tmp_path):
+    agent_cfg = tmp_path / "sregym-agent-kubeconfig-12345.yaml"
+    agent_cfg.write_text("apiVersion: v1\n")
+    cluster_cfg = tmp_path / "isolated-cluster-kubeconfig"
+    cluster_cfg.write_text("apiVersion: v1\n")
+
+    monkeypatch.setenv("KUBECONFIG", f"{agent_cfg}:{cluster_cfg}")
+    assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == str(cluster_cfg)
+
+
+def test_explicit_missing_kubeconfig_does_not_select_another_cluster(monkeypatch, tmp_path):
+    missing = tmp_path / "missing.yaml"
+    monkeypatch.setenv("KUBECONFIG", str(missing))
+    assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == str(missing)
+    with pytest.raises(config.ConfigException):
+        KubernetesAPIProxy()
+
+
+def test_upstream_kubeconfig_merges_files_and_resolves_relative_certificates(monkeypatch, tmp_path):
+    import yaml
+
+    context = tmp_path / "context.yaml"
+    credentials_dir = tmp_path / "credentials"
+    credentials_dir.mkdir()
+    credentials = credentials_dir / "cluster.yaml"
+    (credentials_dir / "ca.pem").write_text("test-ca")
+    (credentials_dir / "cert.pem").write_text("test-cert")
+    (credentials_dir / "key.pem").write_text("test-key")
+    context.write_text(
+        yaml.safe_dump(
+            {"current-context": "real", "contexts": [{"name": "real", "context": {"cluster": "real", "user": "real"}}]}
+        )
+    )
+    credentials.write_text(
+        yaml.safe_dump(
+            {
+                "clusters": [
+                    {
+                        "name": "real",
+                        "cluster": {"server": "https://real-cluster:7443", "certificate-authority": "ca.pem"},
+                    }
+                ],
+                "users": [
+                    {
+                        "name": "real",
+                        "user": {"client-certificate": "cert.pem", "client-key": "key.pem", "token": "test-token"},
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("KUBECONFIG", f"{context}:{credentials}")
+    proxy = KubernetesAPIProxy()
+    assert proxy.api_host == "real-cluster"
+    assert proxy.api_port == 7443
+    assert (proxy.ca_cert, proxy.client_cert, proxy.client_key) == ("test-ca", "test-cert", "test-key")
+    assert proxy._bearer_token == "test-token"

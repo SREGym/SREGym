@@ -9,7 +9,7 @@ BASE_PARENT_DIR = Path(__file__).resolve().parent.parent
 TARGET_MICROSERVICES = BASE_PARENT_DIR / "SREGym-applications"
 
 # Cache directories
-CACHE_DIR = HOME_DIR / "cache_dir"
+CACHE_DIR = Path(os.environ.get("SREGYM_CACHE_DIR", HOME_DIR / "cache_dir"))
 LLM_CACHE_FILE = CACHE_DIR / "llm_cache.json"
 
 # Cluster baseline state snapshot (captured from a fresh cluster)
@@ -30,8 +30,6 @@ FLIGHT_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "flight-ticket.json
 FLEET_CAST_METADATA = BASE_DIR / "service" / "metadata" / "fleet-cast.json"
 BLUEPRINT_HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "blueprint-hotel-reservation.json"
 
-# Khaos DaemonSet
-KHAOS_DS = BASE_DIR / "service" / "khaos.yaml"
 
 # MCP Server
 MCP_SERVER_K8S = BASE_PARENT_DIR / "mcp_server" / "k8s"

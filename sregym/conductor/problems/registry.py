@@ -7,9 +7,7 @@ import yaml
 from sregym.conductor.problems.ad_service_failure import AdServiceFailure
 from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
-from sregym.conductor.problems.admission_webhook_outage import AdmissionWebhookOutage
 from sregym.conductor.problems.admission_webhook_tls_mismatch import AdmissionWebhookTLSMismatch
-from sregym.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from sregym.conductor.problems.calico_route_reflector_label_drift import (
     CalicoRouteReflectorLabelDriftHotelReservation,
@@ -24,25 +22,21 @@ from sregym.conductor.problems.cronjob_sidecar_blocks_completion import (
 from sregym.conductor.problems.cumulative_admission_webhook_timeout_hotel_reservation import (
     CumulativeAdmissionWebhookTimeoutHotelReservation,
 )
-from sregym.conductor.problems.dev_shm_exhaustion_hotel_reservation import DevShmExhaustionHotelReservation
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import EdgeRequestFilterCPUSaturation
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import EphemeralPortRangeHotelReservation
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
-from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import FeatureFlagLatentBugHotelReservation
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.gitlab_notification_delayed_audit import GitLabNotificationDelayedAudit
+from sregym.conductor.problems.gitlab_notification_intermittent import GitLabNotificationIntermittent
 from sregym.conductor.problems.gitlab_notification_unannounced import (
     GitLabNotificationUnannouncedAmbiguity,
 )
-from sregym.conductor.problems.gitlab_notification_delayed_audit import GitLabNotificationDelayedAudit
-from sregym.conductor.problems.gitlab_notification_intermittent import GitLabNotificationIntermittent
-from sregym.conductor.problems.stripe_feature_config import StripeFeatureConfig
-from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
@@ -53,13 +47,8 @@ from sregym.conductor.problems.internal_traffic_policy_local import InternalTraf
 from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
 from sregym.conductor.problems.kafka_producer_leak import KafkaProducerLeak
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
-from sregym.conductor.problems.khaos_faults import (
-    KhaosFaultName,
-    KhaosFaultProblem,
-)
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
-from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from sregym.conductor.problems.load_spike_rpc_retry_storm import LoadSpikeRPCRetryStorm
 from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
@@ -67,6 +56,7 @@ from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
+from sregym.conductor.problems.mongo_storage_faults import LatentSectorError, SilentDataCorruption
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
@@ -83,18 +73,14 @@ from sregym.conductor.problems.operator_misoperation.security_context_fault impo
 from sregym.conductor.problems.operator_misoperation.wrong_operator_image import K8SOperatorWrongOperatorImage
 from sregym.conductor.problems.operator_misoperation.wrong_update_strategy import K8SOperatorWrongUpdateStrategyFault
 from sregym.conductor.problems.payment_service_failure import PaymentServiceFailure
-from sregym.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
-from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
 from sregym.conductor.problems.postgres_lock_contention_product_catalog import PostgresLockContentionProductCatalog
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
 from sregym.conductor.problems.psa_restricted_blocks_recreation import PSARestrictedBlocksRecreation
-from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
-from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
 from sregym.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
-from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
+from sregym.conductor.problems.resource_request import ResourceRequestTooSmall
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
@@ -108,14 +94,13 @@ from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation imp
     ServiceWrongPodSelectionHotelReservation,
 )
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
-from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import (
     StaleHostAliasesDNSPoisoningAstronomyShop,
 )
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
+from sregym.conductor.problems.stripe_feature_config import StripeFeatureConfig
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
-from sregym.conductor.problems.target_port import K8STargetPortMisconfig
 from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
 from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
@@ -134,11 +119,9 @@ class ProblemRegistry:
         self.PROBLEM_REGISTRY = {
             # ==================== APPLICATION FAULT INJECTOR ====================
             # --- CORRELATED PROBLEMS ---
-            "faulty_image_correlated": FaultyImageCorrelated,
             "update_incompatible_correlated": UpdateIncompatibleCorrelated,
             # --- REGULAR APPLICATION PROBLEMS ---
             "incorrect_image": IncorrectImage,
-            "incorrect_port_assignment": IncorrectPortAssignment,
             "kafka_producer_leak": KafkaProducerLeak,
             "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
@@ -160,53 +143,36 @@ class ProblemRegistry:
             "load_spike_rpc_retry_storm": LoadSpikeRPCRetryStorm,
             "search_rate_retry_collapse_hotel_reservation": SearchRateRetryCollapse,
             # --- REGULAR VIRTUALIZATION PROBLEMS ---
-            "assign_to_non_existent_node": AssignNonExistentNode,
             "auth_miss_mongodb": MongoDBAuthMissing,
             "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
             "cfs_cpu_throttling_hotel_reservation": lambda: CpuThrottling(faulty_service="geo"),
             "feature_flag_latent_bug_hotel_reservation": lambda: FeatureFlagLatentBugHotelReservation(),
             "finalizer_deadlock_controller_hotel_reservation": FinalizerDeadlockController,
-            "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),
             "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
             "duplicate_pvc_mounts_social_network": lambda: DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
             "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
             "file_descriptor_exhaustion": lambda: FileDescriptorExhaustion(),
-            "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
-            "liveness_probe_misconfiguration_astronomy_shop": lambda: LivenessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
-            "liveness_probe_misconfiguration_hotel_reservation": lambda: LivenessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="recommendation"),
-            "liveness_probe_misconfiguration_social_network": lambda: LivenessProbeMisconfiguration(app_name="social_network", faulty_service="user-service"),
             "liveness_probe_too_aggressive_astronomy_shop": lambda: LivenessProbeTooAggressive(app_name="astronomy_shop"),
             "liveness_probe_too_aggressive_hotel_reservation": lambda: LivenessProbeTooAggressive(app_name="hotel_reservation"),
             "liveness_probe_too_aggressive_social_network": lambda: LivenessProbeTooAggressive(app_name="social_network"),
             "init_container_dependency_hang_hotel_reservation": lambda: InitContainerDependencyHang(app_name="hotel_reservation", faulty_service="frontend"),
             "init_container_dependency_hang_social_network": lambda: InitContainerDependencyHang(app_name="social_network", faulty_service="user-service"),
-            "init_container_dependency_hang_astronomy_shop": lambda: InitContainerDependencyHang(app_name="astronomy_shop", faulty_service="frontend"),
             "integer_overflow_primary_key_astronomy_shop": IntegerOverflowPrimaryKeyAstronomyShop,
             "missing_configmap_hotel_reservation": lambda: MissingConfigMap(app_name="hotel_reservation", faulty_service="mongodb-geo"),
-            "missing_configmap_social_network": lambda: MissingConfigMap(app_name="social_network", faulty_service="media-mongodb"),
-            "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             "missing_service_hotel_reservation": lambda: MissingService(app_name="hotel_reservation", faulty_service="mongodb-rate"),
-            "missing_service_social_network": lambda: MissingService(app_name="social_network", faulty_service="user-service"),
             "namespace_memory_limit": NamespaceMemoryLimit,
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
-            "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
             "postgres_lock_contention_product_catalog": PostgresLockContentionProductCatalog,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
             "priority_preemption_cascade_hotel_reservation": PriorityPreemptionCascadeHotelReservation,
-            "pvc_claim_mismatch": PVCClaimMismatch,
-            "rbac_misconfiguration": RBACMisconfiguration,
-            "readiness_probe_misconfiguration_astronomy_shop": lambda: ReadinessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
             "readiness_probe_misconfiguration_hotel_reservation": lambda: ReadinessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="frontend"),
-            "readiness_probe_misconfiguration_social_network": lambda: ReadinessProbeMisconfiguration(app_name="social_network", faulty_service="user-service"),
-            "resource_request_too_large": lambda: ResourceRequestTooLarge(app_name="hotel_reservation", faulty_service="mongodb-rate"),
             "resource_request_too_small": lambda: ResourceRequestTooSmall(app_name="hotel_reservation", faulty_service="mongodb-rate"),
-            "hpa_missing_effective_cpu_request_hotel_reservation": lambda: HPAMissingEffectiveCPURequest(),
             "rolling_update_misconfigured_hotel_reservation": lambda: RollingUpdateMisconfigured(app_name="hotel_reservation"),
             "rolling_update_misconfigured_social_network": lambda: RollingUpdateMisconfigured(app_name="social_network"),
             "scale_pod_zero_social_net": ScalePodSocialNet,
-            "service_dns_resolution_failure_astronomy_shop": lambda: ServiceDNSResolutionFailure(app_name="astronomy_shop", faulty_service="frontend"),
-            "service_dns_resolution_failure_social_network": lambda: ServiceDNSResolutionFailure(app_name="social_network", faulty_service="user-service"),
+            "service_dns_resolution_failure_astronomy_shop": lambda: ServiceDNSResolutionFailure(app_name="astronomy_shop"),
+            "service_dns_resolution_failure_social_network": lambda: ServiceDNSResolutionFailure(app_name="social_network"),
             "sidecar_port_conflict_astronomy_shop": lambda: SidecarPortConflict(app_name="astronomy_shop", faulty_service="frontend"),
             "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(app_name="hotel_reservation", faulty_service="frontend"),
             "sidecar_port_conflict_social_network": lambda: SidecarPortConflict(app_name="social_network", faulty_service="user-service"),
@@ -219,13 +185,11 @@ class ProblemRegistry:
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
             # "top_of_rack_router_failure_hotel_reservation": lambda: TopOfRackRouterPartitionHotelReservation(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_bin_usage": WrongBinUsage,
-            "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(app_name="hotel_reservation", faulty_service="profile"),
             "wrong_dns_policy_social_network": lambda: WrongDNSPolicy(app_name="social_network", faulty_service="user-service"),
             "service_wrong_pod_selection_hotel_reservation": ServiceWrongPodSelectionHotelReservation,
             "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
-            "wrong_service_selector_social_network": lambda: WrongServiceSelector(app_name="social_network", faulty_service="user-service"),
             "gitlab_notification_unannounced_ambiguity_replicated": lambda: GitLabNotificationUnannouncedAmbiguity(
                 scale_tier="replicated"
             ),
@@ -240,7 +204,6 @@ class ProblemRegistry:
             "astronomy_shop_cart_service_failure": CartServiceFailure,
             "astronomy_shop_failed_readiness_probe": FailedReadinessProbe,
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
-            "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
             "kafka_queue_problems": KafkaQueueProblems,
             "kafka_poison_pill_hol_block": KafkaPoisonPillHOLBlock,
@@ -250,74 +213,14 @@ class ProblemRegistry:
             "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
             # ==================== HARDWARE FAULT INJECTOR ====================
             "silent_data_corruption": SilentDataCorruption,
-            "latent_sector_error": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[30]),
+            "latent_sector_error": LatentSectorError,
             # ----- Hardware-failure compound problems (Tier A) -----
-            # "nic_packet_corruption": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.packet_loss_sendto, [30]),
-            #         (KhaosFaultName.packet_loss_recvfrom, [30]),
-            #     ],
-            #     root_cause=_HW_NIC_PACKET_CORRUPTION,
-            # ),
-            # "storage_controller_read_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.read_error, None),
-            #         (KhaosFaultName.pread_error, None),
-            #     ],
-            #     root_cause=_HW_STORAGE_READ_FAILURE,
-            # ),
-            # "storage_write_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.write_error, None),
-            #         (KhaosFaultName.pwrite_error, None),
-            #         (KhaosFaultName.fsync_error, None),
-            #     ],
-            #     root_cause=_HW_STORAGE_WRITE_FAILURE,
-            # ),
-            # "dram_module_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.mmap_fail, None),
-            #         (KhaosFaultName.mmap_oom, None),
-            #         (KhaosFaultName.oom_memchunk, None),
-            #     ],
-            #     root_cause=_HW_DRAM_MODULE_FAILURE,
-            # ),
-            # "cpu_clocksource_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.clock_drift, None),
-            #         (KhaosFaultName.gettimeofday_fail, None),
-            #     ],
-            #     root_cause=_HW_CPU_CLOCKSOURCE_FAILURE,
-            # ),
-            # # ----- Hardware-failure compound problems (Tier B) -----
-            # "mmu_page_protection_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.force_mprotect_eacces, None),
-            #         (KhaosFaultName.stack_rndsegfault, None),
-            #     ],
-            #     root_cause=_HW_MMU_PAGE_PROTECTION_FAILURE,
-            # ),
-            # "network_interface_link_down": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.bind_enetdown, None),
-            #         (KhaosFaultName.socket_block, None),
-            #     ],
-            #     root_cause=_HW_NETWORK_INTERFACE_LINK_DOWN,
-            # ),
-            # "dns_resolver_hardware_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.getaddrinfo_fail, None),
-            #     ],
-            #     root_cause=_HW_DNS_RESOLVER_FAILURE,
-            # ),
             # ==================== DIRECT K8S API ====================
             "expired_tls_hotel_reservation": ExpiredTlsHotelReservation,
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             "node_conntrack_exhaustion_hotel_reservation": NodeConntrackExhaustionHotelReservation,
-            "dev_shm_exhaustion_hotel_reservation": DevShmExhaustionHotelReservation,
             "internal_traffic_policy_local_astronomy_shop": InternalTrafficPolicyLocalAstronomyShop,
-            "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
             "pod_cidr_exhaustion_hotel_reservation": lambda: PodCIDRExhaustionHotelReservation(),
             "calico_route_reflector_label_drift_hotel_reservation": CalicoRouteReflectorLabelDriftHotelReservation,
 
@@ -412,3 +315,32 @@ class ProblemRegistry:
         if task_type:
             return len([k for k in self.PROBLEM_REGISTRY if task_type in k])
         return len(self.PROBLEM_REGISTRY)
+
+
+# Saturated problems. Implementations remain, but these IDs are no longer registered.
+# 100% overall pass@3 across evaluated models:
+#   assign_to_non_existent_node
+#   astronomy_shop_payment_service_unreachable
+#   dev_shm_exhaustion_hotel_reservation
+#   duplicate_pvc_mounts_astronomy_shop
+#   faulty_image_correlated
+#   hpa_missing_effective_cpu_request_hotel_reservation
+#   incorrect_port_assignment
+#   init_container_dependency_hang_astronomy_shop
+#   k8s_target_port-misconfig
+#   liveness_probe_misconfiguration_astronomy_shop
+#   liveness_probe_misconfiguration_hotel_reservation
+#   liveness_probe_misconfiguration_social_network
+#   missing_configmap_social_network
+#   missing_service_astronomy_shop
+#   missing_service_social_network
+#   pod_anti_affinity_deadlock
+#   pvc_claim_mismatch
+#   rbac_misconfiguration
+#   readiness_probe_misconfiguration_astronomy_shop
+#   resource_request_too_large
+# 21/21 successes:
+#   admission_webhook_outage_hotel_reservation
+#   readiness_probe_misconfiguration_social_network
+#   wrong_dns_policy_astronomy_shop
+#   wrong_service_selector_social_network

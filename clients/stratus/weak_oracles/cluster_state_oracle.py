@@ -4,34 +4,31 @@ from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 
 
 class ClusterStateOracle(BaseOracle):
-    def validate(self, namespace="default", **kwargs) -> OracleResult:
-        """
-        Validates the Kubernetes cluster status.
+    def __init__(self, namespace: str):
+        self.namespace = namespace
 
-        Args:
-            namespace (str): The namespace to check
-
-        Returns:
-            dict: A dict containing validation results with 'success' and 'issues' keys
-        """
+    def validate(self, **kwargs) -> OracleResult:
+        """Check pods in the application namespace, or report an unavailable API."""
         results = {"success": True, "issues": []}
 
         from kubernetes import client, config
 
-        # Load Kubernetes configuration
-        if os.path.exists(os.path.expanduser("~/.kube/config")):
-            config.load_kube_config()
-        else:
-            config.load_incluster_config()
-
-        # print(f"Validating cluster status on namespace '{namespace}'...")
-
         try:
+            if os.path.exists(os.path.expanduser("~/.kube/config")):
+                config.load_kube_config()
+            else:
+                config.load_incluster_config()
+
             # Initialize Kubernetes API client
-            v1 = client.CoreV1Api()
+            configuration = client.Configuration.get_default_copy()
+            proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+            if proxy_url:
+                configuration.proxy = proxy_url
+                configuration.no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
+            v1 = client.CoreV1Api(client.ApiClient(configuration))
 
             # Get all pods in the namespace
-            pod_list = v1.list_namespaced_pod(namespace)
+            pod_list = v1.list_namespaced_pod(self.namespace)
 
             for pod in pod_list.items:
                 pod_name = pod.metadata.name
@@ -89,7 +86,7 @@ class ClusterStateOracle(BaseOracle):
                 print(f"Found {len(results['issues'])} issues in the cluster.")
 
         except Exception as e:
-            results["success"] = False
+            results["success"] = None
             results["issues"].append(f"Error validating cluster: {str(e)}")
             print(f"Error validating cluster: {str(e)}")
 

@@ -29,7 +29,6 @@ from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
-from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
@@ -89,6 +88,7 @@ def run_preflight_check(
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
         "cursor": "clients.cursor.driver",
+        "mini-sre": "clients.mini_sre.driver",
     }
     module_path = agent_driver_modules.get(agent_name)
     if not module_path:
@@ -491,11 +491,6 @@ def driver_loop(
                     progress.advance(task_id, len(attempts_to_run) - attempt_position)
                     break
 
-                if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
-                    console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
-                    progress.advance(task_id, len(attempts_to_run) - attempt_position)
-                    break  # Skip to next problem
-
                 # If using external harness, fault is injected - exit now
                 if use_external_harness:
                     console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
@@ -514,6 +509,7 @@ def driver_loop(
                     attempt=attempt,
                 )
                 agent_proc = None
+                conductor.agent_timeout_seconds = agent_timeout
 
                 if conductor.stage_sequence:
                     with _artifact_environment(run):
@@ -540,9 +536,10 @@ def driver_loop(
                             conductor.record_incomplete_attempt("cleanup_failed")
 
                 timed_out = False
-                agent_start_time = time.time()
+                agent_start_time = time.monotonic()
+                conductor.agent_deadline_monotonic = agent_start_time + agent_timeout
                 while not abort_campaign_after_attempt and conductor.submission_stage != "done":
-                    if time.time() - agent_start_time > agent_timeout:
+                    if time.monotonic() > conductor.agent_deadline_monotonic:
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         submission_work = conductor.close_submissions()
@@ -922,8 +919,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
         stages=tuple(args.stages) if args.stages else None,
-        baseline_override_s=args.baseline,
-        propagation_override_s=args.propagation,
+        baseline_override_s=getattr(args, "baseline", None),
+        propagation_override_s=getattr(args, "propagation", None),
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)

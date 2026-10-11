@@ -28,7 +28,7 @@ def include_table_objects(path: str) -> str:
     return urlunsplit(parsed._replace(query=urlencode(query)))
 
 
-def stream_response(handler, response, *, event_visible=None) -> None:
+def stream_response(handler, response, *, event_transform=None) -> None:
     """Forward log chunks or filter newline-delimited watch events as they arrive.
 
     The caller owns upstream cleanup. Once headers are sent, an error must
@@ -42,7 +42,7 @@ def stream_response(handler, response, *, event_visible=None) -> None:
     handler.send_header("Connection", "close")
     handler.end_headers()
     handler.wfile.flush()
-    if event_visible is None:
+    if event_transform is None:
         while chunk := response.read1(64 * 1024):
             handler.wfile.write(chunk)
             handler.wfile.flush()
@@ -57,6 +57,7 @@ def stream_response(handler, response, *, event_visible=None) -> None:
         event = json.loads(line)
         if not isinstance(event, dict) or not isinstance(event.get("object"), dict):
             raise ValueError("Invalid Kubernetes watch event")
-        if event_visible(event):
-            handler.wfile.write(line)
+        event = event_transform(event)
+        if event is not None:
+            handler.wfile.write(json.dumps(event).encode() + b"\n")
             handler.wfile.flush()

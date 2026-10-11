@@ -301,10 +301,8 @@ class ClusterStateManager:
         # `openebs` is now protected (see PROTECTED_NAMESPACES), so the
         # provisioner survives step 1 and can run its own cleanup helper pods for
         # PVs deleted in step 4 — the main source of leaks is gone. This sweep
-        # remains as a backstop: on control-plane nodes the dm-flakey path is
-        # intentionally skipped, so those nodes never get the rm -rf wipe that
-        # workers do at dm-flakey setup, and any /var/openebs/local/pvc-* dirs
-        # left behind eventually fill the disk and break subsequent deploys.
+        # remains as a backstop: any /var/openebs/local/pvc-* dirs left behind
+        # eventually fill the disk and break subsequent deploys.
         # Best-effort.
         try:
             gc_results = self.kubectl.gc_orphan_localpv_dirs()

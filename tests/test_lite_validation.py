@@ -17,7 +17,6 @@ def validator():
 def _conductor(monkeypatch, validator):
     problem = Mock()
     problem.namespace = "test-app"
-    problem.requires_khaos.return_value = False
     problem.mitigation_oracle.evaluate.side_effect = [{"success": False}, {"success": True}]
     conductor = Mock()
     conductor.problems.PROBLEM_REGISTRY = {"problem": lambda: problem}

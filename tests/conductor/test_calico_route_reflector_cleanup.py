@@ -223,7 +223,6 @@ def test_fix_kubernetes_keeps_kubelet_eviction_global_cleanup(monkeypatch):
     fake = _FakeKubeCtl({})
     conductor = _conductor(fake, monkeypatch)
     conductor.kubectl = fake
-    conductor.dm_flakey_manager = SimpleNamespace(teardown_openebs_dm_flakey_infrastructure=lambda: None)
     remote_calls = []
     calico_cleanup_calls = []
 

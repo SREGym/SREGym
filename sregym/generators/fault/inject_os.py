@@ -1,6 +1,5 @@
 """Inject faults at the OS layer."""
 
-# TODO: replace with khaos
 import subprocess
 
 from sregym.generators.fault.base import FaultInjector

@@ -399,100 +399,10 @@
         update_cache: no
       become: yes
 
-    - name: Get full kernel version
-      shell: uname -r
-      register: kernel_version_full
-      changed_when: false
-
-    - name: Check if dm_flakey module exists
-      shell: |
-        FLAKEY=$(modinfo dm_flakey 2>/dev/null && echo "exists" || echo "not_found")
-        echo "dm_flakey:$FLAKEY"
-      register: dm_modules_check
-      changed_when: false
-
-    - name: Set module facts (reusable throughout playbook)
-      set_fact:
-        dm_flakey_exists: "{{ 'dm_flakey:exists' in dm_modules_check.stdout }}"
-
-    - name: Check if Ubuntu kernel headers are available
-      stat:
-        path: "/usr/src/linux-headers-{{ kernel_version_full.stdout }}"
-      register: ubuntu_headers
-      changed_when: false
-
-    - name: Install generic 6.8 kernel headers (should already match running kernel)
-      apt:
-        name: linux-headers-generic-6.8
-        state: present
-        update_cache: no
-      when: >
-        manage_generic_kernel
-        and
-        not dm_flakey_exists
-        and not ubuntu_headers.stat.exists
-      become: yes
-      ignore_errors: yes
-
-    - name: Re-check headers after installation attempt
-      stat:
-        path: "/usr/src/linux-headers-{{ kernel_version_full.stdout }}"
-      register: ubuntu_headers
-      changed_when: false
-
-    - name: Fail if headers not available
-      fail:
-        msg: "Kernel headers not available for {{ kernel_version_full.stdout }}. Cannot build modules."
-      when: >
-        manage_generic_kernel
-        and
-        not dm_flakey_exists
-        and not ubuntu_headers.stat.exists
-
-    - name: Check if build symlink exists
-      stat:
-        path: "/lib/modules/{{ kernel_version_full.stdout }}/build"
-      register: build_symlink
-      changed_when: false
-      when: >
-        manage_generic_kernel
-        and
-        not dm_flakey_exists
-        and ubuntu_headers.stat.exists
-
-    - name: Create build symlink if headers exist but symlink is missing
-      file:
-        src: "/usr/src/linux-headers-{{ kernel_version_full.stdout }}"
-        dest: "/lib/modules/{{ kernel_version_full.stdout }}/build"
-        state: link
-      become: yes
-      when: >
-        manage_generic_kernel
-        and
-        not dm_flakey_exists
-        and ubuntu_headers.stat.exists
-        and (build_symlink is defined and (not build_symlink.stat.exists or not build_symlink.stat.islnk))
-
-    - name: Ensure kernel module directory exists
-      file:
-        path: "/lib/modules/{{ kernel_version_full.stdout }}/kernel/drivers/md"
-        state: directory
-        mode: '0755'
-      become: yes
-      when: not dm_flakey_exists
-
-    - name: Load dm_flakey module (built into kernel 6.8.x)
-      modprobe:
-        name: dm_flakey
-        state: present
-      ignore_errors: yes
-      become: yes
-
     - name: Load necessary kernel modules
       shell: |
         modprobe overlay
         modprobe br_netfilter
-        modprobe dm_flakey || true
       become: yes
       args:
         creates: /etc/modules-load.d/k8s.conf
@@ -502,7 +412,6 @@
         content: |
           overlay
           br_netfilter
-          dm_flakey
         dest: /etc/modules-load.d/k8s.conf
       become: yes
 
