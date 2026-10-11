@@ -560,7 +560,7 @@ class KubernetesAPIProxy:
             if not candidate:
                 continue
             expanded = os.path.expanduser(candidate)
-            if os.path.basename(expanded).startswith("sregym-agent-kubeconfig-"):
+            if os.path.basename(expanded).startswith(("sregym-agent-kubeconfig-", "operator-kubeconfig-")):
                 continue
             paths.append(expanded)
         return os.path.pathsep.join(paths) if paths else os.path.expanduser("~/.kube/config")
@@ -1317,10 +1317,10 @@ class KubernetesAPIProxy:
         kubeconfig = {
             "apiVersion": "v1",
             "kind": "Config",
-            "current-context": "sregym-agent",
+            "current-context": "operator",
             "clusters": [
                 {
-                    "name": "sregym-proxy",
+                    "name": "cluster-api",
                     "cluster": {
                         "server": f"https://{server_host}:{self.listen_port}",
                         "certificate-authority-data": base64.b64encode(self._server_cert_pem.encode()).decode(),
@@ -1329,16 +1329,16 @@ class KubernetesAPIProxy:
             ],
             "contexts": [
                 {
-                    "name": "sregym-agent",
+                    "name": "operator",
                     "context": {
-                        "cluster": "sregym-proxy",
-                        "user": "sregym-agent",
+                        "cluster": "cluster-api",
+                        "user": "operator",
                     },
                 }
             ],
             "users": [
                 {
-                    "name": "sregym-agent",
+                    "name": "operator",
                     "user": {"token": self._agent_token},
                 }
             ],
@@ -1346,7 +1346,7 @@ class KubernetesAPIProxy:
 
         owns_output = output_path is None
         if owns_output:
-            fd, output_path = tempfile.mkstemp(prefix="sregym-agent-kubeconfig-", suffix=".yaml")
+            fd, output_path = tempfile.mkstemp(prefix="operator-kubeconfig-", suffix=".yaml")
             os.close(fd)
 
         with open(output_path, "w") as f:
