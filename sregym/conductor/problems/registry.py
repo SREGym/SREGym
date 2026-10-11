@@ -59,6 +59,8 @@ from sregym.conductor.problems.network_policy_block import NetworkPolicyBlock
 from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
 from sregym.conductor.problems.node_clock_drift import NodeClockDriftHotelReservation
 from sregym.conductor.problems.node_conntrack_exhaustion import NodeConntrackExhaustionHotelReservation
+from sregym.conductor.problems.tls_clock_drift import TLSClockDriftHotelReservation
+from sregym.service.docker_runtime import rootless_workload_enabled
 from sregym.conductor.problems.operator_misoperation.invalid_affinity_toleration import (
     K8SOperatorInvalidAffinityTolerationFault,
 )
@@ -157,6 +159,7 @@ class ProblemRegistry:
             "namespace_memory_limit": NamespaceMemoryLimit,
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
+            "tls_clock_drift_hotel_reservation": TLSClockDriftHotelReservation,
             "postgres_lock_contention_product_catalog": PostgresLockContentionProductCatalog,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
             "priority_preemption_cascade_hotel_reservation": PriorityPreemptionCascadeHotelReservation,
@@ -272,6 +275,8 @@ class ProblemRegistry:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
 
         is_emulated_cluster = self.kubectl.is_emulated_cluster()
+        if (is_emulated_cluster or rootless_workload_enabled()) and problem_id == "node_clock_drift_hotel_reservation":
+            return TLSClockDriftHotelReservation()
         if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
             raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
 
