@@ -1,3 +1,4 @@
+import os
 import re
 
 from sregym.conductor.oracles.mitigation import MitigationOracle
@@ -17,6 +18,17 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
 
     def _read_kubelet_config(self, injector, node_name: str) -> str:
         cmd = "grep 'nodefs.available' /var/lib/kubelet/config.yaml || true"
+        if os.environ.get("SREGYM_VERIFIER_CONTAINER") == "1":
+            self.problem.kubectl.create_namespace_if_not_exist("platform-maintenance")
+            config = self.problem.kubectl.run_node_script_pod(
+                node_name=node_name,
+                namespace="platform-maintenance",
+                script="cat /host/var/lib/kubelet/config.yaml",
+                name_prefix="kubelet-check",
+            )
+            if not config.strip():
+                raise RuntimeError("Kubernetes probe returned no kubelet configuration")
+            return "\n".join(line for line in config.splitlines() if "nodefs.available" in line)
         if injector._check_is_kind():
             return injector._docker_exec(node_name, cmd)
         else:
