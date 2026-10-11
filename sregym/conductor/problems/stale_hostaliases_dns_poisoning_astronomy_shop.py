@@ -66,6 +66,8 @@ print(json.dumps(out))
 class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
     """Preserve customer intent across two healthy, inconsistently routed stores."""
 
+    verifier_excluded_fields = ("_thread",)
+
     run_default_workload = False
     FAULTY_SERVICE = "frontend-proxy"
     TARGET_BACKEND = "frontend"
@@ -628,6 +630,10 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
             if self._thread.is_alive():
                 raise RuntimeError("cart request did not drain")
             self._thread = None
+
+    def prepare_verification(self):
+        # Drain on the owner before copying acknowledged customer histories.
+        self.stop_traffic()
 
     def restart_callers(self):
         # Replace running Pods, including a paused edge's old ReplicaSet Pods.

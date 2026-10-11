@@ -142,6 +142,9 @@ class ModelHandle:
 
 def save_oracle_snapshot(oracle, path: Path) -> None:
     """Save a baseline-bearing snapshot for the standalone CLI (trusted input)."""
+    prepare = getattr(getattr(oracle, "problem", None), "prepare_verification", None)
+    if prepare is not None:
+        prepare()
     payload, workloads = snapshot_oracle(oracle, Path(__file__).resolve().parents[2])
     if workloads:
         raise ValueError("Live host workloads require the conductor's private verifier channel")
