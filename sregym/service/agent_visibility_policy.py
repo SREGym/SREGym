@@ -1,14 +1,20 @@
 """Shared rules for the Kubernetes and observability data shown to agents."""
 
 import json
+import re
 from collections.abc import Callable
 
-HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
+MCP_CONTROL_NAMESPACE = "sregym"
+VERIFIER_PROBE_NAMESPACE = "sregym-verifier"
+MCP_CONTROL_RBAC_NAME = "mcp-server"
+# Keep existing control-service identities while excluding them from agent IO.
+HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos", MCP_CONTROL_NAMESPACE, VERIFIER_PROBE_NAMESPACE}
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},
     "network-access": {"restricted"},
     "opentelemetry.io/name": {"load-generator"},
+    "app.kubernetes.io/component": {"mcp-server"},
 }
 HELM_RELEASE_SECRET_TYPE = "helm.sh/release.v1"
 HELM_RELEASE_SECRET_NAME_PREFIX = "sh.helm.release.v1."
@@ -33,7 +39,21 @@ def is_hidden_api_group(group: str) -> bool:
 
 
 def is_hidden_cluster_resource(resource: str | None, name: str | None) -> bool:
-    return resource in CLUSTER_CONTROL_PLANE_RESOURCES and bool(name and mentions_chaos_mesh(name))
+    return resource in CLUSTER_CONTROL_PLANE_RESOURCES and bool(
+        name
+        and (
+            mentions_chaos_mesh(name)
+            or (resource in {"clusterroles", "clusterrolebindings"} and name == MCP_CONTROL_RBAC_NAME)
+        )
+    )
+
+
+def mentions_hidden_namespace(value: str, hidden_namespaces: set[str]) -> bool:
+    """Identify private namespace identities in upstream errors and headers."""
+    return any(
+        re.search(rf"(?<![\w-]){re.escape(namespace)}(?![\w-])", value, re.IGNORECASE)
+        for namespace in hidden_namespaces
+    )
 
 
 def is_helm_release_secret(resource: dict) -> bool:
@@ -74,9 +94,23 @@ def is_hidden_resource(
     metadata = resource.get("metadata") or {}
     labels = metadata.get("labels") or {}
     has_hidden_label = any(labels.get(key) in values for key, values in hidden_labels.items())
+    has_hidden_subject = bool(resource.get("roleRef")) and any(
+        isinstance(subject, dict) and subject.get("namespace") in hidden_namespaces
+        for subject in resource.get("subjects") or []
+    )
+    role_ref = resource.get("roleRef") or {}
+    has_hidden_control_role = role_ref.get("kind") == "ClusterRole" and role_ref.get("name") == MCP_CONTROL_RBAC_NAME
+    is_control_role = (
+        not metadata.get("namespace")
+        and metadata.get("name") == MCP_CONTROL_RBAC_NAME
+        and ("rules" in resource or resource.get("kind") in {"ClusterRole", "ClusterRoleBinding"})
+    )
     return (
         metadata.get("namespace") in hidden_namespaces
         or has_hidden_label
+        or has_hidden_subject
+        or has_hidden_control_role
+        or is_control_role
         or is_helm_release_secret(resource)
         or is_chaos_event(resource, hidden_namespaces)
         or is_hidden_workload_event(resource, is_hidden_reference)

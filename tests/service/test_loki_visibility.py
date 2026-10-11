@@ -1,4 +1,5 @@
 from mcp_server import loki_server
+from sregym.service.agent_visibility_policy import MCP_CONTROL_NAMESPACE
 
 
 class FakeResponse:
@@ -24,6 +25,10 @@ def test_loki_tools_hide_chaos_streams_and_label_values(monkeypatch):
                         "data": {
                             "result": [
                                 {
+                                    "stream": {"namespace": MCP_CONTROL_NAMESPACE, "pod": "mcp-server"},
+                                    "values": [["1000000000", "private control log"]],
+                                },
+                                {
                                     "stream": {"namespace": "chaos-mesh", "pod": "chaos-controller-manager"},
                                     "values": [["1000000000", "controller applied PodChaos"]],
                                 },
@@ -38,7 +43,7 @@ def test_loki_tools_hide_chaos_streams_and_label_values(monkeypatch):
                         },
                     }
                 )
-            return FakeResponse({"status": "success", "data": ["chaos-mesh", "astronomy-shop"]})
+            return FakeResponse({"status": "success", "data": ["chaos-mesh", MCP_CONTROL_NAMESPACE, "astronomy-shop"]})
 
     monkeypatch.setattr(loki_server, "ObservabilityClient", FakeClient)
 
@@ -49,3 +54,5 @@ def test_loki_tools_hide_chaos_streams_and_label_values(monkeypatch):
     assert "chaos-mesh" not in logs
     assert "chaos-mesh" not in values
     assert "astronomy-shop" in values
+    assert MCP_CONTROL_NAMESPACE not in values
+    assert "private control log" not in logs
