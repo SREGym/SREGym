@@ -113,3 +113,11 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  - name: mini-sre
+    kickoff_command: python -m clients.mini_sre.driver
+    kickoff_workdir: .
+    kickoff_env:
+      MINI_SRE_HARD_CAP: "80"  # commands per stage
+      MINI_SRE_DIAGNOSIS_SHARE: "0.667"  # share of --agent-timeout diagnosis may use; mitigation has the rest
+    install_script: null
+    agent_version: null

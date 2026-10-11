@@ -129,6 +129,21 @@ def test_stratus_provider_allowlist_is_derived_from_selected_model(model, enviro
     assert {rule.host for rule in rules} == expected_hosts
 
 
+@pytest.mark.parametrize(
+    ("model", "environment", "expected_hosts"),
+    [
+        ("deepseek/deepseek-flash", {}, {"api.deepseek.com"}),
+        ("openai/deepseek-flash", {"AGENT_API_BASE": "https://api.deepseek.com/v1"}, {"api.deepseek.com"}),
+    ],
+)
+def test_mini_sre_allowlist_is_its_model_endpoint(model, environment, expected_hosts):
+    policy = InternetPolicy.from_mode("filtered", agent_name="mini-sre", model_id=model)
+
+    rules = provider_endpoint_rules(policy, environment)
+
+    assert {rule.host for rule in rules} == expected_hosts
+
+
 def test_unrelated_provider_endpoint_does_not_enter_allowlist():
     policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id="anthropic/claude-sonnet-4-6")
 
