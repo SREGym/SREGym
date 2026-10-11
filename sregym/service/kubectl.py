@@ -5,6 +5,7 @@ import json
 import logging
 import subprocess
 import time
+import uuid
 
 logger = logging.getLogger("all.infra.kubectl")
 logger.propagate = True
@@ -716,17 +717,30 @@ class KubeCtl:
         ``/host/var/openebs/local``. Tolerates all taints so it can land on
         control-plane nodes. Raises if the pod does not succeed within ``timeout``.
         """
-        # Pod name must be DNS-1123: lowercase, <=63 chars. Use first label of
-        # the node hostname plus a short suffix.
+        # The node operation is independent of the caller's application
+        # namespace. Keep privileged helpers behind a reserved namespace so
+        # their creation/deletion cannot race an agent's exec authorization.
+        namespace = "platform-maintenance"
+        try:
+            self.core_v1_api.read_namespace(namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            try:
+                self.core_v1_api.create_namespace(body=client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace)))
+            except ApiException as creation_error:
+                if creation_error.status != 409:
+                    raise
+        # Preserve a unique invocation suffix even when the caller prefix or
+        # node name is long. Concurrent helpers share this private namespace.
         short_node = node_name.split(".")[0].lower().replace("_", "-")[:40]
-        pod_name = f"{name_prefix}-{short_node}-{int(time.time()) % 10000}"
-        pod_name = pod_name[:63]
+        pod_name = f"{name_prefix}-{short_node}"[:50].rstrip("-") + "-" + uuid.uuid4().hex[:12]
 
         pod_body = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,
                 namespace=namespace,
-                labels={"app": name_prefix},
+                labels={"app": name_prefix, "operator.internal/role": "node-maintenance"},
             ),
             spec=client.V1PodSpec(
                 node_name=node_name,
@@ -756,10 +770,8 @@ class KubeCtl:
             ),
         )
 
-        # Best-effort delete in case a stale pod with the same name exists.
-        with contextlib.suppress(ApiException):
-            self.core_v1_api.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)
-
+        # Never delete a pre-existing helper to claim its name. Cleanup below
+        # applies only after this invocation successfully creates its own pod.
         self.core_v1_api.create_namespaced_pod(namespace=namespace, body=pod_body)
 
         try:

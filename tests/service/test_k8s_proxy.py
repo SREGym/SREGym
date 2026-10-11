@@ -5,6 +5,7 @@ import socket
 import ssl
 import threading
 import time
+import urllib.parse
 from datetime import timedelta
 
 import pytest
@@ -93,6 +94,9 @@ class FakeHTTPSConnection:
         self.sock = type(self).sock
 
     def request(self, method: str, path: str, body=None, headers=None):
+        if path in self.responses:
+            # Object lookups use a separate connection from upgraded streams.
+            self.sock = None
         self.path = path
         self.requests.append((method, path, headers or {}))
 
@@ -180,6 +184,266 @@ def test_helm_release_detection_does_not_depend_on_labels():
 
     assert is_helm_release_secret(secret)
     assert not is_helm_release_secret(ORDINARY_SECRET)
+
+
+@pytest.mark.parametrize("filtered", [False, True])
+@pytest.mark.parametrize(
+    "method,suffix,body",
+    [
+        ("GET", "", None),
+        ("GET", "/log", None),
+        ("POST", "/exec?command=sh", None),
+        ("POST", "/attach", None),
+        ("DELETE", "", None),
+        ("PATCH", "", b'{"metadata":{"labels":{"operator.internal/role":null}}}'),
+        ("PUT", "", b'{"metadata":{"name":"maintenance"},"spec":{"containers":[]}}'),
+    ],
+)
+def test_private_node_helper_cannot_be_entered_read_deleted_or_relabelled(proxy, filtered, method, suffix, body):
+    proxy.restrict_network_access = filtered
+    # The fixture starts its handler before this setting changes; restart it.
+    proxy.stop()
+    proxy.start()
+    path = "/api/v1/namespaces/astronomy-shop/pods/maintenance"
+    helper = {
+        "kind": "Pod",
+        "metadata": {"name": "maintenance", "labels": {"operator.internal/role": "node-maintenance"}},
+        "spec": {
+            "containers": [{"name": "gc", "securityContext": {"privileged": True}}],
+            "volumes": [{"name": "host", "hostPath": {"path": "/"}}],
+        },
+    }
+    FakeHTTPSConnection.responses[path] = FakeResponse(json.dumps(helper).encode())
+    status, _, _ = request(proxy, path + suffix, method, headers={"Content-Type": "application/json"}, body=body)
+    assert status == 403
+    assert FakeHTTPSConnection.requests
+    assert all(
+        upstream_method == "GET" and upstream_path == path
+        for upstream_method, upstream_path, _ in FakeHTTPSConnection.requests
+    )
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_collection_delete_cannot_remove_private_helpers_but_can_remove_application_pods(proxy, private):
+    path = "/api/v1/namespaces/astronomy-shop/pods"
+    pod = {"kind": "Pod", "metadata": {"name": "frontend"}}
+    if private:
+        pod["metadata"]["labels"] = {"operator.internal/role": "node-maintenance"}
+    FakeHTTPSConnection.responses[path] = FakeResponse(json.dumps({"items": [pod]}).encode())
+    status, _, _ = request(proxy, path, "DELETE")
+    assert status == (403 if private else 200)
+    assert any(method == "DELETE" for method, _, _ in FakeHTTPSConnection.requests) is (not private)
+
+
+@pytest.mark.parametrize("method", ["GET", "PATCH", "DELETE"])
+def test_ordinary_application_pod_remains_accessible(proxy, method):
+    path = "/api/v1/namespaces/astronomy-shop/pods/frontend"
+    FakeHTTPSConnection.responses[path] = FakeResponse(
+        json.dumps({"kind": "Pod", "metadata": {"name": "frontend"}, "spec": {"containers": []}}).encode()
+    )
+    body = b'{"metadata":{"annotations":{"operator-note":"repaired"}}}' if method == "PATCH" else None
+    status, _, _ = request(proxy, path, method, headers={"Content-Type": "application/json"}, body=body)
+    assert status == 200
+    assert any(
+        upstream_method == method and upstream_path == path
+        for upstream_method, upstream_path, _ in FakeHTTPSConnection.requests
+    )
+
+
+@pytest.mark.parametrize("secure", [False, True])
+def test_workload_privilege_protection_is_independent_of_open_internet(proxy, secure):
+    proxy.stop()
+    proxy.protect_workload_boundary = secure
+    proxy.start()
+    pod = {"kind": "Pod", "spec": {"containers": [{"name": "app", "securityContext": {"privileged": True}}]}}
+    status, _, _ = request(
+        proxy,
+        "/api/v1/namespaces/default/pods",
+        "POST",
+        headers={"Content-Type": "application/json"},
+        body=json.dumps(pod).encode(),
+    )
+    assert proxy.restrict_network_access is False
+    assert status == (403 if secure else 200)
+    assert any(method == "POST" for method, _, _ in FakeHTTPSConnection.requests) is (not secure)
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ({"spec": {"containers": [{"name": "app", "command": ["replacement"]}]}}, "network_escape"),
+        ({"spec": {"hostNetwork": False}}, None),
+    ],
+)
+def test_secure_patch_checks_merged_privileges_and_permits_removing_host_access(body, expected):
+    current = {"kind": "Pod", "spec": {"hostNetwork": True, "containers": [{"name": "app"}]}}
+    assert (
+        _inspect_workload_request(
+            "/api/v1/namespaces/default/pods/app",
+            "PATCH",
+            json.dumps(body).encode(),
+            "application/merge-patch+json",
+            current=current,
+            restrict_network_access=False,
+            protect_workload_boundary=True,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("upstream_status", [403, 500])
+def test_node_helper_policy_lookup_failure_cannot_forward_agent_mutation(proxy, upstream_status):
+    path = "/api/v1/namespaces/default/pods/maintenance"
+    FakeHTTPSConnection.responses[path] = FakeResponse(b"{}", status=upstream_status)
+    status, _, _ = request(
+        proxy, path, "PATCH", headers={"Content-Type": "application/json"}, body=b'{"metadata":{"labels":{}}}'
+    )
+    assert status == 502
+    assert all(method == "GET" for method, _, _ in FakeHTTPSConnection.requests)
+
+
+@pytest.mark.parametrize(
+    "rootless,explicit_env,expected", [(False, False, False), (True, False, True), (False, True, True)]
+)
+def test_proxy_selects_workload_boundary_without_changing_internet_policy(
+    monkeypatch, rootless, explicit_env, expected
+):
+    monkeypatch.delenv("SREGYM_ROOTLESS_WORKLOAD", raising=False)
+    monkeypatch.delenv("PROTECT_WORKLOAD_BOUNDARY", raising=False)
+    if rootless:
+        monkeypatch.setenv("SREGYM_ROOTLESS_WORKLOAD", "1")
+    if explicit_env:
+        monkeypatch.setenv("PROTECT_WORKLOAD_BOUNDARY", "true")
+    monkeypatch.setattr(KubernetesAPIProxy, "_INCLUSTER_TOKEN_PATH", "/nonexistent-synthetic-token")
+    monkeypatch.setattr(KubernetesAPIProxy, "_resolve_upstream_kubeconfig", lambda self: "/synthetic-kubeconfig")
+    monkeypatch.setattr(
+        KubernetesAPIProxy, "_load_cluster_config", lambda self, **kwargs: ("kubernetes.example", 443, None, None, None)
+    )
+    instance = KubernetesAPIProxy(restrict_network_access=False)
+    assert instance.protect_workload_boundary is expected
+    assert instance.restrict_network_access is False
+
+
+@pytest.mark.parametrize("content_type", ["application/strategic-merge-patch+json", "application/apply-patch+yaml"])
+def test_secure_patch_cannot_hide_privilege_retained_in_named_container_lists(content_type):
+    current = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {"name": "app", "image": "old", "securityContext": {"privileged": True}},
+                    ]
+                }
+            }
+        }
+    }
+    replacement = {"spec": {"template": {"spec": {"containers": [{"name": "app", "image": "new"}]}}}}
+    assert (
+        _inspect_workload_request(
+            "/apis/apps/v1/namespaces/default/deployments/app",
+            "PATCH",
+            json.dumps(replacement).encode(),
+            content_type,
+            current=current,
+            restrict_network_access=False,
+            protect_workload_boundary=True,
+        )
+        == "network_escape"
+    )
+    safe_current = {"spec": {"template": {"spec": {"containers": [{"name": "app", "image": "old"}]}}}}
+    assert (
+        _inspect_workload_request(
+            "/apis/apps/v1/namespaces/default/deployments/app",
+            "PATCH",
+            json.dumps(replacement).encode(),
+            content_type,
+            current=safe_current,
+            restrict_network_access=False,
+            protect_workload_boundary=True,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("suffix", ["/exec", "/attach"])
+def test_missing_pod_cannot_be_replaced_between_exec_inspection_and_forwarding(proxy, suffix):
+    path = "/api/v1/namespaces/default/pods/missing"
+    FakeHTTPSConnection.responses[path] = FakeResponse(b"{}", status=404)
+    status, _, _ = request(proxy, path + suffix, "POST")
+    assert status == 404
+    assert [method for method, _, _ in FakeHTTPSConnection.requests] == ["GET"]
+
+
+def test_reserved_node_maintenance_namespace_is_denied_without_upstream_lookup(proxy):
+    status, _, _ = request(proxy, "/api/v1/namespaces/platform-maintenance/pods/future-helper/exec", "POST")
+    assert status == 404
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_collection_delete_adds_server_side_private_helper_exclusions(proxy):
+    path = "/api/v1/namespaces/default/pods?labelSelector=app%3Dfrontend&dryRun=All"
+    FakeHTTPSConnection.responses[path] = FakeResponse(b'{"items":[]}')
+    status, _, _ = request(proxy, path, "DELETE")
+    assert status == 200
+    forwarded = [entry[1] for entry in FakeHTTPSConnection.requests if entry[0] == "DELETE"]
+    assert len(forwarded) == 1
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(forwarded[0]).query)
+    assert query["dryRun"] == ["All"]
+    assert "app=frontend" in query["labelSelector"][0]
+    assert "operator.internal/role notin (node-maintenance)" in query["labelSelector"][0]
+
+
+@pytest.mark.parametrize("method,suffix", [("POST", "/exec?command=true"), ("PATCH", "")])
+def test_protected_open_network_allows_ordinary_pod_exec_and_image_repair(proxy, method, suffix):
+    proxy.stop()
+    proxy.protect_workload_boundary = True
+    proxy.start()
+    path = "/api/v1/namespaces/default/pods/frontend"
+    FakeHTTPSConnection.responses[path] = FakeResponse(
+        json.dumps(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "frontend", "namespace": "default"},
+                "spec": {"containers": [{"name": "app", "image": "registry.example/app:v1"}]},
+            }
+        ).encode()
+    )
+    body = b'{"spec":{"containers":[{"name":"app","image":"registry.example/app:v2"}]}}' if method == "PATCH" else None
+    status, _, _ = request(
+        proxy,
+        path + suffix,
+        method,
+        headers={"Content-Type": "application/strategic-merge-patch+json"},
+        body=body,
+    )
+    assert status == 200
+    assert any(
+        upstream_method == method and upstream_path == path + suffix
+        for upstream_method, upstream_path, _ in FakeHTTPSConnection.requests
+    )
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"hostPID": True},
+        {"hostIPC": True},
+        {"hostNetwork": True},
+        {"containers": [{"name": "app", "securityContext": {"privileged": True}}]},
+        {"volumes": [{"name": "host", "hostPath": {"path": "/"}}]},
+    ],
+)
+def test_protected_open_network_denies_exec_into_host_privileged_pod(proxy, settings):
+    proxy.stop()
+    proxy.protect_workload_boundary = True
+    proxy.start()
+    path = "/api/v1/namespaces/default/pods/unsafe"
+    pod = {"kind": "Pod", "metadata": {"name": "unsafe"}, "spec": settings}
+    FakeHTTPSConnection.responses[path] = FakeResponse(json.dumps(pod).encode())
+    status, _, _ = request(proxy, path + "/exec", "POST")
+    assert status == 403
+    assert [method for method, _, _ in FakeHTTPSConnection.requests] == ["GET"]
 
 
 def test_helm_release_type_is_hidden_even_with_an_unexpected_name():
@@ -750,6 +1014,16 @@ def test_streams_arrive_before_upstream_closes_and_watch_hides_resources(proxy, 
     upstream_response = http.client.HTTPResponse(upstream_reader)
     upstream_response.begin()
     FakeHTTPSConnection.response = upstream_response
+    FakeHTTPSConnection.responses["/api/v1/namespaces/default/pods/api"] = FakeResponse(
+        json.dumps(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "api", "namespace": "default"},
+                "spec": {"containers": [{"name": "app", "image": "registry.example/app:v1"}]},
+            }
+        ).encode()
+    )
     path = "/api/v1/pods?watch=true" if watch else "/api/v1/namespaces/default/pods/api/log?follow=true"
     try:
         with (
@@ -924,6 +1198,9 @@ def test_ordinary_secret_remains_accessible(proxy):
 
 @pytest.mark.parametrize("upgrade_protocol", ["websocket", "SPDY/3.1"])
 def test_protocol_upgrade_relays_buffered_and_subsequent_bytes_in_both_directions(proxy, upgrade_protocol):
+    FakeHTTPSConnection.responses["/api/v1/namespaces/default/pods/example"] = FakeResponse(
+        b'{"kind":"Pod","metadata":{"name":"example","namespace":"default"},"spec":{"containers":[{"name":"app","image":"registry.example/app:v1"}]}}'
+    )
     proxy_side, upstream_side = socket.socketpair()
     proxy_side.settimeout(2)
     upstream_side.settimeout(2)
@@ -982,7 +1259,7 @@ def test_protocol_upgrade_relays_buffered_and_subsequent_bytes_in_both_direction
             upstream_side.sendall(b"server frame")
             assert response.fp.read1(12) == b"server frame"
 
-            _, _, forwarded_headers = FakeHTTPSConnection.requests[0]
+            _, _, forwarded_headers = next(entry for entry in FakeHTTPSConnection.requests if "/exec?" in entry[1])
             assert forwarded_headers["Connection"] == "Upgrade"
             assert forwarded_headers["Upgrade"] == upgrade_protocol
             assert forwarded_headers["Sec-WebSocket-Key"] == "dGhlIHNhbXBsZSBub25jZQ=="
@@ -997,6 +1274,16 @@ def test_protocol_upgrade_relays_buffered_and_subsequent_bytes_in_both_direction
 def test_rejected_protocol_upgrade_uses_the_normal_response_path(proxy):
     response_body = b'{"kind":"Status","message":"pod not found"}'
     FakeHTTPSConnection.response = FakeResponse(response_body, status=404)
+    FakeHTTPSConnection.responses["/api/v1/namespaces/default/pods/missing"] = FakeResponse(
+        json.dumps(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "missing", "namespace": "default"},
+                "spec": {"containers": [{"name": "app", "image": "registry.example/app:v1"}]},
+            }
+        ).encode()
+    )
 
     status, headers, body = request(
         proxy,

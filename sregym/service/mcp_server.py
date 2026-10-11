@@ -45,6 +45,10 @@ class MCPServer:
         value = str(self.restrict_network_access).lower()
         return {
             "RESTRICT_NETWORK_ACCESS": value,
+            "PROTECT_WORKLOAD_BOUNDARY": str(
+                os.environ.get("SREGYM_ROOTLESS_WORKLOAD") == "1"
+                or os.environ.get("PROTECT_WORKLOAD_BOUNDARY", "").lower() == "true"
+            ).lower(),
             # Older MCP images read this name. Keep it synchronized during upgrades.
             "BLOCK_WORKLOAD_CREATION": value,
         }

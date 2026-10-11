@@ -8,6 +8,35 @@ from sregym.service.kubernetes_access_policy import restricted_cluster_role
 from sregym.service.mcp_server import MCPServer
 
 
+@pytest.mark.parametrize("already_running", [False, True])
+def test_rootless_boundary_reaches_new_and_retained_mcp_deployments(rendered_manifests, monkeypatch, already_running):
+    monkeypatch.setenv("SREGYM_ROOTLESS_WORKLOAD", "1")
+    server = MCPServer(restrict_network_access=False)
+    server.kubectl = Mock()
+    server.kubectl.exec_command_checked.return_value = rendered_manifests
+    server._is_running = Mock(return_value=already_running)
+    server.start_port_forward = Mock()
+    server.deploy()
+    if already_running:
+        commands = [call.args[0] for call in server.kubectl.exec_command_checked.call_args_list]
+        assert any(
+            "PROTECT_WORKLOAD_BOUNDARY=true" in command and "RESTRICT_NETWORK_ACCESS=false" in command
+            for command in commands
+        )
+    else:
+        applied = next(
+            call.kwargs["input_data"]
+            for call in server.kubectl.exec_command_checked.call_args_list
+            if "input_data" in call.kwargs
+        )
+        deployment = next(obj for obj in yaml.safe_load_all(applied) if obj["kind"] == "Deployment")
+        environment = {
+            item["name"]: item["value"] for item in deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        }
+        assert environment["PROTECT_WORKLOAD_BOUNDARY"] == "true"
+        assert environment["RESTRICT_NETWORK_ACCESS"] == "false"
+
+
 @pytest.fixture
 def rendered_manifests():
     # Use the real manifest resources. Kustomize adds labels and image names,

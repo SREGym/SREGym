@@ -45,6 +45,9 @@ from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
     HIDDEN_LABELS,
     HIDDEN_NAMESPACES,
+    NODE_MAINTENANCE_LABEL,
+    NODE_MAINTENANCE_NAMESPACE,
+    NODE_MAINTENANCE_ROLE,
     filter_api_groups,
     filter_namespace_list,
     filter_openapi_document,
@@ -300,6 +303,19 @@ def _contains_helm_release_secret_name(value) -> bool:
     return False
 
 
+def _private_workload_delete_path(path: str, hidden_labels: dict[str, set[str]]) -> str:
+    """Exclude private labels in the actual server-side collection operation."""
+    parts = urlsplit(path)
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    selectors = [value for key, value in pairs if key == "labelSelector" and value]
+    protected = {key: set(values) for key, values in hidden_labels.items()}
+    protected.setdefault(NODE_MAINTENANCE_LABEL, set()).add(NODE_MAINTENANCE_ROLE)
+    selectors.extend(f"{key} notin ({','.join(sorted(values))})" for key, values in sorted(protected.items()) if values)
+    pairs = [(key, value) for key, value in pairs if key != "labelSelector"]
+    pairs.append(("labelSelector", ",".join(selectors)))
+    return parts._replace(query=urlencode(pairs)).geturl()
+
+
 def _decode_mutation(body: bytes, content_type: str) -> dict | list:
     media_type = content_type.partition(";")[0].strip().lower()
     if media_type not in STRUCTURED_KUBERNETES_CONTENT_TYPES:
@@ -320,6 +336,7 @@ def _inspect_workload_request(
     *,
     current: dict | None = None,
     restrict_network_access: bool = True,
+    protect_workload_boundary: bool = False,
 ) -> str | None:
     """Inspect workload mutations for protected data and network escapes.
 
@@ -338,11 +355,22 @@ def _inspect_workload_request(
 
     if _contains_helm_release_secret_name(data):
         return "forbidden"
-    if restrict_network_access:
+    if protect_workload_boundary and method == "PATCH" and workload_network_settings(resource, current or {}):
+        media_type = content_type.partition(";")[0].strip().lower()
+        if media_type not in {"application/json-patch+json", "application/merge-patch+json"}:
+            # Strategic merge and server-side apply can retain privileged
+            # fields in named list entries omitted by a partial patch. Use
+            # explicit JSON operations when removing existing host access.
+            return "network_escape"
+    if restrict_network_access or protect_workload_boundary:
         try:
             proposed = apply_json_patch(current or {}, data) if isinstance(data, list) else data
+            if protect_workload_boundary and method == "PATCH" and isinstance(data, dict):
+                proposed = merge_object(current or {}, data)
         except (JsonPatchException, JsonPointerException, TypeError, KeyError):
             return "invalid"
+        if protect_workload_boundary and workload_network_settings(resource, proposed):
+            return "network_escape"
         if workload_adds_network_access(resource, proposed, current):
             return "network_escape"
     return None
@@ -480,15 +508,21 @@ class KubernetesAPIProxy:
         block_workload_creation: bool = False,
         *,
         restrict_network_access: bool = False,
+        protect_workload_boundary: bool = False,
     ):
         self.hidden_namespaces: set[str] = (
             hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES.copy()
-        )
+        ) | {NODE_MAINTENANCE_NAMESPACE}
         self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
         self.listen_host = listen_host
         # Preserve the old keyword for callers outside the Conductor.
         self.restrict_network_access = restrict_network_access or block_workload_creation
+        self.protect_workload_boundary = (
+            protect_workload_boundary
+            or os.environ.get("SREGYM_ROOTLESS_WORKLOAD") == "1"
+            or os.environ.get("PROTECT_WORKLOAD_BOUNDARY", "").lower() == "true"
+        )
         self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
@@ -639,6 +673,7 @@ class KubernetesAPIProxy:
         bearer_token = self._bearer_token
         agent_token = self._agent_token
         restrict_network_access = self.restrict_network_access
+        protect_workload_boundary = getattr(self, "protect_workload_boundary", False)
         # Keep UID-based visibility after a workload is deleted. Never infer it
         # from a name prefix, which can also belong to a normal diagnostic pod.
         reference_visibility: OrderedDict[str, bool] = OrderedDict()
@@ -784,6 +819,29 @@ class KubernetesAPIProxy:
 
             def _validate_mutation(self, path, method, body, content_type):
                 resource, name = _resource_request(path)
+                existing = None
+                # Private workloads must be inaccessible by name as well as
+                # absent from lists. Inspect the existing object before a
+                # caller can exec, delete it, or remove its protective labels.
+                if resource in WORKLOAD_RESOURCES:
+                    if name and (method != "GET" or _object_subresource(path)):
+                        existing = self._read_object(_object_path(path))
+                        if existing and self._is_hidden_resource(existing):
+                            return "control_resource"
+                        if not existing and _is_exec_or_attach_request(path):
+                            return "missing_workload"
+                        if existing and _is_exec_or_attach_request(path):
+                            settings = workload_network_settings("pods", existing)
+                            if (protect_workload_boundary and settings) or (
+                                restrict_network_access and settings.get("hostNetwork")
+                            ):
+                                return "network_escape"
+                    elif method == "DELETE":
+                        collection = self._read_object(path)
+                        if not isinstance(collection, dict) or not isinstance(collection.get("items"), list):
+                            raise ValueError("Kubernetes returned an invalid workload collection")
+                        if any(self._is_hidden_resource(item) for item in collection["items"]):
+                            return "control_resource"
                 if method not in {"POST", "PUT", "PATCH", "DELETE"}:
                     return None
                 if _request_api_group(path) == "rbac.authorization.k8s.io" and resource in RBAC_RESOURCES:
@@ -811,9 +869,7 @@ class KubernetesAPIProxy:
                         return "control_resource"
                     return None
                 if resource in WORKLOAD_RESOURCES and method != "DELETE" and body:
-                    current = None
-                    if restrict_network_access and name and method in {"PUT", "PATCH"}:
-                        current = self._read_object(_object_path(path))
+                    current = existing
                     return _inspect_workload_request(
                         path,
                         method,
@@ -821,6 +877,7 @@ class KubernetesAPIProxy:
                         content_type,
                         current=current,
                         restrict_network_access=restrict_network_access,
+                        protect_workload_boundary=protect_workload_boundary,
                     )
                 if not (
                     restrict_network_access
@@ -880,15 +937,8 @@ class KubernetesAPIProxy:
                     self.send_error(403, "Forbidden: Proxying through a workload's status is not allowed")
                     return
 
-                if restrict_network_access and _is_exec_or_attach_request(path):
-                    _, name = _resource_request(path)
-                    target = self._read_object(_object_path(path)) if name else None
-                    if target and workload_network_settings("pods", target).get("hostNetwork"):
-                        self.send_error(403, "Forbidden: Cannot exec into a host-network pod")
-                        return
-
                 # Block direct access to hidden namespaces
-                if _is_hidden_namespace_request(path, hidden_namespaces):
+                if _is_hidden_namespace_request(path, hidden_namespaces | {NODE_MAINTENANCE_NAMESPACE}):
                     self.send_error(404, "Not Found")
                     return
 
@@ -947,7 +997,10 @@ class KubernetesAPIProxy:
                 if workload_inspection == "control_resource":
                     self.send_error(403, "Forbidden: Access to this resource is not allowed")
                     return
-                if restrict_network_access and workload_inspection == "network_escape":
+                if workload_inspection == "missing_workload":
+                    self.send_error(404, "Not Found")
+                    return
+                if workload_inspection == "network_escape":
                     self.send_error(403, "Forbidden: Workloads cannot escape pod network isolation")
                     return
                 if workload_inspection == "network_policy":
@@ -962,6 +1015,9 @@ class KubernetesAPIProxy:
 
                 # Forward request to upstream
                 try:
+                    resource, name = _resource_request(path)
+                    if method == "DELETE" and resource in WORKLOAD_RESOURCES and not name:
+                        path = _private_workload_delete_path(path, hidden_labels)
                     conn = self._get_upstream_connection()
                     filter_type = _response_filter_type(path)
                     watch = method == "GET" and _is_watch_request(path)

@@ -7,14 +7,24 @@ from collections.abc import Callable
 MCP_CONTROL_NAMESPACE = "sregym"
 VERIFIER_PROBE_NAMESPACE = "sregym-verifier"
 MCP_CONTROL_RBAC_NAME = "mcp-server"
+NODE_MAINTENANCE_LABEL = "operator.internal/role"
+NODE_MAINTENANCE_ROLE = "node-maintenance"
+NODE_MAINTENANCE_NAMESPACE = "platform-maintenance"
 # Keep existing control-service identities while excluding them from agent IO.
-HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos", MCP_CONTROL_NAMESPACE, VERIFIER_PROBE_NAMESPACE}
+HIDDEN_NAMESPACES: set[str] = {
+    "chaos-mesh",
+    "khaos",
+    MCP_CONTROL_NAMESPACE,
+    VERIFIER_PROBE_NAMESPACE,
+    NODE_MAINTENANCE_NAMESPACE,
+}
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},
     "network-access": {"restricted"},
     "opentelemetry.io/name": {"load-generator"},
     "app.kubernetes.io/component": {"mcp-server"},
+    NODE_MAINTENANCE_LABEL: {NODE_MAINTENANCE_ROLE},
 }
 HELM_RELEASE_SECRET_TYPE = "helm.sh/release.v1"
 HELM_RELEASE_SECRET_NAME_PREFIX = "sh.helm.release.v1."
@@ -107,7 +117,9 @@ def is_hidden_resource(
     )
     return (
         metadata.get("namespace") in hidden_namespaces
+        or metadata.get("namespace") == NODE_MAINTENANCE_NAMESPACE
         or has_hidden_label
+        or labels.get(NODE_MAINTENANCE_LABEL) == NODE_MAINTENANCE_ROLE
         or has_hidden_subject
         or has_hidden_control_role
         or is_control_role
