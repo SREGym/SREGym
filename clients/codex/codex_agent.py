@@ -18,7 +18,7 @@ from clients.jev.config import codex_args as jev_codex_args
 
 logger = logging.getLogger("all.codex.agent")
 
-_CUSTOM_PROVIDER_ID = "sregym_custom"
+_CUSTOM_PROVIDER_ID = "custom_endpoint"
 
 
 def custom_provider_args(env: Mapping[str, str] | None = None) -> list[str]:
@@ -37,7 +37,7 @@ def custom_provider_args(env: Mapping[str, str] | None = None) -> list[str]:
         "-c",
         f"model_provider={json.dumps(_CUSTOM_PROVIDER_ID)}",
         "-c",
-        f"model_providers.{_CUSTOM_PROVIDER_ID}.name={json.dumps('SREGym custom endpoint')}",
+        f"model_providers.{_CUSTOM_PROVIDER_ID}.name={json.dumps('Custom endpoint')}",
         "-c",
         f"model_providers.{_CUSTOM_PROVIDER_ID}.base_url={json.dumps(api_base)}",
         "-c",

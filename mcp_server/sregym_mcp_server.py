@@ -58,5 +58,5 @@ if __name__ == "__main__":
 
     port = mcp_server_cfg.mcp_server_port
     host = "0.0.0.0" if mcp_server_cfg.expose_server else "127.0.0.1"
-    logger.info("Starting SREGym MCP Server")
+    logger.info("Starting MCP server")
     uvicorn.run(app, host=host, port=port)

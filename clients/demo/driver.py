@@ -164,7 +164,7 @@ async def run_demo_agent():
 
     transport = SSETransport(
         url=ltc.kubectl_mcp_url,
-        headers={"sregym_ssid": session_id},
+        headers={"x-session-id": session_id},
         sse_read_timeout=sse_timeout,
     )
 

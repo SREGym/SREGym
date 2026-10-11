@@ -379,3 +379,15 @@ def test_gemini_extra_sregym_populated(tmp_path):
     assert sregym["application"] == "Hotel Reservation"
     assert sregym["run"] == 1
     assert sregym["results_path"].endswith("gemini/service_port_conflict_hotel_reservation/run_1")
+
+
+def test_rootless_agent_directory_keeps_trusted_result_metadata(tmp_path):
+    run_dir = _canonical_run_dir(tmp_path)
+    expected = convert.convert_run(run_dir)
+    agent = run_dir / "agent"
+    agent.mkdir()
+    for path in list(run_dir.iterdir()):
+        if path.is_dir() and path != agent:
+            shutil.move(str(path), agent / path.name)
+    actual = convert.convert_run(run_dir)
+    assert actual.to_json_dict() == expected.to_json_dict()
