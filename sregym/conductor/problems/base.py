@@ -5,6 +5,13 @@ from abc import ABC, abstractmethod
 
 class Problem(ABC):
     run_default_workload = True
+    # Only handles unrelated to grading may be explicitly omitted. Unknown
+    # nonserializable state is an error, never a reason to grade on the host.
+    verifier_excluded_fields: tuple[str, ...] = ()
+
+    def prepare_verification(self) -> None:
+        """Drain runner-owned state before taking a trusted grading snapshot."""
+        return
 
     def __init__(self, app, namespace: str | None = None):
         self.app = app

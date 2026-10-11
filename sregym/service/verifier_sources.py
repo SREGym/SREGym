@@ -10,7 +10,14 @@ import subprocess
 from pathlib import Path, PurePosixPath
 
 SOURCE_DIRS = ("sregym", "logger", "clients", "llm_backend", "SREGym-applications", "docker/verifier")
-VERIFIER_SOURCES = ("sregym/service/verifier_sources.py",)
+VERIFIER_SOURCES = (
+    "sregym/service/docker_runtime.py",
+    "sregym/service/verifier_runtime.py",
+    "sregym/service/verifier_sources.py",
+    "sregym/service/verifier_state.py",
+    "sregym/service/verifier_worker.py",
+    "docker/verifier/Dockerfile",
+)
 MANIFEST_NAME = ".sregym-verifier-sources.json"
 REQUIRED_SOURCES = frozenset((*VERIFIER_SOURCES, "pyproject.toml", "uv.lock"))
 
