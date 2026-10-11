@@ -1,0 +1,60 @@
+# SREGym deployment overlay for the Incident Arena slack-spine chart.
+#
+# Deploys the healthy system under test with the images pinned by the
+# Incident Arena tasks, drops the Harbor harness (agent foothold, egress proxy,
+# DNS filter, in-chart Prometheus/Loki/obs-mcp) in favour of SREGym's own
+# observability stack, and replaces the foothold with an operator toolbox.
+# Problems layer their load profile and fault values on top of this file.
+global:
+  imagePullPolicy: IfNotPresent
+
+images:
+  app: ghcr.io/abundant-ai/sre-world/slack-app@sha256:e050b1d953721145ee580e1baf1e424c55aa31c37a15c909e296c9607c8f7f4a
+  appBuilder: ghcr.io/abundant-ai/sre-world/slack-app-builder@sha256:5201d7a4c6e4313c2b9d01209ff6aed413af6f4cc2e11d667631f0ce4920fa07
+  go: ghcr.io/abundant-ai/sre-world/slack-go@sha256:a9c60cefb4326ff918867ab522e05a9570b5b50fccc6208372228ed341d123dd
+  py: ghcr.io/abundant-ai/sre-world/slack-py@sha256:c3a51b1ab5082f337ae5e8c1f2d60467273b1e73440580fc7e1132564b943c12
+  main: ghcr.io/abundant-ai/sre-world/slack-main@sha256:e3dec9737ddfb496b7c380ff529248bf4216514f0d0127f91e41973c05d940f9
+  obsMcp: ghcr.io/abundant-ai/sre-world/slack-obs-mcp@sha256:891670f269e57db65d9a2a896472d91a876efb9896f139efd5e503a3b9818ae9
+  loadgen: ghcr.io/abundant-ai/sre-world/slack-loadgen@sha256:5a8bfa7e291a3e9ddc32eca99d291531964f08e3b1e269bd59fc9236a1eebbd2
+  pgbouncer: ghcr.io/abundant-ai/sre-world/slack-pgbouncer@sha256:70dc0e4aefb23ba0646a3410358732ba8358f3b8aa95b8595f2decbba56ceff0
+
+components:
+  # Harbor foothold. Disabling it also removes the agent egress proxy, DNS
+  # filter, freezer and their NetworkPolicies.
+  main: {enabled: false}
+  # SREGym deploys Prometheus, Loki and its MCP servers cluster-wide.
+  prometheus: {enabled: false}
+  loki: {enabled: false}
+  promtail: {enabled: false}
+  obsMcp: {enabled: false}
+
+obs:
+  postgresExporter:
+    enabled: true
+
+resources:
+  # search-engine keeps its index in memory, so each write costs more as the
+  # corpus grows. SREGym loops the load for the whole run (Incident Arena ran
+  # one hour), and at the chart's 700m the async search lane (task 007) fell
+  # behind within ~15 minutes on a 2.0 GHz host.
+  searchEngine:
+    limits:
+      cpu: "2"
+
+gradingHarness:
+  # Rendered as a fault-free placeholder under sregym.enabled (see
+  # sregym.neutralAnswerKey); the load generator reads it at episode end.
+  answerKey:
+    enabled: true
+
+sregym:
+  enabled: true
+  loadgenLabels:
+    app: load-generator
+  loadgenEnv:
+    # SREGym pins the episode start itself, possibly long after the sidecar
+    # boots (Incident Arena's 1800 s limit assumed Harbor's healthcheck).
+    - name: EPISODE_START_TIMEOUT_S
+      value: "86400"
+  toolbox:
+    enabled: true
