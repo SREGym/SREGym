@@ -1,13 +1,18 @@
+import base64
 import copy
 import http.client
 import json
+import os
 import socket
 import ssl
 import threading
 import time
 from datetime import timedelta
+from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
+import yaml
 from cryptography import x509
 from kubernetes import config
 
@@ -1655,3 +1660,76 @@ def test_upstream_status_and_warning_conceal_private_identity_only(control_proxy
     else:
         assert body == payload
         assert headers["Warning"] == message
+
+
+def test_generated_agent_kubeconfig_uses_neutral_names_and_preserves_authentication(proxy, tmp_path):
+    path = proxy.generate_agent_kubeconfig(str(tmp_path / "config"))
+    text = Path(path).read_text()
+    data = yaml.safe_load(text)
+    assert "sregym" not in text.lower()
+    assert data["current-context"] == data["contexts"][0]["name"]
+    context = data["contexts"][0]["context"]
+    assert context["cluster"] == data["clusters"][0]["name"]
+    assert context["user"] == data["users"][0]["name"]
+    assert data["users"][0]["user"]["token"] == proxy._agent_token
+    assert data["clusters"][0]["cluster"]["server"] == proxy.get_proxy_url()
+    assert data["clusters"][0]["cluster"]["certificate-authority-data"]
+
+
+def test_generated_agent_kubeconfig_uses_real_verified_tls_and_token(proxy):
+    # The local proxy listener and its generated CA/token are real; upstream
+    # response transport remains the existing fixture, not a cluster claim.
+    proxy.listen_port = proxy.server.server_address[1]
+    path = Path(proxy.generate_agent_kubeconfig())
+    assert path.name.startswith("operator-kubeconfig-")
+    assert path.stat().st_mode & 0o777 == 0o600
+    data = yaml.safe_load(path.read_text())
+    cluster = data["clusters"][0]["cluster"]
+    endpoint = urlsplit(cluster["server"])
+    context = ssl.create_default_context(cadata=base64.b64decode(cluster["certificate-authority-data"]).decode())
+    token = data["users"][0]["user"]["token"]
+    FakeHTTPSConnection.response = FakeResponse(b'{"kind":"PodList","items":[]}')
+
+    def send(token):
+        with (
+            socket.create_connection((endpoint.hostname, endpoint.port), timeout=5) as raw_socket,
+            context.wrap_socket(raw_socket, server_hostname=endpoint.hostname) as connection,
+        ):
+            connection.sendall(
+                (
+                    f"GET /api/v1/namespaces/app/pods HTTP/1.1\r\nHost: {endpoint.hostname}\r\n"
+                    f"Authorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+                ).encode()
+            )
+            response = http.client.HTTPResponse(connection)
+            response.begin()
+            return response.status, response.read()
+
+    status, payload = send(token)
+    assert status == 200 and json.loads(payload) == {"kind": "PodList", "items": []}
+    assert len(FakeHTTPSConnection.requests) == 1
+    assert send("wrong-token")[0] == 401
+    assert len(FakeHTTPSConnection.requests) == 1
+    with (
+        socket.create_connection((endpoint.hostname, endpoint.port), timeout=5) as raw_socket,
+        pytest.raises(ssl.SSLCertVerificationError),
+    ):
+        ssl.create_default_context().wrap_socket(raw_socket, server_hostname=endpoint.hostname)
+    proxy.stop()
+    assert not path.exists()
+
+
+def test_upstream_merge_skips_both_generated_config_prefixes(monkeypatch, tmp_path):
+    paths = [
+        tmp_path / name
+        for name in (
+            "sregym-agent-kubeconfig-old.yaml",
+            "first-cluster.yaml",
+            "operator-kubeconfig-new.yaml",
+            "second-cluster.yaml",
+        )
+    ]
+    monkeypatch.setenv("KUBECONFIG", os.path.pathsep.join(map(str, paths)))
+    assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == os.path.pathsep.join(map(str, (paths[1], paths[3])))
+    monkeypatch.setenv("KUBECONFIG", os.path.pathsep.join(map(str, (paths[0], paths[2]))))
+    assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == os.path.expanduser("~/.kube/config")
