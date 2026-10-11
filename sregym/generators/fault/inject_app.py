@@ -185,12 +185,13 @@ class ApplicationFaultInjector(FaultInjector):
     # A.4 valkey_auth_disruption: Invalidate the password in valkey so dependent services cannot work
     def inject_valkey_auth_disruption(self, target_service="cart"):
         pods = self.kubectl.list_pods(self.namespace)
-        valkey_pods = [p.metadata.name for p in pods.items if "valkey-cart" in p.metadata.name]
+        valkey_pods = [p for p in pods.items if "valkey-cart" in p.metadata.name]
         if not valkey_pods:
             print("[❌] No Valkey pod found!")
             return
 
-        valkey_pod = valkey_pods[0]
+        valkey_pod = valkey_pods[0].metadata.name
+        restarts_before = self._container_restart_count(valkey_pods[0])
         print(f"[🔐] Found Valkey pod: {valkey_pod}")
         command = f"kubectl exec -n {self.namespace} {valkey_pod} -- valkey-cli CONFIG SET requirepass 'invalid_pass'"
         result = self.kubectl.exec_command(command)
@@ -199,6 +200,39 @@ class ApplicationFaultInjector(FaultInjector):
         # Restart cartservice to force it to re-authenticate
         self.kubectl.exec_command(f"kubectl delete pod -l app.kubernetes.io/name={target_service} -n {self.namespace}")
         time.sleep(3)
+
+        # `requirepass` set at runtime lives only in server memory. If the pod
+        # restarts (e.g. OOMKilled while running valkey-cli in its cgroup) the
+        # fault silently disappears and the mitigation oracle passes without any
+        # agent action. Fail loudly instead.
+        self._verify_valkey_requirepass(valkey_pod, restarts_before)
+
+    @staticmethod
+    def _container_restart_count(pod) -> int:
+        statuses = (pod.status and pod.status.container_statuses) or []
+        return sum(status.restart_count or 0 for status in statuses)
+
+    def _verify_valkey_requirepass(self, valkey_pod: str, restarts_before: int) -> None:
+        pods = self.kubectl.list_pods(self.namespace)
+        current = [p for p in pods.items if p.metadata.name == valkey_pod]
+        restarts_after = self._container_restart_count(current[0]) if current else None
+        if restarts_after is None or restarts_after != restarts_before:
+            raise RuntimeError(
+                f"valkey_auth_disruption: pod {valkey_pod} restarted during injection "
+                f"(restarts {restarts_before} -> {restarts_after}); the runtime requirepass was lost"
+            )
+
+        command = (
+            f"kubectl exec -n {self.namespace} {valkey_pod} -- "
+            "env VALKEYCLI_AUTH=invalid_pass valkey-cli CONFIG GET requirepass"
+        )
+        output = self.kubectl.exec_command_checked(command, timeout=30)
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if lines != ["requirepass", "invalid_pass"]:
+            raise RuntimeError(
+                f"valkey_auth_disruption: requirepass is not in effect on {valkey_pod}; CONFIG GET returned {lines!r}"
+            )
+        print(f"[✅] Verified requirepass is set on {valkey_pod}")
 
     def recover_valkey_auth_disruption(self, target_service="cart"):
         pods = self.kubectl.list_pods(self.namespace)

@@ -103,3 +103,55 @@ def test_ui_fix_coexists_with_upstream_memory_fixes():
         assert components[name]["resources"]["limits"]["memory"] == "512Mi"
     assert components["kafka"]["resources"]["requests"]["memory"] == "600Mi"
     assert components["kafka"]["resources"]["limits"]["memory"] == "1Gi"
+
+
+def test_valkey_cart_survives_exec_of_valkey_cli_in_its_cgroup():
+    # valkey_auth_disruption injects with `kubectl exec ... valkey-cli`; at the
+    # chart default of 20Mi the server was OOMKilled and lost the runtime password.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    limit = values["components"]["valkey-cart"]["resources"]["limits"]["memory"]
+    assert limit.endswith("Mi") and int(limit[:-2]) >= 64
+
+
+def test_product_catalog_has_headroom_above_gomemlimit():
+    # The chart caps product-catalog at 20Mi with GOMEMLIMIT 16MiB; one run saw
+    # an OOMKill that failed /api/products/* with no injected fault behind it.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    limit = values["components"]["product-catalog"]["resources"]["limits"]["memory"]
+    assert limit.endswith("Mi") and int(limit[:-2]) >= 64
+
+
+def test_product_catalog_waits_for_postgresql():
+    # product-catalog exits when PostgreSQL is not yet listening on 5432, which
+    # gives it restarts on a fresh deployment before any fault is injected.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    (init,) = values["components"]["product-catalog"]["initContainers"]
+    assert init["name"] == "wait-for-postgresql"
+    assert "nc -z" in init["command"][2] and "postgresql 5432" in init["command"][2]
+
+
+def test_frontend_proxy_envoy_prefers_ipv4():
+    # Envoy's STRICT_DNS default (AUTO, IPv6-first) can walk host search domains
+    # on AAAA lookups and dial an unreachable external address (503 UF).
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    script = values["components"]["frontend-proxy"]["command"][2]
+    assert "dns_lookup_family: V4_PREFERRED" in script
+    assert "exec envoy -c envoy.yaml" in script
+
+
+def test_grafana_sidecar_is_not_chronically_throttled():
+    # At the chart's 100m CPU limit the sidecar keeps ContainerCPUThrottling firing.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    resources = values["grafana"]["sidecar"]["resources"]
+    assert resources["requests"]["cpu"] == "100m"
+    assert resources["limits"]["cpu"] == "1000m"
+
+
+def test_locust_exporter_sidecar_is_not_chronically_throttled():
+    # The sidecar is the only CPU-limited container in the load-generator pod, so
+    # it alone decides the pod-scoped ContainerCPUThrottling alert.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    sidecar = values["components"]["load-generator"]["sidecarContainers"][0]
+    assert sidecar["name"] == "locust-exporter"
+    cpu = sidecar["resources"]["limits"]["cpu"]
+    assert cpu.endswith("m") and int(cpu[:-1]) >= 200
