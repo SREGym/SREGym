@@ -26,9 +26,13 @@ import time
 from pathlib import Path
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.missing_stale_cache_fallback_mitigation import MissingStaleCacheFallbackMitigationOracle
+from sregym.conductor.oracles.missing_stale_cache_fallback_mitigation import (
+    MissingStaleCacheFallbackMitigationOracle,
+    ProbeUnavailable,
+)
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
@@ -47,34 +51,42 @@ ROOT_CAUSE = (
     "fall back to the cached, bounded-stale product list when product-catalog fails."
 )
 
-# Runs inside the recommendation pod with its own generated stubs.
-# argv: count, interval_s, deadline_s, product ids to exclude as ONE comma-joined string.
+# Calls ListRecommendations, normally from a short-lived client pod built from the stock recommendation image (it
+# has the generated stubs) through the recommendation Service, the way the frontend does. A new channel per call is
+# a new connection, so the Service picks a backend each time.
+# argv: count, interval_s, deadline_s, product ids to exclude (comma-joined), address.
 _PROBE_SCRIPT = r"""
-import json, os, sys, time
+import json, sys, time
+sys.path.insert(0, "/app")
 import grpc, demo_pb2, demo_pb2_grpc
-count, interval, deadline, exclude = int(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
-port = os.environ.get("RECOMMENDATION_PORT", "8080")
-stub = demo_pb2_grpc.RecommendationServiceStub(grpc.insecure_channel(f"localhost:{port}"))
+count, interval, deadline, exclude, address = int(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), sys.argv[4], sys.argv[5]
+# One id per element with "," elements in between. That reads the same whether the service does
+# ''.join(ids).split(','), reads the list as it is, or splits each element.
+product_ids = []
+for product_id in filter(None, exclude.split(",")):
+    product_ids += [product_id, ","]
+product_ids = product_ids[:-1]
 for i in range(count):
+    channel = grpc.insecure_channel(address)
+    stub = demo_pb2_grpc.RecommendationServiceStub(channel)
     start = time.monotonic()
     try:
-        reply = stub.ListRecommendations(demo_pb2.ListRecommendationsRequest(product_ids=[exclude]), timeout=deadline)
+        reply = stub.ListRecommendations(demo_pb2.ListRecommendationsRequest(product_ids=product_ids), timeout=deadline)
         print(json.dumps({"ok": True, "ms": (time.monotonic() - start) * 1000, "ids": list(reply.product_ids)}), flush=True)
     except grpc.RpcError as e:
         print(json.dumps({"ok": False, "ms": (time.monotonic() - start) * 1000, "code": e.code().name, "error": e.details()}), flush=True)
+    channel.close()
     if i < count - 1:
         time.sleep(interval)
 """
 
 # Times one direct ListProducts call from the recommendation pod.
-# argv: address (empty means the service's own PRODUCT_CATALOG_ADDR), timeout_s.
+# argv: address, timeout_s.
 _UPSTREAM_SCRIPT = r"""
-import json, os, sys, time
+import json, sys, time
+sys.path.insert(0, "/app")
 import grpc, demo_pb2, demo_pb2_grpc
-address, timeout = sys.argv[1] or os.environ.get("PRODUCT_CATALOG_ADDR", ""), float(sys.argv[2])
-if not address:
-    print(json.dumps({"addr": "", "s": 0.0, "code": "NO_ADDRESS"}))
-    sys.exit(0)
+address, timeout = sys.argv[1], float(sys.argv[2])
 stub = demo_pb2_grpc.ProductCatalogServiceStub(grpc.insecure_channel(address))
 start, code = time.monotonic(), "OK"
 try:
@@ -88,8 +100,14 @@ print(json.dumps({"addr": address, "s": round(time.monotonic() - start, 3), "cod
 class MissingStaleCacheFallbackAstronomyShop(Problem):
     RECOMMENDATION = "recommendation"
     PRODUCT_CATALOG = "product-catalog"
-    # The chart's address for product-catalog. The oracle times it directly, whatever the agent configures.
+    # The chart's addresses. Probes call recommendation through its Service, as the frontend does, and time
+    # product-catalog directly to confirm the delay.
+    RECOMMENDATION_ADDR = "recommendation:8080"
     UPSTREAM_ADDR = "product-catalog:8080"
+    LOCAL_ADDR = "localhost:8080"
+    # The client pod runs the stock image with no app labels, so neither the Service nor the delay selects it,
+    # and nothing the agent changed in the recommendation container can touch the probe.
+    CLIENT_CONTAINER = "client"
     SOURCE_PATH = "/app/recommendation_server.py"
     # The agent sees this ConfigMap (editing it is the repair path), so it carries an ordinary name.
     CONFIGMAP = "recommendation-server"
@@ -129,6 +147,10 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         # A ListProducts call slower than this proves the delay is live.
         self.delay_active_min_s = 0.8 * self.delay_seconds
 
+        # Image for the probe client, recorded at injection before the agent can change the Deployment.
+        self._client_image: str | None = None
+        self._client: str | None = None
+
         self._buggy_source = (_ASSETS / "missing_stale_cache_fallback_recommendation.py").read_text()
         self._fixed_source = (_ASSETS / "missing_stale_cache_fallback_recommendation_fixed.py").read_text()
 
@@ -147,6 +169,7 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
     def inject_fault(self) -> bool:
         print("=== Fault Injection ===")
         try:
+            self._client_image = self._deployment_image(self.RECOMMENDATION)
             self._overlay(self._buggy_source)
             if not self._overlay_live(present=self.BUGGY_MARKER, absent=self.FIXED_MARKER):
                 raise RuntimeError(f"the recommendation overlay is not live at {self.SOURCE_PATH}")
@@ -160,20 +183,24 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             if not self.wait_for_delay(active=True):
                 raise RuntimeError(f"the {self.delay} product-catalog delay never became active")
 
-            # The incident must be visible before the agent starts
+            # The incident must be visible before the agent starts: real RPC answers that carry the upstream
+            # deadline error. A probe that could not run proves nothing.
             confirm = self.probe_recommendations(3, 1.0, self.delay_seconds + 2)
-            if any(r["ok"] for r in confirm):
-                raise RuntimeError(f"recommendation still answers under the delay: {confirm}")
+            if not self._incident_confirmed(confirm):
+                raise RuntimeError(f"recommendation calls did not show the injected failure: {confirm}")
         except Exception:
             self._cleanup_after_failed_injection()
             raise
+        finally:
+            self.release_client()
 
         print(f"Service: {self.RECOMMENDATION} | Namespace: {self.namespace} | upstream delay: {self.delay}")
         return True
 
-    @mark_fault_injected
+    @mark_fault_injected(strict=True)
     def recover_fault(self) -> bool:
         print("=== Fault Recovery ===")
+        # Leftover chaos would keep delaying pods after this problem, so a failed delete stops recovery loudly.
         self._delete_chaos()
         if not self._namespace_exists():
             print(f"Namespace '{self.namespace}' not present. Nothing more to recover.")
@@ -182,20 +209,31 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         # Recovery applies the reference fix rather than removing the overlay.
         # The stock image code has no timeout and no fallback, so it would fail the oracle,
         # which re-applies the delay while grading.
-        self._overlay(self._fixed_source)
-        if not self._overlay_live(present=self.FIXED_MARKER):
-            raise RuntimeError(f"The fixed recommendation code is not live at {self.SOURCE_PATH}")
+        # This part is best effort: the agent may have scaled recommendation to 0 or deleted it, and failing the
+        # teardown for that would abort the whole run. validate_problem still catches a fix that isn't live,
+        # because the oracle must pass after recovery.
+        try:
+            self._overlay(self._fixed_source)
+            if not self._overlay_live(present=self.FIXED_MARKER):
+                raise RuntimeError(f"the fixed recommendation code is not live at {self.SOURCE_PATH}")
+            self.wait_until_answering()
+        except Exception as exc:
+            print(f"ERROR: could not re-apply the reference fix: {exc}")
+            return False
+        finally:
+            self.release_client()
 
-        self.wait_until_answering()
         print(f"Recovered: reference fix live in deployment/{self.RECOMMENDATION}, upstream delay removed.")
         return True
 
-    def apply_delay(self, keep_alive: bool) -> None:
+    def apply_delay(self, keep_alive: bool, latency: str | None = None) -> None:
         """
         Delay product-catalog -> recommendation traffic.
 
         keep_alive=True creates a Schedule that keeps re-applying the delay (the incident).
         keep_alive=False creates one NetworkChaos with no duration (steady delay while the oracle grades).
+        latency overrides the problem's delay (the oracle uses a much longer one to tell whether fresh data
+        is reaching recommendation some other way).
         """
         self._delete_chaos()
         spec = {
@@ -213,7 +251,7 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
                     "labelSelectors": {self.SELECTOR_LABEL: self.RECOMMENDATION},
                 },
             },
-            "delay": {"latency": self.delay},
+            "delay": {"latency": latency or self.delay},
         }
         metadata = {"name": self.CHAOS_NAME, "namespace": self.namespace}
 
@@ -245,20 +283,22 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             raise RuntimeError("product-catalog did not answer quickly after removing the delay")
 
     def incident_running(self) -> bool:
-        out = self.kubectl.exec_command(
-            f"kubectl get schedules.chaos-mesh.org {self.CHAOS_NAME} -n {self.namespace} -o name --ignore-not-found"
+        if not self._chaos_crds_installed():
+            return False
+        out = self.kubectl.exec_command_checked(
+            f"kubectl get schedules.chaos-mesh.org {self.CHAOS_NAME} -n {self.namespace} -o name --ignore-not-found",
+            timeout=30,
         )
         return self.CHAOS_NAME in out
 
-    def measure_upstream(self, address: str = "") -> dict | None:
+    def measure_upstream(self) -> dict | None:
         """
-        Time one ListProducts call from the recommendation pod: {"addr", "s", "code"}, or None if exec failed.
-
-        An empty address uses the service's own PRODUCT_CATALOG_ADDR.
+        Time one ListProducts call from the recommendation pod to product-catalog: {"addr", "s", "code"},
+        or None if exec failed.
         """
         timeout_s = 3 * self.delay_seconds + 5
         try:
-            out = self._exec_python(_UPSTREAM_SCRIPT, [address, str(timeout_s)], timeout=timeout_s + 30)
+            out = self._exec_in_rollout(_UPSTREAM_SCRIPT, [self.UPSTREAM_ADDR, str(timeout_s)], timeout=timeout_s + 30)
             return json.loads(out.strip().splitlines()[-1])
         except (RuntimeError, ValueError, IndexError):
             return None
@@ -268,7 +308,7 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         True when a direct call to product-catalog is as slow as the injected delay, False when it is fast
         and answers OK. None when that cannot be told (exec failed, or a fast error).
         """
-        upstream = self.measure_upstream(self.UPSTREAM_ADDR)
+        upstream = self.measure_upstream()
         if upstream is None:
             return None
         if upstream["s"] >= self.delay_active_min_s:
@@ -284,19 +324,29 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         return False
 
     def probe_recommendations(
-        self, count: int, interval_s: float, deadline_s: float, exclude_ids: list[str] | None = None
+        self,
+        count: int,
+        interval_s: float,
+        deadline_s: float,
+        exclude_ids: list[str] | None = None,
+        pod: str | None = None,
     ) -> list[dict]:
         """
-        Call ListRecommendations from inside the recommendation pod.
+        Call ListRecommendations through the recommendation Service from the client pod, or, with `pod`, call that
+        recommendation pod directly on its own port.
 
         Each result: {"ok": bool, "ms": float, "ids": [...]} or {"ok": False, "ms", "code", "error"}.
-        exclude_ids travel as ONE comma-joined string, because the service does ''.join(ids).split(',').
         """
         exclude = ",".join(exclude_ids) if exclude_ids else self.PROBE_PRODUCT
-        args = [str(count), str(interval_s), str(deadline_s), exclude]
+        address = self.LOCAL_ADDR if pod else self.RECOMMENDATION_ADDR
+        args = [str(count), str(interval_s), str(deadline_s), exclude, address]
+        timeout = count * (interval_s + deadline_s) + 60
 
         try:
-            out = self._exec_python(_PROBE_SCRIPT, args, timeout=count * (interval_s + deadline_s) + 60)
+            if pod:
+                out = self._exec_in_rollout(_PROBE_SCRIPT, args, timeout=timeout, pod=pod)
+            else:
+                out = self._exec_in_client(_PROBE_SCRIPT, args, timeout=timeout)
         except RuntimeError as exc:
             return [{"ok": False, "ms": 0.0, "code": "EXEC_FAILED", "error": str(exc)}]
 
@@ -314,31 +364,88 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             if last["ok"]:
                 return
             # Any application-level answer counts (the buggy code answers with an error under the delay).
-            # Only "no pod to exec into" and "nothing listening on the local port" mean keep waiting.
+            # Only "no pod to exec into" and "nothing behind the Service yet" mean keep waiting.
             no_pod = last["code"] in ("EXEC_FAILED", "NO_OUTPUT")
             error = last.get("error") or ""
-            not_listening = last["code"] == "UNAVAILABLE" and any(
-                s in error for s in ("127.0.0.1", "::1", "Connection refused")
-            )
+            not_listening = last["code"] == "UNAVAILABLE" and "Connection refused" in error
             if not (no_pod or not_listening):
                 return
             time.sleep(2)
+        if last and last["code"] in ("EXEC_FAILED", "NO_OUTPUT"):
+            raise ProbeUnavailable(f"could not probe recommendation for {timeout_s:.0f}s: {last}")
         raise RuntimeError(f"Recommendation is not answering after {timeout_s:.0f}s: {last}")
+
+    def rollout_pods(self) -> list[str]:
+        """
+        Running pods of the recommendation Deployment's current ReplicaSet, oldest first.
+        """
+        return [p.metadata.name for p in self._rollout_pod_objects()]
+
+    def rollout_state(self) -> dict[str, int]:
+        """
+        Pod uid -> container restarts, for every running pod of the current recommendation rollout.
+        """
+        return {
+            p.metadata.uid: sum(c.restart_count for c in p.status.container_statuses or [])
+            for p in self._rollout_pod_objects()
+        }
+
+    def service_specs(self) -> dict:
+        """
+        Selector and ports of the recommendation and product-catalog Services, the paths the delay is built on.
+        """
+        specs = {}
+        for name in (self.RECOMMENDATION, self.PRODUCT_CATALOG):
+            try:
+                svc = self.kubectl.core_v1_api.read_namespaced_service(name, self.namespace)
+            except ApiException as exc:
+                if exc.status == 404:
+                    specs[name] = None
+                    continue
+                raise RuntimeError(f"could not read Service {name}: {exc.status} {exc.reason}") from exc
+            specs[name] = {
+                "selector": dict(svc.spec.selector or {}),
+                "ports": sorted((p.port, str(p.target_port), p.protocol) for p in svc.spec.ports or []),
+            }
+        return specs
+
+    def release_client(self) -> None:
+        """
+        Delete the client pod, if one is running.
+        """
+        if not self._client:
+            return
+        name, self._client = self._client, None
+        self.kubectl.exec_command_checked(
+            f"kubectl delete pod {name} -n {self.namespace} --ignore-not-found --wait=true --timeout=60s", timeout=90
+        )
 
     def catalog_ids(self) -> list[str]:
         out = self._psql("SELECT id FROM catalog.products ORDER BY id")
         return [line.strip() for line in out.splitlines() if line.strip()]
 
-    def insert_probe_product(self) -> str:
+    def catalog_rows(self) -> list[str]:
         """
-        Insert a new product the way the catalog would grow, and return its id
+        Every product row as one line, to tell whether the original catalog survived.
         """
+        out = self._psql(
+            "SELECT id, name, description, picture, price_currency_code, price_units, price_nanos, categories "
+            "FROM catalog.products ORDER BY id"
+        )
+        return [line for line in out.splitlines() if line.strip()]
+
+    def new_product_id(self) -> str:
         existing = set(self.catalog_ids())
         while True:
             product_id = "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
             if product_id not in existing:
-                break
+                return product_id
 
+    def insert_probe_product(self, product_id: str | None = None) -> str:
+        """
+        Insert a new product the way the catalog would grow, and return its id
+        """
+        product_id = product_id or self.new_product_id()
         self._psql(
             "INSERT INTO catalog.products "
             "(id, name, description, picture, price_currency_code, price_units, price_nanos, categories) "
@@ -354,11 +461,62 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
 
     # Helpers
 
+    @staticmethod
+    def _incident_confirmed(results: list[dict]) -> bool:
+        """
+        Every call answered, and every answer is the upstream deadline error the buggy fetch raises.
+        """
+        return bool(results) and all(
+            not r["ok"] and r.get("code") == "UNKNOWN" and "DEADLINE_EXCEEDED" in (r.get("error") or "")
+            for r in results
+        )
+
     @classmethod
     def _parse_delay(cls, delay: str) -> float:
         if not re.fullmatch(r"\d+(\.\d+)?s", delay) or float(delay[:-1]) < cls.MIN_DELAY_S:
             raise ValueError(f"delay must look like '3s' and be at least {cls.MIN_DELAY_S:g}s, got {delay!r}")
         return float(delay[:-1])
+
+    def _deployment_image(self, name: str) -> str:
+        try:
+            deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(name, self.namespace)
+        except ApiException as exc:
+            raise RuntimeError(f"could not read deployment/{name}: {exc.status} {exc.reason}") from exc
+        containers = deployment.spec.template.spec.containers
+        return next((c.image for c in containers if c.name == name), containers[0].image)
+
+    def _client_pod(self) -> str:
+        """
+        Start (once) a pod from the stock recommendation image to send probe calls from.
+        """
+        if self._client:
+            return self._client
+        image = self._client_image or self._deployment_image(self.RECOMMENDATION)
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+        name = f"{self.RECOMMENDATION}-client-{suffix}"
+        spec = {
+            "restartPolicy": "Never",
+            "terminationGracePeriodSeconds": 0,
+            "containers": [
+                {"name": self.CLIENT_CONTAINER, "image": image, "command": ["sleep", "3600"], "workingDir": "/app"}
+            ],
+        }
+        rollout = self._rollout_pod_objects()
+        if rollout:
+            # Same node as recommendation, so the image is already there.
+            spec["nodeName"] = rollout[-1].spec.node_name
+        manifest = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {"name": name, "namespace": self.namespace},
+            "spec": spec,
+        }
+        self.kubectl.exec_command_checked("kubectl apply -f -", input_data=json.dumps(manifest), timeout=60)
+        self._client = name
+        self.kubectl.exec_command_checked(
+            f"kubectl wait pod/{name} -n {self.namespace} --for=condition=Ready --timeout=180s", timeout=200
+        )
+        return name
 
     def _warm_cache(self, timeout_s: float = 120) -> None:
         """
@@ -404,22 +562,57 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
 
     def _recommendation_pod(self) -> str:
         """
-        Newest running, non-terminating recommendation pod.
-
-        `kubectl exec deploy/recommendation` can land on a pod that is still terminating after a rollout.
+        Newest running pod of the Deployment's current ReplicaSet.
         """
-        pods = self.kubectl.core_v1_api.list_namespaced_pod(
-            self.namespace, label_selector=f"{self.SELECTOR_LABEL}={self.RECOMMENDATION}"
-        ).items
-        live = [p for p in pods if p.metadata.deletion_timestamp is None and p.status.phase == "Running"]
-        if not live:
-            raise RuntimeError("No running recommendation pod")
-        return max(live, key=lambda p: p.metadata.creation_timestamp).metadata.name
+        pods = self._rollout_pod_objects()
+        if not pods:
+            raise RuntimeError("No running pod in the current recommendation rollout")
+        return pods[-1].metadata.name
 
-    def _exec_python(self, script: str, args: list[str], timeout: float) -> str:
-        pod = self._recommendation_pod()
+    def _rollout_pod_objects(self) -> list:
+        """
+        Running, non-terminating pods owned by the Deployment's current ReplicaSet, oldest first.
+
+        A label match is not enough: a pod started by hand can carry the same labels without belonging to the
+        rollout, and `kubectl exec deploy/recommendation` can land on a pod still terminating after a rollout.
+        """
+        apps, core = self.kubectl.apps_v1_api, self.kubectl.core_v1_api
+        try:
+            deployment = apps.read_namespaced_deployment(self.RECOMMENDATION, self.namespace)
+            labels = deployment.spec.selector.match_labels or {}
+            selector = ",".join(f"{k}={v}" for k, v in labels.items())
+            replica_sets = apps.list_namespaced_replica_set(self.namespace, label_selector=selector).items
+            pods = core.list_namespaced_pod(self.namespace, label_selector=selector).items
+        except ApiException as exc:
+            raise RuntimeError(f"could not look up the recommendation rollout: {exc.status} {exc.reason}") from exc
+
+        revision = (deployment.metadata.annotations or {}).get("deployment.kubernetes.io/revision")
+        current = {
+            rs.metadata.uid
+            for rs in replica_sets
+            if any(o.uid == deployment.metadata.uid for o in rs.metadata.owner_references or [])
+            and (rs.metadata.annotations or {}).get("deployment.kubernetes.io/revision") == revision
+        }
+        live = [
+            p
+            for p in pods
+            if p.metadata.deletion_timestamp is None
+            and p.status.phase == "Running"
+            and any(o.uid in current for o in p.metadata.owner_references or [])
+        ]
+        return sorted(live, key=lambda p: p.metadata.creation_timestamp)
+
+    def _exec_in_rollout(self, script: str, args: list[str], timeout: float, pod: str | None = None) -> str:
+        # -I ignores PYTHONPATH and the other PYTHON* variables set on the container.
+        pod = pod or self._recommendation_pod()
         argv = " ".join(shlex.quote(a) for a in args)
-        command = f"kubectl exec -i -n {self.namespace} {pod} -c {self.RECOMMENDATION} -- /venv/bin/python - {argv}"
+        command = f"kubectl exec -i -n {self.namespace} {pod} -c {self.RECOMMENDATION} -- /venv/bin/python -I - {argv}"
+        return self.kubectl.exec_command_checked(command, input_data=script, timeout=timeout)
+
+    def _exec_in_client(self, script: str, args: list[str], timeout: float) -> str:
+        pod = self._client_pod()
+        argv = " ".join(shlex.quote(a) for a in args)
+        command = f"kubectl exec -i -n {self.namespace} {pod} -c {self.CLIENT_CONTAINER} -- /venv/bin/python - {argv}"
         return self.kubectl.exec_command_checked(command, input_data=script, timeout=timeout)
 
     def _psql(self, query: str) -> str:
@@ -441,29 +634,46 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             "kubectl get crd networkchaos.chaos-mesh.org schedules.chaos-mesh.org", timeout=30
         )
 
+    def _chaos_crds_installed(self) -> bool:
+        out = self.kubectl.exec_command_checked(
+            "kubectl get crd schedules.chaos-mesh.org networkchaos.chaos-mesh.org -o name --ignore-not-found",
+            timeout=30,
+        )
+        return len(out.split()) == 2
+
     def _delete_chaos(self) -> None:
         """
-        Delete our Schedule and NetworkChaos, then wait until no child NetworkChaos of ours is left
+        Delete Schedule and NetworkChaos, then wait until no child NetworkChaos of ours is left.
+
+        Every command is checked: a failed delete or list (for example Forbidden) raises instead of passing as
+        "nothing left".
         """
-        self.kubectl.exec_command(
+        if not self._chaos_crds_installed():
+            return
+        self.kubectl.exec_command_checked(
             f"kubectl delete {self.CHAOS_RESOURCES} {self.CHAOS_NAME} -n {self.namespace} "
-            "--ignore-not-found --wait=true --timeout=60s"
+            "--ignore-not-found --wait=true --timeout=60s",
+            timeout=90,
         )
         deadline = time.monotonic() + 60
-
+        names = ""
         while time.monotonic() < deadline:
-            names = self.kubectl.exec_command(f"kubectl get networkchaos.chaos-mesh.org -n {self.namespace} -o name")
+            names = self.kubectl.exec_command_checked(
+                f"kubectl get networkchaos.chaos-mesh.org -n {self.namespace} -o name", timeout=30
+            )
             if not any(f"/{self.CHAOS_NAME}" in line for line in names.splitlines()):
                 return
             time.sleep(2)
-        print(f"Warning: NetworkChaos objects named {self.CHAOS_NAME}* still present after 60s")
+        raise RuntimeError(f"NetworkChaos objects named {self.CHAOS_NAME}* still present after 60s: {names.split()}")
 
     def _namespace_exists(self) -> bool:
-        out = self.kubectl.exec_command(f"kubectl get namespace {self.namespace} --no-headers --ignore-not-found")
+        out = self.kubectl.exec_command_checked(
+            f"kubectl get namespace {self.namespace} -o name --ignore-not-found", timeout=30
+        )
         return bool(out.strip())
 
     def _cleanup_after_failed_injection(self) -> None:
-        for step in (self._delete_chaos, self._remove_overlay):
+        for step in (self._delete_chaos, self._remove_overlay, self.release_client):
             try:
                 step()
             except Exception as exc:
