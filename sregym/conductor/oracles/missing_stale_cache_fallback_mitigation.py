@@ -72,7 +72,9 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
     FRESHNESS_POLL_S = 2.0
     # The freshness policy stated in the buggy source (2 minutes). The reference fix uses the same value.
     MAX_STALENESS_S = 120
-    STALENESS_MARGIN_S = 20
+    # The caches are refreshed right before the hold starts, so 5 s past the limit every valid cache has expired, while
+    # one allowed to serve data about 2.5 minutes old still answers.
+    STALENESS_MARGIN_S = 5
     FRESHNESS_WINDOW_S = MAX_STALENESS_S + 10
     # Longer than the whole staleness phase (about 185-215 s from adding P3 to the last late call), so nothing added
     # during it can come back through product-catalog. Chaos Mesh can't apply a 300 s delay here ("unable to set
@@ -398,11 +400,25 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
 
     def _staleness_failure(self, added: list[str], p1: str, originals: list[str], deadline_s: float) -> dict | None:
         """
-        Hold product-catalog's answers for HOLD_DELAY_S, add P3, and wait out the age limit with light traffic.
+        Refresh every cache, hold product-catalog's answers for HOLD_DELAY_S, add P3, and wait out the age limit with
+        light traffic.
         P3 can't come back through product-catalog in that time, so seeing it means a route around the impairment.
         Once the limit has passed, every answer must fail or be empty.
         """
         problem = self.problem
+        # Refresh every pod's cache right before the hold, so the age the late checks see is known within seconds.
+        failure = self._lift_delay()
+        if failure:
+            return failure
+        try:
+            others = [i for i in problem.catalog_ids() if i != p1]
+        except RuntimeError as exc:
+            print(f"ERROR: could not read the catalog: {exc}")
+            return self.fail("catalog_unavailable", message=str(exc))
+        failure = self._warm_rollout(p1, others)
+        if failure:
+            return failure
+
         failure = self._apply_delay(latency=f"{self.HOLD_DELAY_S}s")
         if failure:
             return failure
@@ -429,15 +445,15 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
             if failure:
                 return failure
 
+        # Ask right away, then confirm the pods and the hold were still as expected while asking.
+        late = problem.probe_recommendations(self.LATE_TARGETED_PROBES, 0.5, deadline_s, exclude_ids=others)
+        late += problem.probe_frontend(self.LATE_FRONTEND_PROBES, 0.3, deadline_s + 5, random.choice(originals))
         failure = self._pods_changed(before)
         if failure:
             return failure
         if problem.delay_active() is not True:
             print("ERROR: the product-catalog delay is no longer active")
             return self.fail("impairment_unavailable", message="delay not active after the staleness wait")
-
-        late = problem.probe_recommendations(self.LATE_TARGETED_PROBES, 0.5, deadline_s, exclude_ids=others)
-        late += problem.probe_frontend(self.LATE_FRONTEND_PROBES, 0.3, deadline_s + 5, random.choice(originals))
         failure = self._late_failure(late, p3, before)
         if failure:
             return failure
