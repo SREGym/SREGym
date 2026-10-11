@@ -266,18 +266,73 @@ def test_probe_pod_belongs_to_the_current_rollout(problem):
     assert problem.rollout_pods() == ["current-older", "current"]
 
 
-def test_service_specs_report_selector_and_ports(problem):
+def test_routing_specs_report_services_and_name_resolution(problem):
+    from kubernetes.client import V1HostAlias
+
     def read(name, namespace):
         if name == "product-catalog":
             raise ApiException(status=404, reason="Not Found")
         port = SimpleNamespace(port=8080, target_port=8080, protocol="TCP")
-        return SimpleNamespace(spec=SimpleNamespace(selector={"opentelemetry.io/name": name}, ports=[port]))
+        spec = SimpleNamespace(selector={"opentelemetry.io/name": name}, ports=[port], session_affinity="None")
+        return SimpleNamespace(spec=spec)
 
+    pod_spec = SimpleNamespace(
+        host_aliases=[V1HostAlias(ip="10.96.34.212", hostnames=["product-catalog"])],
+        dns_policy="ClusterFirst",
+        dns_config=None,
+    )
+    deployment = SimpleNamespace(spec=SimpleNamespace(template=SimpleNamespace(spec=pod_spec)))
     problem.kubectl.core_v1_api = SimpleNamespace(read_namespaced_service=read)
-    assert problem.service_specs() == {
-        "recommendation": {"selector": {"opentelemetry.io/name": "recommendation"}, "ports": [(8080, "8080", "TCP")]},
+    problem.kubectl.apps_v1_api = SimpleNamespace(read_namespaced_deployment=Mock(return_value=deployment))
+    assert problem.routing_specs() == {
+        "recommendation": {
+            "selector": {"opentelemetry.io/name": "recommendation"},
+            "ports": [(8080, "8080", "TCP")],
+            "session_affinity": "None",
+        },
         "product-catalog": None,
+        "recommendation-dns": {
+            "host_aliases": [{"ip": "10.96.34.212", "hostnames": ["product-catalog"]}],
+            "dns_policy": "ClusterFirst",
+            "dns_config": None,
+        },
     }
+
+
+def _pod(ip, phase="Running", deleting=False):
+    return SimpleNamespace(
+        metadata=SimpleNamespace(deletion_timestamp=1 if deleting else None),
+        status=SimpleNamespace(phase=phase, pod_ip=ip),
+    )
+
+
+def test_upstream_is_timed_at_a_product_catalog_pod_ip(problem):
+    pods = [_pod("10.244.1.7"), _pod("10.244.2.9", deleting=True), _pod(None, phase="Pending")]
+    problem.kubectl.core_v1_api = SimpleNamespace(list_namespaced_pod=Mock(return_value=SimpleNamespace(items=pods)))
+    assert problem.upstream_addrs() == ["10.244.1.7:8080"]
+    assert "opentelemetry.io/name=product-catalog" in str(problem.kubectl.core_v1_api.list_namespaced_pod.call_args)
+
+    problem._exec_in_rollout = Mock(return_value='{"addr": "10.244.1.7:8080", "s": 3.01, "code": "OK"}\n')
+    assert problem.measure_upstream()["s"] == 3.01
+    assert problem._exec_in_rollout.call_args.args[1][0] == "10.244.1.7:8080"
+
+
+def test_upstream_without_a_running_pod_cannot_be_timed(problem):
+    problem.upstream_addrs = Mock(return_value=[])
+    assert problem.measure_upstream() is None
+
+
+def test_frontend_probes_ask_the_frontend_from_the_client_pod(problem):
+    problem._exec_in_client = Mock(return_value='{"ok": true, "ms": 40.0, "ids": ["1YMWWN1N4O"]}\n')
+    assert problem.probe_frontend(1, 0, 7.0, "0PUK6V6EV0") == [{"ok": True, "ms": 40.0, "ids": ["1YMWWN1N4O"]}]
+    script, args = problem._exec_in_client.call_args.args[:2]
+    assert args[-2:] == ["0PUK6V6EV0", "frontend:8080"]
+    assert "/api/recommendations?productIds=" in script
+
+
+def test_frontend_probe_that_cannot_run_is_reported(problem):
+    problem._exec_in_client = Mock(side_effect=RuntimeError("pods is forbidden"))
+    assert problem.probe_frontend(1, 0, 7.0, "0PUK6V6EV0")[0]["code"] == "EXEC_FAILED"
 
 
 @pytest.mark.parametrize(

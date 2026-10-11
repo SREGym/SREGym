@@ -22,9 +22,18 @@ CATALOG = [
     "LS4PSXUNUM",
     "OLJCESPC7Z",
 ]
-SERVICES = {
-    "recommendation": {"selector": {"opentelemetry.io/name": "recommendation"}, "ports": [(8080, "8080", "TCP")]},
-    "product-catalog": {"selector": {"opentelemetry.io/name": "product-catalog"}, "ports": [(8080, "8080", "TCP")]},
+ROUTING = {
+    "recommendation": {
+        "selector": {"opentelemetry.io/name": "recommendation"},
+        "ports": [(8080, "8080", "TCP")],
+        "session_affinity": "None",
+    },
+    "product-catalog": {
+        "selector": {"opentelemetry.io/name": "product-catalog"},
+        "ports": [(8080, "8080", "TCP")],
+        "session_affinity": "None",
+    },
+    "recommendation-dns": {"host_aliases": None, "dns_policy": "ClusterFirst", "dns_config": None},
 }
 
 
@@ -51,7 +60,7 @@ class FakeShop:
         self.pods = [f"recommendation-{i}" for i in range(replicas)]
         self.caches = {pod: (list(CATALOG), 0.0) for pod in self.pods}
         self._next_pod = 0
-        self.services = {name: dict(spec) for name, spec in SERVICES.items()}
+        self.routing = {name: dict(spec) for name, spec in ROUTING.items()}
         self.schedule = True
         # Latency of the current delay in seconds, 0 while product-catalog is healthy.
         self.latency = delay_s
@@ -66,7 +75,15 @@ class FakeShop:
         self.background_timeout_s = None
         # Reads an undelayed product-catalog copy that serves the same database.
         self.copy_upstream = False
-        # Applies the age limit only to requests that exclude many products, like the oracle's targeted ones.
+        # Once the cache is too old, reads the catalog some other way (the frontend) instead of failing.
+        self.bypass_after_expiry = False
+        # A background thread that reads the catalog some other way every n seconds. None means no poller.
+        self.poller_period_s = None
+        self._polled_at = 0.0
+        # After the age limit, still serves the old cache to every n-th request. 0 means never.
+        self.leak_every = 0
+        self._late = 0
+        # Applies the age limit only to the oracle's own client, not to requests coming from the frontend.
         self.fingerprint = False
         self.healthy_ok = True
         # Every n-th answer from the cache is 1.5 s slower (background load). 0 means never.
@@ -81,6 +98,7 @@ class FakeShop:
         self.exec_broken = False
         self.insert_broken = False
         self.restart_at = None
+        self.scale_at = None
         self.restored = []
         self.client_released = 0
         self.pod_probes = []
@@ -123,15 +141,18 @@ class FakeShop:
     def catalog_rows(self):
         return [f"{i}|Product {i}|19" for i in sorted(self.catalog)]
 
-    def service_specs(self):
-        return {name: dict(spec) for name, spec in self.services.items()}
+    def routing_specs(self):
+        return {name: dict(spec) for name, spec in self.routing.items()}
 
     def rollout_pods(self):
         return list(self.pods)
 
     def rollout_state(self):
         restarted = self.restart_at is not None and self.clock.now >= self.restart_at
-        return {pod: int(restarted) for pod in self.pods}
+        state = {pod: int(restarted) for pod in self.pods}
+        if self.scale_at is not None and self.clock.now >= self.scale_at:
+            state["recommendation-added"] = 0
+        return state
 
     def new_product_id(self):
         product_id = f"PROBE{self._next:05d}"
@@ -172,12 +193,30 @@ class FakeShop:
             answers.append(self._answer(target, exclude, deadline_s))
         return answers
 
+    def probe_frontend(self, count, interval_s, deadline_s, exclude_id):
+        if self.exec_broken:
+            return [{"ok": False, "ms": 0.0, "code": "EXEC_FAILED", "error": "exec failed"}]
+        answers = []
+        for _ in range(count):
+            target = self.pods[self._next_pod % len(self.pods)]
+            self._next_pod += 1
+            answer = self._answer(target, {exclude_id}, deadline_s, from_frontend=True)
+            if not answer["ok"]:
+                answer = {"ok": False, "ms": answer["ms"], "code": "HTTP_500", "error": "Internal Server Error"}
+            else:
+                answer["ids"] = answer["ids"][:4]
+            answers.append(answer)
+        return answers
+
     # The fake recommendation service
 
     def _refresh(self, pod):
         self.caches[pod] = (list(self.catalog), self.clock.now)
 
-    def _answer(self, pod, exclude, deadline_s):
+    def _answer(self, pod, exclude, deadline_s, from_frontend=False):
+        if self.poller_period_s is not None and self.clock.now - self._polled_at >= self.poller_period_s:
+            self._polled_at = self.clock.now
+            self._refresh(pod)
         if not self.latency or self.copy_upstream:
             if not self.healthy_ok:
                 return {"ok": False, "ms": 20.0, "code": "UNKNOWN", "error": "broken"}
@@ -192,17 +231,24 @@ class FakeShop:
             if self.background_timeout_s and self.latency < self.background_timeout_s:
                 self._refresh(pod)
             cache, cached_at = self.caches[pod]
-            limited = self.max_age_s is not None and not (self.fingerprint and len(exclude) < 8)
+            limited = self.max_age_s is not None and not (self.fingerprint and from_frontend)
             if limited and self.clock.now - cached_at > self.max_age_s:
-                if self.after_expiry == "empty":
+                self._late += 1
+                if self.bypass_after_expiry:
+                    self._refresh(pod)
+                    cache = self.caches[pod][0]
+                elif self.leak_every and self._late % self.leak_every == 0:
+                    pass
+                elif self.after_expiry == "empty":
                     return {"ok": True, "ms": 1000.0, "ids": []}
-                return {"ok": False, "ms": 1000.0, "code": "UNKNOWN", "error": "StatusCode.DEADLINE_EXCEEDED"}
+                else:
+                    return {"ok": False, "ms": 1000.0, "code": "UNKNOWN", "error": "StatusCode.DEADLINE_EXCEEDED"}
             self.fell_back = True
             self._served += 1
             slow = self.tail_every and self._served % self.tail_every == 0
             ids, ms = cache, self.degraded_ms + (1500.0 if slow else 0.0)
         elif self.degraded == "hardcoded":
-            ids, ms = CATALOG[:5], 3.0
+            ids, ms = CATALOG, 3.0
         elif self.degraded == "hardcoded_unfiltered":
             return {"ok": True, "ms": 3.0, "ids": CATALOG[:5]}
         elif self.degraded == "empty":
@@ -317,15 +363,42 @@ def test_undelayed_upstream_copy_fails(evaluate):
     _assert_fails(evaluate(shop), "upstream_bypassed", "agent_error")
 
 
-@pytest.mark.parametrize("name", ["recommendation", "product-catalog"])
-def test_service_pointed_at_other_pods_fails(evaluate, name):
-    def repoint(shop):
-        shop.services[name] = {"selector": {"app": f"{name}-v2"}, "ports": [(8080, "8080", "TCP")]}
+@pytest.mark.parametrize(
+    "name,field,value",
+    [
+        ("recommendation", "selector", {"app": "recommendation-v2"}),
+        ("product-catalog", "selector", {"app": "product-catalog-v2"}),
+        ("recommendation", "session_affinity", "ClientIP"),
+        ("recommendation-dns", "host_aliases", [{"ip": "10.96.34.212", "hostnames": ["product-catalog"]}]),
+    ],
+)
+def test_routing_changed_since_injection_fails(evaluate, name, field, value):
+    def change(shop):
+        shop.routing[name] = {**shop.routing[name], field: value}
 
-    _assert_fails(evaluate(FakeShop(), after_baseline=repoint), "upstream_bypassed", "agent_error")
+    _assert_fails(evaluate(FakeShop(), after_baseline=change), "upstream_bypassed", "agent_error")
 
 
-@pytest.mark.parametrize("max_age_s", [None, 600.0])
+def test_reading_around_the_delay_once_the_cache_expires_fails(evaluate):
+    shop = FakeShop()
+    shop.bypass_after_expiry = True
+    _assert_fails(evaluate(shop), "upstream_bypassed", "agent_error")
+
+
+@pytest.mark.parametrize("period_s", [5.0, 30.0, 60.0])
+def test_background_poller_reading_around_the_delay_fails(evaluate, period_s):
+    shop = FakeShop()
+    shop.poller_period_s = period_s
+    _assert_fails(evaluate(shop), "upstream_bypassed", "agent_error")
+
+
+def test_cache_leaking_past_the_age_limit_fails(evaluate):
+    shop = FakeShop()
+    shop.leak_every = 10
+    _assert_fails(evaluate(shop), "stale_data_served_past_limit", "agent_error")
+
+
+@pytest.mark.parametrize("max_age_s", [None, 150.0, 600.0])
 def test_cache_served_past_the_age_limit_fails(evaluate, max_age_s):
     _assert_fails(evaluate(FakeShop(max_age_s=max_age_s)), "stale_data_served_past_limit", "agent_error")
 
@@ -337,23 +410,36 @@ def test_cache_with_an_age_limit_passes(evaluate, max_age_s, after_expiry):
     assert evaluate(shop)["success"] is True
 
 
-def test_age_limit_only_for_the_oracles_requests_fails(evaluate):
+def test_age_limit_only_for_the_oracles_own_client_fails(evaluate):
     shop = FakeShop()
     shop.fingerprint = True
     _assert_fails(evaluate(shop), "stale_data_served_past_limit", "agent_error")
 
 
 def test_cache_refreshed_in_the_background_through_product_catalog_passes(evaluate):
-    # A 10s background fetch gets through the 3s delay, but not through the oracle's 60s one.
-    shop = FakeShop(max_age_s=None)
+    # A 10s background fetch gets through the 3s delay. While the oracle holds product-catalog it can't, so the
+    # cache still has to expire after 2 minutes.
+    shop = FakeShop(max_age_s=120.0)
     shop.background_timeout_s = 10.0
     assert evaluate(shop)["success"] is True
+
+
+def test_background_refresh_without_an_age_limit_fails(evaluate):
+    shop = FakeShop(max_age_s=None)
+    shop.background_timeout_s = 10.0
+    _assert_fails(evaluate(shop), "stale_data_served_past_limit", "agent_error")
 
 
 def test_restart_while_impaired_fails(evaluate):
     shop = FakeShop()
     shop.restart_at = 30.0
     _assert_fails(evaluate(shop), "recommendation_restarted_under_degradation", "agent_error")
+
+
+def test_pod_added_while_impaired_is_ambiguous(evaluate):
+    shop = FakeShop()
+    shop.scale_at = 30.0
+    _assert_fails(evaluate(shop), "recommendation_scaled_under_degradation", "ambiguous")
 
 
 def test_deleted_original_products_fail(evaluate):
@@ -446,22 +532,25 @@ def test_delay_stays_off_when_no_incident_was_running(evaluate):
     assert not shop.schedule and not shop.latency
 
 
-def test_expiry_answers_with_other_products_are_invalid():
+def _late(oracle, results):
+    return oracle._late_failure(results, "P3", {})
+
+
+def test_late_answers_may_fail_or_be_empty():
     oracle = MissingStaleCacheFallbackMitigationOracle(problem=FakeShop())
-    result = oracle._expiry_failure([{"ok": True, "ms": 5.0, "ids": ["P1", "66VCHSJNUP"]}], "P1", "P3")
-    _assert_fails(result, "recommendations_invalid", "agent_error")
+    oracle.problem.rollout_state = lambda: {}
+    answers = [{"ok": False, "ms": 1000.0, "code": "HTTP_500"}, {"ok": True, "ms": 1000.0, "ids": []}]
+    assert _late(oracle, answers) is None
 
 
-def test_ordinary_answers_with_the_excluded_product_are_invalid():
+def test_one_late_answer_with_cached_data_is_stale():
     oracle = MissingStaleCacheFallbackMitigationOracle(problem=FakeShop())
-    answers = [{"ok": True, "ms": 5.0, "ids": ["0PUK6V6EV0", "P3"]}]
-    result = oracle._ordinary_expiry_failure(answers, "0PUK6V6EV0", "P3")
-    _assert_fails(result, "recommendations_invalid", "agent_error")
+    oracle.problem.rollout_state = lambda: {}
+    answers = [{"ok": False, "ms": 1000.0, "code": "HTTP_500"}] * 29 + [{"ok": True, "ms": 5.0, "ids": ["1YMWWN1N4O"]}]
+    _assert_fails(_late(oracle, answers), "stale_data_served_past_limit", "agent_error")
 
 
-def test_a_few_ordinary_answers_without_the_new_product_do_not_fail():
+def test_late_answer_with_the_held_back_product_is_a_bypass():
     oracle = MissingStaleCacheFallbackMitigationOracle(problem=FakeShop())
-    answers = [{"ok": True, "ms": 5.0, "ids": ["1YMWWN1N4O"]}] * 9 + [
-        {"ok": False, "ms": 1000.0, "code": "UNKNOWN", "error": "StatusCode.DEADLINE_EXCEEDED"}
-    ] * 6
-    assert oracle._ordinary_expiry_failure(answers, "0PUK6V6EV0", "P3") is None
+    oracle.problem.rollout_state = lambda: {}
+    _assert_fails(_late(oracle, [{"ok": True, "ms": 5.0, "ids": ["P1", "P3"]}]), "upstream_bypassed", "agent_error")
