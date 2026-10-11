@@ -716,28 +716,48 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
 
     def _delete_chaos(self) -> None:
         """
-        Delete Schedule and NetworkChaos, then wait until no child NetworkChaos of ours is left.
+        Delete Schedule and NetworkChaos, then wait until no chaos object of ours is left.
 
         Every command is checked: a failed delete or list (for example Forbidden) raises instead of passing as
-        "nothing left".
+        "nothing left". If Chaos Mesh can't finish deleting an object (its finalizer is stuck, for example after an
+        injection that failed), the finalizer is stripped, the way SREGym's noise manager does it. A delay left
+        behind on the pods still shows up in remove_delay(), which times product-catalog directly.
         """
         if not self._chaos_crds_installed():
             return
-        self.kubectl.exec_command_checked(
-            f"kubectl delete {self.CHAOS_RESOURCES} {self.CHAOS_NAME} -n {self.namespace} "
-            "--ignore-not-found --wait=true --timeout=60s",
-            timeout=90,
-        )
-        deadline = time.monotonic() + 60
-        names = ""
-        while time.monotonic() < deadline:
-            names = self.kubectl.exec_command_checked(
-                f"kubectl get networkchaos.chaos-mesh.org -n {self.namespace} -o name", timeout=30
+        try:
+            self.kubectl.exec_command_checked(
+                f"kubectl delete {self.CHAOS_RESOURCES} {self.CHAOS_NAME} -n {self.namespace} "
+                "--ignore-not-found --wait=true --timeout=60s",
+                timeout=90,
             )
-            if not any(f"/{self.CHAOS_NAME}" in line for line in names.splitlines()):
+        except RuntimeError as exc:
+            if "timed out waiting for the condition" not in str(exc):
+                raise
+            print(f"WARNING: Chaos Mesh did not finish deleting {self.CHAOS_NAME}, stripping its finalizers")
+            patch = shlex.quote(json.dumps({"metadata": {"finalizers": []}}))
+            for name in self._chaos_objects():
+                try:
+                    self.kubectl.exec_command_checked(
+                        f"kubectl patch {name} -n {self.namespace} --type merge -p {patch}", timeout=30
+                    )
+                except RuntimeError as patch_exc:
+                    if "NotFound" not in str(patch_exc):
+                        raise
+        deadline = time.monotonic() + 60
+        left: list[str] = []
+        while time.monotonic() < deadline:
+            left = self._chaos_objects()
+            if not left:
                 return
             time.sleep(2)
-        raise RuntimeError(f"NetworkChaos objects named {self.CHAOS_NAME}* still present after 60s: {names.split()}")
+        raise RuntimeError(f"chaos objects named {self.CHAOS_NAME}* still present after 60s: {left}")
+
+    def _chaos_objects(self) -> list[str]:
+        out = self.kubectl.exec_command_checked(
+            f"kubectl get {self.CHAOS_RESOURCES} -n {self.namespace} -o name", timeout=30
+        )
+        return [line for line in out.split() if f"/{self.CHAOS_NAME}" in line]
 
     def _namespace_exists(self) -> bool:
         out = self.kubectl.exec_command_checked(

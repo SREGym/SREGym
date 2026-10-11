@@ -36,7 +36,7 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
          valid answer is {P1, X}. Empty, stubbed, or made-up lists are rejected.
       4. Stale data has an age limit, and nothing gets around the impaired product-catalog. The buggy source
          states the policy: product data up to 2 minutes old is acceptable. The oracle now holds product-catalog's
-         answers for 5 minutes and adds P3. Nothing that new can come back through product-catalog in that time,
+         answers for 4 minutes and adds P3. Nothing that new can come back through product-catalog in that time,
          so any answer with P3 means recommendation reads the catalog some other way (an undelayed copy, the
          frontend, the database) and fails. #972 is a source-repair problem: the impairment stays. With light
          traffic flowing, the oracle waits until any data recommendation could have cached is more than 2 minutes
@@ -74,13 +74,15 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
     MAX_STALENESS_S = 120
     STALENESS_MARGIN_S = 20
     FRESHNESS_WINDOW_S = MAX_STALENESS_S + 10
-    # Longer than the whole staleness phase, so nothing added during it can come back through product-catalog.
-    HOLD_DELAY_S = 300
+    # Longer than the whole staleness phase (about 185-215 s from adding P3 to the last late call), so nothing added
+    # during it can come back through product-catalog. Chaos Mesh can't apply a 300 s delay here ("unable to set
+    # tcs"), 240 s works.
+    HOLD_DELAY_S = 240
     # Light traffic while waiting out the limit. It also catches an age measured from the last attempt instead
     # of the last success, which would never expire under traffic.
     TRAFFIC_INTERVAL_S = 10
     LATE_TARGETED_PROBES = 10
-    LATE_FRONTEND_PROBES = 20
+    LATE_FRONTEND_PROBES = 10
     # After product-catalog's answers were held for minutes, its TCP retransmissions back off (up to about 2 minutes
     # apart), so recommendation's existing connection can take that long to recover. The policy's 2 minutes for
     # picking up new data start after that.

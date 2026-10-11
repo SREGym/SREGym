@@ -97,6 +97,30 @@ def test_chaos_that_outlives_the_delete_is_reported(problem, monkeypatch):
         problem._delete_chaos()
 
 
+def test_chaos_stuck_on_its_finalizer_is_stripped_and_checked(problem, monkeypatch):
+    # Seen in CI: Chaos Mesh couldn't apply a delay, and the object then never finished deleting.
+    monkeypatch.setattr(problem_module, "time", Clock())
+    stuck = "networkchaos.chaos-mesh.org/catalog-latency\n"
+    listings = iter([stuck, stuck, ""])
+
+    def run(command, **kwargs):
+        if "get crd" in command:
+            return CRDS
+        if command.startswith("kubectl delete"):
+            raise RuntimeError("error: timed out waiting for the condition on networkchaos/catalog-latency")
+        if command.startswith("kubectl get"):
+            return next(listings)
+        return ""
+
+    problem.kubectl.exec_command_checked = Mock(side_effect=run)
+    problem._delete_chaos()
+    patches = [c.args[0] for c in problem.kubectl.exec_command_checked.call_args_list if "kubectl patch" in c.args[0]]
+    assert patches == [
+        "kubectl patch networkchaos.chaos-mesh.org/catalog-latency -n astronomy-shop --type merge "
+        '-p \'{"metadata": {"finalizers": []}}\''
+    ]
+
+
 def test_failed_chaos_cleanup_fails_recovery(problem):
     problem._delete_chaos = Mock(side_effect=RuntimeError("Error from server (Forbidden)"))
     with pytest.raises(RuntimeError, match="Forbidden"):
