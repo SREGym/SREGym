@@ -44,6 +44,12 @@ AUTH = Path.home() / ".codex" / "auth.json"
 LOCK = threading.RLock()
 
 THEMES = [
+    ("build", "A bad build of an application service reached some nodes under an existing mutable image tag "
+              "(a realistic CI or registry mistake): Deployment specs, ConfigMaps and data are unchanged, so "
+              "restarts and rollbacks do not help. You may build the modified image from the service's source or "
+              "binary (e.g. a short-lived privileged pod that imports it into a node's containerd under the "
+              "original tag); remove every helper afterwards. The reference mitigation must restore the known-good "
+              "build using only what the fixer can reach (e.g. a good copy still present on other nodes)."),
     ("intermittent", "Service degrades in recurring episodes driven by a plausible in-cluster mechanism (TTL "
                      "expiry, periodic jobs, rebalancing, connection recycling), so checks made between "
                      "episodes pass while the sustained SLO window still fails."),
@@ -79,7 +85,7 @@ THEMES = [
     ("metastable", "Retry, timeout or caching behaviour creates a self-sustaining degraded state."),
 ]
 # Themes that have beaten a fixer attempt get proportionally more sessions.
-THEME_WEIGHTS = {"partial": 3, "intermittent": 3, "compound-partial": 3}
+THEME_WEIGHTS = {"partial": 3, "intermittent": 3, "compound-partial": 3, "build": 4}
 APPS = ["hotel_reservation", "social_network"]
 
 
