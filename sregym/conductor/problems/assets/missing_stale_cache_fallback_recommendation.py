@@ -30,6 +30,8 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
+# Last product list fetched from product-catalog. The catalog changes rarely, so recommendations
+# built from product data up to 2 minutes old are acceptable.
 catalog_ids = []
 CATALOG_TIMEOUT_SECONDS = 1.0
 

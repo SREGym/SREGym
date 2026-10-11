@@ -31,11 +31,13 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
+# Last product list fetched from product-catalog. The catalog changes rarely, so recommendations
+# built from product data up to 2 minutes old are acceptable.
 catalog_ids = []
 catalog_fetched_at = 0.0
 CATALOG_TIMEOUT_SECONDS = 1.0
 # Serve the last good catalog for at most this long while product-catalog is failing.
-CATALOG_MAX_AGE_SECONDS = 300
+CATALOG_MAX_AGE_SECONDS = 120
 
 
 class RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):
