@@ -21,13 +21,14 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         "required_deployment_not_rolled_out": FailureClass.AMBIGUOUS,
         "target_container_missing": FailureClass.AGENT_ERROR,
         # A probe that exercises both a crafted and a normal request. Failing
-        # it means the edge is not serving correctly, but a single probe run is
-        # not strong enough to attribute on its own.
+        # it after every retry means the edge is not serving correctly, but a
+        # network probe is not strong enough to attribute on its own.
         "edge_filter_probe_failed": FailureClass.AMBIGUOUS,
         "service_has_no_ports": FailureClass.AMBIGUOUS,
     }
     rollout_timeout_seconds = 120
     probe_timeout_seconds = 60
+    probe_attempts = 5
     poll_interval_seconds = 2
     request_timeout_seconds = 3
 
@@ -128,7 +129,6 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         service_port = service_ports[0].port
         base_url = f"http://{service_name}.{namespace}.svc.cluster.local:{service_port}"
         crafted_url = f"{base_url}/?waf={self.problem.crafted_payload}"
-        pod_name = f"frontend-filter-check-{time.time_ns()}"[:63]
         request_timeout = self.request_timeout_seconds
         script = (
             "set -eu; "
@@ -138,6 +138,37 @@ class EdgeRequestFilterMitigationOracle(Oracle):
             "test -s /tmp/normal; "
             "echo NORMAL_OK"
         )
+
+        # The edge may have just restarted, so a single failed run can be a
+        # transient connection error. Retry the whole probe (both requests)
+        # within the shared budget; what counts as a pass is unchanged.
+        deadline = time.monotonic() + self.probe_timeout_seconds
+        try:
+            for attempt in range(1, self.probe_attempts + 1):
+                phase, logs = self._run_probe_pod(script, deadline)
+                print(logs.strip())
+                if phase == "Succeeded" and "CRAFTED_OK" in logs and "NORMAL_OK" in logs:
+                    return None
+                if attempt == self.probe_attempts or time.monotonic() >= deadline:
+                    break
+                print(f"[WARN] Edge filter probe attempt {attempt} failed (phase={phase}); retrying")
+                time.sleep(self.poll_interval_seconds)
+            return self.fail(
+                "edge_filter_probe_failed",
+                service=service_name,
+                phase=phase,
+                crafted_ok="CRAFTED_OK" in logs,
+                normal_ok="NORMAL_OK" in logs,
+                attempts=attempt,
+            )
+        except ApiException as exc:
+            print(f"[FAIL] Edge filter probe failed: {exc}")
+            return self.fail_from_exception(exc, service=service_name)
+
+    def _run_probe_pod(self, script: str, deadline: float) -> tuple[str, str]:
+        namespace = self.problem.namespace
+        core_v1 = self.problem.kubectl.core_v1_api
+        pod_name = f"frontend-filter-check-{time.time_ns()}"[:63]
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,
@@ -160,7 +191,6 @@ class EdgeRequestFilterMitigationOracle(Oracle):
 
         try:
             core_v1.create_namespaced_pod(namespace=namespace, body=pod)
-            deadline = time.monotonic() + self.probe_timeout_seconds
             phase = "Pending"
             while time.monotonic() < deadline:
                 current = core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
@@ -170,19 +200,7 @@ class EdgeRequestFilterMitigationOracle(Oracle):
                 time.sleep(self.poll_interval_seconds)
 
             logs = core_v1.read_namespaced_pod_log(name=pod_name, namespace=namespace)
-            print(logs.strip())
-            if phase == "Succeeded" and "CRAFTED_OK" in logs and "NORMAL_OK" in logs:
-                return None
-            return self.fail(
-                "edge_filter_probe_failed",
-                service=service_name,
-                phase=phase,
-                crafted_ok="CRAFTED_OK" in logs,
-                normal_ok="NORMAL_OK" in logs,
-            )
-        except ApiException as exc:
-            print(f"[FAIL] Edge filter probe failed: {exc}")
-            return self.fail_from_exception(exc, service=service_name)
+            return phase, logs
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(

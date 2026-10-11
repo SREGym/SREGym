@@ -1,0 +1,11 @@
+#!/bin/sh
+# Docker mounts the outer /sys read-only, and the kernel then lets a nested user
+# namespace mount sysfs only read-only ("mount too revealing"). Privileged pods
+# (CNI, chaos daemons, node exporters) request a read-write /sys, so rewrite that
+# one mount to read-only and pass everything else straight through to runc.
+bundle=""; prev=""
+for a in "$@"; do [ "$prev" = "--bundle" ] && bundle="$a"; prev="$a"; done
+if [ -n "$bundle" ] && [ -f "$bundle/config.json" ]; then
+    sed -i 's#\("destination":"/sys","type":"sysfs","source":"sysfs","options":\[[^]]*\)"rw"\]#\1"ro"]#' "$bundle/config.json"
+fi
+exec "$(dirname "$0")/runc.real" "$@"

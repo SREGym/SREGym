@@ -1,0 +1,54 @@
+schema_version = "1.4"
+
+# Setup and backend logs, copied out of the container for inspection. The
+# verifier prints the grade itself: it is written after artifacts are collected.
+artifacts = [
+    { source = "{{log_dir}}" },
+]
+
+[task]
+name = "sregym/{{task_name}}"
+description = "Diagnose and mitigate an injected fault in the {{app_name}} application on Kubernetes."
+authors = [{ name = "SREGym Team" }]
+keywords = {{keywords}}
+
+[metadata]
+sregym_problem_id = "{{problem_id}}"
+application = "{{app_name}}"
+category = "sre"
+tags = {{keywords}}
+
+# Runs as root in the task container, after the agent's processes are killed.
+# The problem's mitigation oracle grades in the backend, which holds the
+# pre-fault baseline captured during setup.
+[verifier]
+environment_mode = "shared"
+timeout_sec = {{grade_timeout_hook}}
+
+# An unprivileged user: it cannot read the problem, the grader or the cluster's
+# admin credentials, and reaches the cluster only through SREGym's API proxy.
+[agent]
+timeout_sec = {{agent_timeout}}
+user = "agent"
+
+# Only the oracle agent receives this. Export it before `harbor run -a oracle`.
+[solution]
+env = { {{oracle_secret_env}} = "${{{oracle_secret_env}}}" }
+
+[environment]
+# Covers building the task image, a thin layer over the SREGym image.
+build_timeout_sec = 1800.0
+# Sized for the four-node cluster and the application, all in this container.
+cpus = {{cpus}}
+memory_mb = {{memory_mb}}
+storage_mb = {{storage_mb}}
+
+# The first check starts the cluster and backend. Blocks until the problem is
+# deployed and its fault injected (each check waits up to {{ready_wait}}s), and
+# fails fast if setup failed.
+[environment.healthcheck]
+command = "sregym-ready {{ready_wait}}"
+timeout_sec = {{ready_timeout}}
+interval_sec = 5.0
+start_period_sec = 0.0
+retries = {{ready_retries}}

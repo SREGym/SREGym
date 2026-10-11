@@ -12,6 +12,7 @@ from kubernetes.client.rest import ApiException
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.paths import CACHE_DIR, TARGET_MICROSERVICES
+from sregym.service.apps import social_network
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 from sregym.service.rollout import deployment_rollout_complete
@@ -85,7 +86,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 "chart_path": TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork/",
                 "namespace": self.namespace,
                 "values_file": TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork/values.yaml",
-                "set_values": set_values,
+                "set_values": {**set_values, **social_network.chart_set_values()},
             }
 
             Helm.upgrade(**helm_args)
@@ -108,7 +109,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 "chart_path": TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork/",
                 "namespace": self.namespace,
                 "values_file": TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork/values.yaml",
-                "set_values": set_values,
+                "set_values": {**set_values, **social_network.chart_set_values()},
             }
 
             Helm.upgrade(**helm_args)
@@ -3200,6 +3201,7 @@ class VirtualizationFaultInjector(FaultInjector):
         )
         print(f"Rollout status for {service}: {result}")
         return result
+
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
             command = (

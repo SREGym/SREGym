@@ -4,6 +4,7 @@ import time
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.agent_visibility_policy import HIDDEN_LABELS, HIDDEN_NAMESPACES, is_hidden_resource
 
 # Prometheus endpoint used from *inside* the prometheus-server pod via
 # ``kubectl exec``.  We use localhost so the request doesn't depend on
@@ -16,6 +17,13 @@ _SUSTAINED_SILENCE_SECONDS = 120
 _POLL_INTERVAL_SECONDS = 10
 # Grace period before starting to check (let alerts resolve).
 _BUFFER_SECONDS = 30
+
+# Alert labels that name the Kubernetes object an alert is about, and the kinds
+# of object they name.
+_OBJECT_LABELS = ("pod", "deployment", "replicaset", "statefulset", "daemonset", "job_name")
+_OBJECT_KINDS = "pods,replicasets,deployments,statefulsets,daemonsets,jobs"
+# Length of the random suffix a ReplicaSet or Job adds to its pods' names.
+_POD_SUFFIX_LENGTH = 5
 
 
 class AlertOracle(Oracle):
@@ -48,12 +56,18 @@ class AlertOracle(Oracle):
         poll_interval_seconds=_POLL_INTERVAL_SECONDS,
         buffer_seconds=_BUFFER_SECONDS,
         exclude_alerts=None,
+        ignore_hidden_workloads=False,
     ):
         super().__init__(problem)
         self.sustained_silence_seconds = sustained_silence_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
         self.exclude_alerts = set(exclude_alerts or [])
+        # Ignore alerts about workloads the agent visibility policy hides, such
+        # as SREGym's load generators: the agent can neither see nor change
+        # them. Their alerts survive the baseline whenever the pod is replaced,
+        # because the new pod's name is not in it.
+        self.ignore_hidden_workloads = ignore_hidden_workloads
         # Alert *instances* (full label sets, not just alertname) already firing
         # before the fault was injected (environmental noise unrelated to the
         # agent). Populated by ``capture_baseline`` and ignored during
@@ -95,6 +109,7 @@ class AlertOracle(Oracle):
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
             raise RuntimeError("Failed to query Prometheus alerts") from exc
 
+        hidden = self._hidden_workload_names(namespace) if self.ignore_hidden_workloads else set()
         firing = []
         for alert in payload.get("data", {}).get("alerts", []):
             if alert.get("state") != "firing":
@@ -104,6 +119,8 @@ class AlertOracle(Oracle):
                 continue
             alertname = labels.get("alertname")
             if alertname in self.exclude_alerts:
+                continue
+            if hidden and self._is_about_hidden_workload(alert, hidden):
                 continue
             # Skip alerts that were already firing before fault injection. They
             # are environmental noise, not the agent's responsibility. Matched by
@@ -115,6 +132,34 @@ class AlertOracle(Oracle):
                 continue
             firing.append(alert)
         return firing
+
+    @staticmethod
+    def _hidden_workload_names(namespace: str) -> set[str]:
+        """Names of the pods and controllers in *namespace* hidden from the agent."""
+        cmd = ["kubectl", "get", _OBJECT_KINDS, "-n", namespace, "-o", "json"]
+        try:
+            items = json.loads(subprocess.check_output(cmd, text=True, timeout=30)).get("items", [])
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            print(f"⚠️  Cannot list the workloads hidden from the agent in {namespace}: {exc}")
+            return set()
+        return {
+            item["metadata"]["name"] for item in items if is_hidden_resource(item, HIDDEN_NAMESPACES, HIDDEN_LABELS)
+        }
+
+    @staticmethod
+    def _is_about_hidden_workload(alert: dict, hidden: set[str]) -> bool:
+        labels = alert.get("labels", {})
+        for key in _OBJECT_LABELS:
+            name = labels.get(key)
+            if not name:
+                continue
+            if name in hidden:
+                return True
+            # A pod that is already gone, named after its hidden ReplicaSet or Job.
+            owner, _, suffix = name.rpartition("-")
+            if key == "pod" and owner in hidden and len(suffix) == _POD_SUFFIX_LENGTH:
+                return True
+        return False
 
     @staticmethod
     def _alert_instance_key(alert: dict) -> tuple:
