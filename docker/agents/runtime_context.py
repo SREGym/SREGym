@@ -33,7 +33,7 @@ def session_url(url, session_id):
 
 def _public_session_transport(text: str) -> str:
     """Use the server's existing neutral query protocol in generated clients."""
-    if "sregym_ssid" not in text:
+    if "sregym_ssid" not in text and "x-session-id" not in text:
         return text
     tree = ast.parse(text)
     changed = False
@@ -48,7 +48,7 @@ def _public_session_transport(text: str) -> str:
             (
                 index
                 for index, key in enumerate(headers.value.keys)
-                if isinstance(key, ast.Constant) and key.value == "sregym_ssid"
+                if isinstance(key, ast.Constant) and key.value in {"sregym_ssid", "x-session-id"}
             ),
             None,
         )
@@ -65,7 +65,9 @@ def _public_session_transport(text: str) -> str:
         )
         changed = True
     if not changed:
-        raise ValueError("Unrecognized public session transport")
+        if "sregym_ssid" in text:
+            raise ValueError("Unrecognized public session transport")
+        return text
     insertion = 0
     if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Constant):
         insertion = 1
