@@ -365,7 +365,10 @@ class Pipeline:
             c["reason"] = "artifact lint: " + "; ".join(problems)
             return
         # Script text is only a hint; the validation replay scans the cluster for real leaks.
-        c["status"] = "validating"
+        # Nearly every candidate falls to the first fixer attempt, so that attempt (a probe) runs
+        # before the much longer validation replays, which only survivors need.
+        c["status"] = "probe"
+        c["panel"] = {"attempts": []}
 
     def run_validate(self, job: Job) -> None:
         c = self.cand(job.cid)
@@ -414,7 +417,7 @@ class Pipeline:
             c["reason"] = "gates failed: " + ", ".join(failed)
         else:
             c["status"] = "panel"
-            c["panel"] = {"attempts": []}
+            c.setdefault("panel", {"attempts": []})
 
     def run_panel(self, job: Job) -> None:
         c = self.cand(job.cid)
@@ -473,6 +476,15 @@ class Pipeline:
             if c.get("depth", 0) < self.o.max_hardening:
                 c["harden"] = "pending"
             return []
+        if c["status"] == "probe":
+            if valid:  # survived one fixer attempt: now establish validity
+                c["status"] = "validating"
+                return []
+            if len(attempts) >= 2:
+                c["status"] = "rejected"
+                c["reason"] = "fault not live in probe attempts"
+                return []
+            return [Job("panel", cid, 0, "probe", {"agent": "codex", "round": len(attempts) + 1})]
         jobs = []
         for agent in self.panel_agents():
             done = [a for a in attempts if a["agent"] == agent]
@@ -546,7 +558,7 @@ class Pipeline:
             busy = any(j.cid == cid for j in self.running.values())
             if c["status"] == "validating" and not busy:
                 jobs.append(Job("validate", cid, 1, "validate"))
-            elif c["status"] == "panel":
+            elif c["status"] in ("probe", "panel"):
                 jobs += self.panel_jobs(cid)
             elif c["status"] == "chaos" and not busy:
                 jobs.append(Job("chaos", cid, 2, "resume"))
@@ -588,7 +600,7 @@ class Pipeline:
                 if phase:
                     shutil.rmtree(self.work / "runs" / parts[0] / phase, ignore_errors=True)
                 c.pop("reason", None)
-                if parts[1] == "panel":
+                if parts[1] in ("probe", "panel"):
                     c.setdefault("panel", {"attempts": []})
                 self.log(f"REQUEUE {parts[0]} -> {parts[1]}")
         path.unlink()
@@ -602,7 +614,7 @@ class Pipeline:
                 free = self.o.slots - len(self.running)
                 jobs = self.pending_jobs() if free > 0 else []
                 in_flight = sum(1 for c in self.ledger["candidates"].values()
-                                if c["status"] in ("chaos", "validating", "panel"))
+                                if c["status"] in ("chaos", "probe", "validating", "panel"))
                 if free > 0 and not jobs and self.generating() and in_flight < self.o.slots + 1:
                     jobs = [self.new_candidate()]
                 for job in jobs[:max(free, 0)]:
