@@ -40,3 +40,10 @@ def test_escalation_is_on_unless_turned_off(monkeypatch):
     assert config.load().escalate is True
     monkeypatch.setenv("JEV_AGENT_ESCALATE", "0")
     assert config.load().escalate is False
+
+
+def test_review_is_on_unless_turned_off(monkeypatch):
+    monkeypatch.delenv("JEV_AGENT_REVIEW", raising=False)
+    assert config.load().review is True
+    monkeypatch.setenv("JEV_AGENT_REVIEW", "off")
+    assert config.load().review is False

@@ -444,8 +444,10 @@ def _investigate_and_report(trace, cfg, llm, asker, session: _Session, prefix: P
             ctx, asker, notebook, trace, llm, config=cfg, tools=tools_mod, overview=overview_mod, scores=scores
         )
         inv = investigator.run()
-        if llm is not None:
+        if llm is not None and cfg.review:
             _review_origin(trace, cfg, llm, ctx, notebook, inv)
+        elif llm is not None:
+            trace.record("report", "origin_review_skipped", reason="JEV_AGENT_REVIEW=0")
         with trace.timed("report", "build") as info:
             report = build_report(
                 asker,

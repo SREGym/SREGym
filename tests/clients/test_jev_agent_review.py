@@ -68,3 +68,29 @@ def test_review_adds_a_candidate_the_evidence_ranks_above_the_classifier_top():
     inv = SimpleNamespace(origin_probs=probs, origin="deployment/a")
     assert review.candidates(inv) == ["deployment/a", "deployment/b", "deployment/c", "deployment/d"]
     assert review.candidates(inv, ctx, nb)[-1] == "deployment/api"
+
+
+def test_driver_skips_the_review_when_turned_off(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from clients.jev_agent import driver
+    from clients.jev_diag.trace import DecisionTrace
+
+    reviewed = []
+    monkeypatch.setattr(
+        driver, "Investigator", lambda *a, **k: SimpleNamespace(run=lambda: _inv_result("deployment/a"))
+    )
+    monkeypatch.setattr(driver, "_review_origin", lambda *a, **k: reviewed.append(True))
+    monkeypatch.setattr(
+        driver, "build_report", lambda *a, **k: SimpleNamespace(source="llm", evidence=[], llm_error=None)
+    )
+    session = SimpleNamespace(ctx=None, notebook=None, scores=None, cache=SimpleNamespace(close=lambda: None))
+    for on in (True, False):
+        trace = DecisionTrace(tmp_path / f"trace_{on}.jsonl", problem_id="p")
+        cfg = SimpleNamespace(review=on, max_llm_calls=2)
+        driver._investigate_and_report(
+            trace, cfg, FakeLLM([]), SimpleNamespace(requests=[]), session, tmp_path / f"run_{on}", None, None
+        )
+        trace.close("ok")
+        skipped = [r for r in trace.records if r["event"] == "origin_review_skipped"]
+        assert (len(reviewed), len(skipped)) == ((1, 0) if on else (1, 1))

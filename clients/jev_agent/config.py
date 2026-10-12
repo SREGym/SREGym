@@ -28,6 +28,7 @@ ENV_VARS = (
     "JEV_AGENT_CRAFT",
     "JEV_AGENT_MAX_CRAFT",
     "JEV_AGENT_ESCALATE",
+    "JEV_AGENT_REVIEW",
     "JEV_AGENT_CHANGE_WINDOW_S",
     "JEV_AGENT_ENOUGH_P",
     "JEV_AGENT_ORIGIN_P",
@@ -79,6 +80,7 @@ class AgentConfig:
     # recorded runs the tools written mid-investigation rarely changed the answer and cost 30-90 s per run.
     max_craft: int = 0
     escalate: bool = True  # one LLM call for hypotheses when the investigation stalls (escalate.trigger)
+    review: bool = True  # one LLM call that reviews the origin before the report (driver._review_origin)
     cache_dir: str = ""  # explore results per environment (empty: no cache)
     change_window_s: float = 1800.0  # writes this long before the symptoms began are history, not changes
     # Stop rules (policy._should_stop): enough_evidence >= enough_p with the same origin >= origin_p on two
@@ -116,6 +118,7 @@ def load() -> AgentConfig:
         craft=os.environ.get("JEV_AGENT_CRAFT", "").strip().lower() in ("1", "true", "yes", "on"),
         max_craft=max(0, _int("JEV_AGENT_MAX_CRAFT", 0)),
         escalate=os.environ.get("JEV_AGENT_ESCALATE", "").strip().lower() not in ("0", "false", "no", "off"),
+        review=os.environ.get("JEV_AGENT_REVIEW", "").strip().lower() not in ("0", "false", "no", "off"),
         cache_dir=os.environ.get("JEV_AGENT_CACHE_DIR", "").strip(),
         change_window_s=max(60.0, _float("JEV_AGENT_CHANGE_WINDOW_S", 1800.0)),
         enough_p=_float("JEV_AGENT_ENOUGH_P", 0.7),
