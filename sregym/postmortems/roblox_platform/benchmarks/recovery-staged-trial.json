@@ -1,0 +1,116 @@
+{
+  "status": "clean source-blind staged trial; later cold-start and epoch-guard changes not yet included",
+  "run": "native-recovery-4",
+  "tier": "expanded",
+  "cache_pools": 24,
+  "nomad_allocations": 99,
+  "source_sha256": {
+    "topology.py": "ecc797d5e5bad5ca0baacceebc57dd48bb8dc63b186419d4748eb87c2c73eb5a",
+    "runner.py": "e63d195c7932b54f97a2355f20407eddd91f87024a538e99741a999d8f350744",
+    "grading.py": "ed69956c8242e3e7e6f75ed2eec229930c606dfbfc757b53293f05ad19a17eca",
+    "runtime/routing.py": "63dd73c22a7baaba2cd23f2f5c4ae39a4a237bad4e95f19276b4724f556c9023",
+    "runtime/cache_reconciler.py": "ebcac1f32d2036425872a807c9c484b3a032d81722c1d879b2bb17c67f9e3f90",
+    "runtime/application.py": "0ade2ac86832b95d9da7ec85c7116535d53ccc7e7e8ccc4866cff06f731afd6c"
+  },
+  "baselines": [
+    {
+      "valid": true,
+      "passed": false,
+      "successful": 220,
+      "attempted": 240,
+      "failed_checks": [
+        "workflows",
+        "workflow_latency"
+      ]
+    },
+    {
+      "valid": true,
+      "passed": true,
+      "successful": 240,
+      "attempted": 240,
+      "failed_checks": []
+    },
+    {
+      "valid": true,
+      "passed": true,
+      "successful": 240,
+      "attempted": 240,
+      "failed_checks": []
+    },
+    {
+      "valid": true,
+      "passed": true,
+      "successful": 240,
+      "attempted": 240,
+      "failed_checks": []
+    }
+  ],
+  "pre_agent_grades": [
+    {
+      "valid": true,
+      "passed": false,
+      "successful": 0,
+      "attempted": 240,
+      "failed_checks": [
+        "workflows",
+        "workflow_latency",
+        "cache_redeployment_complete"
+      ]
+    },
+    {
+      "valid": true,
+      "passed": false,
+      "successful": 0,
+      "attempted": 240,
+      "failed_checks": [
+        "workflows",
+        "workflow_latency",
+        "cache_redeployment_complete"
+      ]
+    }
+  ],
+  "pre_agent_cache_capacity": true,
+  "reconciler": {
+    "pools_stopped": 24,
+    "pools_ready": 24,
+    "first_failed_pool_wait_seconds": 130.225,
+    "full_rollout_seconds": 441.122
+  },
+  "agent": "Codex CLI 0.155.1",
+  "model": "gpt-6-astra",
+  "elapsed_seconds": 1075.75,
+  "timed_out": false,
+  "exit_code": 0,
+  "post_agent_grade": {
+    "valid": true,
+    "passed": true,
+    "successful": 240,
+    "attempted": 240,
+    "failed_checks": []
+  },
+  "post_agent_checks": {
+    "full_admission": true,
+    "workflows": true,
+    "correct_responses": true,
+    "identities_preserved": true,
+    "balances_conserved": true,
+    "unique_transactions": true,
+    "consistent_transactions": true,
+    "acknowledged_work_preserved": true,
+    "recovery_tail_processed": true,
+    "consul_quorum": true,
+    "workers_ready": true,
+    "service_capacity": true,
+    "placement_shards_live": true,
+    "workflow_latency": true,
+    "cache_redeployment_complete": true
+  },
+  "acknowledgments_checked": 7609,
+  "usage": {
+    "input_tokens": 4507234,
+    "cached_input_tokens": 4406400,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 14611,
+    "reasoning_output_tokens": 2222
+  }
+}

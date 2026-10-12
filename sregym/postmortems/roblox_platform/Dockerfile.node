@@ -1,0 +1,8 @@
+FROM docker:27.5.1-dind AS docker
+FROM python:3.12.11-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server curl jq procps iproute2 util-linux iptables kmod pigz xz-utils ca-certificates tini && rm -rf /var/lib/apt/lists/* && mkdir -p /run/sshd
+COPY --from=docker /usr/local/bin/ /usr/local/bin/
+COPY bin/consul bin/nomad bin/vault /usr/local/bin/
+COPY runtime/node.sh /usr/local/bin/platform-node
+RUN chmod +x /usr/local/bin/platform-node && ssh-keygen -A
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/platform-node"]

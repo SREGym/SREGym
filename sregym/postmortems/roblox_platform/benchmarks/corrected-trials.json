@@ -1,0 +1,189 @@
+{
+  "scenario": "latent-leader",
+  "tier": "expanded",
+  "agent": "Codex CLI 0.155.1",
+  "model": "gpt-6-astra",
+  "timeout_seconds": 3600,
+  "shared_source_sha256": {
+    "runner.py": "e424047c93b91b62a26052f12f82507eb2b9c4fdc02d0821d80ce19d093f4e62",
+    "runtime/application.py": "d70bc2170b95236ddbcd26293e2f87cdfbd2a1f78a6ec50b8309cd863faf2e99",
+    "runtime/routing.py": "63dd73c22a7baaba2cd23f2f5c4ae39a4a237bad4e95f19276b4724f556c9023",
+    "grading.py": "ed69956c8242e3e7e6f75ed2eec229930c606dfbfc757b53293f05ad19a17eca"
+  },
+  "trials": [
+    {
+      "run": "native-shards-3",
+      "elapsed_seconds": 873.792,
+      "timed_out": false,
+      "agent_exit_code": 0,
+      "pre_agent_grades": [
+        {
+          "valid": true,
+          "passed": false,
+          "successful": 0,
+          "attempted": 240,
+          "failed_checks": [
+            "workflows",
+            "workflow_latency"
+          ]
+        },
+        {
+          "valid": true,
+          "passed": false,
+          "successful": 0,
+          "attempted": 240,
+          "failed_checks": [
+            "workflows",
+            "workflow_latency"
+          ]
+        }
+      ],
+      "post_agent_grade": {
+        "valid": true,
+        "passed": true,
+        "successful": 240,
+        "attempted": 240,
+        "checks": {
+          "full_admission": true,
+          "workflows": true,
+          "correct_responses": true,
+          "identities_preserved": true,
+          "balances_conserved": true,
+          "unique_transactions": true,
+          "consistent_transactions": true,
+          "acknowledged_work_preserved": true,
+          "recovery_tail_processed": true,
+          "consul_quorum": true,
+          "workers_ready": true,
+          "service_capacity": true,
+          "placement_shards_live": true,
+          "workflow_latency": true
+        },
+        "acknowledgments_checked": 7557
+      },
+      "usage": {
+        "input_tokens": 3294844,
+        "cached_input_tokens": 3210880,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 13823,
+        "reasoning_output_tokens": 2372
+      }
+    },
+    {
+      "run": "native-shards-4",
+      "elapsed_seconds": 830.304,
+      "timed_out": false,
+      "agent_exit_code": 0,
+      "pre_agent_grades": [
+        {
+          "valid": true,
+          "passed": false,
+          "successful": 0,
+          "attempted": 240,
+          "failed_checks": [
+            "workflows",
+            "workflow_latency"
+          ]
+        },
+        {
+          "valid": true,
+          "passed": false,
+          "successful": 0,
+          "attempted": 240,
+          "failed_checks": [
+            "workflows",
+            "workflow_latency"
+          ]
+        }
+      ],
+      "post_agent_grade": {
+        "valid": true,
+        "passed": true,
+        "successful": 240,
+        "attempted": 240,
+        "checks": {
+          "full_admission": true,
+          "workflows": true,
+          "correct_responses": true,
+          "identities_preserved": true,
+          "balances_conserved": true,
+          "unique_transactions": true,
+          "consistent_transactions": true,
+          "acknowledged_work_preserved": true,
+          "recovery_tail_processed": true,
+          "consul_quorum": true,
+          "workers_ready": true,
+          "service_capacity": true,
+          "placement_shards_live": true,
+          "workflow_latency": true
+        },
+        "acknowledgments_checked": 7195
+      },
+      "usage": {
+        "input_tokens": 3543415,
+        "cached_input_tokens": 3446144,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 16926,
+        "reasoning_output_tokens": 3823
+      }
+    },
+    {
+      "run": "native-shards-5",
+      "elapsed_seconds": 701.125,
+      "timed_out": false,
+      "agent_exit_code": 0,
+      "pre_agent_grades": [
+        {
+          "valid": true,
+          "passed": false,
+          "successful": 0,
+          "attempted": 240,
+          "failed_checks": [
+            "workflows",
+            "workflow_latency"
+          ]
+        },
+        {
+          "valid": true,
+          "passed": false,
+          "successful": 0,
+          "attempted": 240,
+          "failed_checks": [
+            "workflows",
+            "workflow_latency"
+          ]
+        }
+      ],
+      "post_agent_grade": {
+        "valid": true,
+        "passed": true,
+        "successful": 240,
+        "attempted": 240,
+        "checks": {
+          "full_admission": true,
+          "workflows": true,
+          "correct_responses": true,
+          "identities_preserved": true,
+          "balances_conserved": true,
+          "unique_transactions": true,
+          "consistent_transactions": true,
+          "acknowledged_work_preserved": true,
+          "recovery_tail_processed": true,
+          "consul_quorum": true,
+          "workers_ready": true,
+          "service_capacity": true,
+          "placement_shards_live": true,
+          "workflow_latency": true
+        },
+        "acknowledgments_checked": 5706
+      },
+      "usage": {
+        "input_tokens": 2925996,
+        "cached_input_tokens": 2848256,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 12107,
+        "reasoning_output_tokens": 1564
+      }
+    }
+  ]
+}
