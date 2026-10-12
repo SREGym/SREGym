@@ -3,7 +3,8 @@
 Default backend (JEV_AGENT_LLM_BACKEND=codex): the Codex CLI on the ChatGPT subscription, run through
 llm_backend.judge_bridge._run_codex (the same invocation SREGym's subscription judge uses; API keys are stripped
 from its environment). The agent image installs the CLI via install-codex.sh and the container gets a copy of
-~/.codex/auth.json. Token usage is not reported by this path.
+~/.codex/auth.json. Token usage comes from the `turn.completed` events of `codex exec --json`; its input count
+includes the Codex CLI's own instructions (about 16K tokens per call).
 
 Alternative backend (JEV_AGENT_LLM_BACKEND=api): OpenAI Responses API over `requests`, described below.
 
@@ -28,6 +29,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -233,16 +235,27 @@ class CodexLLMClient:
             raise ValueError("codex CLI not found (the agent image installs it via install-codex.sh)")
         self.timeout = timeout
         self.calls = 0
-        self.input_tokens = 0  # not reported by codex exec
+        self.input_tokens = 0
         self.output_tokens = 0
+        self.cached_input_tokens = 0
+        self.reasoning_output_tokens = 0
         self.log: list[dict] = []
+        self._lock = threading.Lock()  # the early explore call can overlap the main thread's calls
         effort = os.environ.get(EFFORT_ENV, DEFAULT_EFFORT).strip().lower()
         self._effort = None if effort in ("", "none") else effort
 
     @property
     def tokens(self) -> int:
-        """Tokens used so far (codex exec does not report usage here, so 0)."""
-        return 0
+        """Input plus output tokens used so far."""
+        return self.input_tokens + self.output_tokens
+
+    def _add_usage(self, usage: dict[str, int]) -> None:
+        """Add one call's `codex exec` token counts to the running totals."""
+        with self._lock:
+            self.input_tokens += usage.get("input_tokens", 0)
+            self.output_tokens += usage.get("output_tokens", 0)
+            self.cached_input_tokens += usage.get("cached_input_tokens", 0)
+            self.reasoning_output_tokens += usage.get("reasoning_output_tokens", 0)
 
     def complete(
         self, system: str, user: str, *, json_mode: bool = False, max_output_tokens: int = 2000
@@ -256,19 +269,24 @@ class CodexLLMClient:
             prompt += "\n\nReply with one JSON object only, no prose and no code fences."
         started = time.monotonic()
         self.calls += 1
+        usage: dict[str, int] = {}
         try:
             with tempfile.TemporaryDirectory(prefix="jev-agent-codex-") as tmp:
-                text = _run_codex(prompt, self.model, Path(tmp), os.environ.copy(), self._effort)
+                text = _run_codex(prompt, self.model, Path(tmp), os.environ.copy(), self._effort, usage=usage)
         except Exception as exc:
-            self.log.append({"error": str(exc)[:500], "latency_ms": int((time.monotonic() - started) * 1000)})
+            self._add_usage(usage)
+            self.log.append(
+                {"usage": usage, "error": str(exc)[:500], "latency_ms": int((time.monotonic() - started) * 1000)}
+            )
             raise
-        out = LLMResponse(text=text, model=self.model, latency_ms=int((time.monotonic() - started) * 1000))
+        self._add_usage(usage)
+        out = LLMResponse(text=text, usage=usage, model=self.model, latency_ms=int((time.monotonic() - started) * 1000))
         if not out.text.strip():
-            self.log.append({"latency_ms": out.latency_ms, "error": "empty answer"})
+            self.log.append({"usage": usage, "latency_ms": out.latency_ms, "error": "empty answer"})
             raise RuntimeError("codex returned no text")
         if json_mode:
             out.data = parse_json_object(out.text)
-        self.log.append({"latency_ms": out.latency_ms, "model": out.model, "backend": "codex"})
+        self.log.append({"usage": usage, "latency_ms": out.latency_ms, "model": out.model, "backend": "codex"})
         return out
 
     def complete_json(self, system: str, user: str, *, max_output_tokens: int = 3000) -> LLMResponse:

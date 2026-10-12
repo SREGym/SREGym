@@ -115,7 +115,15 @@ def _run_cursor(prompt: str, model: str, cwd: Path, env: dict[str, str], effort:
     )
 
 
-def _run_codex(prompt: str, model: str, cwd: Path, env: dict[str, str], effort: str | None = None) -> str:
+def _run_codex(
+    prompt: str,
+    model: str,
+    cwd: Path,
+    env: dict[str, str],
+    effort: str | None = None,
+    usage: dict[str, int] | None = None,
+) -> str:
+    """Run `codex exec` once and return its last message; token counts from `turn.completed` are added to `usage`."""
     for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
         env.pop(key, None)
     response = cwd / "response.txt"
@@ -154,6 +162,10 @@ def _run_codex(prompt: str, model: str, cwd: Path, env: dict[str, str], effort: 
         event = json.loads(line)
         if event.get("type") == "turn.failed":
             raise RuntimeError(f"Codex reported an error: {line[:2000]}")
+        if event.get("type") == "turn.completed" and usage is not None:
+            for key, value in (event.get("usage") or {}).items():
+                if isinstance(value, int):
+                    usage[key] = usage.get(key, 0) + value
     return response.read_text()
 
 

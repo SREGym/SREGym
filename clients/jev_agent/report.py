@@ -554,6 +554,8 @@ def results_payload(inv: InvestigationResult, report: Report, asker: Any, llm: A
         "llm_tokens": llm_in + llm_out,
         "llm_input_tokens": llm_in,
         "llm_output_tokens": llm_out,
+        "llm_cached_input_tokens": getattr(llm, "cached_input_tokens", None) if llm is not None else None,
+        "llm_reasoning_output_tokens": getattr(llm, "reasoning_output_tokens", None) if llm is not None else None,
         "report_source": report.source,
         "report_llm_error": report.llm_error,
         "evidence": report.evidence,

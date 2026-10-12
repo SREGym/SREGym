@@ -875,6 +875,24 @@ def test_make_llm_disabled_without_model_or_key(monkeypatch):
     assert isinstance(llm_mod.make_llm("gpt-6-luna"), llm_mod.CodexLLMClient)
 
 
+def test_codex_client_counts_tokens(monkeypatch):
+    from llm_backend import judge_bridge
+
+    def fake_run_codex(prompt, model, cwd, env, effort=None, usage=None):
+        usage.update(input_tokens=16000, cached_input_tokens=9000, output_tokens=300, reasoning_output_tokens=200)
+        return '{"ok": true}'
+
+    monkeypatch.setattr(judge_bridge, "_run_codex", fake_run_codex)
+    monkeypatch.setattr(llm_mod.shutil, "which", lambda name: "/usr/bin/codex")
+    client = llm_mod.CodexLLMClient("gpt-6-sol")
+    out = client.complete_json("system", "user")
+    client.complete("system", "user")
+    assert out.data == {"ok": True} and out.usage["input_tokens"] == 16000
+    assert (client.input_tokens, client.output_tokens, client.tokens) == (32000, 600, 32600)
+    assert (client.cached_input_tokens, client.reasoning_output_tokens) == (18000, 400)
+    assert client.log[0]["usage"]["output_tokens"] == 300
+
+
 def test_results_payload_has_run_fields():
     from clients.jev_agent.report import results_payload
 
