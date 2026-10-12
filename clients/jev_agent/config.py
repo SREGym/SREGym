@@ -74,7 +74,9 @@ class AgentConfig:
     start_delay: float = 120.0
     overview_budget: int = 4000
     craft: bool = False  # LLM-crafted read-only tools: explore before the investigation + a CRAFT menu option
-    max_craft: int = 2  # CRAFT choices per investigation (each one LLM call, plus one retry when rejected)
+    # CRAFT choices per investigation (each one LLM call, plus one retry when rejected). Off by default: on the
+    # recorded runs the tools written mid-investigation rarely changed the answer and cost 30-90 s per run.
+    max_craft: int = 0
     cache_dir: str = ""  # explore results per environment (empty: no cache)
     change_window_s: float = 1800.0  # writes this long before the symptoms began are history, not changes
     # Stop rules (policy._should_stop): enough_evidence >= enough_p with the same origin >= origin_p on two
@@ -110,7 +112,7 @@ def load() -> AgentConfig:
         state_budget=max(2000, _int("JEV_AGENT_STATE_BUDGET", 24000)),
         start_delay=max(0.0, _float("JEV_AGENT_START_DELAY", 120.0)),
         craft=os.environ.get("JEV_AGENT_CRAFT", "").strip().lower() in ("1", "true", "yes", "on"),
-        max_craft=max(0, _int("JEV_AGENT_MAX_CRAFT", 2)),
+        max_craft=max(0, _int("JEV_AGENT_MAX_CRAFT", 0)),
         cache_dir=os.environ.get("JEV_AGENT_CACHE_DIR", "").strip(),
         change_window_s=max(60.0, _float("JEV_AGENT_CHANGE_WINDOW_S", 1800.0)),
         enough_p=_float("JEV_AGENT_ENOUGH_P", 0.7),
