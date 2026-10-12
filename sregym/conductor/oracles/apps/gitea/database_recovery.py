@@ -3,8 +3,8 @@
 import time
 from collections import Counter
 
+from sregym.conductor.oracles.apps.gitea.application import GiteaApplicationOracle
 from sregym.conductor.oracles.failure import FailureClass
-from sregym.conductor.oracles.gitea.application import GiteaApplicationOracle
 from sregym.service.apps.gitea.recovery import ARCHIVE
 
 

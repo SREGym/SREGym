@@ -11,8 +11,8 @@ undo a manual scale-up.
 
 import time
 
+from sregym.conductor.oracles.apps.mattermost.cascade_recovery import MattermostCascadeOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.mattermost.cascade_recovery import MattermostCascadeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.mattermost.cascade import MattermostCascadeApplication
 from sregym.utils.decorators import mark_fault_injected

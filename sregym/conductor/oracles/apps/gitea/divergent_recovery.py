@@ -2,9 +2,9 @@
 
 import time
 
+from sregym.conductor.oracles.apps.gitea.application import GiteaApplicationOracle
+from sregym.conductor.oracles.apps.gitlab.divergent_recovery import divergence_report
 from sregym.conductor.oracles.failure import FailureClass
-from sregym.conductor.oracles.gitea.application import GiteaApplicationOracle
-from sregym.conductor.oracles.gitlab.divergent_recovery import divergence_report
 from sregym.service.apps.gitea.failover import EAST_SNAPSHOT, SHARED_SNAPSHOT
 
 

@@ -7,7 +7,7 @@ coordination state and gradually admitting traffic.
 
 import time
 
-from sregym.conductor.oracles.coordination.recovery import CoordinationRecoveryOracle
+from sregym.conductor.oracles.apps.coordination.recovery import CoordinationRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.coordination.application import RECOMMENDED_AGENT_TIMEOUT, CoordinationApplication

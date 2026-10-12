@@ -94,13 +94,13 @@ def test_gitlab_restore_resets_partitioned_schemas_with_writers_stopped(variant)
 def test_gitlab_variants_select_final_oracles_once(monkeypatch, problem_name):
     import importlib
 
-    import sregym.conductor.problems.gitlab.database_deletion as database_deletion
-    from sregym.conductor.oracles.gitlab.notification_recovery import GitLabNotificationRecoveryOracle
+    import sregym.conductor.problems.apps.gitlab.database_deletion as database_deletion
+    from sregym.conductor.oracles.apps.gitlab.notification_recovery import GitLabNotificationRecoveryOracle
 
     diagnosis = Mock()
     monkeypatch.setattr(database_deletion, "LLMAsAJudgeOracle", diagnosis)
     module, name = problem_name.rsplit(".", 1)
-    problem = getattr(importlib.import_module("sregym.conductor.problems." + module), name)()
+    problem = getattr(importlib.import_module("sregym.conductor.problems.apps." + module), name)()
 
     diagnosis.assert_called_once_with(problem, problem.root_cause)
     assert problem.root_cause.endswith(problem.root_cause_description)

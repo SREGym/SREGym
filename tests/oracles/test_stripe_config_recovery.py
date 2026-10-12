@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.stripe.config_recovery import StripeConfigRecoveryOracle, compare_state
+from sregym.conductor.oracles.apps.stripe.config_recovery import StripeConfigRecoveryOracle, compare_state
 from sregym.service.apps.stripe.configuration import StripeConfigApplication, _configuration_safety
 from sregym.service.apps.stripe.runtime import feature_edge as edge
 

@@ -13,8 +13,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from sregym.conductor.oracles.apps.mattermost.cascade_recovery import MattermostCascadeOracle, latency_budget
 from sregym.conductor.oracles.failure import FailureClass
-from sregym.conductor.oracles.mattermost.cascade_recovery import MattermostCascadeOracle, latency_budget
 from sregym.conductor.oracles.postgres_application import PostgresApplicationOracle
 from sregym.service.apps.mattermost.cascade import MattermostCascadeApplication
 from sregym.service.apps.mattermost.runtime.capacity_scaler import (
@@ -183,7 +183,7 @@ def capacity_oracle(monkeypatch, samples, *, floor=3, interval=15):
     """
     from types import SimpleNamespace
 
-    from sregym.conductor.oracles.mattermost import cascade_recovery as module
+    from sregym.conductor.oracles.apps.mattermost import cascade_recovery as module
 
     now = [0.0]
     monkeypatch.setattr(module.time, "monotonic", lambda: now[0])

@@ -32,9 +32,9 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
-from sregym.conductor.problems.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
-from sregym.conductor.problems.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
-from sregym.conductor.problems.gitlab.notification_unannounced import (
+from sregym.conductor.problems.apps.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
+from sregym.conductor.problems.apps.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
+from sregym.conductor.problems.apps.gitlab.notification_unannounced import (
     GitLabNotificationUnannouncedAmbiguityProblem,
 )
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -99,10 +99,10 @@ from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop im
     StaleHostAliasesDNSPoisoningAstronomyShop,
 )
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
-from sregym.conductor.problems.stripe.feature_config import StripeFeatureConfigProblem
+from sregym.conductor.problems.apps.stripe.feature_config import StripeFeatureConfigProblem
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
-from sregym.conductor.problems.train_ticket.f17 import TrainTicketF17
-from sregym.conductor.problems.train_ticket.f22 import TrainTicketF22
+from sregym.conductor.problems.apps.train_ticket.f17 import TrainTicketF17
+from sregym.conductor.problems.apps.train_ticket.f22 import TrainTicketF22
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption

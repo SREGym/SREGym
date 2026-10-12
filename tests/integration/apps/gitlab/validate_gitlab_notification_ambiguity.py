@@ -4,8 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from sregym.conductor.oracles.gitlab.notification_recovery import notification_report
-from sregym.conductor.problems.gitlab.notification_ambiguity import GitLabNotificationAmbiguityProblem
+from sregym.conductor.oracles.apps.gitlab.notification_recovery import notification_report
+from sregym.conductor.problems.apps.gitlab.notification_ambiguity import GitLabNotificationAmbiguityProblem
 from tests.integration.apps.gitlab.validate_gitlab_notifications import validate
 
 

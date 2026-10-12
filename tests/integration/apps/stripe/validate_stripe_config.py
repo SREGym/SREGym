@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from sregym.conductor.problems.stripe.feature_config import StripeFeatureConfigProblem
+from sregym.conductor.problems.apps.stripe.feature_config import StripeFeatureConfigProblem
 
 
 def validate(tier):

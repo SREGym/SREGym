@@ -6,13 +6,13 @@ that down: failing back and doing nothing each fail, for their own reason.
 
 import pytest
 
-from sregym.conductor.oracles.failure import FailureClass
-from sregym.conductor.oracles.gitlab.divergent_recovery import (
+from sregym.conductor.oracles.apps.gitlab.divergent_recovery import (
     GitLabDivergentRecoveryOracle,
     both_histories_retained,
     content_key,
     divergence_report,
 )
+from sregym.conductor.oracles.failure import FailureClass
 
 PROJECT = 7
 

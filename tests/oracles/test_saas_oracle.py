@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.gitea.application import GiteaApplicationOracle
+from sregym.conductor.oracles.apps.gitea.application import GiteaApplicationOracle
 from sregym.conductor.oracles.postgres_application import PostgresApplicationOracle
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
 

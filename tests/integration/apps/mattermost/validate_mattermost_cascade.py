@@ -12,7 +12,10 @@ import json
 import time
 from pathlib import Path
 
-from sregym.conductor.problems.mattermost.capacity_cascade import UPSTREAM_DELAY_MS, MattermostCapacityCascadeProblem
+from sregym.conductor.problems.apps.mattermost.capacity_cascade import (
+    UPSTREAM_DELAY_MS,
+    MattermostCapacityCascadeProblem,
+)
 
 
 def validate(tier):

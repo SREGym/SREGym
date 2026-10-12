@@ -11,7 +11,7 @@ import json
 import secrets
 import time
 
-from sregym.conductor.oracles.gitlab.divergent_recovery import GitLabDivergentRecoveryOracle
+from sregym.conductor.oracles.apps.gitlab.divergent_recovery import GitLabDivergentRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.gitlab.failover import (

@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from sregym.conductor.problems.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
+from sregym.conductor.problems.apps.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
 from tests.integration.apps.gitlab.validate_gitlab_notification_intermittent import (
     inspect_fixture as inspect_intermittent,
 )

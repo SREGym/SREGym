@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.gitea.database_recovery import (
+from sregym.conductor.oracles.apps.gitea.database_recovery import (
     GiteaDatabaseRecoveryOracle,
     compare_records,
     records_intact,
@@ -99,7 +99,7 @@ def test_failed_database_command_is_not_automatically_counted_as_model_failure(s
 
 
 def test_asynchronous_replica_gets_a_bounded_chance_to_catch_up(snapshot, monkeypatch):
-    from sregym.conductor.oracles.gitea import database_recovery as module
+    from sregym.conductor.oracles.apps.gitea import database_recovery as module
 
     app = Mock()
     app.cluster.return_value = {"status": {"currentPrimary": "db-1"}}

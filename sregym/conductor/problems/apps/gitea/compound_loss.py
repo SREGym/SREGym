@@ -6,7 +6,7 @@ The repository snapshot remains on the data volume for independent recovery.
 
 import json
 
-from sregym.conductor.problems.gitea.database_deletion import GiteaDatabaseDeletionProblem
+from sregym.conductor.problems.apps.gitea.database_deletion import GiteaDatabaseDeletionProblem
 from sregym.service.apps.gitea.application import FIXTURES
 from sregym.utils.decorators import mark_fault_injected
 

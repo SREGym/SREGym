@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from sregym.conductor.problems.gitlab.notification_expanded import GitLabNotificationExpandedProblem
+from sregym.conductor.problems.apps.gitlab.notification_expanded import GitLabNotificationExpandedProblem
 from tests.integration.apps.gitlab.validate_gitlab_notification_delayed_audit import inspect_fixture as inspect_delayed
 from tests.integration.apps.gitlab.validate_gitlab_notification_intermittent import (
     select_negative_intent as select_intermittent,

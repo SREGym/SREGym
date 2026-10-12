@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from sregym.conductor.problems.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
+from sregym.conductor.problems.apps.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
 from tests.integration.apps.gitlab.validate_gitlab_notification_ambiguity import inspect_fixture as inspect_ambiguity
 from tests.integration.apps.gitlab.validate_gitlab_notifications import validate
 

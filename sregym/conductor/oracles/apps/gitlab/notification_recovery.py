@@ -4,8 +4,8 @@ import secrets
 import time
 from collections import Counter
 
+from sregym.conductor.oracles.apps.gitlab.database_recovery import GitLabDatabaseRecoveryOracle
 from sregym.conductor.oracles.failure import FailureClass
-from sregym.conductor.oracles.gitlab.database_recovery import GitLabDatabaseRecoveryOracle
 from sregym.service.apps.gitlab.notifications import NOTIFICATION_REASON
 
 

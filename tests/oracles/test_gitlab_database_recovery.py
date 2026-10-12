@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.gitlab.database_recovery import (
+from sregym.conductor.oracles.apps.gitlab.database_recovery import (
     GitLabDatabaseRecoveryOracle,
     compare_records,
     records_intact,

@@ -10,8 +10,8 @@ import subprocess
 import time
 from pathlib import Path
 
-from sregym.conductor.oracles.gitlab.notification_recovery import notification_report
-from sregym.conductor.problems.gitlab.notification_recovery import GitLabNotificationRecoveryProblem
+from sregym.conductor.oracles.apps.gitlab.notification_recovery import notification_report
+from sregym.conductor.problems.apps.gitlab.notification_recovery import GitLabNotificationRecoveryProblem
 from sregym.service.apps.gitlab.notifications import NOTIFICATION_REASON
 
 

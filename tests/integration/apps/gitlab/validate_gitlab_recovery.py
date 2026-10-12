@@ -9,7 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from sregym.conductor.problems.gitlab.database_deletion import GitLabDatabaseDeletionProblem
+from sregym.conductor.problems.apps.gitlab.database_deletion import GitLabDatabaseDeletionProblem
 
 
 def validate(tier):

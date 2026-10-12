@@ -7,8 +7,8 @@ acknowledged write is missing, and the problem would look impossible rather than
 broken.
 """
 
-from sregym.conductor.oracles.gitea.divergent_recovery import GiteaDivergentRecoveryOracle, gitea_keys
-from sregym.conductor.oracles.gitlab.divergent_recovery import divergence_report
+from sregym.conductor.oracles.apps.gitea.divergent_recovery import GiteaDivergentRecoveryOracle, gitea_keys
+from sregym.conductor.oracles.apps.gitlab.divergent_recovery import divergence_report
 
 REPOSITORIES = {"octo/alpha": 1, "octo/beta": 2}
 
@@ -105,9 +105,9 @@ def test_compound_loss_declares_a_silent_second_fault():
     recovery that stops at the database is a named failure. This pins that the
     variant actually reaches it rather than inheriting a grader that ignores git.
     """
+    from sregym.conductor.oracles.apps.gitea.database_recovery import GiteaDatabaseRecoveryOracle
     from sregym.conductor.oracles.failure import FailureClass
-    from sregym.conductor.oracles.gitea.database_recovery import GiteaDatabaseRecoveryOracle
-    from sregym.conductor.problems.gitea.compound_loss import GiteaCompoundLossProblem
+    from sregym.conductor.problems.apps.gitea.compound_loss import GiteaCompoundLossProblem
 
     classes = GiteaDatabaseRecoveryOracle._failure_classes()
     assert classes["acknowledged_git_data_changed"] is FailureClass.AGENT_ERROR
@@ -147,7 +147,7 @@ def test_the_oracle_only_asks_its_application_for_methods_that_exist():
     import ast
     import inspect
 
-    from sregym.conductor.oracles.gitea.divergent_recovery import GiteaDivergentRecoveryOracle
+    from sregym.conductor.oracles.apps.gitea.divergent_recovery import GiteaDivergentRecoveryOracle
     from sregym.service.apps.gitea.failover import GiteaFailoverApplication
 
     wanted = set()

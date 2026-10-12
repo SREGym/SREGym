@@ -1,6 +1,6 @@
 """Recovery must wait for independent delivery evidence to become complete."""
 
-from sregym.conductor.problems.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
+from sregym.conductor.problems.apps.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
 from sregym.service.apps.gitlab.notifications import (
     GitLabNotificationDelayedAuditApplication as DelayedAuditApplication,
 )

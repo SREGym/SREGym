@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
+from sregym.conductor.oracles.apps.gitea.application import GiteaApplicationOracle
 from sregym.conductor.oracles.deathstarbench import ScaledServiceEndpointOracle
-from sregym.conductor.oracles.gitea.application import GiteaApplicationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.postgres_application import PostgresApplicationOracle
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle

@@ -1,6 +1,6 @@
 """Coordination collapse with delayed compaction or admission acknowledgements."""
 
-from sregym.conductor.problems.coordination.collapse import CoordinationCollapseProblem
+from sregym.conductor.problems.apps.coordination.collapse import CoordinationCollapseProblem
 from sregym.service.apps.coordination.lagging_acknowledgement import (
     CoordinationLaggingAckApplication,
     CoordinationLaggingAdmissionApplication,

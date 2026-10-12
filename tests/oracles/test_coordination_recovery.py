@@ -7,7 +7,7 @@ left behind — plus the durability hold that stops a mid-flight state passing.
 
 import pytest
 
-from sregym.conductor.oracles.coordination.recovery import CoordinationRecoveryOracle, loss_budget
+from sregym.conductor.oracles.apps.coordination.recovery import CoordinationRecoveryOracle, loss_budget
 from sregym.conductor.oracles.failure import FailureClass
 
 RECOVERED = {

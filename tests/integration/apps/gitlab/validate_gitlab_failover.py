@@ -12,7 +12,7 @@ import json
 import time
 from pathlib import Path
 
-from sregym.conductor.problems.gitlab.regional_failover import GitLabRegionalFailoverProblem
+from sregym.conductor.problems.apps.gitlab.regional_failover import GitLabRegionalFailoverProblem
 from sregym.service.apps.gitlab.failover import EAST_SNAPSHOT, PARTITION_JOURNAL, SHARED_SNAPSHOT
 
 

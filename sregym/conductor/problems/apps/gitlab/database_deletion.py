@@ -4,7 +4,7 @@ import json
 import secrets
 import time
 
-from sregym.conductor.oracles.gitlab.database_recovery import GitLabDatabaseRecoveryOracle
+from sregym.conductor.oracles.apps.gitlab.database_recovery import GitLabDatabaseRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.gitlab.recovery import ARCHIVE, JOURNAL, GitLabRecoveryApplication

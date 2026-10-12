@@ -8,8 +8,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from sregym.conductor.oracles.gitea.application import GiteaApplicationOracle
-from sregym.conductor.problems.gitea.database_deletion import GiteaDatabaseDeletionProblem
+from sregym.conductor.oracles.apps.gitea.application import GiteaApplicationOracle
+from sregym.conductor.problems.apps.gitea.database_deletion import GiteaDatabaseDeletionProblem
 
 
 def validate(tier):

@@ -1,7 +1,7 @@
 """An ongoing SMTP impairment makes notification recovery itself stateful."""
 
-from sregym.conductor.oracles.gitlab.notification_recovery import notification_report
-from sregym.conductor.problems.gitlab.notification_ambiguity import GitLabNotificationAmbiguityProblem
+from sregym.conductor.oracles.apps.gitlab.notification_recovery import notification_report
+from sregym.conductor.problems.apps.gitlab.notification_ambiguity import GitLabNotificationAmbiguityProblem
 from sregym.service.apps.gitlab.notifications import (
     GitLabNotificationIntermittentApplication as IntermittentApplication,
 )

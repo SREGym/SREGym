@@ -4,7 +4,7 @@ import json
 import secrets
 import time
 
-from sregym.conductor.oracles.gitea.database_recovery import GiteaDatabaseRecoveryOracle
+from sregym.conductor.oracles.apps.gitea.database_recovery import GiteaDatabaseRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.gitea.application import FIXTURES

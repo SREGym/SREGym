@@ -4,8 +4,8 @@ import json
 import secrets
 import time
 
+from sregym.conductor.oracles.apps.stripe.config_recovery import StripeConfigRecoveryOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.stripe.config_recovery import StripeConfigRecoveryOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.stripe.configuration import COUNTS, StripeConfigApplication
 from sregym.utils.decorators import mark_fault_injected

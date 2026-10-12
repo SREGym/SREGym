@@ -16,7 +16,7 @@ import json
 import time
 from pathlib import Path
 
-from sregym.conductor.problems.coordination.collapse import CoordinationCollapseProblem
+from sregym.conductor.problems.apps.coordination.collapse import CoordinationCollapseProblem
 from sregym.service.apps.coordination.runtime import coordination_store
 
 

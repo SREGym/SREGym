@@ -1,6 +1,6 @@
 """A larger multi-tenant recovery tail under the same fault and outcome contract."""
 
-from sregym.conductor.problems.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
+from sregym.conductor.problems.apps.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
 from sregym.service.apps.gitlab.notifications import GitLabNotificationExpandedApplication as ExpandedApplication
 
 

@@ -7,12 +7,12 @@ must not replay Redis jobs against different objects that reuse internal IDs.
 import json
 import time
 
-from sregym.conductor.oracles.gitlab.database_recovery import GitLabDatabaseRecoveryOracle
-from sregym.conductor.oracles.gitlab.notification_recovery import (
+from sregym.conductor.oracles.apps.gitlab.database_recovery import GitLabDatabaseRecoveryOracle
+from sregym.conductor.oracles.apps.gitlab.notification_recovery import (
     GitLabNotificationRecoveryOracle,
     notification_report,
 )
-from sregym.conductor.problems.gitlab.database_deletion import GitLabDatabaseDeletionProblem
+from sregym.conductor.problems.apps.gitlab.database_deletion import GitLabDatabaseDeletionProblem
 from sregym.service.apps.gitlab.notifications import (
     NOTIFICATION_JOURNAL,
     NOTIFICATION_REASON,

@@ -4,10 +4,10 @@ from unittest.mock import Mock
 import pytest
 from kubernetes import client
 
-from sregym.conductor.oracles.train_ticket import mitigation as train_ticket
-from sregym.conductor.oracles.train_ticket.mitigation import TrainTicketMitigationOracle
+from sregym.conductor.oracles.apps.train_ticket import mitigation as train_ticket
+from sregym.conductor.oracles.apps.train_ticket.mitigation import TrainTicketMitigationOracle
 from sregym.conductor.oracles.workload import WorkloadOracle
-from sregym.conductor.problems.train_ticket import f22 as train_ticket_f22
+from sregym.conductor.problems.apps.train_ticket import f22 as train_ticket_f22
 
 
 @pytest.mark.parametrize(

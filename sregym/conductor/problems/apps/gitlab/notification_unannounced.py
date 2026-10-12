@@ -5,8 +5,8 @@ The fault mechanisms and recovery checks match their announced variants.
 
 from functools import partial
 
-from sregym.conductor.problems.gitlab.notification_ambiguity import GitLabNotificationAmbiguityProblem
-from sregym.conductor.problems.gitlab.notification_recovery import GitLabNotificationRecoveryProblem
+from sregym.conductor.problems.apps.gitlab.notification_ambiguity import GitLabNotificationAmbiguityProblem
+from sregym.conductor.problems.apps.gitlab.notification_recovery import GitLabNotificationRecoveryProblem
 from sregym.service.apps.gitlab.notifications import (
     UNANNOUNCED_AMBIGUOUS_NOTIFICATIONS,
     UNANNOUNCED_NOTIFICATIONS,
