@@ -63,6 +63,8 @@ class ConductorConfig:
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     k8s_proxy_listen_host: str = "127.0.0.1"
     k8s_proxy_listen_port: int = 16443
+    # Hostname written into the agent kubeconfig, e.g. a Compose service name.
+    k8s_proxy_advertise_host: str | None = None
     block_workload_creation: bool = False
     # Which stages this run should attempt. None means every stage the problem
     # supports, which is what an unset --stages leaves in place.
@@ -101,6 +103,7 @@ class Conductor:
             listen_port=self.config.k8s_proxy_listen_port,
             listen_host=self.config.k8s_proxy_listen_host,
             restrict_network_access=self.config.restrict_network_access,
+            advertise_host=self.config.k8s_proxy_advertise_host,
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -685,7 +688,7 @@ class Conductor:
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)
 
-        self.dependency_check(["kubectl", "helm", "docker"])
+        self.dependency_check(["kubectl", "helm"])
         self.logger.debug("Dependency check passed: kubectl, helm")
 
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")

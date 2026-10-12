@@ -1,0 +1,33 @@
+#!/bin/bash
+# Harbor healthcheck. The first call (as root) starts the trial's cluster and
+# SREGym backend in the background; every call then waits up to $1 seconds
+# (default 300). Exit 0 once the fault is live and the agent's kubeconfig
+# works, exit 1 at once if setup failed, or after the wait if it is still
+# in progress.
+set -u
+shared=/run/sregym
+if [ "$(id -u)" = 0 ] && mkdir /run/sregym-started 2>/dev/null; then
+    setsid nohup /usr/local/lib/sregym-harbor/start.sh >/dev/null 2>&1 &
+fi
+deadline=$((SECONDS + ${1:-300}))
+while :; do
+    state=$(cat "$shared/state" 2>/dev/null || echo starting)
+    case $state in
+        ready)
+            if kubectl --kubeconfig "$shared/kubeconfig" version --request-timeout=10s >/dev/null 2>&1; then
+                echo "SREGym environment is ready"
+                exit 0
+            fi
+            ;;
+        failed)
+            echo "SREGym environment setup failed:" >&2
+            cat "$shared/status.json" >&2 2>/dev/null
+            exit 1
+            ;;
+    esac
+    if ((SECONDS >= deadline)); then
+        echo "SREGym environment is still ${state}" >&2
+        exit 1
+    fi
+    sleep 5
+done

@@ -75,8 +75,23 @@ class LauncherTests(unittest.TestCase):
             launcher.main()
 
     def test_shell_syntax(self):
-        for name in ("entrypoint.sh", "prepare-cgroups.sh", "smoke.sh"):
+        for name in ("entrypoint.sh", "prepare-cgroups.sh", "smoke.sh", "env-report.sh"):
             subprocess.run(["bash", "-n", str(ROOT / "docker/dind" / name)], check=True)
+
+    def test_env_report_summarizes_the_host(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "docker/dind/env-report.sh")],
+            env={**os.environ, "SREGYM_ENV_REPORT_EGRESS": "0"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for section in ("[host]", "[isolation]", "[kernel]", "[egress]"):
+            self.assertIn(section, result.stdout)
+        self.assertRegex(result.stdout, r"summary: kernel .*cgroup v[12], privileged (yes|no)")
+        # Credentials live in the environment; the report must never print it.
+        self.assertNotIn(os.environ.get("PATH", "unset"), result.stdout)
 
     def test_entrypoint_rejects_remote_daemon_before_startup(self):
         with tempfile.TemporaryDirectory() as directory:

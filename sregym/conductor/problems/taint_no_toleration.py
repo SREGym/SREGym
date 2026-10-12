@@ -12,8 +12,6 @@ class TaintNoToleration(Problem):
         self.kubectl = KubeCtl()
         super().__init__(app=SocialNetwork())
 
-        # ── pick all nodes so the control-plane cannot be used as fallback ──
-        self.faulty_nodes = self._pick_all_nodes()
         self.faulty_service = "user-service"
         self.root_cause = self.build_structured_root_cause(
             component=self.faulty_service,
@@ -35,14 +33,21 @@ class TaintNoToleration(Problem):
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
 
     def _pick_all_nodes(self) -> list[str]:
-        """Return the names of all nodes in the cluster."""
+        """Return the names of all nodes in the cluster.
+
+        Taint every node so the control plane cannot be used as a fallback.
+        Listed when the fault is injected or recovered, not at construction,
+        so the problem can be built without a cluster (e.g. by the Harbor
+        task generator).
+        """
         nodes = self.kubectl.core_v1_api.list_node().items
         return [n.metadata.name for n in nodes]
 
     @mark_fault_injected
     def inject_fault(self):
-        print(f"Injecting Fault to Service {self.faulty_service} on Nodes {self.faulty_nodes}")
-        for node in self.faulty_nodes:
+        nodes = self._pick_all_nodes()
+        print(f"Injecting Fault to Service {self.faulty_service} on Nodes {nodes}")
+        for node in nodes:
             self.kubectl.exec_command(f"kubectl taint node {node} sre-fault=blocked:NoSchedule --overwrite")
 
         patch = """[{"op": "add", "path": "/spec/template/spec/tolerations",
@@ -56,7 +61,7 @@ class TaintNoToleration(Problem):
     def recover_fault(self):
         print("Fault Recovery")
         # Step 1: Remove taints from all nodes first
-        for node in self.faulty_nodes:
+        for node in self._pick_all_nodes():
             self.kubectl.exec_command(f"kubectl taint node {node} sre-fault=blocked:NoSchedule-")
             print(f"Removed taint from node {node}")
 

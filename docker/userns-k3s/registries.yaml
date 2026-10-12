@@ -1,0 +1,24 @@
+# Optional containerd mirrors for networks that block registry.k8s.io or quay.io,
+# or that exhaust Docker Hub's anonymous pull limit. Mount it at
+# /etc/userns-k3s/registries.yaml. Rewrites apply to the mirror endpoints only;
+# the original registry stays the last fallback.
+mirrors:
+  docker.io:
+    endpoint:
+      - "https://mirror.gcr.io"
+      - "https://registry-1.docker.io"
+  # Prometheus images are published on Docker Hub as prom/<name>; the
+  # prometheus-operator images keep their path on GHCR.
+  quay.io:
+    endpoint:
+      - "https://mirror.gcr.io"
+      - "https://registry-1.docker.io"
+      - "https://ghcr.io"
+    rewrite:
+      "^prometheus/(.*)$": "prom/$1"
+  # registry.k8s.io images are promoted from gcr.io/k8s-staging-<project>.
+  registry.k8s.io:
+    endpoint:
+      - "https://gcr.io"
+    rewrite:
+      "^([a-z0-9-]+)/(.*)$": "k8s-staging-$1/$2"

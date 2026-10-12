@@ -132,7 +132,7 @@ def validate(
 
         # --- Deploy the application -------------------------------------------
         logger.info("[STAGE] Deploying application")
-        conductor.dependency_check(["kubectl", "helm", "docker"])
+        conductor.dependency_check(["kubectl", "helm"])
         conductor.fix_kubernetes()
         conductor.undeploy_app()  # clear any leftovers from a previous run
         conductor.deploy_app()

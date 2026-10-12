@@ -250,3 +250,7 @@ logs/
 docker/agents/build-context/
 
 resolve-values.yaml
+
+# Generated Harbor datasets; each holds an oracle secret (.sregym-oracle-secret).
+datasets/
+.sregym-oracle-secret

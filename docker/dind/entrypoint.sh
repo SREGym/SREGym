@@ -16,13 +16,36 @@ fi
 unset DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_CONTEXT KUBECONFIG
 export DOCKER_HOST=unix:///var/run/docker.sock
 export KIND_RETAIN_ON_FAILURE=true
-mkdir -p /run/udev /root/.kube /opt/sregym/results/dind
-daemon_log=/opt/sregym/results/dind/dockerd.log
+# Diagnostics directory; harnesses can point it at a directory they collect.
+results=${SREGYM_DIND_RESULTS:-/opt/sregym/results/dind}
+mkdir -p /run/udev /root/.kube "$results"
+daemon_log=$results/dockerd.log
 daemon_pid=
 child_pid=
+# Which part of setup is running; empty once the command has started.
+stage="host checks"
+report_setup_failure() {
+    local message="SREGym sidecar setup failed during: $stage (exit $1). Diagnostics: $results"
+    echo "$message" >&2
+    if [[ -n ${SREGYM_FAILURE_STATE_DIR:-} ]]; then
+        # Same files as the Harbor backend writes (sregym/harbor/protocol.py),
+        # so a waiting agent container fails fast with this message.
+        mkdir -p "$SREGYM_FAILURE_STATE_DIR"
+        printf '{"state": "failed", "error": "%s"}\n' "$message" >"$SREGYM_FAILURE_STATE_DIR/status.json"
+        echo failed >"$SREGYM_FAILURE_STATE_DIR/state"
+    fi
+    if [[ ${SREGYM_HOLD_ON_FAILURE_S:-0} != 0 ]]; then
+        # Stay up so the harness can still copy diagnostics out of this container.
+        sleep "$SREGYM_HOLD_ON_FAILURE_S" || true
+    fi
+}
 cleanup() {
     local status=$?
     trap - EXIT TERM INT
+    # 130 and 143 mean the harness stopped us: that is not a setup failure.
+    if [[ $status != 0 && $status != 130 && $status != 143 && -n $stage ]]; then
+        report_setup_failure "$status"
+    fi
     if [[ -n $child_pid ]]; then
         kill -TERM -- "-$child_pid" 2>/dev/null || true
     fi
@@ -42,8 +65,21 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
+# Record what this host offers before anything can fail.
+bash /opt/sregym/docker/dind/env-report.sh >"$results/environment.txt" 2>&1 || true
+grep '^summary:' "$results/environment.txt" >&2 || true
+
+stage="cgroup delegation"
 # Delegate only the outer container's private cgroup subtree.
 bash /opt/sregym/docker/dind/prepare-cgroups.sh
+if [[ -n ${SREGYM_EXTRA_CA_CERTS:-} ]]; then
+    # TLS-inspecting egress proxies: trust their CA in this container, the
+    # private daemon and (via the KIND config below) every cluster node.
+    # update-ca-certificates expects one certificate per file.
+    awk '/BEGIN CERTIFICATE/ {n++} n {print > sprintf("/usr/local/share/ca-certificates/sregym-extra-%03d.crt", n)}' \
+        "$SREGYM_EXTRA_CA_CERTS"
+    update-ca-certificates >/dev/null 2>&1
+fi
 if [[ -n ${SREGYM_DOCKER_TMPFS_SIZE:-} ]]; then
     # Older kernels' tmpfs lacks user xattrs found in container image layers.
     # A sparse ext4 image in tmpfs provides them without physical disk I/O.
@@ -59,8 +95,17 @@ if [[ -n ${SREGYM_DOCKER_TMPFS_SIZE:-} ]]; then
     mount -o loop,noatime "$docker_data_image" /var/lib/docker
 fi
 export container=docker
-dockerd --host=unix:///var/run/docker.sock \
-    --storage-driver="${SREGYM_DOCKER_STORAGE_DRIVER:-overlay2}" >"$daemon_log" 2>&1 &
+stage="private Docker daemon"
+dockerd_args=(--host=unix:///var/run/docker.sock --storage-driver="${SREGYM_DOCKER_STORAGE_DRIVER:-overlay2}")
+if [[ -n ${SREGYM_REGISTRY_MIRROR:-} ]]; then
+    # Every run starts with an empty image cache; a pull-through mirror keeps
+    # parallel runs from exhausting Docker Hub's anonymous pull limit.
+    dockerd_args+=(--registry-mirror="$SREGYM_REGISTRY_MIRROR")
+    mkdir -p /run/sregym-containerd-certs.d/docker.io
+    printf 'server = "https://registry-1.docker.io"\n\n[host."%s"]\n  capabilities = ["pull", "resolve"]\n' \
+        "$SREGYM_REGISTRY_MIRROR" > /run/sregym-containerd-certs.d/docker.io/hosts.toml
+fi
+dockerd "${dockerd_args[@]}" >"$daemon_log" 2>&1 &
 daemon_pid=$!
 ready=false
 for ((i=0; i<120; i++)); do
@@ -82,35 +127,31 @@ case "$(uname -m)" in
     aarch64|arm64) arch=arm ;;
     *) echo 'Unsupported architecture' >&2; exit 1 ;;
 esac
-# The older custom node images contain containerd 2.0.2, which can deadlock
-# while Calico initializes. Build the same udev/socat additions on a patched
-# Kubernetes 1.32 base, once per private daemon.
-setsid docker build --build-arg "KIND_NODE_IMAGE=${SREGYM_KIND_BASE_IMAGE:-kindest/node:v1.32.11}" \
-    -t sregym-kind:local kind &
-child_pid=$!
-wait "$child_pid"
-child_pid=
-export KIND_NODE_IMAGE=sregym-kind:local
+stage="KIND node image"
+if [[ -n ${SREGYM_KIND_NODE_IMAGE:-} ]]; then
+    # A prebuilt node image with SREGym's additions skips the per-run build.
+    export KIND_NODE_IMAGE=$SREGYM_KIND_NODE_IMAGE
+else
+    # The older custom node images contain containerd 2.0.2, which can deadlock
+    # while Calico initializes. Build the same udev/socat additions on a patched
+    # Kubernetes 1.32 base, once per private daemon.
+    setsid docker build --build-arg "KIND_NODE_IMAGE=${SREGYM_KIND_BASE_IMAGE:-kindest/node:v1.32.11}" \
+        -t sregym-kind:local kind &
+    child_pid=$!
+    wait "$child_pid"
+    child_pid=
+    export KIND_NODE_IMAGE=sregym-kind:local
+fi
 # etcd is disposable in these per-run clusters. Keeping its small database in
 # memory prevents image extraction on the shared host disk from stalling API
 # writes. Application volumes still use the daemon's disk-backed storage.
 if [[ ${SREGYM_ETCD_TMPFS_SIZE:-512m} != 0 ]]; then
     mkdir -p /run/sregym-etcd
     mount -t tmpfs -o "size=${SREGYM_ETCD_TMPFS_SIZE:-512m}" tmpfs /run/sregym-etcd
-    export KIND_CONFIG=/run/sregym-kind.yaml
-    python - <<'PY'
-import os
-from pathlib import Path
-
-import yaml
-
-config = yaml.safe_load(Path("kind/kind-config.yaml").read_text())
-config["nodes"][0].setdefault("extraMounts", []).append(
-    {"hostPath": "/run/sregym-etcd", "containerPath": "/var/lib/etcd"}
-)
-Path(os.environ["KIND_CONFIG"]).write_text(yaml.safe_dump(config))
-PY
 fi
+stage="KIND cluster"
+export KIND_CONFIG=/run/sregym-kind.yaml
+python docker/dind/kind_config.py kind/kind-config.yaml "$KIND_CONFIG"
 # Keep the existing four-node topology and Calico behavior used by SREGym.
 setsid bash kind/setup_kind_cluster.sh "$arch" &
 child_pid=$!
@@ -119,10 +160,11 @@ if wait "$child_pid"; then
 else
     status=$?
     child_pid=
-    timeout 120 kind export logs /opt/sregym/results/dind/kind-logs || true
+    timeout 120 kind export logs "$results/kind-logs" || true
     exit "$status"
 fi
 touch /run/sregym-ready
+stage=
 setsid "$@" &
 child_pid=$!
 status=0
