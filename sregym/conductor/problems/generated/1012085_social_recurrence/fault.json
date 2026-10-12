@@ -1,0 +1,70 @@
+{
+  "app": "social_network",
+  "title": "Timeline write admission regresses after cache policy repair",
+  "fault_layer": "app-config",
+  "fault_primitive": "A detached process in social-graph-mongodb periodically publishes Redis min-replicas-to-write=1 to both standalone timeline caches",
+  "root_cause_class": "orphaned_timeline_write_quorum_policy_publication",
+  "incident_class": "Leftover operational policy synchronization applies a replicated-store durability contract to standalone ephemeral caches",
+  "affected_components": [
+    "social-graph-mongodb",
+    "user-timeline-redis",
+    "home-timeline-redis",
+    "user-timeline-service",
+    "home-timeline-service",
+    "compose-post-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "All pods remain Running and Ready. Redis remains master and can answer reads and health checks, but rejects timeline writes and cache population with NOREPLICAS. Posting and some cold timeline reads fail, producing frontend and user-timeline errors. Repairs to runtime policy or restarts of destination caches work temporarily and regress within six minutes.",
+  "why_hard": "No Deployment, ConfigMap, Service, collection, or role change identifies the source. The failing dependency names the immediate write-admission problem but not the remote policy writer. A repair can pass a complete two-minute SLO window before the dormant six-minute publisher restores the setting. The publisher lives in an existing relationship database container and follows stable Service DNS across cache replacement.",
+  "expected_agent_pitfalls": [
+    "Restore Redis write admission and submit after immediate request checks",
+    "Restart or roll back timeline caches and services",
+    "Add replicas to satisfy an unintended quorum policy",
+    "Repair only one timeline cache",
+    "Inspect Kubernetes controllers and static configuration without checking unmanaged processes"
+  ],
+  "mitigation_summary": "Find and terminate the detached cache-policy-sync process inside social-graph-mongodb, remove its temporary operational files, and set min-replicas-to-write back to the stock standalone-cache default of zero on both timeline Redis instances. No saved state, data deletion, or original manifests are needed.",
+  "generation": {
+    "tier": "hard",
+    "chaos_backend": "codex",
+    "chaos_effort": "xhigh",
+    "theme": "recurrence",
+    "solve_rate": "0/2",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 40.6,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "337.24630784988403",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/nginx-thrift --tail=60'\nRUNS: /bin/bash -lc 'kubectl get svc,events -n social-network; kubectl top pods -n social-network'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli CONFIG GET 'min*'; kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli INFO replication; kubectl get deployment -n social-network user-timeline-redis -o yaml\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/social-graph-redis -- redis-cli CONFIG GET 'min*'; kubectl exec -n social-network deployment/social-graph-redis -- redis-cli INFO replication; kubectl get deployment -n social-network social-graph-redis -o yaml\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli CONFIG GET 'min*'; kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli INFO replication; kubectl get deployment -n social-network home-timeline-redis -o yaml\"\nRUNS: /bin/bash -lc \"kubectl get configmap -n social-network \n[...]\nent/home-timeline-redis -- redis-cli CONFIG SET min-replicas-to-write 0; kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli CONFIG GET min-replicas-to-write'\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli CONFIG SET min-replicas-to-write 0; kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli CONFIG GET min-replicas-to-write'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- sh -c 'curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://localhost:8080/wrk2-api/user-timeline/read?user_id=55&start=0&stop=10\\\"; curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://localhost:808\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- python3 -c 'import urllib.request,time,concurrent.futures,collections; urls=[\\\"http://localhost:8080/wrk2-api/\\\"+t+\\\"/read?user_id=\\\"+str(u)+\\\"&start=0&stop=10\\\" for t in [\\\"user-timeline\\\",\\\"home-timeline\\\"] for u in range(1,2\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- curl -s -o /dev/null -w '%{http_code} %{time_total}\\\\n' -X POST http://localhost:8080/wrk2-api/post/compose --data-urlencode username=username_55 --data-urlencode user_id=55 --data-urlencode text=mitigation_verification --data-\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/nginx-thrift --since=30s --tail=10; kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli CONFIG GET min-replicas-to-write; kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli CONFIG GET min-replicas\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- sh -c 'for i in 1 2 3 4 5; do for t in user-timeline home-timeline; do curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://localhost:8080/wrk2-api/\"'$t/read?user_id=55&start=0&stop=10\"; done; sleep 5; done'\"'\"\nSAYS: Post creation and repeated timeline reads now return HTTP 200. Timeline checks over 25 seconds completed in 9\u201330 ms, and no new gateway errors appeared. The startup configuration already uses the correct default. I\u2019m submitting the mitigation now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Fixed both timeline Redis instances by setting `min-replicas-to-write` to `0`, resolving write failures in their standalone deployment.  Verified successful post creation and repeated timeline reads with low latency and no new gateway errors. Submitted the required empty solution once; submission was accepted."
+      },
+      {
+        "agent": "codex",
+        "round": 2,
+        "exit": 0,
+        "minutes": 38.4,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "309.47843408584595",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the cluster and available telemetry, apply a mitigation, and submit it for validation once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'ls -la /logs'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=40; kubectl logs -n social-network deploy/compose-post-service --tail=40'\nRUNS: /bin/bash -lc 'kubectl get svc,cm -n social-network; kubectl get events -n social-network --sort-by=.lastTimestamp | tail -20; kubectl top pods -n social-network'\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/social-graph-redis -- redis-cli CONFIG GET 'min*'; kubectl exec -n social-network deploy/social-graph-redis -- redis-cli INFO replication; kubectl get cm social-graph-redis -n social-network -o yaml; kubectl get deploy social-graph-redis -n social\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli CONFIG GET 'min*'; kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli INFO replication; kubectl get cm home-timeline-redis -n social-network -o yaml; kubectl get deploy home-timeline-redis -n so\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli CONFIG GET 'min*'; kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli INFO replication; kubectl get cm user-timeline-redis -n social-network -o yaml; kubectl get deploy user-timeline-redis -n so\nSAYS: Both timeline Redis instances are rejecting writes with `NOREPLICAS`: they require one replica, but each is deployed without replicas. I\u2019ll set that requirement to zero to match the deployed topology and verify that requests recover. \nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli CONFIG SET min-replicas-to-write 0; kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli CONFIG SET min-replicas-to-write 0'\nRUNS: /bin/bash -lc \"python - <<'PY' import subprocess,json for name in ['user-timeline-redis','home-timeline-redis']:  c=json.loads(subprocess.check_output(['kubectl','get','cm',name,'-n','social-network','-o','json']))  conf=c['data']['redis.conf']  conf+='\\\\nmin-replicas-to-write 0\\\\n'  subprocess.run(\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for i in 1 2 3 4 5; do curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://localhost:8080/wrk2-api/user-timeline/read?user_id=52&start=0&stop=10\\\"; curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" -X \nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --since=15s --tail=15; kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli CONFIG GET min-replicas-to-write; kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli CONFIG GET min-replicas-to-write'\nSAYS: The fix is active and saved in both ConfigMaps. Repeated timeline reads and post submissions returned HTTP 200 in 16\u201338 ms, and no new frontend errors appeared during verification. I\u2019m submitting the mitigation now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Fixed the replica requirement on both timeline Redis instances and saved the configuration.  Verified reads and post submissions returned HTTP 200 in 16\u201338 ms with no new frontend errors. Submitted the required empty solution once; validation endpoint accepted it."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-12 11:15:08"
+  }
+}
