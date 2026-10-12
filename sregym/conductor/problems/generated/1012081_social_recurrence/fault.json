@@ -1,0 +1,66 @@
+{
+  "app": "social_network",
+  "title": "Orphaned cache access sync repeatedly narrows timeline key coverage",
+  "fault_layer": "app-config",
+  "fault_primitive": "recurring Redis default-user key-pattern ACL reconciliation by an unmanaged detached process",
+  "root_cause_class": "orphaned_timeline_keyscope_policy_reconciliation",
+  "incident_class": "unfinished keyspace isolation rollout with a stale operational policy synchronizer",
+  "affected_components": [
+    "home-timeline-redis",
+    "home-timeline-service",
+    "nginx-thrift",
+    "media-mongodb"
+  ],
+  "symptoms": "Home timeline reads return HTTP 500 with Redis key-authorization errors. Application pods remain Running and Ready. Native service and frontend error logs surge while the Kubernetes specifications and mounted Redis configuration remain unchanged.",
+  "why_hard": "Restoring the Redis default user's key coverage immediately repairs requests and can produce a completely healthy two-minute SLO window. A detached session inside the unrelated media MongoDB container observes that repair and promotes the stale prefixed policy after a 210-second settling delay. The writer is absent from Deployments, ConfigMaps, Jobs, and database collections; it has no persistent connection to the affected cache during the delay. Restarting the affected cache, all Redis caches, or the RPC service and rolling back deployments do not stop the remote writer.",
+  "expected_agent_pitfalls": [
+    "Restore allkeys and finish after a short healthy verification window",
+    "Restart Redis caches and the home-timeline service without inspecting processes in other datastore containers",
+    "Look for the policy in ConfigMaps, deployment history, or a Kubernetes controller",
+    "Treat a later permission regression as a separate event rather than evidence of a surviving operational writer"
+  ],
+  "mitigation_summary": "Discover detached shell sessions in existing datastore containers whose live scripts reconcile home-timeline key permissions; stop their entire process groups, remove their operational files, and restore the stock default-user allkeys permission. No artifact snapshot is used.",
+  "generation": {
+    "tier": "hard",
+    "chaos_backend": "codex",
+    "chaos_effort": "xhigh",
+    "theme": "recurrence",
+    "solve_rate": "0/2",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 41.0,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "339.2283146381378",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the workloads and service health, apply a fix, and submit it for validation once recovery is verified. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=70'\nRUNS: /bin/bash -lc 'kubectl get svc,configmap,networkpolicy -n social-network; kubectl top pods -n social-network'\nRUNS: /bin/bash -lc 'kubectl get configmap home-timeline-redis -n social-network -o yaml; kubectl get deploy home-timeline-redis -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli ACL LIST; kubectl exec -n social-network deploy/social-graph-redis -- redis-cli ACL LIST'\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli ACL LIST; kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli CONFIG GET aclfile; kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli ACL LOG 3'\nSAYS: Home-timeline Redis is denying access to numeric user keys: its ACL allows only `timeline:*`, but the application uses keys such as `810`. The other Redis instances allow all keys. I\u2019ll restore that permission on home-timeline Redis and check request success and latency. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli ACL SETUSER default '~*'; kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli ACL LIST; kubectl exec -n social-network deploy/home-timeline-redis -- redis-cli ZREVRANGE 810 0 9; kubectl exec -n s\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for id in 1 35 209 477 810; do curl -s -o /dev/null -w \\\"HTTP %{http_code} latency %{time_total}s\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/home-timeline/read?user_id=\"'$id&start=0&stop=10\"; done'\"'; kubectl logs -n social-netwo\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for id in 12 110 220 330 440 550 660 770 880 990; do curl -s -o /dev/null -w \\\"HTTP %{http_code} latency %{time_total}s\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/home-timeline/read?user_id=\"'$id&start=0&stop=10\"; sleep 2; done'\"\nSAYS: The ACL fix is active. All sampled home-timeline requests returned HTTP 200 in 4\u201324 ms, and no new gateway errors appeared during the 20-second check. The startup configuration already permits these keys, so the fix required no restart. I\u2019m submitting it for validation now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Fixed the home-timeline Redis ACL blocking user keys. Verified HTTP 200 responses with 4\u201324 ms latency and no new gateway errors.  Submitted the required empty solution; validation accepted the submission."
+      },
+      {
+        "agent": "codex",
+        "round": 2,
+        "exit": 0,
+        "minutes": 40.8,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "348.23910450935364",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit the required empty solution once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get svc,configmap,networkpolicy -n social-network; kubectl get events -n social-network --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/nginx-thrift --tail=60; kubectl top pods -n social-network'\nRUNS: /bin/bash -lc 'kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli ACL LIST; kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli CONFIG GET aclfile; kubectl get configmap home-timeline-redis -n social-network -o yaml; kubectl get deployment home-timeline\nSAYS: Home timeline requests are failing because Redis restricts key access to `timeline:*`. The application uses keys outside that pattern. I\u2019ll restore key access and verify requests through the frontend. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli ACL SETUSER default '~*'; kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli ACL LIST; kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli ACL LIST; kubectl exec -\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- sh -c 'for i in \"'$(seq 1 30); do curl -s -o /dev/null -w \"%{http_code} %{time_total}'\"\\\\n\\\" \\\"http://localhost:8080/wrk2-api/home-timeline/read?user_id=\"'$i&start=0&stop=10\"; done'\"'; kubectl logs -n social-network deployment/\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- sh -c 'for i in \"'$(seq 1 20); do curl -s -o /dev/null -w \"%{http_code} %{time_total}'\"\\\\n\\\" \\\"http://localhost:8080/wrk2-api/home-timeline/read?user_id=\"'$i&start=0&stop=10\"; sleep 2; done'\"'\"\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/nginx-thrift --since=30s --tail=5; kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli ACL LIST'\nSAYS: Redis key access is restored. All 50 frontend probes returned HTTP 200 in 6\u201332 ms, and no frontend errors appeared in the last 30 seconds. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Restored Redis key permissions for home timelines. All 50 frontend probes succeeded with 6\u201332 ms latency, and recent frontend logs showed no errors.  Submitted the required empty solution once; validation accepted the submission."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-12 07:10:49"
+  }
+}

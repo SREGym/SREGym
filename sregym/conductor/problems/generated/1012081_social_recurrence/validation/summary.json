@@ -1,0 +1,60 @@
+{
+  "baseline": {
+    "rounds": 11,
+    "violating": 0,
+    "healthy": true,
+    "violated": false
+  },
+  "initial_impact": {
+    "rounds": 11,
+    "violating": 11,
+    "healthy": false,
+    "violated": true
+  },
+  "restart_healthy": {
+    "rounds": 11,
+    "violating": 0,
+    "healthy": true,
+    "violated": false
+  },
+  "restart_regressed": {
+    "rounds": 11,
+    "violating": 8,
+    "healthy": false,
+    "violated": true
+  },
+  "mitigated": {
+    "rounds": 11,
+    "violating": 0,
+    "healthy": true,
+    "violated": false
+  },
+  "recovered": {
+    "rounds": 11,
+    "violating": 0,
+    "healthy": true,
+    "violated": false
+  },
+  "reinjected": {
+    "rounds": 11,
+    "violating": 11,
+    "healthy": false,
+    "violated": true
+  },
+  "cleanup_acl_exact": true,
+  "final_checks_spacing_seconds": 128,
+  "final_error_ratio_range": [
+    0.5865,
+    0.6182
+  ],
+  "final_log_surges": {
+    "home-timeline-service": [
+      0.0,
+      6670.0
+    ],
+    "nginx-thrift": [
+      0.0,
+      6631.0
+    ]
+  }
+}
