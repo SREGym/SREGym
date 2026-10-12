@@ -1,0 +1,69 @@
+{
+  "app": "social_network",
+  "title": "Timeline snapshot destination drifts back to the runtime configuration path",
+  "fault_layer": "app-config",
+  "fault_primitive": "Detached in-container snapshot loop repeatedly changes Redis RDB destination and reinstates write protection",
+  "root_cause_class": "snapshot_config_file_destination_alias_recurrence",
+  "incident_class": "Leftover operator maintenance process with incorrect snapshot path derivation",
+  "affected_components": [
+    "media-mongodb",
+    "user-timeline-redis",
+    "user-timeline-service",
+    "compose-post-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "All pods remain Running and Ready. User timeline reads that populate the cache and post submissions fail with Redis MISCONF errors. Redis reports failed background RDB saves and permission errors at the mounted configuration path. Roughly 40% of requests fail in the live validation, with large error-log surges in user-timeline-service and nginx-thrift.",
+  "why_hard": "Redis runtime settings differ from the unchanged stock ConfigMap. The visible snapshot failure is easy to repair, but an unmanaged sleeping process in a different datastore container restores the bad destination and write-protection policy every five minutes. RPC service restarts, Redis replacement, deployment rollback, cache flushes, and one-time CONFIG SET repairs do not stop that process. The destination includes the ConfigMap-mounted filename, so merely making the directory writable is insufficient. There are no new Kubernetes workloads, configuration keys, collections, or admission objects to identify the source.",
+  "expected_agent_pitfalls": [
+    "Restore dir and dbfilename, verify several requests, and stop before the next maintenance pass",
+    "Disable stop-writes-on-bgsave-error and overlook that the maintenance loop reinstates it",
+    "Restart the user timeline service or Redis without inspecting processes in the media datastore container",
+    "Treat the unchanged redis.conf ConfigMap as the complete effective configuration",
+    "Fix directory ownership but retain a snapshot filename that resolves to a mounted ConfigMap file",
+    "Assume a process is gone because there is no Job, CronJob, sidecar, or Deployment change"
+  ],
+  "mitigation_summary": "Terminate the detached content-snapshot process and its cadence timer in the existing media-mongodb container; remove its runtime script and local files; restore Redis's standard /data/dump.rdb destination and default persistence policy; complete a successful background save to clear write protection. No original manifests or saved state are needed.",
+  "generation": {
+    "tier": "hard",
+    "chaos_backend": "codex",
+    "chaos_effort": "xhigh",
+    "theme": "recurrence",
+    "solve_rate": "0/2",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 39.7,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "302.47626209259033",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, fix the cause of the degradation, and submit the mitigation for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/nginx-thrift --tail=60; kubectl logs -n social-network deployment/compose-post-service --tail=50'\nRUNS: /bin/bash -lc 'kubectl top pods -n social-network; kubectl get deployments -n social-network -o yaml'\nRUNS: /bin/bash -lc 'kubectl get svc,networkpolicy,configmap -n social-network; kubectl get events -n social-network --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/home-timeline-redis --tail=12; kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli CONFIG GET dir; kubectl exec -n social-network deployment/home-timeline-redis -- redis-cli INFO persistence; kubectl get configmap -n soc\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/social-graph-redis --tail=12; kubectl exec -n social-network deployment/social-graph-redis -- redis-cli CONFIG GET dir; kubectl exec -n social-network deployment/social-graph-redis -- redis-cli INFO persistence; kubectl get configmap -n social\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/user-timeline-redis --tail=12; kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli CONFIG GET dir; kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli INFO persistence; kubectl get configmap -n soc\nSAYS: User-timeline Redis is blocking writes because its snapshots target a read-only configuration directory. I\u2019ll move the snapshot target to Redis\u2019s writable data directory and verify that saving and timeline requests recover. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/user-timeline-redis -- sh -c 'id; ls -ld /data; redis-cli CONFIG GET dbfilename; redis-cli CONFIG GET save'; kubectl exec -n social-network deployment/user-timeline-redis -- redis-cli CONFIG SET dir /data; kubectl exec -n social-network deploy\nRUNS: /bin/bash -lc \"python - <<'PY' import json,subprocess ns='social-network'; name='user-timeline-redis' x=json.loads(subprocess.check_output(['kubectl','get','configmap',name,'-n',ns,'-o','json'])) s=x['data']['redis.conf'] s+='\\\\ndir /data\\\\ndbfilename dump.rdb\\\\n' subprocess.run(['kubectl','patch','\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- sh -c 'for i in 1 2 3 4 5; do curl -s -o /dev/null -w \\\"HTTP %{http_code} latency %{time_total}s\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/user-timeline/read?user_id=\"'$i&start=0&stop=10\"; done'\"'; kubectl logs -n social-network de\nSAYS: Redis snapshots now succeed, and all five timeline checks returned HTTP 200 in 12\u201335 ms. I\u2019ve also saved the corrected settings in the ConfigMap. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Fixed user-timeline Redis\u2019s invalid snapshot path and persisted the corrected configuration. Snapshots succeed; timeline checks returned HTTP 200 in 12\u201335 ms.  Submitted the required empty solution once; validation accepted the submission."
+      },
+      {
+        "agent": "codex",
+        "round": 2,
+        "exit": 0,
+        "minutes": 38.8,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "313.56797218322754",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, fix the cause of the degraded service, and submit the mitigation for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=60; kubectl logs -n social-network deploy/compose-post-service --tail=40'\nRUNS: /bin/bash -lc 'kubectl get svc,cm,networkpolicy -n social-network; kubectl top pods -n social-network'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/user-timeline-redis --tail=25; kubectl get deploy user-timeline-redis -n social-network -o yaml; kubectl get cm user-timeline-redis -n social-network -o yaml; kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli CONFIG GET dir; k\nRUNS: /bin/bash -lc 'for service in user-timeline-redis home-timeline-redis social-graph-redis; do echo \"$service\"; kubectl exec -n social-network deploy/$service -- redis-cli CONFIG GET dir; kubectl exec -n social-network deploy/$service -- redis-cli CONFIG GET dbfilename; kubectl exec -n social-network \nSAYS: User-timeline Redis is blocking writes because it is trying to save snapshots over a read-only configuration file. I\u2019ll move snapshots to its writable data directory, preserve the current data, and add the correct settings to its startup configuration. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli CONFIG SET dir /data; kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli CONFIG SET dbfilename dump.rdb; kubectl exec -n social-network deploy/user-timeline-redis -- redis-cli BGSAVE; python - <\nRUNS: /bin/bash -lc \"kubectl logs -n social-network deploy/nginx-thrift --since=15s --tail=15; kubectl exec -n social-network deploy/nginx-thrift -- sh -c 'for i in 1 2 3 4 5; do curl -s -o /dev/null -w \\\"HTTP %{http_code} latency %{time_total}s\\\\n\\\" \\\"http://127.0.0.1:8080/wrk2-api/user-timeline/read?use\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- curl -s -o /dev/null -w 'HTTP %{http_code} latency %{time_total}s\\\\n' -X POST http://127.0.0.1:8080/wrk2-api/post/compose -d 'username=username_394&user_id=394&text=Mitigation%20verification&media_ids=%5B%5D&media_types=%5B%5D&post\nSAYS: Redis snapshots now succeed, and no new application errors appeared in the recent log check. Timeline reads returned HTTP 200 in 5\u201316 ms, and posting returned HTTP 200 in 25 ms. I\u2019m submitting the fix for sustained validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\": \\\"\\\"}'\"\nSAYS: Fixed Redis snapshot settings that blocked timeline reads and posting. Snapshots now succeed; verified requests returned HTTP 200 in 5\u201325 ms.  Submitted the required empty solution once. Validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-12 09:57:41"
+  }
+}

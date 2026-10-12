@@ -1,0 +1,1 @@
+{"dir": "/data", "dbfilename": "dump.rdb", "save": "3600 1 300 100 60 10000", "stop-writes-on-bgsave-error": "yes", "deployment_uid": "a43fa81c-d8cd-409a-928d-ea32eacd2a1b"}
