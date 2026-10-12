@@ -44,6 +44,14 @@ AUTH = Path.home() / ".codex" / "auth.json"
 LOCK = threading.RLock()
 
 THEMES = [
+    ("endpoints", "Traffic for one service is partly routed somewhere wrong by the Service/EndpointSlice layer "
+                  "(an extra or stale EndpointSlice carrying the service-name label, a traffic or affinity "
+                  "policy, a port or protocol mapping), while Deployments, Pods and the legacy Endpoints view "
+                  "all look healthy and the application logs only show generic connection failures."),
+    ("recurrence", "A leftover operational process that lives inside an existing container (a backfill, "
+                   "compaction or sync loop started by an operator, not a Kubernetes object) keeps re-applying "
+                   "the damage after a delay, so a fixer's repair passes its own checks and then regresses "
+                   "during the sustained SLO window unless the process itself is found and stopped."),
     ("intermittent", "Service degrades in recurring episodes driven by a plausible in-cluster mechanism (TTL "
                      "expiry, periodic jobs, rebalancing, connection recycling), so checks made between "
                      "episodes pass while the sustained SLO window still fails."),
@@ -79,7 +87,7 @@ THEMES = [
     ("metastable", "Retry, timeout or caching behaviour creates a self-sustaining degraded state."),
 ]
 # Themes that have beaten a fixer attempt get proportionally more sessions.
-THEME_WEIGHTS = {"partial": 3, "intermittent": 3, "compound-partial": 3}
+THEME_WEIGHTS = {"endpoints": 4, "recurrence": 4, "partial": 2, "intermittent": 2, "compound-partial": 2}
 APPS = ["hotel_reservation", "social_network"]
 
 
@@ -328,9 +336,13 @@ class Pipeline:
             "views, recipes or config keys were found within ten minutes however deep the machinery behind them "
             "was. Prefer small edits to values the application already has, so that nothing new stands out "
             "and the obvious repairs (restart, rollback, scale up, cache flush) fail or do not last. "
-            "The only faults a fixer has failed on so far broke a slice of real traffic that the fixer's own "
-            "spot checks did not cover, so it repaired part of the damage, saw its probes pass and submitted "
-            "while the workload was still failing.\n\n"
+            "Over seventy faults so far, every one was solved, usually within ten minutes: exotic encodings, "
+            "validators, regexes and Lua edits in data or config were all found because the failing service "
+            "logged an error pointing at the store or file. What remains untested: damage that is re-applied "
+            "after the fixer repairs it, by something that is not a Kubernetes object, and routing faults below "
+            "the Deployment/Pod/Endpoints views a fixer inspects. Fixers verify with a few requests right "
+            "after their repair and then submit, so anything that regresses minutes later or only hits a "
+            "fraction of connections defeats that check.\n\n"
             + self.avoid_list() + "\n"
         )
         brief.write_text(text)
