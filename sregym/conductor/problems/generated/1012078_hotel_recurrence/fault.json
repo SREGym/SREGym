@@ -1,0 +1,68 @@
+{
+  "app": "hotel_reservation",
+  "title": "Dormant directory refresh re-advertises a datastore endpoint as the live rate service",
+  "fault_layer": "service-discovery",
+  "fault_primitive": "Detached in-container directory synchronizer repeatedly overwrites existing Consul rate registrations after a four-minute stabilization interval",
+  "root_cause_class": "orphaned_runtime_directory_inventory_address_authority",
+  "incident_class": "An abandoned operational inventory reconciliation process retains write authority after an address-source migration",
+  "affected_components": [
+    "mongodb-user (resident operational process)",
+    "consul (existing srv-rate registrations)",
+    "rate (discovery path)",
+    "search",
+    "frontend"
+  ],
+  "symptoms": "Hotel searches return HTTP 500 with search dependency unavailable; search logs surge with downstream request failed and gRPC Unavailable, while all application pods and Kubernetes Services remain healthy and direct rate connections remain usable.",
+  "why_hard": "The directory writer lives only as a native mongo-shell process inside the unrelated, healthy user datastore container. There are no additional controllers, ConfigMaps, service records, or database collections. Fixing the existing registration or restarting rate restores service for four minutes; the inventory writer then overwrites every current rate registration, including newly created IDs. Restarting the Go services leaves the writer alive. A short healthy verification can miss the regression.",
+  "expected_agent_pitfalls": [
+    "Treat the valid Kubernetes rate Service and ready endpoints as proof that discovery is correct",
+    "Fix the Consul address and submit after a few healthy measurement rounds",
+    "Restart or scale rate and observe temporary recovery without finding the independent directory writer",
+    "Roll back Deployments even though their specifications are unchanged",
+    "Restart the Go services or investigate the rate datastore without inspecting the unrelated user datastore container for an operational directory writer"
+  ],
+  "mitigation_summary": "Find and terminate the orphaned mongo process running directory_refresh.js in mongodb-user, stop any transport children, remove its temporary operational files, and rebuild rate registrations from current pod IPs and registration IDs in native application startup logs. Remove obsolete rate IDs. No saved state or original manifests are needed.",
+  "generation": {
+    "tier": "hard",
+    "chaos_backend": "codex",
+    "chaos_effort": "xhigh",
+    "theme": "recurrence",
+    "solve_rate": "0/2",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 42.3,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "373.6011002063751",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit the required empty solution once the fix is in place. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deployments -n hotel-reservation; kubectl get events -n hotel-reservation --sort-by=.lastTimestamp | tail -30'\nRUNS: /bin/bash -lc 'kubectl get svc,endpoints,networkpolicy -n hotel-reservation; kubectl logs -n hotel-reservation deploy/frontend --tail=50; kubectl get deploy frontend -n hotel-reservation -o yaml; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get deploy rate search -n hotel-reservation -o yaml; kubectl logs -n hotel-reservation deploy/rate --tail=35; kubectl logs -n hotel-reservation deploy/search --tail=35; kubectl top pods -n hotel-reservation; kubectl get svc -A'\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'which curl; which wget'; kubectl port-forward -n hotel-reservation svc/rate 19091:9091 >/tmp/rate-pf.log 2>&1 & kubectl port-forward -n hotel-reservation svc/search 19092:9092 >/tmp/search-pf.log 2>&1 & kubectl port-forward -\nRUNS: /bin/bash -lc \"curl -s localhost:19091/metrics; curl -s localhost:19092/metrics; curl -s -w '\\\\n%{http_code} %{time_total}\\\\n' 'localhost:15000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'; kubectl exec -n hotel-reservation deploy/frontend -- curl -s http://consul:8500/v1/h\nRUNS: /bin/bash -lc 'kubectl exec -n hotel-reservation deploy/frontend -- curl -s http://consul:8500/v1/agent/services'\nSAYS: Consul\u2019s rate-service registration points to the MongoDB service IP on the gRPC port. This explains the search service\u2019s `Unavailable` errors. I\u2019ll correct the registration to the rate service address and verify hotel searches. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- curl -sS -X PUT http://consul:8500/v1/agent/service/register -H 'Content-Type: application/json' -d '{\\\"ID\\\":\\\"42a289c9-a289-4b26-8bb4-0e1f59805da1\\\",\\\"Name\\\":\\\"srv-rate\\\",\\\"Address\\\":\\\"10.96.55.9\\\",\\\"Port\\\":8084}'; kubectl exec -n \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'for i in 1 2 3 4 5; do curl -s -o /dev/null -w \\\"%{http_code} %{time_total}\\\\n\\\" \\\"http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194\\\"; done'; kubectl exec -n hotel-reservation deploy/\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- curl -s http://search:9092/metrics; kubectl exec -n hotel-reservation deploy/frontend -- curl -s http://rate:9091/metrics; kubectl logs -n hotel-reservation deploy/search --since=20s --tail=5; kubectl exec -n hotel-reservation deplo\nSAYS: Hotel searches now return HTTP 200 in 13\u201339 ms. During verification, 1,751 additional search requests succeeded with no new rate failures or timeouts. I\u2019m submitting the required empty solution now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Corrected Consul\u2019s rate-service registration, which pointed to MongoDB.  Verified hotel searches return HTTP 200 in 13\u201339 ms, with no new downstream failures across 1,751 additional requests.  Submitted the empty solution once; the endpoint accepted it."
+      },
+      {
+        "agent": "codex",
+        "round": 2,
+        "exit": 0,
+        "minutes": 44.5,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "411.0664927959442",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster, apply a mitigation, and verify recovery before submitting for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'kubectl get deployments,svc,networkpolicy -n hotel-reservation -o wide; kubectl get events -n hotel-reservation --sort-by=.lastTimestamp | tail -25; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=60'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/search --tail=40; kubectl logs -n hotel-reservation deploy/rate --tail=40'\nRUNS: /bin/bash -lc 'kubectl get deploy frontend search rate -n hotel-reservation -o yaml; kubectl top pods -n hotel-reservation; kubectl get svc -A'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/rate --tail=20; kubectl exec -n hotel-reservation deploy/rate -- printenv; curl -s --max-time 5 http://10.96.38.78:9091/metrics'\nRUNS: /bin/bash -lc \"curl -s localhost:19091/metrics | rg 'rate_|grpc'; curl -s localhost:19092/metrics | rg 'rate_|search_|grpc'; curl -s -w '\\\\n%{http_code} %{time_total}\\\\n' 'http://localhost:15000/hotels?lat=37.7749&lon=-122.4194&inDate=2015-04-09&outDate=2015-04-10'\"\nSAYS: Hotel searches are failing on calls to the rate service, even though its pod is healthy. The rate service reports no queue saturation or rejected requests. I\u2019ll check service discovery for stale endpoints. \nRUNS: /bin/bash -lc \"curl -s 'localhost:18500/v1/health/service/srv-rate?passing=1'; kubectl logs -n hotel-reservation deploy/search --tail=2000 | rg -v 'downstream request failed' | tail -25; ls -la /logs\"\nRUNS: /bin/bash -lc 'curl -s localhost:18500/v1/agent/services'\nRUNS: /bin/bash -lc \"curl -sS -X PUT http://localhost:18500/v1/agent/service/register -H 'Content-Type: application/json' --data '{\\\"ID\\\":\\\"d2108775-21b9-43d4-bf9f-4e91fb89000f\\\",\\\"Name\\\":\\\"srv-rate\\\",\\\"Address\\\":\\\"10.244.162.135\\\",\\\"Port\\\":8084}' ; curl -s -w '\\\\n%{http_code} %{time_total}\\\\n' 'http://lo\nSAYS: Consul had registered the rate service at MongoDB\u2019s IP address on port 8084. I corrected it to the rate pod\u2019s address, and hotel searches now return HTTP 200. I\u2019ll verify that recovery holds under ongoing traffic before submitting. \nRUNS: /bin/bash -lc 'curl -s localhost:19092/metrics; curl -s localhost:19091/metrics'\nRUNS: /bin/bash -lc \"python - <<'PY' import urllib.request,time,concurrent.futures,collections url='http://localhost:15000/hotels?lat=37.7749&lon=-122.4194&inDate=2015-04-09&outDate=2015-04-10' def check(_):  t=time.monotonic()  try:   with urllib.request.urlopen(url,timeout=3) as r: r.read(); return r.st\nRUNS: /bin/bash -lc 'curl -s localhost:19092/metrics; curl -s localhost:19091/metrics; kubectl logs -n hotel-reservation deploy/search --since=45s --tail=5'\nSAYS: All 45 verification requests succeeded. During that interval, the application recorded over 2,600 additional successful rate calls with no new failures or timeouts. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' --data '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Corrected the rate service\u2019s Consul registration, which incorrectly pointed to MongoDB.  Verified 45/45 hotel searches succeeded, with no new rate failures or timeouts during observation.  Submitted the required empty solution once; validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-12 06:39:58"
+  }
+}

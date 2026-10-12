@@ -1,0 +1,170 @@
+{
+    "4a354f8a-30f0-4163-801d-348ec61220cc": {
+        "ID": "4a354f8a-30f0-4163-801d-348ec61220cc",
+        "Service": "srv-geo",
+        "Tags": [],
+        "Meta": {},
+        "Port": 8083,
+        "Address": "10.244.195.200",
+        "TaggedAddresses": {
+            "lan_ipv4": {
+                "Address": "10.244.195.200",
+                "Port": 8083
+            },
+            "wan_ipv4": {
+                "Address": "10.244.195.200",
+                "Port": 8083
+            }
+        },
+        "Weights": {
+            "Passing": 1,
+            "Warning": 1
+        },
+        "EnableTagOverride": false,
+        "Datacenter": "dc1"
+    },
+    "58ac5a88-3384-44a1-9dbb-8c6699914331": {
+        "ID": "58ac5a88-3384-44a1-9dbb-8c6699914331",
+        "Service": "srv-reservation",
+        "Tags": [],
+        "Meta": {},
+        "Port": 8087,
+        "Address": "10.244.162.136",
+        "TaggedAddresses": {
+            "lan_ipv4": {
+                "Address": "10.244.162.136",
+                "Port": 8087
+            },
+            "wan_ipv4": {
+                "Address": "10.244.162.136",
+                "Port": 8087
+            }
+        },
+        "Weights": {
+            "Passing": 1,
+            "Warning": 1
+        },
+        "EnableTagOverride": false,
+        "Datacenter": "dc1"
+    },
+    "801c6c6b-e4a1-40c4-9bc0-efa7c8c8d505": {
+        "ID": "801c6c6b-e4a1-40c4-9bc0-efa7c8c8d505",
+        "Service": "srv-user",
+        "Tags": [],
+        "Meta": {},
+        "Port": 8086,
+        "Address": "10.244.195.211",
+        "TaggedAddresses": {
+            "lan_ipv4": {
+                "Address": "10.244.195.211",
+                "Port": 8086
+            },
+            "wan_ipv4": {
+                "Address": "10.244.195.211",
+                "Port": 8086
+            }
+        },
+        "Weights": {
+            "Passing": 1,
+            "Warning": 1
+        },
+        "EnableTagOverride": false,
+        "Datacenter": "dc1"
+    },
+    "a35658dd-461e-4415-94ab-ad7557f9b133": {
+        "ID": "a35658dd-461e-4415-94ab-ad7557f9b133",
+        "Service": "srv-rate",
+        "Tags": [],
+        "Meta": {},
+        "Port": 8084,
+        "Address": "10.244.162.141",
+        "TaggedAddresses": {
+            "lan_ipv4": {
+                "Address": "10.244.162.141",
+                "Port": 8084
+            },
+            "wan_ipv4": {
+                "Address": "10.244.162.141",
+                "Port": 8084
+            }
+        },
+        "Weights": {
+            "Passing": 1,
+            "Warning": 1
+        },
+        "EnableTagOverride": false,
+        "Datacenter": "dc1"
+    },
+    "d491faf5-7c98-46a0-898a-4d22ecef9ddd": {
+        "ID": "d491faf5-7c98-46a0-898a-4d22ecef9ddd",
+        "Service": "srv-profile",
+        "Tags": [],
+        "Meta": {},
+        "Port": 8081,
+        "Address": "10.244.162.134",
+        "TaggedAddresses": {
+            "lan_ipv4": {
+                "Address": "10.244.162.134",
+                "Port": 8081
+            },
+            "wan_ipv4": {
+                "Address": "10.244.162.134",
+                "Port": 8081
+            }
+        },
+        "Weights": {
+            "Passing": 1,
+            "Warning": 1
+        },
+        "EnableTagOverride": false,
+        "Datacenter": "dc1"
+    },
+    "de40eba8-389b-447b-94b7-f325b8d16f45": {
+        "ID": "de40eba8-389b-447b-94b7-f325b8d16f45",
+        "Service": "srv-search",
+        "Tags": [],
+        "Meta": {},
+        "Port": 8082,
+        "Address": "10.244.195.206",
+        "TaggedAddresses": {
+            "lan_ipv4": {
+                "Address": "10.244.195.206",
+                "Port": 8082
+            },
+            "wan_ipv4": {
+                "Address": "10.244.195.206",
+                "Port": 8082
+            }
+        },
+        "Weights": {
+            "Passing": 1,
+            "Warning": 1
+        },
+        "EnableTagOverride": false,
+        "Datacenter": "dc1"
+    },
+    "fb9cdfb1-47d4-44c7-a7fb-8966f8ba53e1": {
+        "ID": "fb9cdfb1-47d4-44c7-a7fb-8966f8ba53e1",
+        "Service": "srv-recommendation",
+        "Tags": [],
+        "Meta": {},
+        "Port": 8085,
+        "Address": "10.244.110.136",
+        "TaggedAddresses": {
+            "lan_ipv4": {
+                "Address": "10.244.110.136",
+                "Port": 8085
+            },
+            "wan_ipv4": {
+                "Address": "10.244.110.136",
+                "Port": 8085
+            }
+        },
+        "Weights": {
+            "Passing": 1,
+            "Warning": 1
+        },
+        "EnableTagOverride": false,
+        "Datacenter": "dc1"
+    }
+}
