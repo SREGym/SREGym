@@ -1,0 +1,158 @@
+{
+  "slo": {
+    "target_rps": 100.0,
+    "max_error_ratio": 0.05,
+    "p99_floor_ms": 1000.0,
+    "p99_baseline_multiplier": 5.0,
+    "min_throughput_fraction": 0.7,
+    "timeout_floor": 0.15,
+    "timeout_margin": 0.1,
+    "baseline_p99_ms": 82.37,
+    "baseline_timeout_ratio": 0.0,
+    "baseline_error_ratio": 0.0,
+    "p99_limit_ms": 1000.0,
+    "timeout_limit": 0.15,
+    "error_limit": 0.05
+  },
+  "verdict": {
+    "rounds": 11,
+    "violating": 11,
+    "healthy": false,
+    "violated": true,
+    "details": [
+      {
+        "time": 1791786586.710109,
+        "requests": 14,
+        "rps": 1.4,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=1.4<70.0"
+        ]
+      },
+      {
+        "time": 1791786597.741179,
+        "requests": 67,
+        "rps": 6.7,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=6.7<70.0"
+        ]
+      },
+      {
+        "time": 1791786608.77349,
+        "requests": 12,
+        "rps": 1.2,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=1.2<70.0"
+        ]
+      },
+      {
+        "time": 1791786619.802688,
+        "requests": 33,
+        "rps": 3.3,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=3.3<70.0"
+        ]
+      },
+      {
+        "time": 1791786630.829462,
+        "requests": 26,
+        "rps": 2.6,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=2.6<70.0"
+        ]
+      },
+      {
+        "time": 1791786641.859437,
+        "requests": 12,
+        "rps": 1.2,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=1.2<70.0"
+        ]
+      },
+      {
+        "time": 1791786652.892043,
+        "requests": 25,
+        "rps": 2.5,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=2.5<70.0"
+        ]
+      },
+      {
+        "time": 1791786663.923053,
+        "requests": 31,
+        "rps": 3.1,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=3.1<70.0"
+        ]
+      },
+      {
+        "time": 1791786674.958343,
+        "requests": 61,
+        "rps": 6.1,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=6.1<70.0"
+        ]
+      },
+      {
+        "time": 1791786685.992751,
+        "requests": 32,
+        "rps": 3.2,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=3.2<70.0"
+        ]
+      },
+      {
+        "time": 1791786697.039643,
+        "requests": 34,
+        "rps": 3.4,
+        "error_ratio": 0.0,
+        "timeout_ratio": 0.0,
+        "p99_ms": null,
+        "violations": [
+          "rps=3.4<70.0"
+        ]
+      }
+    ]
+  },
+  "new_alerts": [],
+  "log_surges": {
+    "nginx-thrift": [
+      0.0,
+      78.0
+    ],
+    "post-storage-service": [
+      0.0,
+      68.0
+    ]
+  },
+  "cpu_surges": {}
+}

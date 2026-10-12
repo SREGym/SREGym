@@ -1,0 +1,68 @@
+{
+  "app": "social_network",
+  "title": "Orphaned content snapshot coordinator reacquires the post-store write freeze",
+  "fault_layer": "data",
+  "fault_primitive": "MongoDB fsync write lock reacquired by a detached administrative shell in an existing remote container",
+  "root_cause_class": "orphaned_snapshot_quiescence_reconciliation",
+  "incident_class": "Leftover backup maintenance process with an unbounded write-freeze reconciliation loop",
+  "affected_components": [
+    "post-storage-mongodb",
+    "post-storage-service",
+    "compose-post-service",
+    "nginx-thrift",
+    "media-mongodb"
+  ],
+  "symptoms": "Publishing stalls, frontend Thrift reads time out, and end-user throughput falls far below 70 requests per second. All pods remain Running and Ready. MongoDB reads, collection contents, indexes, and Kubernetes routing remain normal; post inserts queue behind the global administrative write freeze.",
+  "why_hard": "The visible timeout is at the frontend, while the durable write lock is in the post datastore and its owner is an idle detached Mongo shell inside the media datastore. No Deployment, ConfigMap, database schema, or application record differs from the stock installation. Releasing the lock produces an entirely healthy 120-second SLO window, then the coordinator silently reacquires it after 210-215 seconds. Restarting the publishing services leaves both the lock and coordinator intact; restarting only the affected database leaves the remote coordinator intact.",
+  "expected_agent_pitfalls": [
+    "Treat generic frontend transport timeouts as a Thrift pool, DNS, or publishing-service problem",
+    "Conclude that MongoDB is healthy from successful reads, normal documents and indexes, and a successful ping",
+    "Release the administrative lock, observe immediate recovery and a healthy rolling SLO window, and finish before the delayed regression",
+    "Restart the affected services or datastore without tracing the idle administrative session to the remote media datastore container",
+    "Look for a Job, CronJob, sidecar, ConfigMap or altered deployment to explain the repeated maintenance operation"
+  ],
+  "mitigation_summary": "Trace the Mongo shell session's source address to media-mongodb, terminate the detached snapshot coordinator and remove its maintenance files, then release all post-store fsync lock references. No saved manifests or private data are needed.",
+  "generation": {
+    "tier": "hard",
+    "chaos_backend": "codex",
+    "chaos_effort": "xhigh",
+    "theme": "recurrence",
+    "solve_rate": "0/2",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 43.9,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "360.8601403236389",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the cluster and service health, apply a mitigation, and submit it for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide'\nRUNS: /bin/bash -lc 'ls -la /logs; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/nginx-thrift --tail=80'\nRUNS: /bin/bash -lc 'kubectl get svc,endpoints,networkpolicy -n social-network; kubectl get events -n social-network --sort-by=.lastTimestamp'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/user-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/text-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/url-shorten-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/post-storage-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/user-timeline-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/home-timeline-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/user-mention-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deploy/compose-post-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl get svc compose-post-service -n social-network -o yaml; kubectl get deploy compose-post-service -n social-ne\n[...]\n -n social-network; kubectl exec -n social-network deploy/unique-id-service -- sh -c 'ps aux; ls /social-network-microservices; cat /proc/1/status' ; kubectl logs -n social-network deploy/unique-id-service --tail=12\"\nRUNS: /bin/bash -lc \"python - <<'PY' import json,collections x=json.load(open('/tmp/social-cms.json')) a=[(c['metadata']['name'],json.loads(c['data']['service-config.json'])) for c in x['items'] if 'service-config.json' in c.get('data',{})] base=a[0][1] for n,d in a:  print(n, {k:v for k,v in d.items() if\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/post-storage-service -- sh -c 'ps aux; cat /proc/net/tcp'\"\nRUNS: /bin/bash -lc \"kubectl get deploy post-storage-memcached post-storage-mongodb -n social-network -o yaml; kubectl exec -n social-network deploy/post-storage-memcached -- sh -c 'cat /proc/1/cmdline; cat /proc/net/tcp'\"\nSAYS: Post creation is timing out in the post-storage path. The pods are running, so I\u2019m checking MongoDB for blocking operations or injected delays. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/post-storage-mongodb -- mongo --quiet --eval 'printjson(db.adminCommand({getParameter:1,\\\"failpoint.hangBeforeInsert\\\":1})); printjson(db.currentOp()); printjson(db.adminCommand({getParameter:\\\"*\\\"}));'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/post-storage-mongodb -- mongo --quiet --eval 'printjson(db.adminCommand({serverStatus:1}).globalLock); db.currentOp(true).inprog.forEach(function(o){if(\"'!o.waitingForLock) printjson({opid:o.opid,desc:o.desc,command:o.command,locks:o.locks,secs:o.\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/post-storage-mongodb -- mongo --quiet --eval 'printjson(db.adminCommand({fsyncUnlock:1})); printjson(db.adminCommand({serverStatus:1}).globalLock);'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deploy/nginx-thrift -- curl -s -o /dev/null -w 'HTTP %{http_code} latency %{time_total}s\\\\n' --max-time 15 -X POST http://localhost:8080/wrk2-api/post/compose -d 'username=username_1&user_id=1&text=mitigationcheck&media_ids=%5B%5D&media_types=%5B%5D&post\nSAYS: MongoDB had an active `fsync` lock blocking post writes. I released it, the write queue cleared, and a post-creation request succeeded with HTTP 200 in 71 ms. I\u2019m submitting the mitigation for validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Released the MongoDB `fsync` lock blocking post writes. The write queue cleared, and post creation returned HTTP 200 in 71 ms.  Submitted the required empty solution once; validation accepted the submission."
+      },
+      {
+        "agent": "codex",
+        "round": 2,
+        "exit": 0,
+        "minutes": 41.4,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "386.3585093021393",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a mitigation, and submit it for validation once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n social-network -o wide; kubectl get events -n social-network --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'kubectl get svc,cm -n social-network; kubectl logs -n social-network deployment/nginx-thrift --tail=60; kubectl get deployments -n social-network -o yaml > /tmp/deployments.yaml; curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/post-storage-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/text-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/home-timeline-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/unique-id-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/compose-post-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl logs -n social-network deployment/user-service --tail=25'\nRUNS: /bin/bash -lc 'kubectl get networkpolicy -n social-network -o yaml; kubectl get cm compose-post-service -n social-network -o yaml; kubectl top pods -n social-network'\nRUNS: /bin/bash -lc \"kubectl get svc compose-post-service -n social-network -o yam\n[...]\ns,svc -n observe; kubectl exec -n social-netwo\nSAYS: Post creation is timing out while the pods remain running. I\u2019m checking the compose service\u2019s dependencies and live configuration to find where requests stall. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/compose-post-service -- sh -c 'ls /social-network; cat /proc/1/cmdline; ps -ef'; kubectl get endpoints -n social-network; kubectl get deployment compose-post-service -n social-network -o json; kubectl exec -n social-network deployment/compose-\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-service -- sh -c 'ss -tnp | head -25; ls; ls src/PostStorageService; cat src/PostStorageService/PostStorageHandler.h | head -100'; kubectl get cm post-storage-service -n social-network -o json > /tmp/postcm.json; kubectl exec -n s\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-mongodb -- mongo --quiet --eval 'printjson(db.currentOp()); printjson(db.adminCommand({getParameter:1,\\\"failpoint.hangBeforeCollectionInserts\\\":1})); printjson(db.adminCommand({getParameter:1,allParameters:true}))'\"\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-mongodb -- mongo --quiet --eval 'printjson(db.fsyncUnlock()); printjson(db.currentOp().fsyncLock)' ; kubectl exec -n social-network deployment/nginx-thrift -- curl -sS --max-time 15 -w '\\\\nHTTP %{http_code} time %{time_total}\\\\n' \nSAYS: The post-storage MongoDB had an active `fsync` lock, which blocked writes and caused post creation to time out. I released it, and a post creation request succeeded in 45 ms. I\u2019m checking sustained recovery before submitting. \nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/post-storage-mongodb -- mongo --quiet --eval 'var s=db.currentOp(); printjson({fsyncLock:s.fsyncLock,blockedOperations:s.inprog.filter(function(o){return o.waitingForLock && o.secs_running>1}).length});'; kubectl logs -n social-network deploym\nRUNS: /bin/bash -lc \"kubectl exec -n social-network deployment/nginx-thrift -- sh -c 'for i in \"'$(seq 1 15); do curl -sS --max-time 5 -o /dev/null -w \"compose %{http_code} %{time_total}'\"\\\\n\\\" -d \\\"username=username_1&user_id=1&post_type=0&text=recovery-check\\\" http://localhost:8080/wrk2-api/post/compose\nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Released the MongoDB `fsync` lock blocking post writes. All 30 recovery checks succeeded with HTTP 200 and 18\u2013136 ms latency; no blocked database operations remained.  Submitted the required empty solution once. Validation submission was accepted."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-12 03:07:56"
+  }
+}

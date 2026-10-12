@@ -1,0 +1,875 @@
+[
+  {
+    "elapsed_seconds": 52,
+    "healthy": false,
+    "violated": false,
+    "violating_rounds": 5,
+    "rounds": 11,
+    "rps_range": [
+      0.4,
+      102.4
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        30.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 99,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 9,
+    "rounds": 11,
+    "rps_range": [
+      0.4,
+      102.3
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        54.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 146,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.4,
+      6.2
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        70.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 193,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      6.2
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        66.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 240,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      11.8
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        72.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 287,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      11.8
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        70.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 334,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      11.8
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        72.0
+      ],
+      "post-storage-service": [
+        0.0,
+        42.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 381,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      3.7
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        68.0
+      ],
+      "post-storage-service": [
+        0.0,
+        66.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 428,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      3.7
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        70.0
+      ],
+      "post-storage-service": [
+        0.0,
+        74.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 475,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      5.1
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        70.0
+      ],
+      "post-storage-service": [
+        0.0,
+        72.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 522,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      1.0,
+      5.1
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        72.0
+      ],
+      "post-storage-service": [
+        0.0,
+        74.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 570,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.9,
+      4.3
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        72.0
+      ],
+      "post-storage-service": [
+        0.0,
+        70.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 617,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.5,
+      6.6
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        70.0
+      ],
+      "post-storage-service": [
+        0.0,
+        72.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 664,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.5,
+      6.6
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        66.0
+      ],
+      "post-storage-service": [
+        0.0,
+        74.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 711,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.4,
+      6.6
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        66.0
+      ],
+      "post-storage-service": [
+        0.0,
+        70.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 760,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.4,
+      9.5
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        72.0
+      ],
+      "post-storage-service": [
+        0.0,
+        64.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 807,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.4,
+      9.5
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        72.0
+      ],
+      "post-storage-service": [
+        0.0,
+        72.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 853,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      4.3
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        66.0
+      ],
+      "post-storage-service": [
+        0.0,
+        74.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 902,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      4.3
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        72.0
+      ],
+      "post-storage-service": [
+        0.0,
+        64.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 950,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      6.0
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        74.0
+      ],
+      "post-storage-service": [
+        0.0,
+        66.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 997,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.7,
+      6.0
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        76.0
+      ],
+      "post-storage-service": [
+        0.0,
+        70.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1044,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.7,
+      6.0
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        70.0
+      ],
+      "post-storage-service": [
+        0.0,
+        72.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1092,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.7,
+      7.1
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        70.0
+      ],
+      "post-storage-service": [
+        0.0,
+        72.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1139,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.3,
+      7.1
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        68.0
+      ],
+      "post-storage-service": [
+        0.0,
+        72.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1186,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.3,
+      7.1
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        66.0
+      ],
+      "post-storage-service": [
+        0.0,
+        74.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1232,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.3,
+      4.9
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        76.0
+      ],
+      "post-storage-service": [
+        0.0,
+        66.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1279,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.3,
+      4.9
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        76.0
+      ],
+      "post-storage-service": [
+        0.0,
+        78.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1327,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.7,
+      4.9
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        68.0
+      ],
+      "post-storage-service": [
+        0.0,
+        76.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1374,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.5,
+      3.8
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        62.0
+      ],
+      "post-storage-service": [
+        0.0,
+        72.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1422,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.5,
+      3.8
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        78.0
+      ],
+      "post-storage-service": [
+        0.0,
+        62.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1469,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.5,
+      5.8
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        86.0
+      ],
+      "post-storage-service": [
+        0.0,
+        70.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1516,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.8,
+      5.8
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        84.0
+      ],
+      "post-storage-service": [
+        0.0,
+        76.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1563,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.8,
+      6.7
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        74.0
+      ],
+      "post-storage-service": [
+        0.0,
+        76.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1610,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      1.2,
+      6.7
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        78.0
+      ],
+      "post-storage-service": [
+        0.0,
+        62.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1657,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      1.2,
+      6.7
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        78.0
+      ],
+      "post-storage-service": [
+        0.0,
+        68.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1705,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      6.1
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        64.0
+      ],
+      "post-storage-service": [
+        0.0,
+        78.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1752,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      6.3
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        70.0
+      ],
+      "post-storage-service": [
+        0.0,
+        80.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1800,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      8.1
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        68.0
+      ],
+      "post-storage-service": [
+        0.0,
+        86.0
+      ]
+    },
+    "cpu_surges": {}
+  },
+  {
+    "elapsed_seconds": 1807,
+    "healthy": false,
+    "violated": true,
+    "violating_rounds": 11,
+    "rounds": 11,
+    "rps_range": [
+      0.2,
+      8.1
+    ],
+    "new_alerts": [],
+    "log_surges": {
+      "nginx-thrift": [
+        0.0,
+        68.0
+      ],
+      "post-storage-service": [
+        0.0,
+        78.0
+      ]
+    },
+    "cpu_surges": {}
+  }
+]
