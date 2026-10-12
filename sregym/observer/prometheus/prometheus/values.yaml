@@ -882,14 +882,17 @@ serverFiles:
             - alert: HighRequestErrorRate
               # Locust load generator error detection (train-ticket).
               # Fires when any endpoint has failures and enough requests to be meaningful.
+              # locust_requests_num_* are cumulative since the load test started, so a
+              # ratio of raw totals never recovers after a fault is fixed. Compare the
+              # increase over a sliding window instead (locust is scraped every 15 s).
               expr: |
                 (
-                  locust_requests_num_failures{namespace="train-ticket", name!="Aggregated"}
+                  increase(locust_requests_num_failures{namespace="train-ticket", name!="Aggregated"}[2m])
                     /
-                  locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}
+                  increase(locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}[2m])
                 ) > 0.1
                   and
-                locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"} > 0
+                increase(locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}[2m]) > 0
               for: 1m
               labels:
                 severity: critical
@@ -900,14 +903,15 @@ serverFiles:
             - alert: HighRequestErrorRate
               # Locust load generator error detection (astronomy-shop).
               # Fires when any endpoint has failures and enough requests to be meaningful.
+              # See the train-ticket rule above for why this uses increase().
               expr: |
                 (
-                  locust_requests_num_failures{namespace="astronomy-shop", name!="Aggregated"}
+                  increase(locust_requests_num_failures{namespace="astronomy-shop", name!="Aggregated"}[2m])
                     /
-                  locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}
+                  increase(locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}[2m])
                 ) > 0.1
                   and
-                locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"} > 0
+                increase(locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}[2m]) > 0
               for: 1m
               labels:
                 severity: critical
@@ -1297,7 +1301,7 @@ extraScrapeConfigs: |
         target_label: namespace
         replacement: social-network
 
-  # ---- OTel Collector spanmetrics (OTLP traces — astronomy-shop) ----
+  # ---- OTel Collector spanmetrics (OTLP traces — astronomy-shop, train-ticket) ----
   - job_name: 'otel-spanmetrics-otlp'
     scrape_interval: 15s
     static_configs:
@@ -1305,6 +1309,11 @@ extraScrapeConfigs: |
           - otel-collector.observe:8890
         labels:
           namespace: astronomy-shop
+    metric_relabel_configs:
+      - source_labels: [service_name]
+        regex: 'ts-.+'
+        target_label: namespace
+        replacement: train-ticket
   # ---- Scraping from TiDB Cluster ----
   - job_name: tidb-cluster
     scrape_interval: 15s
@@ -1313,7 +1322,7 @@ extraScrapeConfigs: |
       - targets:
           - basic-tidb.tidb-cluster.svc.cluster.local:10080
           - basic-pd.tidb-cluster.svc.cluster.local:2379
-  # ---- Incident Arena ports (sregym/service/apps/incident_arena) ----
+  # ---- Frappe, Saleor and Slack Spine ----
   # The charts' own Prometheus is not deployed under SREGym; these jobs scrape the
   # same targets it did. Targets of a namespace that is not deployed are simply down.
   - job_name: 'incident-arena-slack-spine-app'

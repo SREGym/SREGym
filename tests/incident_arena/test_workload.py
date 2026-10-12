@@ -2,7 +2,7 @@ import pytest
 
 import sregym.generators.workload.incident_arena as workload_module
 from sregym.generators.workload.incident_arena import IncidentArenaLoadgen
-from sregym.service.apps.incident_arena.saleor import Saleor
+from sregym.service.apps.saleor.application import Saleor
 
 
 class FakeClock:

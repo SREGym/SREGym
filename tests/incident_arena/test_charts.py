@@ -6,7 +6,7 @@ import subprocess
 import pytest
 import yaml
 
-from sregym.conductor.problems.incident_arena import INCIDENT_ARENA_PROBLEM_CLASSES
+from tests.incident_arena.cases import INCIDENT_ARENA_PROBLEM_CLASSES
 
 pytestmark = pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
 
@@ -84,10 +84,8 @@ def test_chart_renders_without_harness(offline_cluster, tmp_path, problem_cls):
 
 
 def test_slack_problem_specific_knobs_render(offline_cluster, tmp_path):
-    from sregym.conductor.problems.incident_arena.slack_spine import (
-        SlackMaintenanceCollision,
-        SlackSendsFailStrictMode,
-    )
+    from sregym.conductor.problems.apps.slack_spine.maintenance import SlackMaintenanceCollision
+    from sregym.conductor.problems.apps.slack_spine.strict_mode import SlackSendsFailStrictMode
 
     docs = _render(SlackSendsFailStrictMode(), tmp_path)
     channel = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "svc-channel")
@@ -106,7 +104,7 @@ def test_slack_problem_specific_knobs_render(offline_cluster, tmp_path):
 
 
 def test_frappe_queue_broker_deploys_healthy_flags(offline_cluster, tmp_path):
-    from sregym.conductor.problems.incident_arena.frappe import FrappeWritesAndQueueOOM
+    from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import FrappeWritesAndQueueOOM
 
     docs = _render(FrappeWritesAndQueueOOM(), tmp_path)
     scripts = next(

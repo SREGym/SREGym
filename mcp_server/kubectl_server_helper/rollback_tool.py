@@ -142,7 +142,7 @@ class RollbackTool:
     def _apply_yaml_deployment(self, yaml_content):
         # TODO improve this using patch
         strategy = yaml_content.get("spec", {}).get("strategy", {})
-        yaml_content["spec"]["strategy"] = {"type": "Recreate"}
+        yaml_content["spec"]["strategy"] = {"type": "Recreate", "rollingUpdate": None}
         self._apply_yaml_directly(yaml.dump(yaml_content))
         yaml_content["spec"]["strategy"] = strategy
         self._apply_yaml_directly(yaml.dump(yaml_content))

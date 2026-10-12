@@ -1,4 +1,5 @@
 import contextlib
+import shlex
 import time
 
 from kubernetes import client
@@ -10,13 +11,20 @@ from sregym.service.rollout import deployment_rollout_complete
 
 
 class DuplicatePVCMountsMitigationOracle(Oracle):
-    """Verify that the target Deployment and its current Jaeger pod recovered."""
+    """Verify that the target Deployment and its current service pod recovered."""
 
     importance = 1.0
     rollout_timeout_seconds = 120
     probe_timeout_seconds = 60
     poll_interval_seconds = 2
-    query_port = 16686
+
+    def __init__(
+        self, problem, *, query_port: int = 16686, query_path: str = "/api/services", expected_content: str = '"data"'
+    ):
+        super().__init__(problem)
+        self.query_port = query_port
+        self.query_path = query_path
+        self.expected_content = expected_content
 
     @staticmethod
     def _desired_replicas(deployment) -> int:
@@ -87,10 +95,10 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
         core_v1 = self.problem.kubectl.core_v1_api
 
         pod_name = f"service-content-check-{time.time_ns()}"[:63]
-        url = f"http://{target_ip}:{self.query_port}/api/services"
+        url = f"http://{target_ip}:{self.query_port}{self.query_path}"
         script = (
-            f"response=$(wget -q -T 10 -O - '{url}') && "
-            "printf '%s' \"$response\" | grep -q '\"data\"' && "
+            f"response=$(wget -q -T 10 -O - {shlex.quote(url)}) && "
+            f"printf '%s' \"$response\" | grep -Fq {shlex.quote(self.expected_content)} && "
             "echo SERVICE_OK"
         )
         pod = client.V1Pod(
@@ -167,11 +175,11 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
                 return self.fail("no_ready_endpoints", deployment=service_name)
 
             if not self._run_query_check(target_ip):
-                print(f"[FAIL] Current Jaeger pod for Deployment '{service_name}' did not respond correctly")
+                print(f"[FAIL] Current pod for Deployment '{service_name}' did not respond correctly")
                 return self.fail("query_check_failed", deployment=service_name, pod_ip=target_ip)
         except Exception as exc:
             print(f"[FAIL] Error checking storage recovery: {exc}")
             return self.fail_from_exception(exc)
 
-        print(f"[PASS] Deployment '{service_name}' is fully ready and its current pod is serving Jaeger queries")
+        print(f"[PASS] Deployment '{service_name}' is fully ready and its current pod is serving expected content")
         return {"success": True}

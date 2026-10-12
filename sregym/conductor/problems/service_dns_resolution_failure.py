@@ -10,9 +10,9 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class ServiceDNSResolutionFailure(Problem):
-    def __init__(self, app_name="astronomy_shop", faulty_service="frontend"):
+    def __init__(self, app_name="astronomy_shop"):
         self.app_name = app_name
-        self.faulty_service = faulty_service
+        self.faulty_service = "user-service" if app_name == "social_network" else "frontend"
 
         if app_name == "social_network":
             app = SocialNetwork()
@@ -27,10 +27,10 @@ class ServiceDNSResolutionFailure(Problem):
 
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
-            component=self.faulty_service,
-            namespace=self.namespace,
+            component="configmap/coredns",
+            namespace="kube-system",
             description=(
-                f"CoreDNS is configured with an NXDOMAIN template for `{self.faulty_service}.{self.namespace}.svc.cluster.local`, "
+                f"The CoreDNS ConfigMap contains an NXDOMAIN template for `{self.faulty_service}.{self.namespace}.svc.cluster.local`, "
                 "so in-cluster lookups for this service name fail at DNS resolution time. Dependent services cannot "
                 "resolve or connect to the target even though pods may be healthy and listening. Users observe request "
                 "timeouts and cascading failures on flows that depend on this service endpoint."

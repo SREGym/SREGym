@@ -20,7 +20,7 @@ class StubKubeCtl:
 @pytest.fixture
 def offline_cluster(monkeypatch):
     """Construct Incident Arena apps/problems without a kubeconfig."""
-    import sregym.service.apps.incident_arena.base as app_base
+    import sregym.service.apps.components.incident_arena as app_base
 
     monkeypatch.setattr(app_base, "KubeCtl", StubKubeCtl)
     return StubKubeCtl

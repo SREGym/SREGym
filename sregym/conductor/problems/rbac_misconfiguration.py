@@ -8,6 +8,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class RBACMisconfiguration(Problem):
+    """Deprecated in SREGym 1.1 after reaching 100% overall pass@3."""
+
     def __init__(self, faulty_service: str = "frontend"):
         super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()

@@ -1,18 +1,33 @@
 """The vendored Incident Arena contracts and the problems built from them."""
 
+from pathlib import Path
+
 import pytest
 import yaml
 
 from sregym.conductor.problem_sets import PROBLEM_SETS
-from sregym.conductor.problems.incident_arena import INCIDENT_ARENA_PROBLEM_CLASSES, INCIDENT_ARENA_PROBLEMS
-from sregym.conductor.problems.incident_arena.task import TASKS_DIR, IncidentArenaTask
-from sregym.service.apps.incident_arena.base import LOAD_WINDOW_S, continuous_load_profile, deep_merge
+from sregym.conductor.problems.contracts.incident_arena.task import TASKS_DIR, IncidentArenaTask
+from sregym.service.apps.app_registry import AppRegistry
+from sregym.service.apps.components.incident_arena import LOAD_WINDOW_S, continuous_load_profile, deep_merge
+from tests.incident_arena.cases import INCIDENT_ARENA_PROBLEM_CLASSES, INCIDENT_ARENA_PROBLEMS
 
 ALL_TASKS = sorted(p.name for p in TASKS_DIR.iterdir() if p.is_dir())
 
 
 # Incident Arena tasks whose faults no other ported task covers (see docs/incident-arena.md).
 PORTED_TASKS = ["002", "005", "006", "007", "008", "009", "013", "014", "018", "019"]
+
+
+@pytest.mark.parametrize("name", ["frappe", "Frappe", "saleor", "Saleor", "slack-spine", "slack_spine", "Slack Spine"])
+def test_catalog_constructs_apps_with_their_own_assets(offline_cluster, name):
+    registry = AppRegistry()
+    app = registry.get_app_instance(name)
+    assert app.config_file == registry.get_app_config_file(name)
+    assert app.values_file.parent == app.metadata_file.parent
+    assert app.values_file.is_file()
+    assert Path(app.helm_configs["chart_path"]).is_dir()
+    assert app.namespace == registry.get_app_metadata(name)["Namespace"]
+    assert registry.get_definition(name).service_port == app.frontend_port
 
 
 def test_each_ported_task_is_vendored_once():
@@ -101,7 +116,7 @@ def test_problem_constructs_offline(offline_cluster, problem_cls):
 
 
 def test_image_tier_tasks_deploy_their_release_build(offline_cluster):
-    from sregym.conductor.problems.incident_arena.slack_spine import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
+    from sregym.conductor.problems.apps.slack_spine.lock_leaks import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
 
     for cls in (SlackSeqLockLeak, SlackDistractorVolumeSeqLock):
         problem = cls()
@@ -109,7 +124,7 @@ def test_image_tier_tasks_deploy_their_release_build(offline_cluster):
 
 
 def test_compliance_window_is_context_not_a_cause(offline_cluster):
-    from sregym.conductor.problems.incident_arena.slack_spine import SlackSendsFailComplianceWindow
+    from sregym.conductor.problems.apps.slack_spine.strict_mode import SlackSendsFailComplianceWindow
 
     problem = SlackSendsFailComplianceWindow()
     assert "read_consistency_strict" not in problem.root_cause
@@ -117,7 +132,7 @@ def test_compliance_window_is_context_not_a_cause(offline_cluster):
 
 
 def test_event_legs_carry_their_latent_hold_dose(offline_cluster):
-    from sregym.conductor.problems.incident_arena.slack_spine import SlackLoginsUnreadSendsAllSlow
+    from sregym.conductor.problems.apps.slack_spine.store_consistency import SlackLoginsUnreadSendsAllSlow
 
     roles = SlackLoginsUnreadSendsAllSlow().app.deploy_overrides["app"]["roles"]
     assert {r: roles[r]["env"]["STORE_HOLD_MS"] for r in roles} == {

@@ -178,6 +178,9 @@ def test_locust_image_override_preserves_the_complete_upstream_sidecar():
     image = actual[0]["imageOverride"]
     assert f"{image['repository']}:{image['tag']}" == IMAGES["locust-exporter"]
     expected[0]["imageOverride"] = image
+    # The CPU limit is raised on purpose (see test_astronomy_shop.py); every
+    # other field must still match upstream.
+    expected[0]["resources"]["limits"]["cpu"] = actual[0]["resources"]["limits"]["cpu"]
     assert actual == expected
 
 

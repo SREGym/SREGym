@@ -15,11 +15,7 @@ SREGYM_LITE_PROBLEMS = (
     "valkey_auth_disruption",
     "secret_rotation_stale_env_credentials_astronomy_shop",
     "unschedulable_incorrect_port_assignment",
-    "readiness_probe_misconfiguration_social_network",
     "duplicate_pvc_mounts_social_network",
-    "admission_webhook_outage_hotel_reservation",
-    "wrong_dns_policy_astronomy_shop",
-    "wrong_service_selector_social_network",
     "rolling_update_misconfigured_social_network",
     "search_rate_retry_collapse_hotel_reservation",
 )

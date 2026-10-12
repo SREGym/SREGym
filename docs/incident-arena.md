@@ -20,7 +20,7 @@ uv run main.py --problem slack_maintenance_collision --agent stratus --model gpt
 
 Each app is a Helm chart in [SREGym-applications](https://github.com/SREGym/SREGym-applications)
 (`frappe/`, `saleor/`, `slack-spine/`; each README lists provenance and the SREGym edits), deployed
-with SREGym's values overlay (`sregym/service/apps/incident_arena/values/<app>.yaml`). Incident Arena's own harness is
+with each app's values overlay (`sregym/service/apps/<app>/values.yaml`). Incident Arena's own harness is
 switched off:
 
 * SREGym's Prometheus/Loki/MCP stack replaces the in-chart observability. `sregym/observer/prometheus`
@@ -74,7 +74,7 @@ other ten are covered:
 | 017 | `06-stall-every-minute-and-later-every-send-crawls` | maintenance collision + channel strict | 008, 013 |
 
 The task contracts behind the table are vendored, unmodified, in
-`sregym/conductor/problems/incident_arena/tasks/`: ticket, ground truth, health bands, load profile
+`sregym/conductor/problems/contracts/incident_arena/tasks/`: ticket, ground truth, health bands, load profile
 and reference repair.
 
 ### What the agent sees

@@ -60,6 +60,8 @@ class ResourceRequest(Problem):
 
 
 class ResourceRequestTooLarge(ResourceRequest):
+    """Deprecated in SREGym 1.1 after reaching 100% overall pass@3."""
+
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
         super().__init__(app_name, faulty_service)
         self.root_cause = self.build_structured_root_cause(
