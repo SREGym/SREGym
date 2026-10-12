@@ -1,0 +1,372 @@
+{
+  "checks": {
+    "native_views": "All Pods Running/Ready; frontend legacy Endpoints and native EndpointSlice remain correct.",
+    "restart_check": "Frontend replacement did not eliminate the independent endpoint export.",
+    "scale_check": "Two healthy frontend replicas still produced approximately 40-46 percent errors.",
+    "reconciliation_check": "Deleted exported slice UID 7368517b-fd82-41f6-b944-5839aee11fa7; recurring export created UID 5939085b-c4f3-401c-880b-afc7c584ddc9.",
+    "idempotence": "Two injection runs retained one runtime exporter. Two mitigation runs exited successfully.",
+    "observability": "Existing ServiceEndpointDown alert fired for frontend.hotel-reservation:5000.",
+    "scope": "Only hotel-reservation endpoint routing, namespaced RBAC, and an existing application container process were changed."
+  },
+  "scaled_violation": {
+    "slo": {
+      "target_rps": 100.0,
+      "max_error_ratio": 0.05,
+      "p99_floor_ms": 1000.0,
+      "p99_baseline_multiplier": 5.0,
+      "min_throughput_fraction": 0.7,
+      "timeout_floor": 0.15,
+      "timeout_margin": 0.1,
+      "baseline_p99_ms": 62.85,
+      "baseline_timeout_ratio": 0.0634162973065121,
+      "baseline_error_ratio": 0.0,
+      "p99_limit_ms": 1000.0,
+      "timeout_limit": 0.1634162973065121,
+      "error_limit": 0.05
+    },
+    "verdict": {
+      "rounds": 4,
+      "violating": 4,
+      "healthy": false,
+      "violated": true,
+      "details": [
+        {
+          "time": 1791791783.202864,
+          "requests": 2969,
+          "rps": 98.9,
+          "error_ratio": 0.4335,
+          "timeout_ratio": 0.0613,
+          "p99_ms": 83.78,
+          "violations": [
+            "error_ratio=0.433>0.050"
+          ]
+        },
+        {
+          "time": 1791791818.342399,
+          "requests": 2933,
+          "rps": 97.7,
+          "error_ratio": 0.4524,
+          "timeout_ratio": 0.0668,
+          "p99_ms": 63.94,
+          "violations": [
+            "error_ratio=0.452>0.050"
+          ]
+        },
+        {
+          "time": 1791791857.575147,
+          "requests": 2867,
+          "rps": 95.6,
+          "error_ratio": 0.399,
+          "timeout_ratio": 0.0705,
+          "p99_ms": 76.42,
+          "violations": [
+            "error_ratio=0.399>0.050"
+          ]
+        },
+        {
+          "time": 1791791888.618696,
+          "requests": 2970,
+          "rps": 98.8,
+          "error_ratio": 0.4613,
+          "timeout_ratio": 0.0646,
+          "p99_ms": 55.1,
+          "violations": [
+            "error_ratio=0.461>0.050"
+          ]
+        }
+      ]
+    },
+    "new_alerts": [],
+    "log_surges": {},
+    "cpu_surges": {}
+  },
+  "reference_mitigation": {
+    "slo": {
+      "target_rps": 100.0,
+      "max_error_ratio": 0.05,
+      "p99_floor_ms": 1000.0,
+      "p99_baseline_multiplier": 5.0,
+      "min_throughput_fraction": 0.7,
+      "timeout_floor": 0.15,
+      "timeout_margin": 0.1,
+      "baseline_p99_ms": 62.85,
+      "baseline_timeout_ratio": 0.0634162973065121,
+      "baseline_error_ratio": 0.0,
+      "p99_limit_ms": 1000.0,
+      "timeout_limit": 0.1634162973065121,
+      "error_limit": 0.05
+    },
+    "verdict": {
+      "rounds": 4,
+      "violating": 0,
+      "healthy": true,
+      "violated": false,
+      "details": [
+        {
+          "time": 1791792622.433863,
+          "requests": 2933,
+          "rps": 97.7,
+          "error_ratio": 0.0,
+          "timeout_ratio": 0.0634,
+          "p99_ms": 84.74,
+          "violations": []
+        },
+        {
+          "time": 1791792653.472393,
+          "requests": 2933,
+          "rps": 97.7,
+          "error_ratio": 0.0,
+          "timeout_ratio": 0.0665,
+          "p99_ms": 98.94,
+          "violations": []
+        },
+        {
+          "time": 1791792684.541096,
+          "requests": 2971,
+          "rps": 99.0,
+          "error_ratio": 0.0,
+          "timeout_ratio": 0.0613,
+          "p99_ms": 60.96,
+          "violations": []
+        },
+        {
+          "time": 1791792715.609911,
+          "requests": 2962,
+          "rps": 98.7,
+          "error_ratio": 0.0,
+          "timeout_ratio": 0.0621,
+          "p99_ms": 88.19,
+          "violations": []
+        }
+      ]
+    },
+    "new_alerts": [],
+    "log_surges": {},
+    "cpu_surges": {
+      "hotel-reserv-frontend": [
+        0.0,
+        0.404
+      ]
+    }
+  },
+  "recovery": {
+    "slo": {
+      "target_rps": 100.0,
+      "max_error_ratio": 0.05,
+      "p99_floor_ms": 1000.0,
+      "p99_baseline_multiplier": 5.0,
+      "min_throughput_fraction": 0.7,
+      "timeout_floor": 0.15,
+      "timeout_margin": 0.1,
+      "baseline_p99_ms": 62.85,
+      "baseline_timeout_ratio": 0.0634162973065121,
+      "baseline_error_ratio": 0.0,
+      "p99_limit_ms": 1000.0,
+      "timeout_limit": 0.1634162973065121,
+      "error_limit": 0.05
+    },
+    "verdict": {
+      "rounds": 4,
+      "violating": 0,
+      "healthy": true,
+      "violated": false,
+      "details": [
+        {
+          "time": 1791792653.472393,
+          "requests": 2933,
+          "rps": 97.7,
+          "error_ratio": 0.0,
+          "timeout_ratio": 0.0665,
+          "p99_ms": 98.94,
+          "violations": []
+        },
+        {
+          "time": 1791792684.541096,
+          "requests": 2971,
+          "rps": 99.0,
+          "error_ratio": 0.0,
+          "timeout_ratio": 0.0613,
+          "p99_ms": 60.96,
+          "violations": []
+        },
+        {
+          "time": 1791792715.609911,
+          "requests": 2962,
+          "rps": 98.7,
+          "error_ratio": 0.0,
+          "timeout_ratio": 0.0621,
+          "p99_ms": 88.19,
+          "violations": []
+        },
+        {
+          "time": 1791792746.686576,
+          "requests": 2971,
+          "rps": 98.9,
+          "error_ratio": 0.0,
+          "timeout_ratio": 0.0623,
+          "p99_ms": 88.96,
+          "violations": []
+        }
+      ]
+    },
+    "new_alerts": [],
+    "log_surges": {},
+    "cpu_surges": {}
+  },
+  "final_replay": {
+    "times": {
+      "first_check_unix": 1791793138.9008985,
+      "second_check_unix": 1791793304.3356931
+    },
+    "first": {
+      "slo": {
+        "target_rps": 100.0,
+        "max_error_ratio": 0.05,
+        "p99_floor_ms": 1000.0,
+        "p99_baseline_multiplier": 5.0,
+        "min_throughput_fraction": 0.7,
+        "timeout_floor": 0.15,
+        "timeout_margin": 0.1,
+        "baseline_p99_ms": 62.85,
+        "baseline_timeout_ratio": 0.0634162973065121,
+        "baseline_error_ratio": 0.0,
+        "p99_limit_ms": 1000.0,
+        "timeout_limit": 0.1634162973065121,
+        "error_limit": 0.05
+      },
+      "verdict": {
+        "rounds": 4,
+        "violating": 4,
+        "healthy": false,
+        "violated": true,
+        "details": [
+          {
+            "time": 1791792996.779333,
+            "requests": 2933,
+            "rps": 97.7,
+            "error_ratio": 0.6004,
+            "timeout_ratio": 0.0638,
+            "p99_ms": 83.9,
+            "violations": [
+              "error_ratio=0.600>0.050"
+            ]
+          },
+          {
+            "time": 1791793027.853573,
+            "requests": 2899,
+            "rps": 96.5,
+            "error_ratio": 0.6175,
+            "timeout_ratio": 0.0666,
+            "p99_ms": 55.01,
+            "violations": [
+              "error_ratio=0.617>0.050"
+            ]
+          },
+          {
+            "time": 1791793061.962389,
+            "requests": 2899,
+            "rps": 96.5,
+            "error_ratio": 0.6713,
+            "timeout_ratio": 0.0666,
+            "p99_ms": 44.86,
+            "violations": [
+              "error_ratio=0.671>0.050"
+            ]
+          },
+          {
+            "time": 1791793099.165868,
+            "requests": 2896,
+            "rps": 96.4,
+            "error_ratio": 0.7196,
+            "timeout_ratio": 0.0694,
+            "p99_ms": 46.37,
+            "violations": [
+              "error_ratio=0.720>0.050"
+            ]
+          }
+        ]
+      },
+      "new_alerts": [
+        "ServiceEndpointDown"
+      ],
+      "log_surges": {},
+      "cpu_surges": {}
+    },
+    "second": {
+      "slo": {
+        "target_rps": 100.0,
+        "max_error_ratio": 0.05,
+        "p99_floor_ms": 1000.0,
+        "p99_baseline_multiplier": 5.0,
+        "min_throughput_fraction": 0.7,
+        "timeout_floor": 0.15,
+        "timeout_margin": 0.1,
+        "baseline_p99_ms": 62.85,
+        "baseline_timeout_ratio": 0.0634162973065121,
+        "baseline_error_ratio": 0.0,
+        "p99_limit_ms": 1000.0,
+        "timeout_limit": 0.1634162973065121,
+        "error_limit": 0.05
+      },
+      "verdict": {
+        "rounds": 4,
+        "violating": 4,
+        "healthy": false,
+        "violated": true,
+        "details": [
+          {
+            "time": 1791793132.289875,
+            "requests": 2932,
+            "rps": 97.6,
+            "error_ratio": 0.6664,
+            "timeout_ratio": 0.0638,
+            "p99_ms": 55.97,
+            "violations": [
+              "error_ratio=0.666>0.050"
+            ]
+          },
+          {
+            "time": 1791793166.515175,
+            "requests": 2898,
+            "rps": 96.5,
+            "error_ratio": 0.619,
+            "timeout_ratio": 0.0673,
+            "p99_ms": 47.49,
+            "violations": [
+              "error_ratio=0.619>0.050"
+            ]
+          },
+          {
+            "time": 1791793202.716436,
+            "requests": 2935,
+            "rps": 97.7,
+            "error_ratio": 0.678,
+            "timeout_ratio": 0.0637,
+            "p99_ms": 43.42,
+            "violations": [
+              "error_ratio=0.678>0.050"
+            ]
+          },
+          {
+            "time": 1791793240.918257,
+            "requests": 2933,
+            "rps": 97.7,
+            "error_ratio": 0.7051,
+            "timeout_ratio": 0.0641,
+            "p99_ms": 42.46,
+            "violations": [
+              "error_ratio=0.705>0.050"
+            ]
+          }
+        ]
+      },
+      "new_alerts": [
+        "ServiceEndpointDown"
+      ],
+      "log_surges": {},
+      "cpu_surges": {}
+    }
+  },
+  "replay_portability": "Repeated from a separate writable directory with stale Service UID recovery state; all object names and Pod IPs regenerated from live cluster state.",
+  "permission_lifecycle": "Exporter Role and RoleBinding are independent of frontend Service ownership; the reference fix identifies their live permission scope."
+}

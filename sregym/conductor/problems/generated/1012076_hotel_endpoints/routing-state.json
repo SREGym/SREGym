@@ -1,0 +1,1 @@
+{"namespace": "hotel-reservation", "name": "frontend-6e0e7", "prior": null, "service_uid": "087ec028-9fb5-429e-9f94-14ee5cf800f8", "rbac": [{"kind": "role", "name": "consul-endpoints-6e0e7", "prior": null}, {"kind": "rolebinding", "name": "consul-endpoints-6e0e7", "prior": null}]}

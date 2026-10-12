@@ -1,0 +1,70 @@
+{
+  "app": "hotel_reservation",
+  "title": "HTTP transport alias in recurring frontend endpoint export",
+  "fault_layer": "network",
+  "fault_primitive": "Recurring EndpointSlice export binds the frontend HTTP port name to the discovery administration transport and peer inventory",
+  "root_cause_class": "runtime_endpoint_export_transport_capability_alias",
+  "incident_class": "Operational service-discovery export retains an incompatible transport mapping after a naming migration",
+  "affected_components": [
+    "frontend Service",
+    "frontend EndpointSlices",
+    "Consul HTTP listener",
+    "recommendation container endpoint export"
+  ],
+  "symptoms": "Intermittent connection refusals and HTTP 404 responses affect hotel operations. Native frontend pods, Deployment, Service selector, targetPort, and legacy Endpoints remain healthy. Consul receives unrelated hotel URLs, and the existing frontend TCP endpoint alert fires.",
+  "why_hard": "The externally managed slice has the correct frontend service-name label and Service owner identity. Native Endpoints and direct Pod checks remain healthy. Deleting the inconsistent slice gives immediate recovery, but a periodic export running inside an existing application container recreates it after two minutes. The export is absent from Deployment and ConfigMap inventories and runs in recommendation, away from the frontend and Consul symptoms. Rollback, frontend replacement, and moderate scaling leave it active. A live wrong HTTP listener retains connections rather than allowing retries to converge on the working frontend.",
+  "expected_agent_pitfalls": [
+    "Trusting healthy legacy Endpoints as the complete routing inventory",
+    "Treating Consul's unrelated URL warnings as a client discovery or HTTP API problem",
+    "Replacing frontend pods or rolling back an unchanged Deployment",
+    "Checking only slice service-name labels and ownerReferences, which agree",
+    "Accepting a successful direct pod request or a small sample of successful frontend requests",
+    "Deleting the slice and accepting temporary recovery before the next two-minute export",
+    "Searching only Deployment and ConfigMap state for the writer of a recurring EndpointSlice",
+    "Restarting Consul because it logs unrelated frontend URLs"
+  ],
+  "mitigation_summary": "Inspect live application process state to stop the recurring frontend EndpointSlice exporter, remove its namespace-scoped write authority, and remove frontend slices whose membership or transport ports disagree with the live Service selector and Pod ports. No saved manifests or private recovery values are used.",
+  "generation": {
+    "tier": "hard",
+    "chaos_backend": "codex",
+    "chaos_effort": "xhigh",
+    "theme": "endpoints",
+    "solve_rate": "0/2",
+    "panel": [
+      {
+        "agent": "codex",
+        "round": 1,
+        "exit": 0,
+        "minutes": 44.2,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "491.8947591781616",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application and cluster state, apply a fix, and submit the required empty payload once the service is stable. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide'\nRUNS: /bin/bash -lc 'ls -la /logs; kubectl get svc,deploy,hpa -n hotel-reservation; kubectl get events -n hotel-reservation --sort-by=.lastTimestamp | tail -25'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc 'kubectl get deploy -n hotel-reservation -o yaml; kubectl get networkpolicy -n hotel-reservation; kubectl top pods -n hotel-reservation'\nRUNS: /bin/bash -lc 'kubectl logs -n hotel-reservation deploy/frontend --tail=70; kubectl logs -n hotel-reservation deploy/search --tail=40; kubectl logs -n hotel-reservation deploy/rate --tail=40'\nRUNS: /bin/bash -lc \"kubectl get deploy -n hotel-reservation -o json | python -c 'import json,sys; d=json.load(sys.stdin); [print(x[\\\"metadata\\\"][\\\"name\\\"],json.dumps(x[\\\"spec\\\"][\\\"template\\\"][\\\"spec\\\"][\\\"containers\\\"])) for x in d[\\\"items\\\"] if x[\\\"metadata\\\"][\\\"name\\\"] in [\\\"rate\\\",\\\"reservation\\\"]]'; k\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'curl -s http://rate:9091/metrics; curl -s http://search:9092/metrics; cat services/rate/server.go; cat services/search/server.go' \"\nRUNS: /bin/bash -lc\n[...]\nrnal:8000/get_app'\nRUNS: /bin/bash -lc \"kubectl get cm failure-admin-rate failure-admin-geo -n hotel-reservation -o yaml; kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'ls failures; cat failures/*' \"\nSAYS: All pods are running, and a hotel search currently succeeds. I\u2019m checking recent traces and runtime settings to identify any intermittent latency issue. \nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'curl -s \\\"http://jaeger-backend.observe:16686/api/traces?service=frontend&limit=10\\\"' > /tmp/traces.json; python - <<'PY' import json x=json.load(open('/tmp/traces.json')) for t in x.get('data',[]):  print([(s['operationName'\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'cat config.json; cat tune/setting.go; curl -s http://consul:8500/v1/catalog/services; curl -s http://jaeger-backend.observe:16686/api/services'; kubectl get nodes -o wide; which docker; kubectl exec -n hotel-reservation deplo\nRUNS: /bin/bash -lc 'kubectl get svc frontend -n hotel-reservation -o yaml; kubectl get endpoints,endpointslices -n hotel-reservation -o wide; kubectl get pods -n hotel-reservation --show-labels'\nRUNS: /bin/bash -lc 'kubectl get endpointslice frontend-7796a -n hotel-reservation -o yaml'\nSAYS: I found an extra frontend EndpointSlice routing requests to unrelated pods on port 8500. This explains the intermittent connection failures and 404s. I\u2019ll remove it and verify requests through the frontend Service. \nRUNS: /bin/bash -lc \"kubectl delete endpointslice frontend-7796a -n hotel-reservation; kubectl get endpointslice -n hotel-reservation -l kubernetes.io/service-name=frontend -o wide; kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'for i in \"'$(seq 1 100); do curl --max-time 3 -s -o /dev/null -w\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'for i in \"'$(seq 1 30); do curl --max-time 3 -s -o /dev/null -w \"%{http_code} %{time_total}'\"\\\\n\\\" \\\"http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194\\\"; sleep 1; done' > /tmp/frontend\nSAYS: The incorrect EndpointSlice is removed. All 130 verification requests returned HTTP 200, including a 30-second sustained check; maximum latency was 102 ms. I\u2019m submitting the empty payload now. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Removed an incorrect frontend EndpointSlice that routed traffic to unrelated pods.  Verified 130 requests: all HTTP 200, maximum latency 102 ms.  Submitted the required empty payload once; submission accepted."
+      },
+      {
+        "agent": "codex",
+        "round": 2,
+        "exit": 0,
+        "minutes": 47.7,
+        "valid": true,
+        "solved": false,
+        "reason": "slo_violated",
+        "ttm": "560.8627455234528",
+        "timed_out": null,
+        "digest": "SAYS: I\u2019ll inspect the application\u2019s health and resource state, apply a mitigation, then submit the required empty solution for validation. \nRUNS: /bin/bash -lc 'kubectl get pods -n hotel-reservation -o wide; kubectl get deployments -n hotel-reservation'\nRUNS: /bin/bash -lc 'kubectl get svc -n hotel-reservation; kubectl get events -n hotel-reservation --sort-by=.lastTimestamp | tail -25; kubectl logs -n hotel-reservation deploy/frontend --tail=60; kubectl top pods -n hotel-reservation'\nRUNS: /bin/bash -lc 'curl -s http://host.docker.internal:8000/openapi.json'\nRUNS: /bin/bash -lc \"kubectl get deploy -n hotel-reservation -o yaml > /tmp/hotel-deploy.yaml; kubectl get networkpolicy -n hotel-reservation -o yaml; kubectl get svc -n observe; kubectl logs -n hotel-reservation deploy/profile --tail=35; kubectl logs -n hotel-reservation deploy/rate --tail=25; cat /tmp/h\nRUNS: /bin/bash -lc \"sed -n '1238,1265p' /tmp/hotel-deploy.yaml; sed -n '1495,1525p' /tmp/hotel-deploy.yaml; kubectl port-forward -n hotel-reservation svc/frontend 15000:5000 >/tmp/frontend-pf.log 2>&1 & kubectl port-forward -n observe svc/jaeger-backend 16686:16686 >/tmp/jaeger-pf.log 2>&1 & kubectl port\nRUNS: /bin/bash -lc \"curl -s 'http://localhost:16686/api/traces?service=frontend&limit=5' > /tmp/traces.json; python - <<'PY' import json x=json.load(op\n[...]\n x[\\\"items\\\"]]'; kubectl exec -n hotel-reservation deploy/frontend -- cat registry/registry.go\"\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'ls wrk2; command -v curl; command -v python; command -v go'; kubectl get deploy -n hotel-reservation rate search -o json | python -c 'import sys,json; x=json.load(sys.stdin); [print(d[\\\"metadata\\\"][\\\"name\\\"],d[\\\"metadata\\\"].g\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- sh -c 'for i in \"'$(seq 1 15); do curl -s -o /dev/null -w \"%{http_code} %{time_total}'\"\\\\n\\\" \\\"http://localhost:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=38.0235&lon=-122.095\\\"; done'; curl -sG localhost:19090/api/v1/quer\nSAYS: All 300 concurrent searches succeeded. Direct checks inside the cluster returned in 15\u201342 ms; the longer timings through port-forwarding don\u2019t appear to reflect application latency. I haven\u2019t reproduced an active failure. I\u2019ll increase rate-service capacity and limit search retries to reduce the risk of queueing and retry amplification during traffic spikes, then verify service health. \nRUNS: /bin/bash -lc 'kubectl set env -n hotel-reservation deploy/rate RATE_BACKEND_QPS_LIMIT=2000; kubectl set env -n hotel-reservation deploy/search RATE_RPC_MAX_ATTEMPTS=1; kubectl rollout status -n hotel-reservation deploy/rate --timeout=60s; kubectl rollout status -n hotel-reservation deploy/search --\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- curl -s http://consul:8500/v1/agent/services > /tmp/consul-services.json; python - <<'PY' import json for k,v in json.load(open('/tmp/consul-services.json')).items():print(k,v['Service'],v['Address'],v['Port']) PY kubectl get pods -\nRUNS: /bin/bash -lc \"kubectl exec -n hotel-reservation deploy/frontend -- curl -s -X PUT http://consul:8500/v1/agent/service/deregister/17df6269-d8e2-42f0-a201-175e4a8abfdc; kubectl exec -n hotel-reservation deploy/frontend -- curl -s -X PUT http://consul:8500/v1/agent/service/deregister/34f73df5-cc96-4d8\nSAYS: The capacity and retry changes have rolled out, and I removed the replaced pods\u2019 stale Consul registrations. All 20 post-change hotel searches succeeded in 11\u201353 ms. I\u2019m submitting the required empty solution now for sustained validation. \nRUNS: /bin/bash -lc \"curl -sS -X POST http://host.docker.internal:8000/submit -H 'Content-Type: application/json' -d '{\\\"solution\\\":\\\"\\\"}'\"\nSAYS: Applied capacity and retry mitigations and removed stale Consul registrations. Post-change searches all succeeded in 11\u201353 ms.  Submitted `{\"solution\": \"\"}` exactly once; validation submission was accepted. Sustained validation results are pending."
+      }
+    ],
+    "validated": {
+      "reproducibility": true,
+      "impact": true,
+      "observability": true,
+      "persistence": true,
+      "integrity": true,
+      "no_leak": true,
+      "solvability": true
+    },
+    "accepted": "2026-10-12 05:30:58"
+  }
+}
