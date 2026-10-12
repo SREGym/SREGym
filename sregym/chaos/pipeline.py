@@ -87,7 +87,7 @@ THEMES = [
     ("metastable", "Retry, timeout or caching behaviour creates a self-sustaining degraded state."),
 ]
 # Themes that have beaten a fixer attempt get proportionally more sessions.
-THEME_WEIGHTS = {"endpoints": 4, "recurrence": 4, "partial": 2, "intermittent": 2, "compound-partial": 2}
+THEME_WEIGHTS = {"endpoints": 2, "recurrence": 8, "partial": 2, "intermittent": 2, "compound-partial": 2}
 APPS = ["hotel_reservation", "social_network"]
 
 
@@ -338,9 +338,10 @@ class Pipeline:
             "and the obvious repairs (restart, rollback, scale up, cache flush) fail or do not last. "
             "Over seventy faults so far, every one was solved, usually within ten minutes: exotic encodings, "
             "validators, regexes and Lua edits in data or config were all found because the failing service "
-            "logged an error pointing at the store or file. What remains untested: damage that is re-applied "
-            "after the fixer repairs it, by something that is not a Kubernetes object, and routing faults below "
-            "the Deployment/Pod/Endpoints views a fixer inspects. Fixers verify with a few requests right "
+            "logged an error pointing at the store or file; stale EndpointSlices were found too. The first fixer "
+            "failure came from damage re-applied a few minutes after the fixer's repair by a detached process "
+            "inside an existing container, which is not a Kubernetes object; find other mechanisms and "
+            "targets in that spirit rather than repeating that exact one. Fixers verify with a few requests right "
             "after their repair and then submit, so anything that regresses minutes later or only hits a "
             "fraction of connections defeats that check.\n\n"
             + self.avoid_list() + "\n"
