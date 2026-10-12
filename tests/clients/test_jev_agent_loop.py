@@ -558,6 +558,17 @@ def test_investigator_escalates_once_and_pins_suggestions():
     assert res.summary()["escalated"] is True
 
 
+def test_no_escalation_when_turned_off():
+    llm = FakeLLM([])
+    inv, _ = investigator(
+        lambda i, s, q: dict(next_p=0.1, abnormal=0.1),
+        llm=llm,
+        config=cfg(max_steps=6, max_llm_calls=2, escalate=False),
+    )
+    res = inv.run()
+    assert res.escalations == [] and llm.calls == 0
+
+
 def test_no_escalation_without_spare_llm_call():
     llm = FakeLLM([])
     inv, _ = investigator(lambda i, s, q: dict(next_p=0.1), llm=llm, config=cfg(max_steps=3, max_llm_calls=1))

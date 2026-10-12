@@ -489,6 +489,7 @@ class ContainerRunner:
                 "JEV_AGENT_START_DELAY",
                 "JEV_AGENT_CRAFT",
                 "JEV_AGENT_MAX_CRAFT",
+                "JEV_AGENT_ESCALATE",
                 "JEV_AGENT_CHANGE_WINDOW_S",
                 "JEV_AGENT_ENOUGH_P",
                 "JEV_AGENT_ORIGIN_P",

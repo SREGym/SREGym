@@ -33,3 +33,10 @@ def test_stop_thresholds_are_read_from_the_environment(monkeypatch):
     cfg = config.load()
     assert (cfg.enough_p, cfg.origin_p_once, cfg.stable_steps) == (0.9, 0.95, 4)
     assert (cfg.origin_p, cfg.submit_p) == (0.6, 0.5)
+
+
+def test_escalation_is_on_unless_turned_off(monkeypatch):
+    monkeypatch.delenv("JEV_AGENT_ESCALATE", raising=False)
+    assert config.load().escalate is True
+    monkeypatch.setenv("JEV_AGENT_ESCALATE", "0")
+    assert config.load().escalate is False

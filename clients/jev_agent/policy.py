@@ -1085,7 +1085,7 @@ class Investigator:
     def _maybe_escalate(self) -> None:
         """Ask the LLM once for hypotheses and suggested actions, when the escalation trigger fires and the LLM
         budget allows."""
-        if self.escalations or not self._llm_allowed():
+        if not self.cfg.escalate or self.escalations or not self._llm_allowed():
             return
         reason = esc.trigger(self.steps, tool_steps=self.tool_steps, max_steps=self.cfg.max_steps)
         if reason is None:
