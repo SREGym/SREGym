@@ -101,8 +101,8 @@ from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop im
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.stripe.feature_config import StripeFeatureConfigProblem
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
-from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
-from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
+from sregym.conductor.problems.train_ticket.f17 import TrainTicketF17
+from sregym.conductor.problems.train_ticket.f22 import TrainTicketF22
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption

@@ -2,7 +2,7 @@ import logging
 
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.train_ticket import TrainTicketMitigationOracle
+from sregym.conductor.oracles.train_ticket.mitigation import TrainTicketMitigationOracle
 from sregym.conductor.oracles.workload import WorkloadOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_tt import TrainTicketFaultInjector
