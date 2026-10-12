@@ -82,6 +82,7 @@ def run_preflight_check(
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
         "cursor": "clients.cursor.driver",
+        "mini-sre": "clients.mini_sre.driver",
     }
     module_path = agent_driver_modules.get(agent_name)
     if not module_path:
