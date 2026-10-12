@@ -26,6 +26,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -138,6 +139,7 @@ def _public(obj, include_private: bool):
 _KUBECTL_OBSERVER: Callable[[dict], None] | None = None
 _RAW_RECORDER: RawRecorder | None = None
 _REPLAY: dict[str, list[dict]] | None = None
+_RECORDING_PAUSED = 0  # > 0 while preparatory reads run that a replay must not see (see recording_paused)
 
 
 def set_kubectl_observer(observer: Callable[[dict], None] | None) -> None:
@@ -161,6 +163,22 @@ class RawRecorder:
     def close(self) -> None:
         with self._lock:
             self._handle.close()
+
+
+@contextmanager
+def recording_paused():
+    """kubectl calls made inside this block (from any thread) are not written to the raw recording.
+
+    For preparatory reads that run while nothing else reads the cluster (e.g. during a start delay): a replay
+    matches calls by their arguments in recorded order, so an early copy of a collection call would be served to
+    the real collection later.
+    """
+    global _RECORDING_PAUSED
+    _RECORDING_PAUSED += 1
+    try:
+        yield
+    finally:
+        _RECORDING_PAUSED -= 1
 
 
 def set_kubectl_recorder(recorder: RawRecorder | None) -> None:
@@ -201,11 +219,14 @@ def _execute(args: list[str], timeout: int) -> tuple[int | None, str, str]:
         return rec.get("returncode"), rec.get("stdout") or "", rec.get("stderr") or ""
     at = now().isoformat()
     try:
-        proc = subprocess.run(["kubectl", *args], capture_output=True, text=True, timeout=timeout)
+        # errors="replace": logs and records can hold bytes that are not UTF-8; they must not abort the read
+        proc = subprocess.run(
+            ["kubectl", *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout
+        )
         result = (proc.returncode, proc.stdout, proc.stderr)
     except subprocess.TimeoutExpired:
         result = (None, "", f"timed out after {timeout}s")
-    if _RAW_RECORDER is not None:
+    if _RAW_RECORDER is not None and not _RECORDING_PAUSED:
         _RAW_RECORDER.write({"cmd": cmd, "at": at, "returncode": result[0], "stdout": result[1], "stderr": result[2]})
     return result
 

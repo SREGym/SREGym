@@ -18,6 +18,7 @@ import json
 import logging
 import re
 from collections import Counter
+from collections.abc import Callable
 from typing import Any
 
 from clients.jev_diag.checks import describe_probe
@@ -168,7 +169,7 @@ def workload_detail(kind: str, name: str, ns: str) -> dict:
     )
 
 
-def pod_details(pod_names: list[str], ns: str) -> tuple[list[dict], list[dict]]:
+def pod_details(pod_names: list[str], ns: str, message_chars: int = 120) -> tuple[list[dict], list[dict]]:
     """Pod state for up to three pods, and their warning events that are still current.
 
     A warning event whose last occurrence precedes the moment its pod became Ready (the pod is Ready now) is
@@ -206,7 +207,11 @@ def pod_details(pod_names: list[str], ns: str) -> tuple[list[dict], list[dict]]:
                     "ready_since": ready,
                     "conditions": [
                         f"{c.get('type')}={c.get('status')}"
-                        + (f" ({c.get('reason')}: {trim(c.get('message'), 120)})" if c.get("status") != "True" else "")
+                        + (
+                            f" ({c.get('reason')}: {trim(c.get('message'), message_chars)})"
+                            if c.get("status") != "True"
+                            else ""
+                        )
                         for c in st.get("conditions") or []
                     ],
                     "containers": [
@@ -308,14 +313,22 @@ def repeated_failures(lines: list[str]) -> list[dict]:
     return out[:MAX_REPEATED]
 
 
-def log_detail(pod_names: list[str], ns: str, pods: list[dict], change_time: str | None = None) -> dict:
+def log_detail(
+    pod_names: list[str],
+    ns: str,
+    pods: list[dict],
+    change_time: str | None = None,
+    rewrite: Callable[[str], str] | None = None,
+) -> dict:
     """Recent logs for up to two pods; each error signature is marked as still occurring or stopped.
 
     A signature is stopped when it has been silent for much longer than its own usual gap (see
     collector.signature_recency); errors of a crash-looping container count as occurring. `change_time` is
-    accepted for compatibility and ignored.
+    accepted for compatibility and ignored. `rewrite`, when given, is applied to every log line before it is
+    classified or shortened (jev_agent uses it to put the content of structured JSON lines first).
     """
     del change_time
+    rewrite = rewrite or (lambda line: line)
     lines: list[str] = []
     previous: dict[str, list[str]] = {}
     for name in pod_names[:2]:
@@ -333,7 +346,7 @@ def log_detail(pod_names: list[str], ns: str, pods: list[dict], change_time: str
                 ],
                 timeout=40,
             )
-            lines += [strip_ansi(ln) for ln in out.splitlines()]
+            lines += [rewrite(strip_ansi(ln)) for ln in out.splitlines()]
         except Exception as exc:  # noqa: BLE001
             lines.append(f"[logs unavailable for {name}: {str(exc)[:120]}]")
         pod = next((p for p in pods if p.get("name") == name), {})
@@ -344,7 +357,7 @@ def log_detail(pod_names: list[str], ns: str, pods: list[dict], change_time: str
                         ["logs", name, "-n", ns, "-c", cs["name"], "--previous", "--tail=40"], timeout=30
                     )
                     previous[f"{name}/{cs['name']}"] = [
-                        trim(strip_ansi(ln), 200) for ln in prev.splitlines()[-MAX_TAIL_LINES:]
+                        trim(rewrite(strip_ansi(ln)), 200) for ln in prev.splitlines()[-MAX_TAIL_LINES:]
                     ]
                 except Exception:  # noqa: BLE001
                     pass
@@ -391,7 +404,13 @@ def configmap_detail(names: list[str], ns: str) -> dict:
             take = min(CONFIG_VALUE_CHARS, max(0, budget))
             excerpt[key] = trim(str(value).replace("\n", " ⏎ "), take) if take else "…"
             budget -= len(excerpt[key])
-        out[name] = {"last_update": last_update_time(cm.get("metadata", {})), "keys": sorted(data), "data": excerpt}
+        meta = cm.get("metadata", {})
+        out[name] = {
+            "last_update": last_update_time(meta),
+            "created": meta.get("creationTimestamp"),
+            "keys": sorted(data),
+            "data": excerpt,
+        }
     return out
 
 

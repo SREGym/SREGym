@@ -36,8 +36,11 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
+from typesafe_sdk import Noul  # noqa: E402
+
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.harness.token_usage import usage_metrics  # noqa: E402
+from clients.jev_diag import decisions_client  # noqa: E402
 from clients.jev_diag.classifier import (  # noqa: E402
     DEFAULT_STATE_TOKEN_BUDGET,
     JevDiagnoser,
@@ -68,6 +71,17 @@ SUBMIT_TIMEOUT = 310  # the conductor may hold a submission for up to 300s
 
 def run_preflight() -> None:
     """Fail fast when the TypeSafe key is missing or the API is unreachable."""
+    if decisions_client.enabled():
+        try:
+            client = decisions_client.make_client(timeout=60)
+            response = client.system_one(
+                {"check": "preflight"}, {"ok": Noul(instructions="Is this a preflight check?")}
+            )
+        except Exception as exc:  # noqa: BLE001 - report and exit non-zero
+            print(f"Decisions API check failed: {exc}")
+            sys.exit(1)
+        print(f"Decisions API reachable; using {client.model} (answered model {response.model})")
+        return
     if not os.environ.get("TYPESAFE_API_KEY", "").strip():
         print("missing TYPESAFE_API_KEY")
         sys.exit(1)
@@ -207,7 +221,12 @@ def main() -> None:
     trace = DecisionTrace(
         prefix.with_name(prefix.name + "_trace.jsonl"),
         problem_id=problem_id,
-        run_args={**vars(args), "typesafe_model": jev_model() or "jev-latest"},
+        run_args={
+            **vars(args),
+            "typesafe_model": jev_model() or "jev-latest",
+            "decision_backend": os.getenv(decisions_client.BACKEND_ENV) or "typesafe",
+            "decisions_model": os.getenv(decisions_client.MODEL_ENV) or decisions_client.DEFAULT_MODEL,
+        },
     )
     set_kubectl_observer(trace.kubectl_observer())
     recorder = None

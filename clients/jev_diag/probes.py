@@ -31,7 +31,10 @@ logger = logging.getLogger("all.jev_diag.probes")
 EXEC_TIMEOUT = 20
 DEFAULT_BROKER_INTERVAL = 15
 # Memory a command needs in the target container, beyond the container's current usage.
-NATIVE_TOOL_BYTES = 8 * 1024**2  # valkey-cli, redis-cli, pg_isready, mysqladmin: a few MB of RSS
+# valkey-cli, redis-cli, pg_isready, mysqladmin. Measured: redis-cli 4.3Mi peak RSS of which 0.85Mi anonymous,
+# pg_isready 6.3Mi of which 0.9Mi anonymous; the rest is file-backed (binary, libraries), which the kernel reclaims
+# under cgroup pressure instead of OOM-killing. 3Mi leaves ~3x margin over the anonymous part.
+NATIVE_TOOL_BYTES = 3 * 1024**2
 SHELL_TOOL_BYTES = 256 * 1024**2  # mongosh (Node.js)
 JVM_TOOL_BYTES = 768 * 1024**2  # Kafka command-line tools start a JVM
 
@@ -236,7 +239,7 @@ _BACKEND_COMMANDS: dict[str, tuple[tuple[list[str], int], ...]] = {
     ),
     "postgresql": ((["pg_isready", "-h", "127.0.0.1", "-p", "{port}"], NATIVE_TOOL_BYTES),),
     "mongodb": (
-        (["mongo", "--quiet", "--port", "{port}", "--eval", "db.runCommand({ping:1}).ok"], 4 * NATIVE_TOOL_BYTES),
+        (["mongo", "--quiet", "--port", "{port}", "--eval", "db.runCommand({ping:1}).ok"], 32 * 1024**2),
         (["mongosh", "--quiet", "--port", "{port}", "--eval", "db.runCommand({ping:1}).ok"], SHELL_TOOL_BYTES),
     ),
     "mysql": ((["mysqladmin", "-h", "127.0.0.1", "-P", "{port}", "ping"], NATIVE_TOOL_BYTES),),
