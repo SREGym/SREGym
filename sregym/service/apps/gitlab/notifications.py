@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from sregym.service.apps.gitlab.notification_workflow import reconcile_delayed, reconcile_immediate
-from sregym.service.apps.gitlab.recovery import ARCHIVE, GitLabRecovery
+from sregym.service.apps.gitlab.reconciliation import reconcile_delayed, reconcile_immediate
+from sregym.service.apps.gitlab.recovery import ARCHIVE, GitLabRecoveryApplication
 
 NOTIFICATION_REASON = "issue-update"
 NOTIFICATION_JOURNAL = "/recovery/journal/acknowledged-notifications.json"
@@ -33,12 +33,35 @@ INTERMITTENT_MAILBOX = MailProvider((*AMBIGUOUS_MAILBOX.scripts, "intermittent_m
 DELAYED_MAILBOX = MailProvider((*INTERMITTENT_MAILBOX.scripts, "delayed_mail_sink.py"))
 
 
-class GitLabNotificationRecovery(GitLabRecovery):
-    data_volumes = (*GitLabRecovery.data_volumes, "notification-mailbox")
-    auxiliary_deployments = (*GitLabRecovery.auxiliary_deployments, "notification-mailbox")
+@dataclass(frozen=True)
+class NotificationPreset:
+    provider: MailProvider = MAILBOX
+    describe: bool = True
+
+
+STANDARD_NOTIFICATIONS = NotificationPreset()
+AMBIGUOUS_NOTIFICATIONS = NotificationPreset(AMBIGUOUS_MAILBOX)
+INTERMITTENT_NOTIFICATIONS = NotificationPreset(INTERMITTENT_MAILBOX)
+DELAYED_NOTIFICATIONS = NotificationPreset(DELAYED_MAILBOX)
+UNANNOUNCED_NOTIFICATIONS = NotificationPreset(describe=False)
+UNANNOUNCED_AMBIGUOUS_NOTIFICATIONS = NotificationPreset(AMBIGUOUS_MAILBOX, describe=False)
+
+
+class GitLabNotificationApplication(GitLabRecoveryApplication):
+    data_volumes = (*GitLabRecoveryApplication.data_volumes, "notification-mailbox")
+    auxiliary_deployments = (*GitLabRecoveryApplication.auxiliary_deployments, "notification-mailbox")
     mail_provider = MAILBOX
     describe_notifications = True
     smtp_enabled = True
+    notification_preset = STANDARD_NOTIFICATIONS
+
+    def __init__(
+        self, tier="replicated", storage_class="openebs-hostpath", *, preset: NotificationPreset | None = None
+    ):
+        self.notification_preset = preset or self.notification_preset
+        self.mail_provider = self.notification_preset.provider
+        self.describe_notifications = self.notification_preset.describe
+        super().__init__(tier, storage_class)
 
     def database_document(self):
         document = super().database_document()
@@ -356,34 +379,34 @@ print('stored', {count})
         )
 
 
-class GitLabNotificationAmbiguity(GitLabNotificationRecovery):
-    mail_provider = AMBIGUOUS_MAILBOX
+class GitLabNotificationAmbiguityApplication(GitLabNotificationApplication):
+    notification_preset = AMBIGUOUS_NOTIFICATIONS
 
 
-class GitLabNotificationIntermittent(GitLabNotificationRecovery):
-    mail_provider = INTERMITTENT_MAILBOX
+class GitLabNotificationIntermittentApplication(GitLabNotificationApplication):
+    notification_preset = INTERMITTENT_NOTIFICATIONS
 
     def deliver_reconciled_notifications(self, receipts):
         return reconcile_immediate(self, receipts)
 
 
-class GitLabNotificationDelayedAudit(GitLabNotificationRecovery):
-    mail_provider = DELAYED_MAILBOX
+class GitLabNotificationDelayedAuditApplication(GitLabNotificationApplication):
+    notification_preset = DELAYED_NOTIFICATIONS
     reconciliation_batches = 4
 
     def deliver_reconciled_notifications(self, receipts):
         return reconcile_delayed(self, receipts)
 
 
-class GitLabNotificationUnannounced(GitLabNotificationRecovery):
-    describe_notifications = False
+class GitLabNotificationUnannouncedApplication(GitLabNotificationApplication):
+    notification_preset = UNANNOUNCED_NOTIFICATIONS
 
 
-class GitLabNotificationUnannouncedAmbiguity(GitLabNotificationAmbiguity):
-    describe_notifications = False
+class GitLabNotificationUnannouncedAmbiguityApplication(GitLabNotificationAmbiguityApplication):
+    notification_preset = UNANNOUNCED_AMBIGUOUS_NOTIFICATIONS
 
 
-class GitLabNotificationExpanded(GitLabNotificationDelayedAudit):
+class GitLabNotificationExpandedApplication(GitLabNotificationDelayedAuditApplication):
     reconciliation_batches = 8
 
     @property
@@ -413,3 +436,13 @@ class GitLabNotificationExpanded(GitLabNotificationDelayedAudit):
             )
             + "\n",
         )
+
+
+# Existing class names remain available to callers.
+GitLabNotificationRecovery = GitLabNotificationApplication
+GitLabNotificationAmbiguity = GitLabNotificationAmbiguityApplication
+GitLabNotificationIntermittent = GitLabNotificationIntermittentApplication
+GitLabNotificationDelayedAudit = GitLabNotificationDelayedAuditApplication
+GitLabNotificationUnannounced = GitLabNotificationUnannouncedApplication
+GitLabNotificationUnannouncedAmbiguity = GitLabNotificationUnannouncedAmbiguityApplication
+GitLabNotificationExpanded = GitLabNotificationExpandedApplication

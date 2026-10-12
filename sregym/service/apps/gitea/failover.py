@@ -8,7 +8,7 @@ different issues. Neither history alone is the complete record.
 import time
 from collections import Counter
 
-from sregym.service.apps.gitea.recovery import GiteaRecovery
+from sregym.service.apps.gitea.recovery import GiteaRecoveryApplication
 
 #: The demoted primary's full state at the moment it stopped serving writes.
 EAST_SNAPSHOT = "/recovery/east/pre-partition.dump"
@@ -21,7 +21,7 @@ PARTITION_JOURNAL = "/recovery/journal/partition-acknowledged.json"
 DIVERGENCE_COUNTS = {"single": (12, 6, 6), "replicated": (60, 30, 30)}
 
 
-class GiteaFailover(GiteaRecovery):
+class GiteaFailoverApplication(GiteaRecoveryApplication):
     def get_app_json(self):
         result = super().get_app_json()
         result["Desc"] += " The database runs in two regions behind a failover orchestrator."
@@ -90,3 +90,7 @@ class GiteaFailover(GiteaRecovery):
             "create", records=[{"repository": r["repository"], "title": r["title"], "body": r["body"]} for r in missing]
         )
         return [{"original_number": before["number"], **after} for before, after in zip(missing, placed, strict=True)]
+
+
+# Existing class names remain available to callers.
+GiteaFailover = GiteaFailoverApplication

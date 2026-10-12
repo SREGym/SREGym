@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.stripe_config_recovery import StripeConfigRecoveryOracle, compare_state
-from sregym.service.apps.stripe.configuration import StripeConfig, _configuration_safety
+from sregym.conductor.oracles.stripe.config_recovery import StripeConfigRecoveryOracle, compare_state
+from sregym.service.apps.stripe.configuration import StripeConfigApplication, _configuration_safety
 from sregym.service.apps.stripe.runtime import feature_edge as edge
 
 
@@ -103,7 +103,7 @@ def test_private_verifier_executes_with_its_dependencies(tmp_path, monkeypatch, 
             exec(input_text, {})
         return output.getvalue()
 
-    app = object.__new__(StripeConfig)
+    app = object.__new__(StripeConfigApplication)
     app.command = run_verifier
     result = app.configuration_safety()
     assert result["safe"] is not expanded_source
@@ -111,7 +111,7 @@ def test_private_verifier_executes_with_its_dependencies(tmp_path, monkeypatch, 
 
 
 def test_agent_visible_runtime_excludes_grading_policy():
-    app = object.__new__(StripeConfig)
+    app = object.__new__(StripeConfigApplication)
     documents = app.application_documents()
     scripts = next(document["data"] for document in documents if document["kind"] == "ConfigMap")
     source = scripts["feature_edge.py"]

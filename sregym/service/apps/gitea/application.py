@@ -3,30 +3,31 @@
 import base64
 import json
 import secrets
-import subprocess
 import time
 from pathlib import Path
 
-import yaml
-
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
-from sregym.paths import BASE_DIR
 from sregym.service.apps.base import Application
-from sregym.service.apps.components.cnpg import ensure_operator
-from sregym.service.apps.components.postgres import POSTGRES_IMAGE, TIERS
+from sregym.service.apps.components.client_runner import PythonClientRunner
+from sregym.service.apps.components.cnpg import PostgresCluster, ensure_operator
+from sregym.service.apps.components.kubernetes import KubernetesCommands
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.apps.persistent import cleanup_persistent_namespace
+from sregym.service.apps.postgres import POSTGRES_IMAGE, TIERS
 from sregym.service.kubectl import KubeCtl
 
 GITEA_IMAGE = "gitea/gitea:1.27.3"
-FIXTURES = Path(__file__).parents[1] / "fixtures" / "gitea-zoo"
+FIXTURES = Path(__file__).with_name("fixtures") / "gitea-zoo"
 
 
-class Gitea(Application):
+class GiteaApplication(KubernetesCommands, Application):
+    app_id = "gitea"
+    metadata_file = Path(__file__).with_name("metadata.json")
+
     def __init__(self, tier="replicated", storage_class="openebs-hostpath"):
         if tier not in TIERS:
             raise ValueError(f"Unknown Gitea tier {tier!r}; choose from {tuple(TIERS)}")
-        super().__init__(BASE_DIR / "service/metadata/gitea.json")
+        super().__init__(self.metadata_file)
         self.scale_tier = tier
         self.members = TIERS[tier]
         self.storage_class = storage_class
@@ -49,22 +50,13 @@ class Gitea(Application):
             metadata["Desc"] += f" Tier {self.scale_tier}: {self.members} PostgreSQL members and one Gitea server."
         return metadata
 
-    def command(self, *args, input_text=None, timeout=120):
-        return subprocess.run(
-            ["kubectl", "-n", self.namespace, *args],
-            input=input_text,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=timeout,
-        ).stdout
+    @property
+    def postgres(self) -> PostgresCluster:
+        return PostgresCluster(self.command, "gitea-db", "gitea")
 
     @property
     def expected_volume_count(self):
         return self.members + 1
-
-    def apply(self, documents):
-        self.command("apply", "-f", "-", input_text=yaml.safe_dump_all(documents, sort_keys=False))
 
     def render(self):
         labels = {"app": "gitea"}
@@ -92,11 +84,8 @@ class Gitea(Application):
             "GITEA__log__LEVEL": "Info",
         }
         return [
-            {
-                "apiVersion": "postgresql.cnpg.io/v1",
-                "kind": "Cluster",
-                "metadata": {"name": "gitea-db"},
-                "spec": {
+            self.postgres.document(
+                {
                     "instances": self.members,
                     "imageName": POSTGRES_IMAGE,
                     "bootstrap": {
@@ -109,8 +98,8 @@ class Gitea(Application):
                         "limits": {"cpu": "1", "memory": "768Mi"},
                     },
                     "affinity": {"enablePodAntiAffinity": True, "podAntiAffinityType": "preferred"},
-                },
-            },
+                }
+            ),
             {
                 "apiVersion": "v1",
                 "kind": "PersistentVolumeClaim",
@@ -255,39 +244,13 @@ class Gitea(Application):
         self.check_workflow()
 
     def cluster(self):
-        return json.loads(self.command("get", "cluster.postgresql.cnpg.io", "gitea-db", "-o", "json"))
+        return self.postgres.get()
 
     def database_pods(self):
-        pods = json.loads(self.command("get", "pods", "-l", "cnpg.io/cluster=gitea-db", "-o", "json"))["items"]
-        return [
-            p
-            for p in pods
-            if any(c["name"] == "postgres" for c in p["spec"]["containers"])
-            and not p["metadata"].get("deletionTimestamp")
-        ]
+        return self.postgres.pods()
 
     def sql(self, statement, pod=None):
-        pod = pod or self.cluster()["status"]["currentPrimary"]
-        return self.command(
-            "exec",
-            "-i",
-            pod,
-            "-c",
-            "postgres",
-            "--",
-            "psql",
-            "-U",
-            "postgres",
-            "-d",
-            "gitea",
-            "-X",
-            "-A",
-            "-t",
-            "-v",
-            "ON_ERROR_STOP=1",
-            input_text=statement,
-            timeout=45,
-        ).strip()
+        return self.postgres.sql(statement, pod or self.cluster()["status"]["currentPrimary"])
 
     def wait_database(self, timeout=600):
         deadline = time.monotonic() + timeout
@@ -313,11 +276,11 @@ class Gitea(Application):
         raise RuntimeError("PostgreSQL cluster did not converge to its required primary and replica count")
 
     def run_client(self, mode, **arguments):
-        source = Path(__file__).with_name("workload.py").read_text()
         # The script and arguments travel on stdin; no host ports or local auth files are needed.
-        source += "\nrun(" + repr(mode) + ", **json.loads(" + repr(json.dumps(arguments)) + "))\n"
-        output = self.command("exec", "-i", "application-client", "--", "python", "-", input_text=source, timeout=180)
-        return json.loads(output)
+        return PythonClientRunner(self.command).run(
+            [Path(__file__).with_name("workflow.py")],
+            "run(" + repr(mode) + ", **json.loads(" + repr(json.dumps(arguments)) + "))",
+        )
 
     def check_workflow(self, token=None):
         result = self.run_client("probe", token=token or secrets.token_hex(16))
@@ -363,3 +326,7 @@ class Gitea(Application):
 
     def delete(self):
         self.cleanup()
+
+
+# Existing class names remain available to callers.
+Gitea = GiteaApplication

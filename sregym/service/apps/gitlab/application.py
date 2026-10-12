@@ -2,13 +2,15 @@
 
 from pathlib import Path
 
-from sregym.service.apps.components.postgres import PostgresApplication
+from sregym.service.apps.postgres import PostgresApplication
 
 GITLAB_IMAGE = "gitlab/gitlab-ce:18.11.12-ce.0"
 REDIS_IMAGE = "redis:7.4.2-alpine"
 
 
-class GitLabCE(PostgresApplication):
+class GitLabApplication(PostgresApplication):
+    app_id = "gitlab"
+    metadata_file = Path(__file__).with_name("metadata.json")
     slug = "gitlab-ce"
     frontend_port = 80
     health_path = "/users/sign_in"
@@ -116,3 +118,7 @@ puts 'Application API access initialized'
 
     def record_query(self, token):
         return f"SELECT count(*) FROM issues WHERE title = 'healthcheck-{token}';"
+
+
+# Existing class names remain available to callers.
+GitLabCE = GitLabApplication

@@ -4,7 +4,7 @@ Compaction and admission acknowledgements arrive before the next safe operation
 window. The event ledger records operations immediately.
 """
 
-from sregym.service.apps.coordination.application import CoordinationCluster
+from sregym.service.apps.coordination.application import CoordinationApplication
 
 #: Seconds the reported compaction state trails the real one, by tier. Both are
 #: well under their tier's stability window (60s and 90s).
@@ -16,7 +16,7 @@ ACK_LAG = {"single": 40, "replicated": 55}
 ADMISSION_ACK_LAG = {"single": 30, "replicated": 40}
 
 
-class LaggingAck(CoordinationCluster):
+class LaggingAckApplication(CoordinationApplication):
     """Configure one or more acknowledgement lags on the coordinator."""
 
     #: Map each acknowledgement setting to its delay in seconds for each tier.
@@ -43,13 +43,19 @@ class LaggingAck(CoordinationCluster):
         return documents
 
 
-class CoordinationLaggingAck(LaggingAck):
+class CoordinationLaggingAckApplication(LaggingAckApplication):
     """The compaction acknowledgement trails the compaction."""
 
     LAGS = {"COMPACTION_ACK_LAG_SECONDS": ACK_LAG}
 
 
-class CoordinationLaggingAdmission(LaggingAck):
+class CoordinationLaggingAdmissionApplication(LaggingAckApplication):
     """The reported admitted fraction trails each admission step."""
 
     LAGS = {"ADMISSION_ACK_LAG_SECONDS": ADMISSION_ACK_LAG}
+
+
+# Existing class names remain available to callers.
+LaggingAck = LaggingAckApplication
+CoordinationLaggingAck = CoordinationLaggingAckApplication
+CoordinationLaggingAdmission = CoordinationLaggingAdmissionApplication

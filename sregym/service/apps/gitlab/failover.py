@@ -7,7 +7,7 @@ journal, so neither side alone is the complete record.
 
 from collections import Counter
 
-from sregym.service.apps.gitlab.recovery import GitLabRecovery
+from sregym.service.apps.gitlab.recovery import GitLabRecoveryApplication
 
 #: The demoted primary's full state at the moment it stopped serving writes.
 EAST_SNAPSHOT = "/recovery/east/pre-partition.dump"
@@ -20,7 +20,7 @@ PARTITION_JOURNAL = "/recovery/journal/partition-acknowledged.json"
 DIVERGENCE_COUNTS = {"single": (3, 12, 6, 6), "replicated": (5, 60, 30, 30)}
 
 
-class GitLabFailover(GitLabRecovery):
+class GitLabFailoverApplication(GitLabRecoveryApplication):
     @property
     def recovery_counts(self):
         projects, historical, orphaned, _ = DIVERGENCE_COUNTS[self.scale_tier]
@@ -80,3 +80,7 @@ class GitLabFailover(GitLabRecovery):
             return []
         placed = self.recovery_client("create", records=[{k: r[k] for k in fields} for r in missing])
         return [{"original_iid": before["iid"], **after} for before, after in zip(missing, placed, strict=True)]
+
+
+# Existing class names remain available to callers.
+GitLabFailover = GitLabFailoverApplication

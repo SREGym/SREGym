@@ -4,8 +4,8 @@ import json
 import time
 from pathlib import Path
 
-from sregym.service.apps.components.postgres import POSTGRES_IMAGE
-from sregym.service.apps.gitlab.application import GitLabCE
+from sregym.service.apps.gitlab.application import GitLabApplication
+from sregym.service.apps.postgres import POSTGRES_IMAGE
 
 ARCHIVE = "/recovery/backups/staging.dump"
 JOURNAL = "/recovery/journal/acknowledged-issues.json"
@@ -26,8 +26,8 @@ SELECT json_build_object(
 """
 
 
-class GitLabRecovery(GitLabCE):
-    data_volumes = (*GitLabCE.data_volumes, "gitlab-recovery-archives")
+class GitLabRecoveryApplication(GitLabApplication):
+    data_volumes = (*GitLabApplication.data_volumes, "gitlab-recovery-archives")
 
     @property
     def recovery_counts(self):
@@ -177,3 +177,7 @@ class GitLabRecovery(GitLabCE):
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(3)
+
+
+# Existing class names remain available to callers.
+GitLabRecovery = GitLabRecoveryApplication

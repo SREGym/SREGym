@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from sregym.service.apps.coordination.runtime import coordination_store
-from sregym.service.apps.mattermost.application import Mattermost
+from sregym.service.apps.mattermost.application import MattermostApplication
 
 CONTROL_VOLUME = "coordination-control"
 #: Customer-facing services that depend on coordination for backend lookup.
@@ -27,7 +27,7 @@ TIER_SETTINGS = {
 }
 
 
-class CoordinationCluster(Mattermost):
+class CoordinationApplication(MattermostApplication):
     """Reuses the PostgreSQL SaaS lifecycle for its business-state checks.
 
     The coordination incident is about availability and recovery sequencing
@@ -36,7 +36,7 @@ class CoordinationCluster(Mattermost):
     agent cannot "recover" by discarding business state.
     """
 
-    data_volumes = (*Mattermost.data_volumes, CONTROL_VOLUME)
+    data_volumes = (*MattermostApplication.data_volumes, CONTROL_VOLUME)
     auxiliary_deployments = ()
     #: Not auxiliary: these legitimately scale and one is legitimately deletable,
     #: so the shared oracle's exactly-one-replica rule must not apply to them.
@@ -288,3 +288,7 @@ class CoordinationCluster(Mattermost):
         and the dropped-request meter is part of the grade.
         """
         return
+
+
+# Existing class names remain available to callers.
+CoordinationCluster = CoordinationApplication

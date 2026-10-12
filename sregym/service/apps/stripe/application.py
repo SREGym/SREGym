@@ -2,14 +2,15 @@
 
 from pathlib import Path
 
-from sregym.service.apps.components.postgres import PostgresApplication
+from sregym.service.apps.helpers import image_reference
+from sregym.service.apps.postgres import PostgresApplication
 
-STRIPE_IMAGE = (
-    "ghcr.io/sregym/stripe-marathon:20261010@sha256:2bb5997c3fa8177e77045e59ff17d66ca20e8040a666e28848ca4b8bd9406cc9"
-)
+STRIPE_IMAGE = image_reference("stripe-backend")
 
 
-class StripeMarathon(PostgresApplication):
+class StripeApplication(PostgresApplication):
+    app_id = "stripe"
+    metadata_file = Path(__file__).with_name("metadata.json")
     slug = "stripe-marathon"
     frontend_port = 8000
     health_path = "/v1/health"
@@ -70,3 +71,7 @@ class StripeMarathon(PostgresApplication):
             + token
             + "');"
         )
+
+
+# Existing class names remain available to callers.
+StripeMarathon = StripeApplication

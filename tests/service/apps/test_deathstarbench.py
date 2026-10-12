@@ -8,8 +8,8 @@ from sregym.service.apps.deathstarbench.application import (
     LABEL,
     OPENRESTY_IMAGE,
     SCALE_TIERS,
-    ScaledHotelReservation,
-    ScaledSocialNetwork,
+    ScaledHotelReservationApplication,
+    ScaledSocialNetworkApplication,
     member_hosts,
     mongo_resources,
 )
@@ -17,7 +17,7 @@ from sregym.service.apps.deathstarbench.application import (
 
 @pytest.mark.parametrize("tier", SCALE_TIERS)
 def test_hotel_renders_real_replica_sets_without_mutating_source(tier):
-    app = ScaledHotelReservation(tier)
+    app = ScaledHotelReservationApplication(tier)
     original = app.source_documents()
     source = copy.deepcopy(original)
     app.source_documents = lambda: source
@@ -39,10 +39,10 @@ def test_hotel_renders_real_replica_sets_without_mutating_source(tier):
     assert config["GeoMongoAddress"].endswith("/?replicaSet=mongodb-geo")
     assert config["GeoMongoAddress"].count(":27017") == app.scale.members
     # Source files are unchanged, despite rendering a different deployment topology.
-    assert original == ScaledHotelReservation(tier).source_documents()
+    assert original == ScaledHotelReservationApplication(tier).source_documents()
 
 
-@pytest.mark.parametrize("factory", [ScaledHotelReservation, ScaledSocialNetwork])
+@pytest.mark.parametrize("factory", [ScaledHotelReservationApplication, ScaledSocialNetworkApplication])
 def test_custom_storage_class_remains_supported(factory):
     app = factory(storage_class="custom-storage")
     stateful_sets = [document for document in app.render() if document["kind"] == "StatefulSet"]
@@ -53,7 +53,7 @@ def test_custom_storage_class_remains_supported(factory):
     )
 
 
-@pytest.mark.parametrize("factory", [ScaledHotelReservation, ScaledSocialNetwork])
+@pytest.mark.parametrize("factory", [ScaledHotelReservationApplication, ScaledSocialNetworkApplication])
 def test_workflow_uses_the_application_package_script(factory):
     app = factory()
     app.command = Mock(return_value=json.dumps({"token": "customer-record"}))
@@ -68,11 +68,11 @@ def test_workflow_uses_the_application_package_script(factory):
 
 def test_invalid_tier_fails_before_cluster_access():
     with pytest.raises(ValueError, match="Unknown DeathStarBench tier"):
-        ScaledHotelReservation("typo")
+        ScaledHotelReservationApplication("typo")
 
 
 def test_social_client_seed_list_preserves_upstream_port_append_contract():
-    app = ScaledSocialNetwork("replicated")
+    app = ScaledSocialNetworkApplication("replicated")
     app.databases = ["user-mongodb"]
     docs = [
         {
@@ -93,7 +93,7 @@ def test_social_client_seed_list_preserves_upstream_port_append_contract():
 
 @pytest.mark.parametrize("tier", SCALE_TIERS)
 def test_social_uses_pinned_multiarch_frontend_without_changing_the_source(tier):
-    app = ScaledSocialNetwork(tier)
+    app = ScaledSocialNetworkApplication(tier)
     original = app.source_documents()
     documents = app.render()
     deployment = next(d for d in documents if d["kind"] == "Deployment" and d["metadata"]["name"] == "nginx-thrift")
@@ -111,7 +111,7 @@ def test_authenticated_members_have_private_key_and_bounded_cache():
 
 
 def test_bootstrap_refuses_to_force_existing_replica_set_configuration():
-    app = ScaledHotelReservation()
+    app = ScaledHotelReservationApplication()
     app.mongo = Mock()
     app.wait_database = Mock()
     app._bootstrap_database("mongodb-user")
@@ -122,14 +122,14 @@ def test_bootstrap_refuses_to_force_existing_replica_set_configuration():
 
 
 def test_source_database_count_drift_is_rejected():
-    app = ScaledHotelReservation()
+    app = ScaledHotelReservationApplication()
     app.source_documents = lambda: []
     with pytest.raises(ValueError, match="Expected 6 MongoDB deployments"):
         app.render()
 
 
 def test_social_redeployment_does_not_reseed_existing_incident_state():
-    app = ScaledSocialNetwork()
+    app = ScaledSocialNetworkApplication()
     app.command = Mock(return_value="configmap/business-data-seeded\n")
     app.mongo_primary = Mock()
     app.apply = Mock()
@@ -140,7 +140,7 @@ def test_social_redeployment_does_not_reseed_existing_incident_state():
 
 
 def test_social_seed_uses_matching_application_data_prefix():
-    app = ScaledSocialNetwork()
+    app = ScaledSocialNetworkApplication()
     app.command = Mock(side_effect=["", json.dumps({"users": 962, "posts": 962})])
     app.mongo_primary = Mock()
     app.apply = Mock()
@@ -153,7 +153,7 @@ def test_social_seed_uses_matching_application_data_prefix():
 
 
 def test_social_media_readiness_matches_its_service_and_nginx_listener():
-    app = ScaledSocialNetwork("replicated")
+    app = ScaledSocialNetworkApplication("replicated")
     documents = app.render()
     deployment = next(d for d in documents if d["kind"] == "Deployment" and d["metadata"]["name"] == "media-frontend")
     service = next(d for d in documents if d["kind"] == "Service" and d["metadata"]["name"] == "media-frontend")

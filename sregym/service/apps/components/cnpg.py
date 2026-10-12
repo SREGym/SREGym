@@ -3,6 +3,7 @@
 import hashlib
 import json
 import urllib.request
+from collections.abc import Callable
 
 VERSION = "1.30.1"
 OPERATOR_IMAGE = f"ghcr.io/cloudnative-pg/cloudnative-pg:{VERSION}"
@@ -10,6 +11,58 @@ MANIFEST_URL = (
     f"https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-{VERSION}.yaml"
 )
 MANIFEST_SHA256 = "37237f145d8138256ea25ae830f87759255665ff08f8d552fdd8224a5ec032fb"
+
+
+class PostgresCluster:
+    """CNPG resource and SQL operations without application-specific configuration."""
+
+    def __init__(self, command: Callable, name: str, database: str):
+        self.command = command
+        self.name = name
+        self.database = database
+
+    def document(self, spec: dict) -> dict:
+        return {
+            "apiVersion": "postgresql.cnpg.io/v1",
+            "kind": "Cluster",
+            "metadata": {"name": self.name},
+            "spec": spec,
+        }
+
+    def get(self) -> dict:
+        return json.loads(self.command("get", "cluster.postgresql.cnpg.io", self.name, "-o", "json"))
+
+    def pods(self) -> list[dict]:
+        pods = json.loads(self.command("get", "pods", "-l", f"cnpg.io/cluster={self.name}", "-o", "json"))["items"]
+        return [
+            pod
+            for pod in pods
+            if not pod["metadata"].get("deletionTimestamp")
+            and any(container["name"] == "postgres" for container in pod["spec"]["containers"])
+        ]
+
+    def sql(self, statement: str, pod: str | None = None) -> str:
+        pod = pod or self.get()["status"]["currentPrimary"]
+        return self.command(
+            "exec",
+            "-i",
+            pod,
+            "-c",
+            "postgres",
+            "--",
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            self.database,
+            "-X",
+            "-A",
+            "-t",
+            "-v",
+            "ON_ERROR_STOP=1",
+            input_text=statement,
+            timeout=45,
+        ).strip()
 
 
 def ensure_operator(command):

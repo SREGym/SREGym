@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.gitea import GiteaOracle
-from sregym.conductor.oracles.saas import SaaSOracle
+from sregym.conductor.oracles.gitea.application import GiteaApplicationOracle
+from sregym.conductor.oracles.postgres_application import PostgresApplicationOracle
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
 
 READY_DEPLOYMENT = {
@@ -26,7 +26,7 @@ def oracle(monkeypatch):
     app = SimpleNamespace(slug="mattermost", auxiliary_deployments=(), scale_tier="replicated", members=3)
     app.command = Mock(return_value=json.dumps(READY_DEPLOYMENT))
     app.run_client, app.check_workflow = Mock(), Mock(return_value={"token": "b" * 32})
-    result = SaaSOracle(SimpleNamespace(app=app))
+    result = PostgresApplicationOracle(SimpleNamespace(app=app))
     result.baseline = {"token": "a" * 32}
     result.volumes = {"data": "original"}
     result.volume_ids = Mock(return_value=result.volumes)
@@ -43,7 +43,7 @@ def test_recreated_storage_cannot_pass(monkeypatch):
     app.check_workflow.assert_not_called()
 
 
-@pytest.mark.parametrize("oracle_class", [SaaSOracle, GiteaOracle])
+@pytest.mark.parametrize("oracle_class", [PostgresApplicationOracle, GiteaApplicationOracle])
 @pytest.mark.parametrize(
     ("claims", "expected"),
     [

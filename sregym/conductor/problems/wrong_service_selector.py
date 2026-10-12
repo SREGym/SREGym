@@ -1,12 +1,23 @@
+from collections.abc import Callable
+
+from sregym.conductor.oracles.deathstarbench import ScaledServiceEndpointOracle
+from sregym.conductor.oracles.gitea.application import GiteaApplicationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.oracles.postgres_application import PostgresApplicationOracle
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.service.apps.astronomy_shop import AstronomyShop
-from sregym.service.apps.hotel_reservation import HotelReservation
-from sregym.service.apps.social_network import SocialNetwork
+from sregym.service.apps.app_registry import AppRegistry, RecoveryChecks
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
+
+RECOVERY_ORACLES = {
+    RecoveryChecks.ENDPOINTS: ServiceEndpointMitigationOracle,
+    RecoveryChecks.POSTGRES_RECORDS: PostgresApplicationOracle,
+    RecoveryChecks.GIT_REPOSITORIES: GiteaApplicationOracle,
+    RecoveryChecks.MONGODB_RECORDS: ScaledServiceEndpointOracle,
+}
 
 
 class WrongServiceSelector(Problem):
@@ -14,38 +25,30 @@ class WrongServiceSelector(Problem):
     deprecated in SREGym 1.1 after 21/21 successes.
     """
 
-    def __init__(self, app_name="astronomy_shop", faulty_service="frontend", scale_tier=None):
+    def __init__(
+        self,
+        app_name="astronomy_shop",
+        faulty_service="frontend",
+        scale_tier=None,
+        *,
+        app_factory: Callable[[], Application] | None = None,
+        oracle_factory: Callable | None = None,
+        expected_service_port: int | None = None,
+    ):
         self.app_name = app_name
         self.faulty_service = faulty_service
 
-        if app_name in ("gitlab_ce", "mattermost", "stripe_marathon"):
-            from sregym.service.apps.gitlab.application import GitLabCE
-            from sregym.service.apps.mattermost.application import Mattermost
-            from sregym.service.apps.stripe.application import StripeMarathon
-
-            app = {"gitlab_ce": GitLabCE, "mattermost": Mattermost, "stripe_marathon": StripeMarathon}[app_name](
-                tier=scale_tier or "replicated"
-            )
-        elif app_name == "gitea":
-            from sregym.service.apps.gitea.application import Gitea
-
-            app = Gitea(tier=scale_tier or "replicated")
-        elif scale_tier is not None:
-            from sregym.service.apps.deathstarbench.application import ScaledHotelReservation, ScaledSocialNetwork
-
-            scaled_apps = {"hotel_reservation": ScaledHotelReservation, "social_network": ScaledSocialNetwork}
-            if app_name not in scaled_apps:
-                raise ValueError(f"Scaling is not supported for {app_name}")
-            app = scaled_apps[app_name](tier=scale_tier)
-        elif app_name == "social_network":
-            app = SocialNetwork()
-        elif app_name == "hotel_reservation":
-            app = HotelReservation()
-        elif app_name == "astronomy_shop":
-            app = AstronomyShop()
+        if app_factory is None:
+            definition = AppRegistry().get_definition(app_name)
+            app = definition.create(scale_tier)
+            oracle_factory = oracle_factory or RECOVERY_ORACLES[definition.checks(scale_tier)]
+            expected_service_port = expected_service_port or definition.service_port
         else:
-            raise ValueError(f"Unsupported app name: {app_name}")
-        self.expected_service_port = 9090 if app_name == "social_network" else app.frontend_port
+            if scale_tier is not None:
+                raise ValueError("Configure the scale tier in app_factory instead")
+            app = app_factory()
+            oracle_factory = oracle_factory or ServiceEndpointMitigationOracle
+        self.expected_service_port = expected_service_port or app.frontend_port
         super().__init__(app=app)
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
@@ -62,19 +65,7 @@ class WrongServiceSelector(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
-        self.mitigation_oracle = ServiceEndpointMitigationOracle(problem=self)
-        if app_name in ("gitlab_ce", "mattermost", "stripe_marathon"):
-            from sregym.conductor.oracles.saas import SaaSOracle
-
-            self.mitigation_oracle = SaaSOracle(problem=self)
-        elif app_name == "gitea":
-            from sregym.conductor.oracles.gitea import GiteaOracle
-
-            self.mitigation_oracle = GiteaOracle(problem=self)
-        elif scale_tier is not None:
-            from sregym.conductor.oracles.deathstarbench import ScaledServiceEndpointOracle
-
-            self.mitigation_oracle = ScaledServiceEndpointOracle(problem=self)
+        self.mitigation_oracle = oracle_factory(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

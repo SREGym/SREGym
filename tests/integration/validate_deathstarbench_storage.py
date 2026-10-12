@@ -12,7 +12,10 @@ import subprocess
 import time
 from pathlib import Path
 
-from sregym.service.apps.deathstarbench.application import ScaledHotelReservation, ScaledSocialNetwork
+from sregym.service.apps.deathstarbench.application import (
+    ScaledHotelReservationApplication,
+    ScaledSocialNetworkApplication,
+)
 
 
 def wait_for_workflow(app):
@@ -99,7 +102,9 @@ def main():
     parser.add_argument("--application", choices=("hotel_reservation", "social_network"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    factory = ScaledHotelReservation if args.application == "hotel_reservation" else ScaledSocialNetwork
+    factory = (
+        ScaledHotelReservationApplication if args.application == "hotel_reservation" else ScaledSocialNetworkApplication
+    )
     result = validate(factory(tier="replicated"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")

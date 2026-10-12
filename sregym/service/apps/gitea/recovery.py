@@ -4,8 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
-from sregym.service.apps.components.postgres import POSTGRES_IMAGE
-from sregym.service.apps.gitea.application import FIXTURES, Gitea
+from sregym.service.apps.gitea.application import FIXTURES, GiteaApplication
+from sregym.service.apps.postgres import POSTGRES_IMAGE
 
 RECOVERY_COUNTS = {"single": (12, 6), "replicated": (60, 30)}
 ARCHIVE = "/recovery/backups/daily.dump"
@@ -27,7 +27,7 @@ SELECT json_build_object(
 """
 
 
-class GiteaRecovery(Gitea):
+class GiteaRecoveryApplication(GiteaApplication):
     @property
     def expected_volume_count(self):
         return super().expected_volume_count + 1
@@ -113,7 +113,7 @@ class GiteaRecovery(Gitea):
 
     def recovery_client(self, mode, **arguments):
         directory = Path(__file__).parent
-        source = (directory / "workload.py").read_text()
+        source = (directory / "workflow.py").read_text()
         source += "\n" + (directory / "recovery_workflow.py").read_text()
         source += "\nrun_recovery(api, " + repr(mode) + ", **json.loads(" + repr(json.dumps(arguments)) + "))\n"
         output = self.command("exec", "-i", "application-client", "--", "python", "-", input_text=source, timeout=300)
@@ -211,3 +211,7 @@ class GiteaRecovery(Gitea):
         )
         self.wait_database()
         self.resume_application()
+
+
+# Existing class names remain available to callers.
+GiteaRecovery = GiteaRecoveryApplication

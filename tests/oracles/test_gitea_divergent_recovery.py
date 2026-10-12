@@ -7,8 +7,8 @@ acknowledged write is missing, and the problem would look impossible rather than
 broken.
 """
 
-from sregym.conductor.oracles.gitea_divergent_recovery import GiteaDivergentRecoveryOracle, gitea_keys
-from sregym.conductor.oracles.gitlab_divergent_recovery import divergence_report
+from sregym.conductor.oracles.gitea.divergent_recovery import GiteaDivergentRecoveryOracle, gitea_keys
+from sregym.conductor.oracles.gitlab.divergent_recovery import divergence_report
 
 REPOSITORIES = {"octo/alpha": 1, "octo/beta": 2}
 
@@ -106,15 +106,15 @@ def test_compound_loss_declares_a_silent_second_fault():
     variant actually reaches it rather than inheriting a grader that ignores git.
     """
     from sregym.conductor.oracles.failure import FailureClass
-    from sregym.conductor.oracles.gitea_database_recovery import GiteaDatabaseRecoveryOracle
-    from sregym.conductor.problems.gitea_compound_loss import GiteaCompoundLoss
+    from sregym.conductor.oracles.gitea.database_recovery import GiteaDatabaseRecoveryOracle
+    from sregym.conductor.problems.gitea.compound_loss import GiteaCompoundLossProblem
 
     classes = GiteaDatabaseRecoveryOracle._failure_classes()
     assert classes["acknowledged_git_data_changed"] is FailureClass.AGENT_ERROR
-    assert issubclass(GiteaCompoundLoss.application_class.__mro__[0], object)
+    assert issubclass(GiteaCompoundLossProblem.application_class.__mro__[0], object)
     # The recovery path has to exist, or a hard problem is an impossible one.
     for method in ("backup_git_repositories", "restore_git_repositories", "discard_repository_storage"):
-        assert callable(getattr(GiteaCompoundLoss.application_class, method))
+        assert callable(getattr(GiteaCompoundLossProblem.application_class, method))
 
 
 def test_a_missing_repository_is_graded_rather_than_raising():
@@ -128,18 +128,18 @@ def test_a_missing_repository_is_graded_rather_than_raising():
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from sregym.service.apps.gitea.recovery import GiteaRecovery
+    from sregym.service.apps.gitea.recovery import GiteaRecoveryApplication
 
     # Called unbound against a stub: constructing the application needs a
     # kubeconfig, and this behaviour is worth testing without a cluster.
     stub = SimpleNamespace(command=Mock(side_effect=subprocess.CalledProcessError(128, ["git", "ls-tree"])))
-    inventory = GiteaRecovery.git_inventory(stub)
+    inventory = GiteaRecoveryApplication.git_inventory(stub)
     assert inventory, "every fixture repository should still be reported"
     assert all(files == {} for files in inventory.values())
 
     # And a healthy listing is still parsed into path -> mode/type/sha.
     ok = SimpleNamespace(command=Mock(return_value="100644 blob abc123\tREADME.md"))
-    assert GiteaRecovery.git_inventory(ok)["alice/hello-zoo"] == {"README.md": "100644 blob abc123"}
+    assert GiteaRecoveryApplication.git_inventory(ok)["alice/hello-zoo"] == {"README.md": "100644 blob abc123"}
 
 
 def test_the_oracle_only_asks_its_application_for_methods_that_exist():
@@ -147,8 +147,8 @@ def test_the_oracle_only_asks_its_application_for_methods_that_exist():
     import ast
     import inspect
 
-    from sregym.conductor.oracles.gitea_divergent_recovery import GiteaDivergentRecoveryOracle
-    from sregym.service.apps.gitea.failover import GiteaFailover
+    from sregym.conductor.oracles.gitea.divergent_recovery import GiteaDivergentRecoveryOracle
+    from sregym.service.apps.gitea.failover import GiteaFailoverApplication
 
     wanted = set()
     for klass in GiteaDivergentRecoveryOracle.__mro__:
@@ -166,7 +166,7 @@ def test_the_oracle_only_asks_its_application_for_methods_that_exist():
     # Attributes assigned in __init__ (`self.members`, `self.scale_tier`) are not
     # visible on the class, so collect those from the application's sources too.
     provided = set()
-    for klass in GiteaFailover.__mro__:
+    for klass in GiteaFailoverApplication.__mro__:
         provided.update(vars(klass))
         try:
             source = inspect.getsource(klass)

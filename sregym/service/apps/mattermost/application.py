@@ -2,14 +2,15 @@
 
 from pathlib import Path
 
-from sregym.service.apps.components.postgres import PostgresApplication
+from sregym.service.apps.helpers import image_reference
+from sregym.service.apps.postgres import PostgresApplication
 
-MATTERMOST_IMAGE = (
-    "ghcr.io/sregym/mattermost:11.7.0@sha256:82b758dbf24caecc7690097fa7b6a33216b2e9e4e5527fbf67033009969f4875"
-)
+MATTERMOST_IMAGE = image_reference("mattermost-server")
 
 
-class Mattermost(PostgresApplication):
+class MattermostApplication(PostgresApplication):
+    app_id = "mattermost"
+    metadata_file = Path(__file__).with_name("metadata.json")
     slug = "mattermost"
     frontend_port = 8065
     health_path = "/api/v4/system/ping"
@@ -64,3 +65,7 @@ class Mattermost(PostgresApplication):
 
     def record_query(self, token):
         return f"SELECT count(*) FROM posts WHERE message = 'change-{token}' AND deleteat = 0;"
+
+
+# Existing class names remain available to callers.
+Mattermost = MattermostApplication

@@ -9,7 +9,7 @@ import json
 import time
 from pathlib import Path
 
-from sregym.service.apps.mattermost.application import Mattermost
+from sregym.service.apps.mattermost.application import MattermostApplication
 from sregym.service.apps.mattermost.runtime.capacity_scaler import SCALE_IN_STABILIZATION_SECONDS
 
 CONTROL_VOLUME = "gateway-control"
@@ -34,8 +34,8 @@ CASCADE_DESCRIPTION = (
 )
 
 
-class MattermostCascade(Mattermost):
-    data_volumes = (*Mattermost.data_volumes, CONTROL_VOLUME)
+class MattermostCascadeApplication(MattermostApplication):
+    data_volumes = (*MattermostApplication.data_volumes, CONTROL_VOLUME)
     #: Deliberately NOT in auxiliary_deployments: the shared SaaS oracle requires
     #: exactly one replica of each, and the gateway is meant to run several while
     #: deleting the scaler is a legitimate repair.
@@ -336,3 +336,7 @@ class MattermostCascade(Mattermost):
         CPU signal the capacity policy is calibrated against.
         """
         return
+
+
+# Existing class names remain available to callers.
+MattermostCascade = MattermostCascadeApplication

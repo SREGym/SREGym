@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.gitlab_notification_recovery import (
+from sregym.conductor.oracles.gitlab.notification_recovery import (
     GitLabNotificationRecoveryOracle,
     complete,
     notification_report,
@@ -113,7 +113,7 @@ def test_unknown_mail_is_not_automatically_exempt(later_notification):
 
 
 def test_oracle_validates_later_mail_and_scopes_pending_jobs(monkeypatch, later_notification):
-    from sregym.conductor.oracles.gitlab_database_recovery import GitLabDatabaseRecoveryOracle
+    from sregym.conductor.oracles.gitlab.database_recovery import GitLabDatabaseRecoveryOracle
 
     monkeypatch.setattr(GitLabDatabaseRecoveryOracle, "evaluate", lambda self: {"success": True})
     issue, mail = later_notification
@@ -121,7 +121,7 @@ def test_oracle_validates_later_mail_and_scopes_pending_jobs(monkeypatch, later_
     app.notification_issues.return_value = [issue]
     app.recovery_client.return_value = [{"project": 2, "iid": 22, "title": "Probe", "description": "Probe text"}]
     app.enqueue_notification_probe.return_value = {"pending_incident_jobs": 0}
-    monkeypatch.setattr("sregym.conductor.oracles.gitlab_notification_recovery.secrets.token_hex", lambda n: "token")
+    monkeypatch.setattr("sregym.conductor.oracles.gitlab.notification_recovery.secrets.token_hex", lambda n: "token")
     probe_mail = copy.deepcopy(MAIL)
     probe_mail.update(subject="Probe", body="Probe text", recipients=["tenant-user-1@example.test"])
     probe_mail["headers"].update(

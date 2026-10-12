@@ -4,7 +4,7 @@ import inspect
 import json
 from pathlib import Path
 
-from sregym.service.apps.stripe.application import StripeMarathon
+from sregym.service.apps.stripe.application import StripeApplication
 
 CATALOG_IMAGE = "clickhouse/clickhouse-server:25.8.12.129-alpine"
 RUNTIME_IMAGE = "python:3.12.13-alpine3.23"
@@ -28,9 +28,9 @@ def _configuration_safety(read, features, canonical):
     return {**result, "safe": valid}
 
 
-class StripeConfig(StripeMarathon):
-    data_volumes = (*StripeMarathon.data_volumes, "feature-control", "feature-catalog")
-    auxiliary_deployments = (*StripeMarathon.auxiliary_deployments, "stripe-origin", "feature-catalog")
+class StripeConfigApplication(StripeApplication):
+    data_volumes = (*StripeApplication.data_volumes, "feature-control", "feature-catalog")
+    auxiliary_deployments = (*StripeApplication.auxiliary_deployments, "stripe-origin", "feature-catalog")
 
     def get_app_json(self):
         result = super().get_app_json()
@@ -175,3 +175,7 @@ class StripeConfig(StripeMarathon):
             self.command("rollout", "status", "deployment/stripe-worker", "--timeout=180s", timeout=200)
         else:
             self.command("wait", "--for=delete", "pod", "-l", "app=stripe-worker", "--timeout=180s", timeout=200)
+
+
+# Existing class names remain available to callers.
+StripeConfig = StripeConfigApplication

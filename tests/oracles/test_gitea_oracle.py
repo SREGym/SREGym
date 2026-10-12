@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.gitea import GiteaOracle
+from sregym.conductor.oracles.gitea.application import GiteaApplicationOracle
 
 
 def oracle_with_database():
@@ -34,7 +34,7 @@ def oracle_with_database():
         return str(database.execute(statement).fetchone()[0])
 
     app.sql.side_effect = sql
-    return GiteaOracle(SimpleNamespace(app=app)), app
+    return GiteaApplicationOracle(SimpleNamespace(app=app)), app
 
 
 @pytest.mark.parametrize("admission_default", [False, True])

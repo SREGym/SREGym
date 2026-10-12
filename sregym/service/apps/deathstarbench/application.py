@@ -393,7 +393,7 @@ class ScaledApplication:
         return super().create_workload(**kwargs)
 
 
-class ScaledHotelReservation(ScaledApplication, HotelReservation):
+class ScaledHotelReservationApplication(ScaledApplication, HotelReservation):
     expected_databases = 6
     authenticated_databases = frozenset({"mongodb-geo", "mongodb-rate"})
     services = frozenset({"frontend", "geo", "profile", "rate", "recommendation", "reservation", "search", "user"})
@@ -444,7 +444,7 @@ class ScaledHotelReservation(ScaledApplication, HotelReservation):
                     )
 
 
-class ScaledSocialNetwork(ScaledApplication, SocialNetwork):
+class ScaledSocialNetworkApplication(ScaledApplication, SocialNetwork):
     expected_databases = 6
 
     def __init__(self, tier: str = "replicated", storage_class: str = "openebs-hostpath"):
@@ -516,3 +516,8 @@ class ScaledSocialNetwork(ScaledApplication, SocialNetwork):
                         # The upstream C++ client appends :port to addr, then discovers the set via isMaster.
                         value["addr"] = ",".join([*hosts[:-1], hosts[-1].removesuffix(":27017")])
                 doc["data"]["service-config.json"] = json.dumps(config, indent=2)
+
+
+# Existing class names remain available to callers.
+ScaledHotelReservation = ScaledHotelReservationApplication
+ScaledSocialNetwork = ScaledSocialNetworkApplication

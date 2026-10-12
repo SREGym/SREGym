@@ -14,9 +14,9 @@ from unittest.mock import Mock
 import pytest
 
 from sregym.conductor.oracles.failure import FailureClass
-from sregym.conductor.oracles.mattermost_cascade_recovery import MattermostCascadeOracle, latency_budget
-from sregym.conductor.oracles.saas import SaaSOracle
-from sregym.service.apps.mattermost.cascade import MattermostCascade
+from sregym.conductor.oracles.mattermost.cascade_recovery import MattermostCascadeOracle, latency_budget
+from sregym.conductor.oracles.postgres_application import PostgresApplicationOracle
+from sregym.service.apps.mattermost.cascade import MattermostCascadeApplication
 from sregym.service.apps.mattermost.runtime.capacity_scaler import (
     DEFAULT_POLICY,
     SCALE_IN_STABILIZATION_SECONDS,
@@ -128,7 +128,7 @@ def test_gateway_probe_and_oracle_require_successful_mattermost_ping(monkeypatch
         return response
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    app = MattermostCascade.__new__(MattermostCascade)
+    app = MattermostCascadeApplication.__new__(MattermostCascadeApplication)
 
     def command(*args, input_text=None, **kwargs):
         if input_text is None:
@@ -147,7 +147,7 @@ def test_gateway_probe_and_oracle_require_successful_mattermost_ping(monkeypatch
     oracle = MattermostCascadeOracle(SimpleNamespace(app=app))
     oracle.baseline, oracle.baseline_latency_ms = {"token": "abc"}, 50
     oracle.observe_capacity = Mock(return_value=(None, [{"desired": 3, "ready": 3}]))
-    monkeypatch.setattr(SaaSOracle, "evaluate", lambda self: {"success": True})
+    monkeypatch.setattr(PostgresApplicationOracle, "evaluate", lambda self: {"success": True})
 
     result = oracle.evaluate()
 
@@ -183,7 +183,7 @@ def capacity_oracle(monkeypatch, samples, *, floor=3, interval=15):
     """
     from types import SimpleNamespace
 
-    from sregym.conductor.oracles import mattermost_cascade_recovery as module
+    from sregym.conductor.oracles.mattermost import cascade_recovery as module
 
     now = [0.0]
     monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
