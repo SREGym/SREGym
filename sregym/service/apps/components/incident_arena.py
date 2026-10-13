@@ -67,6 +67,8 @@ class IncidentArenaApplication(Application):
     values_file: Path
     #: Upper bound for the whole system to become ready after ``helm install``.
     READY_TIMEOUT_S: int = 1200
+    #: Bound for a complete request in the app's pinned workload image.
+    WORKLOAD_COMPLETION_TIMEOUT_S: float
     #: Pods matching this selector run the operator toolbox (repair CLIs).
     TOOLBOX_SELECTOR = "app.kubernetes.io/component=ops-toolbox"
 
@@ -99,19 +101,30 @@ class IncidentArenaApplication(Application):
         """Run the load generator with ``profile`` (looped, without fault triggers)."""
         self.configure({"loadgen": {"profile": name, "profilesYaml": continuous_load_profile(name, profile)}})
 
-    def _write_overrides(self) -> Path:
-        with tempfile.NamedTemporaryFile(
-            "w", prefix=f"sregym-{self.CHART_NAME}-", suffix=".yaml", delete=False, encoding="utf-8"
-        ) as handle:
-            yaml.safe_dump(self.deploy_overrides, handle, sort_keys=False)
-        return Path(handle.name)
-
     # ------------------------------------------------------------------ lifecycle
+    def bootstrap_values(self) -> dict[str, Any]:
+        """Temporary install values for applications that must initialize first."""
+        return {}
+
+    def _apply_release(self, values: dict[str, Any], *, install: bool) -> None:
+        with tempfile.TemporaryDirectory(prefix=f"sregym-{self.CHART_NAME}-") as directory:
+            overrides = Path(directory) / "values.yaml"
+            overrides.write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
+            extra_args = ["-f", str(self.values_file), "-f", str(overrides)]
+            if install:
+                Helm.install(**self.helm_configs, extra_args=[shlex.quote(arg) for arg in extra_args])
+            else:
+                cfg = self.helm_configs
+                command = ["helm", "upgrade", cfg["release_name"], cfg["chart_path"], "-n", self.namespace, *extra_args]
+                self.kubectl.exec_command_checked(shlex.join(command), timeout=self.READY_TIMEOUT_S)
+
     def deploy(self):
         self.kubectl.create_namespace_if_not_exist(self.namespace)
-        overrides = self._write_overrides()
-        self.helm_configs["extra_args"] = ["-f", str(self.values_file), "-f", str(overrides)]
-        Helm.install(**self.helm_configs)
+        bootstrap = self.bootstrap_values()
+        self._apply_release(deep_merge(self.deploy_overrides, bootstrap), install=True)
+        if bootstrap:
+            self.wait_for_jobs(self.READY_TIMEOUT_S)
+            self._apply_release(self.deploy_overrides, install=False)
         self.wait_until_ready()
 
     def wait_until_ready(self) -> None:

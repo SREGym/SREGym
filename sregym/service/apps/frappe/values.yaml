@@ -1,8 +1,8 @@
 # SREGym deployment overlay for the Incident Arena frappe chart.
 #
 # Deploys the healthy Frappe site with the images pinned by the Incident Arena
-# tasks and the workload shape every Frappe task shares (one supervised long
-# worker, no scheduler/socketio), drops the Harbor harness (agent foothold,
+# tasks and the workload shape every Frappe task shares (supervised long
+# workers, no scheduler/socketio), drops the Harbor harness (agent foothold,
 # egress proxy, DNS filter, in-chart Prometheus/Loki/obs-mcp) in favour of
 # SREGym's own observability stack, and replaces the foothold with an operator
 # toolbox. Problems layer their load profile and fault values on top.
@@ -49,12 +49,9 @@ erpnext:
     short:
       replicaCount: 0
     long:
-      # Two workers: a Prepared Report job takes ~2.4 s on a 2.0 GHz core, so
-      # one worker drains ~0.4 jobs/s against ~1.2 arrivals/s and rq_complete
-      # (15 s budget) sat at 0.37-0.48 against its 0.4 floor on such hosts.
-      # The scope guard pins the deployed replica count, so agents still may
-      # not scale it.
-      replicaCount: 2
+      # Enough capacity for the healthy report workload and broker restart.
+      # The scope guard captures this initial count before fault injection.
+      replicaCount: 4
       supervise: true
       resources:
         requests:

@@ -51,6 +51,8 @@ def test_summary_windows_and_rates():
     # goodput counts ok AND correct
     assert summary["good"] == 1
     assert summary["goodput_ratio"] == 0.25
+    assert summary["scheduled"] == 5
+    assert summary["scheduled_goodput_ratio"] == 0.2
     assert summary["latency"]["peak"]["n"] == 3
     assert summary["latency"]["trough"]["p_ms"] == 50.0
     assert summary["first_sent_s"] == 11.0 and summary["last_sent_s"] == 15.0
@@ -61,6 +63,14 @@ def test_settle_window_only_drops_latency_samples():
     summary = ledger.summarize(records, since_s=10.0, latency_percentile=99.0, settle_s=30.0)
     assert summary["offered"] == 2
     assert summary["latency"]["peak"] == {"n": 1, "p_ms": 5.0}
+
+
+def test_closed_window_includes_late_completions_but_not_later_arrivals():
+    records = [_record(11, latency=25000), _record(20, latency=10), _record(21, latency=99999)]
+    summary = ledger.summarize(records, since_s=10, until_s=20)
+    assert summary["offered"] == 2
+    assert summary["last_sent_s"] == 20
+    assert summary["latency"]["peak"]["p_ms"] == 25000
 
 
 def test_by_driver_breakdown():
@@ -102,6 +112,25 @@ def test_script_runs_standalone_like_in_the_pod(tmp_path):
     assert json.loads(summary.stdout)["offered"] == 1
 
 
+def test_ledger_follows_the_current_workload_episode(tmp_path, monkeypatch):
+    import runpy
+
+    entrypoint = Path(__file__).resolve().parents[2] / "SREGym-applications/slack-spine/chart/files/loadgen-session.py"
+    start = runpy.run_path(str(entrypoint))["start_session"]
+    monkeypatch.setenv("GRADER_DIR", str(tmp_path))
+    first = start()
+    (first / "loadgen.jsonl").write_text(json.dumps(_record(100.0)) + "\n")
+    monkeypatch.setenv("GRADER_DIR", str(tmp_path))
+    second = start()
+    (second / "loadgen.jsonl").write_text(json.dumps(_record(1.0)) + "\n")
+    monkeypatch.setenv("GRADER_DIR", str(tmp_path))
+    assert first != second
+    assert first.name != second.name  # prefixes used by the pinned runner
+    assert ledger.grader_dir() == str(second)
+    assert ledger.latest_sent_s(ledger.ledger_path()) == 1.0
+    assert (first / "loadgen.jsonl").exists()
+
+
 def test_status_mode_reports_episode_end_and_sidecar_log(tmp_path):
     source = Path(ledger.__file__).read_text()
     env = {"GRADER_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
@@ -112,7 +141,13 @@ def test_status_mode_reports_episode_end_and_sidecar_log(tmp_path):
         )
         return json.loads(out.stdout)
 
-    assert status() == {"latest_sent_s": None, "episode_done": None, "log_tail": None}
+    initial = status()
+    assert {k: initial[k] for k in ("latest_sent_s", "episode_done", "log_tail")} == {
+        "latest_sent_s": None,
+        "episode_done": None,
+        "log_tail": None,
+    }
+    assert "episode_id" in initial
 
     (tmp_path / "episode_done.json").write_text(json.dumps({"done": False, "error": "RuntimeError: no variants"}))
     (tmp_path / "sidecar.log").write_text("".join(f"line {i}\n" for i in range(100)))

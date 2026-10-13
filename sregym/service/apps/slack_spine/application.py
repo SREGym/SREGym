@@ -17,6 +17,8 @@ class SlackSpine(IncidentArenaApplication):
     values_file = Path(__file__).with_name("values.yaml")
     CHART_NAME = "slack-spine"
     READY_TIMEOUT_S = 1500
+    # One send plus twenty ten-second search polls and 250ms between polls.
+    WORKLOAD_COMPLETION_TIMEOUT_S = 220.0
 
     DB_STATEFULSET = "db"
     ADMIN_DSN = "postgresql://svc_admin:svc_admin@127.0.0.1:5432/app"

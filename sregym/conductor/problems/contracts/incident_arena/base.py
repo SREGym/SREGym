@@ -170,7 +170,10 @@ class IncidentArenaProblem(Problem):
 
     def outcome_spec(self) -> OutcomeSpec:
         return OutcomeSpec(
-            thresholds=self.task.thresholds, gate_latency=self.task.gates_latency, soak_s=self.task.soak_s
+            thresholds=self.task.thresholds,
+            gate_latency=self.task.gates_latency,
+            soak_s=self.task.soak_s,
+            completion_timeout_s=self.app.WORKLOAD_COMPLETION_TIMEOUT_S,
         )
 
     # ------------------------------------------------------------------ fault lifecycle

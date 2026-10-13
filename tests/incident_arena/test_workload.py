@@ -1,8 +1,12 @@
+from pathlib import Path
+
 import pytest
+import yaml
 
 import sregym.generators.workload.incident_arena as workload_module
 from sregym.generators.workload.incident_arena import IncidentArenaLoadgen
 from sregym.service.apps.saleor.application import Saleor
+from sregym.service.helm import Helm
 
 
 class FakeClock:
@@ -119,3 +123,48 @@ def test_wait_for_jobs_without_jobs_is_a_no_op(offline_cluster):
     app.kubectl = JobsKubeCtl([])
     app.wait_for_jobs(300)
     assert len(app.kubectl.commands) == 1
+
+
+def test_saleor_waits_for_initialization_before_starting_consumers(offline_cluster, monkeypatch):
+    app = Saleor()
+    app.configure({"saleor": {"api": {"replicaCount": 3}}})
+    events = []
+    app.kubectl.create_namespace_if_not_exist = lambda namespace: None
+    monkeypatch.setattr(
+        Helm,
+        "install",
+        lambda **cfg: events.append(
+            ("install", yaml.safe_load(Path(cfg["extra_args"][-1]).read_text()), cfg["extra_args"][-1])
+        ),
+    )
+    monkeypatch.setattr(app, "wait_for_jobs", lambda timeout: events.append(("jobs", timeout)))
+    monkeypatch.setattr(app, "wait_until_ready", lambda: events.append(("ready",)))
+    original = app._apply_release
+
+    def apply(values, *, install):
+        if install:
+            original(values, install=True)
+        else:
+            events.append(("upgrade", values))
+
+    monkeypatch.setattr(app, "_apply_release", apply)
+    app.deploy()
+    assert [e[0] for e in events] == ["install", "jobs", "upgrade", "ready"]
+    assert events[0][1]["saleor"] == {"api": {"replicaCount": 0}, "worker": {"replicaCount": 0}}
+    assert events[2][1]["saleor"]["api"]["replicaCount"] == 3
+    assert not Path(events[0][2]).exists()
+
+
+def test_failed_saleor_initialization_does_not_start_consumers(offline_cluster, monkeypatch):
+    app = Saleor()
+    app.kubectl.create_namespace_if_not_exist = lambda namespace: None
+    events = []
+    monkeypatch.setattr(app, "_apply_release", lambda values, *, install: events.append(install))
+
+    def fail(timeout):
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(app, "wait_for_jobs", fail)
+    with pytest.raises(RuntimeError, match="migration failed"):
+        app.deploy()
+    assert events == [True]

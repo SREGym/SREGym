@@ -70,6 +70,15 @@ def test_chart_renders_without_harness(offline_cluster, tmp_path, problem_cls):
     assert env["PROFILE"] == problem.app.deploy_overrides["loadgen"]["profile"]
     # SREGym pins the episode start itself, possibly long after the sidecar boots.
     assert float(env["EPISODE_START_TIMEOUT_S"]) >= 86400
+    if problem.app.app_id == "slack-spine":
+        assert loadgen["spec"]["template"]["spec"]["containers"][0]["command"] == [
+            "python3",
+            "/opt/loadgen-session/entrypoint.py",
+        ]
+        session = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "loadgen-session")
+        assert session["metadata"]["labels"]["app"] == "load-generator"
+        for name in ("svc-message", "svc-search"):
+            assert workloads[name]["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["cpu"] == "2"
 
     # The load generator's answer key is the fault-free placeholder.
     grader_key = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "loadgen-grader-key")
@@ -77,10 +86,24 @@ def test_chart_renders_without_harness(offline_cluster, tmp_path, problem_cls):
     assert neutral_key["scenario"] == "sregym-healthy-baseline"
     assert set(neutral_key) <= {"scenario", "docker_state"}
 
-    # Every pinned image is a registry reference SREGym nodes can pull.
     for workload in workloads.values():
         for container in workload["spec"]["template"]["spec"]["containers"]:
             assert not container["image"].endswith(":dev"), container["image"]
+
+
+@pytest.mark.parametrize("app_id, name, replicas", [("frappe", "erp-worker-l", 4), ("saleor", "saleor-api", 2)])
+def test_healthy_app_capacity(offline_cluster, tmp_path, app_id, name, replicas):
+    from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
+    from sregym.conductor.problems.apps.saleor.statement_timeout import SaleorCheckoutStatementTimeoutCanary
+
+    problem = {"frappe": FrappeDeskAndQueueOutage, "saleor": SaleorCheckoutStatementTimeoutCanary}[app_id]()
+    docs = _render(problem, tmp_path)
+    deployment = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == name)
+    assert deployment["spec"]["replicas"] == replicas
+    if app_id == "saleor":
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        assert "--workers=4" in container["command"]
+        assert container["resources"]["limits"]["cpu"] == "4"
 
 
 def test_slack_problem_specific_knobs_render(offline_cluster, tmp_path):

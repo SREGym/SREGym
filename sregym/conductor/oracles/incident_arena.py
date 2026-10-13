@@ -8,7 +8,8 @@ Incident Arena grades a repair with two gates (abundant-ai/incident-arena,
   with a repository-wide 20% tolerance on every band. Latency bands are
   absolute milliseconds from Incident Arena's hardware, so they are re-based
   on the healthy latency this cluster showed before injection when that is
-  higher (``OutcomeSpec.latency_baseline``);
+  higher (``OutcomeSpec.latency_baseline``). Goodput includes dropped arrivals
+  instead of conditioning success on the client accepting a request;
 * **safe repair** -- white-box state: the injected cause is gone, the change
   stayed inside the allowed scope, and it survives a verifier-owned restart.
 
@@ -83,6 +84,7 @@ class OutcomeSpec:
     soak_s: float = 180.0
     latency_baseline: dict[str, Any] | None = None
     latency_baseline_factor: float = LATENCY_BASELINE_FACTOR
+    completion_timeout_s: float = 0.0
 
     @property
     def latency_percentile(self) -> float:
@@ -121,13 +123,18 @@ def evaluate_outcome(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRe
         )
     if "goodput_min_ratio" in thresholds:
         limit = relaxed_floor(thresholds["goodput_min_ratio"])
-        value = summary.get("goodput_ratio")
+        value = _scheduled_goodput(summary)
         results.append(
             CheckResult(
                 "sustained_correct_goodput",
                 value is not None and value >= limit,
                 reason="service_unhealthy",
-                detail={"value": value, "limit": limit, "good": summary.get("good")},
+                detail={
+                    "value": value,
+                    "limit": limit,
+                    "good": summary.get("good"),
+                    "dropped": summary.get("dropped", 0),
+                },
             )
         )
 
@@ -138,12 +145,14 @@ def evaluate_outcome(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRe
         passed = bool(stats.get("offered"))
         if passed and "goodput_min_ratio" in limits:
             floor = relaxed_floor(limits["goodput_min_ratio"])
-            detail["goodput"] = {"value": stats.get("goodput_ratio"), "limit": floor}
-            passed = passed and (stats.get("goodput_ratio") or 0.0) >= floor
+            value = _scheduled_goodput(stats)
+            detail["goodput"] = {"value": value, "limit": floor, "dropped": stats.get("dropped", 0)}
+            passed = passed and value is not None and value >= floor
         if passed and "error_rate_max" in limits:
             ceiling = relaxed_ceiling(limits["error_rate_max"], maximum=1.0)
-            detail["error_rate"] = {"value": stats.get("error_rate"), "limit": ceiling}
-            passed = passed and (stats.get("error_rate") if stats.get("error_rate") is not None else 1.0) <= ceiling
+            value = stats.get("error_rate")
+            detail["error_rate"] = {"value": value, "limit": ceiling}
+            passed = (value if value is not None else 1.0) <= ceiling
         results.append(CheckResult(f"driver_{driver}_within_limits", passed, reason="service_unhealthy", detail=detail))
 
     if spec.gate_latency:
@@ -163,6 +172,12 @@ def evaluate_outcome(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRe
             healthy = (baseline.get("by_driver") or {}).get(driver) or {}
             results.append(_latency_check(f"driver_{driver}_latency", stats, bands, healthy, factor))
     return results
+
+
+def _scheduled_goodput(stats: dict[str, Any]) -> float | None:
+    """Correct responses divided by all recorded arrivals, including drops."""
+    scheduled = int(stats.get("offered") or 0) + int(stats.get("dropped") or 0)
+    return int(stats.get("good") or 0) / scheduled if scheduled else None
 
 
 def _latency_check(
@@ -236,7 +251,9 @@ class IncidentArenaMitigationOracle(Oracle):
             return
         try:
             self.latency_baseline = self._measure_latency_baseline(spec)
-        except Exception:
+        except Exception as exc:
+            if spec.completion_timeout_s:
+                raise RuntimeError("Could not capture a complete healthy latency window") from exc
             logger.warning("Could not measure the healthy latency; grading against absolute bands", exc_info=True)
             self.latency_baseline = None
         logger.info("Healthy latency baseline (p%.0f, ms): %s", spec.latency_percentile, self.latency_baseline)
@@ -250,7 +267,19 @@ class IncidentArenaMitigationOracle(Oracle):
             # Too little healthy traffic yet (the validator injects right after deploy).
             time.sleep(window - latest)
             latest = workload.latest_sent_s() or latest
-        summary = workload.summary(latest - window, latency_percentile=spec.latency_percentile, settle_s=0.0)
+        options = {"latency_percentile": spec.latency_percentile, "settle_s": 0.0}
+        if spec.completion_timeout_s:
+            state = workload.status()
+            latest = state.get("latest_sent_s")
+            episode = state.get("episode_id")
+            if latest is None or latest < window or episode is None:
+                raise RuntimeError("Healthy workload window is incomplete")
+            time.sleep(spec.completion_timeout_s)
+            completed = workload.status()
+            if completed.get("episode_id") != episode or (completed.get("latest_sent_s") or 0) < latest:
+                raise RuntimeError("Workload restarted during latency calibration")
+            options["until_s"] = latest
+        summary = workload.summary(latest - window, **options)
 
         def p_ms(stats: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -296,6 +325,12 @@ class IncidentArenaMitigationOracle(Oracle):
             # Normally one ledger read. A load generator pod that restarted
             # waits for its episode to be started again before it sends.
             mark = workload.wait_for_traffic()
+            episode = None
+            if spec.completion_timeout_s:
+                state = workload.status()
+                mark, episode = state.get("latest_sent_s"), state.get("episode_id")
+                if mark is None or episode is None:
+                    raise RuntimeError("Workload measurement has no active episode")
         except Exception as exc:
             results.append(
                 CheckResult("traffic_observed", False, reason="no_traffic_observed", detail={"error": str(exc)})
@@ -303,11 +338,28 @@ class IncidentArenaMitigationOracle(Oracle):
             return self._verdict(results)
         logger.info("Soaking for %.0fs from load generator mark %s", spec.soak_s, mark)
         time.sleep(spec.soak_s)
-
-        results.extend(problem.run_checks("soak_end"))
         latest = workload.latest_sent_s()
+        options = {"latency_percentile": spec.latency_percentile, "settle_s": spec.settle_s}
+        if spec.completion_timeout_s:
+            time.sleep(spec.completion_timeout_s)
+            completed = workload.status()
+            current = completed.get("latest_sent_s")
+            if completed.get("episode_id") != episode or (
+                current is None or latest is None or latest < mark or current < latest
+            ):
+                results.append(
+                    CheckResult(
+                        "workload_window_intact",
+                        False,
+                        reason="no_traffic_observed",
+                        detail={"error": "Workload restarted before the measurement window completed"},
+                    )
+                )
+                return self._verdict(results)
+            options["until_s"] = latest
+        results.extend(problem.run_checks("soak_end"))
         # A restarted load generator starts a new clock; grade everything it sent.
         since = mark if (mark is not None and latest is not None and latest >= mark) else None
-        summary = workload.summary(since, latency_percentile=spec.latency_percentile, settle_s=spec.settle_s)
+        summary = workload.summary(since, **options)
         results.extend(evaluate_outcome(summary, spec))
         return self._verdict(results)

@@ -159,10 +159,17 @@ class IncidentArenaLoadgen(WorkloadManager):
             parts.append("sidecar log tail:\n" + "\n".join(tail[-15:]))
         return "; ".join(parts)
 
-    def summary(self, since_s: float | None, latency_percentile: float = 99.0, settle_s: float = 0.0) -> dict:
+    def summary(
+        self,
+        since_s: float | None,
+        latency_percentile: float = 99.0,
+        settle_s: float = 0.0,
+        until_s: float | None = None,
+    ) -> dict:
         """Aggregate every arrival sent after ``since_s`` (see the ledger module)."""
         since = "none" if since_s is None else repr(float(since_s))
-        result = self._run_ledger("summary", since, repr(float(latency_percentile)), repr(float(settle_s)))
+        until = "none" if until_s is None else repr(float(until_s))
+        result = self._run_ledger("summary", since, repr(float(latency_percentile)), repr(float(settle_s)), until)
         if "error" in result:
             raise RuntimeError(f"load generator ledger unavailable: {result}")
         return result

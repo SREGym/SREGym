@@ -16,6 +16,8 @@ class Frappe(IncidentArenaApplication):
     # `bench new-site` runs inside the install and can take 15-30 minutes on a
     # contended node (Incident Arena budgets 45 minutes for the build).
     READY_TIMEOUT_S = 2700
+    # The pinned drivers make at most two HTTP calls with ten-second timeouts.
+    WORKLOAD_COMPLETION_TIMEOUT_S = 30.0
 
     MARIADB_STATEFULSET = "frappe-mariadb-subchart"
     MARIADB_ROOT_PASSWORD = "sre-world-mariadb-root"

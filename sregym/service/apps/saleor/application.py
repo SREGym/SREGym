@@ -15,6 +15,8 @@ class Saleor(IncidentArenaApplication):
     CHART_NAME = "saleor"
     # Migrations + populatedb run in the saleor-init Job before the API is ready.
     READY_TIMEOUT_S = 1800
+    # A checkout makes at most five HTTP calls with ten-second timeouts.
+    WORKLOAD_COMPLETION_TIMEOUT_S = 60.0
 
     POSTGRES_STATEFULSET = "postgres"
     ADMIN_ROLE = "saleoradmin"
@@ -28,6 +30,10 @@ class Saleor(IncidentArenaApplication):
         super().__init__(self.metadata_file)
         self.frontend_service = "svc-saleor-api"
         self.frontend_port = 8000
+
+    def bootstrap_values(self) -> dict:
+        """Do not start database consumers until migration and seeding finish."""
+        return {"saleor": {role: {"replicaCount": 0} for role in ("api", "worker")}}
 
     def psql(self, sql: str, user: str | None = None, password: str | None = None, timeout: float = 60) -> str:
         """Run SQL over TCP inside the PostgreSQL pod; unaligned, tuples only."""

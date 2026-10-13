@@ -24,7 +24,7 @@ def _summary(**overrides):
         "goodput_ratio": 0.9,
         "latency": {"peak": {"n": 50, "p_ms": 400.0}, "trough": {"n": 50, "p_ms": 300.0}},
         "by_driver": {
-            "write_readback": {"offered": 100, "error_rate": 0.05, "goodput_ratio": 0.9, "latency": {}},
+            "write_readback": {"offered": 100, "good": 90, "error_rate": 0.05, "goodput_ratio": 0.9, "latency": {}},
         },
     }
     summary.update(overrides)
@@ -102,6 +102,24 @@ def test_no_traffic_short_circuits():
     results = evaluate_outcome(_summary(offered=0), OutcomeSpec(THRESHOLDS))
     assert [r.name for r in results] == ["traffic_observed"]
     assert results[0].reason == "no_traffic_observed"
+
+
+def test_dropped_arrivals_cannot_hide_behind_successful_responses():
+    summary = _summary(offered=1, dropped=99, good=1, error_rate=0, goodput_ratio=1, by_driver={})
+    checks = _by_name(evaluate_outcome(summary, OutcomeSpec(THRESHOLDS)))
+    assert not checks["sustained_correct_goodput"].passed
+    assert checks["sustained_correct_goodput"].detail["value"] == 0.01
+
+
+def test_driver_goodput_includes_its_dropped_arrivals():
+    summary = _summary(
+        by_driver={
+            "write_readback": {"offered": 1, "dropped": 99, "good": 1, "error_rate": 0, "goodput_ratio": 1},
+        }
+    )
+    checks = _by_name(evaluate_outcome(summary, OutcomeSpec(THRESHOLDS)))
+    assert not checks["driver_write_readback_within_limits"].passed
+    assert checks["driver_write_readback_within_limits"].detail["goodput"]["value"] == 0.01
 
 
 @pytest.fixture(autouse=True)
@@ -227,3 +245,56 @@ def test_capture_baseline_skips_calibration_when_the_fault_ships_with_the_releas
     oracle.capture_baseline()
     assert oracle.latency_baseline is None
     assert problem.app.wrk.calls == []
+
+
+class _CompletedWindowWorkload(_Workload):
+    def __init__(self, latest, episodes=("a", "a")):
+        super().__init__()
+        self.latest = iter(latest)
+        self.episodes = iter(episodes)
+        self.windows = []
+        self.last_latest = 100
+
+    def latest_sent_s(self):
+        self.last_latest = next(self.latest)
+        return self.last_latest
+
+    def status(self):
+        return {"latest_sent_s": self.last_latest, "episode_id": next(self.episodes)}
+
+    def summary(self, since, latency_percentile, settle_s, until_s=None):
+        self.windows.append((since, until_s))
+        return _summary()
+
+
+def test_baseline_waits_for_late_requests_then_reads_the_closed_window(no_sleep):
+    problem = _Problem()
+    workload = _CompletedWindowWorkload([180, 240])
+    problem.app.wrk = workload
+    problem.outcome_spec = lambda: OutcomeSpec(THRESHOLDS, completion_timeout_s=60)
+    oracle = IncidentArenaMitigationOracle(problem)
+    oracle.capture_baseline()
+    assert no_sleep == [80, 60]
+    assert workload.windows == [(0, 180)]
+    assert oracle.latency_baseline["overall"]["peak"] == 400
+
+
+def test_soak_waits_for_late_requests_without_counting_later_arrivals(no_sleep):
+    problem = _Problem()
+    workload = _CompletedWindowWorkload([280, 340])
+    problem.app.wrk = workload
+    problem.outcome_spec = lambda: OutcomeSpec(THRESHOLDS, soak_s=180, completion_timeout_s=60)
+    assert IncidentArenaMitigationOracle(problem).evaluate()["success"] is True
+    assert no_sleep == [180, 60]
+    assert workload.windows == [(100, 280)]
+
+
+def test_workload_restart_cannot_replace_the_measurement_window():
+    problem = _Problem()
+    workload = _CompletedWindowWorkload([280, 340], episodes=("old", "new"))
+    problem.app.wrk = workload
+    problem.outcome_spec = lambda: OutcomeSpec(THRESHOLDS, soak_s=180, completion_timeout_s=60)
+    result = IncidentArenaMitigationOracle(problem).evaluate()
+    assert result["success"] is False
+    assert result["reason"] == "no_traffic_observed"
+    assert workload.windows == []
