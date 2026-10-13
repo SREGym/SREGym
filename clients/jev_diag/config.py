@@ -7,6 +7,7 @@ import os
 from clients.jev.config import KEY_ENV, MODEL_ENV
 
 AGENT_NAME = "jev_diag"
+AGENT_NAMES = {"jev_diag", "jev_agent"}  # jev_agent (clients/jev_agent) uses the same decision backends
 DEFAULT_MODEL = "jev-latest"
 
 
@@ -17,15 +18,22 @@ def configure(args) -> None:
     The container runner forwards TYPESAFE_API_KEY only while it is set, so other runs never receive the
     key. Because ``--model`` names a Jev model here, the judge needs its own ``--judge-model``.
     """
-    if getattr(args, "agent", None) != AGENT_NAME or getattr(args, "use_external_harness", False):
+    agent = getattr(args, "agent", None)
+    if agent not in AGENT_NAMES or getattr(args, "use_external_harness", False):
         return
     model = (getattr(args, "model", None) or DEFAULT_MODEL).strip()
     if not model:
-        raise ValueError("--model must name a Jev model for --agent jev_diag")
+        raise ValueError(f"--model must name a Jev model for --agent {agent}")
     if not getattr(args, "judge_model", None):
-        raise ValueError("--agent jev_diag takes the Jev model from --model; set the judge's model with --judge-model")
-    if not os.environ.get(KEY_ENV, "").strip():
-        raise ValueError("--agent jev_diag requires TYPESAFE_API_KEY")
+        raise ValueError(f"--agent {agent} takes the Jev model from --model; set the judge's model with --judge-model")
+    if os.environ.get("JEV_DIAG_BACKEND", "").strip() == "openai_decisions":
+        if not os.environ.get("DECISIONS_OPENAI_API_KEY", "").strip():
+            raise ValueError("JEV_DIAG_BACKEND=openai_decisions requires DECISIONS_OPENAI_API_KEY")
+    elif os.environ.get("JEV_DIAG_BACKEND", "").strip() == "openrouter":
+        if not os.environ.get("DECISIONS_OPENROUTER_API_KEY", "").strip():
+            raise ValueError("JEV_DIAG_BACKEND=openrouter requires DECISIONS_OPENROUTER_API_KEY")
+    elif not os.environ.get(KEY_ENV, "").strip():
+        raise ValueError(f"--agent {agent} requires TYPESAFE_API_KEY")
     args.model = model
     os.environ[MODEL_ENV] = model
 

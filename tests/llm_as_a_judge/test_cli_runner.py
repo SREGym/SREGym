@@ -51,6 +51,18 @@ def test_codex_uses_last_message_and_terminal_outcome_after_reconnect(monkeypatc
         assert judge_bridge._run_codex("prompt", "gpt-model", tmp_path, api_overrides.copy()) == "judgment"
 
 
+def test_codex_adds_turn_usage(monkeypatch, tmp_path):
+    def fake_execute(command, *, cwd, env, prompt=None):
+        Path(_option(command, "--output-last-message")).write_text("judgment")
+        done = {"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 60, "output_tokens": 7}}
+        return json.dumps({"type": "turn.started"}) + "\n" + json.dumps(done)
+
+    monkeypatch.setattr(judge_bridge, "_execute", fake_execute)
+    usage = {"input_tokens": 1}
+    assert judge_bridge._run_codex("prompt", "gpt-model", tmp_path, {}, usage=usage) == "judgment"
+    assert usage == {"input_tokens": 101, "cached_input_tokens": 60, "output_tokens": 7}
+
+
 @pytest.mark.parametrize("backend,executable", [("claudecode", "claude"), ("copilot", "copilot"), ("cursor", "agent")])
 def test_cli_runners_extract_results_and_scope_env(monkeypatch, tmp_path, backend, executable):
     copilot_overrides = {

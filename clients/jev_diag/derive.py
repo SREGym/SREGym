@@ -100,7 +100,7 @@ LOG_CLASSES: list[tuple[str, re.Pattern[str]]] = [
 # Failures of the telemetry pipeline (trace/metric/log export) never break application requests; they
 # are classified so they can be reported without creating pointers or own-failure signals.
 TELEMETRY_RE = re.compile(
-    r"(?i)(opentelemetry|otel[-_ .:/]|otel-collector|otlp|jaeger|zipkin|\btempo\b|exporter\.internal|"
+    r"(?i)(opentelemetry|(?<![a-z0-9])otel[-_ .:/]|otel-collector|otlp|jaeger|zipkin|\btempo\b|exporter\.internal|"
     r"(?:span|metric|log|trace)s? ?export(?:er|ing)?\b|exporter export|export(?:ing)? (?:spans|metrics|logs|traces)|"
     r"HttpExporter|telemetry|prometheus remote|pushgateway|kubeletstats|scraper)"
 )

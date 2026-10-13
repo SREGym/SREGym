@@ -33,6 +33,7 @@ HARDENING_FLAGS = (
     "--security-opt=no-new-privileges",
 )
 AGENT_TOOLS_CONTAINER_PATH = "/opt/agent-tools"
+JEV_AGENT_CACHE_CONTAINER_PATH = "/jev-agent-cache"
 CONTAINER_PATH = f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
@@ -464,6 +465,43 @@ class ContainerRunner:
         if self.config.forward_host_credentials and os.environ.get("AGENT_JEV_MODEL"):
             env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])
             env_vars.setdefault("TYPESAFE_API_KEY", os.environ.get("TYPESAFE_API_KEY", ""))
+            # OpenAI Decisions backend for jev_diag (clients/jev_diag/decisions_client.py)
+            for name in (
+                "JEV_DIAG_BACKEND",
+                "DECISIONS_OPENAI_API_KEY",
+                "DECISIONS_OPENROUTER_API_KEY",
+                "DECISIONS_MODEL",
+                "DECISIONS_URL",
+                "JEV_DIAG_EXEC_PROBES",
+                # jev_agent: clients/jev_agent/config.py ENV_VARS (a test keeps the two lists equal)
+                "JEV_AGENT_MAX_STEPS",
+                "JEV_AGENT_MIN_STEPS",
+                "JEV_AGENT_WALL_BUDGET_S",
+                "JEV_AGENT_POLICY",
+                "JEV_AGENT_LLM_MODEL",
+                "JEV_AGENT_LLM_BACKEND",
+                "JEV_AGENT_LLM_EFFORT",
+                "JEV_AGENT_LLM_URL",
+                "JEV_AGENT_MAX_LLM_CALLS",
+                "JEV_AGENT_MAX_OPTIONS",
+                "JEV_AGENT_PER_TOOL",
+                "JEV_AGENT_STATE_BUDGET",
+                "JEV_AGENT_START_DELAY",
+                "JEV_AGENT_CRAFT",
+                "JEV_AGENT_MAX_CRAFT",
+                "JEV_AGENT_ESCALATE",
+                "JEV_AGENT_REVIEW",
+                "JEV_AGENT_CHANGE_WINDOW_S",
+                "JEV_AGENT_ENOUGH_P",
+                "JEV_AGENT_ORIGIN_P",
+                "JEV_AGENT_ORIGIN_P_ONCE",
+                "JEV_AGENT_SUBMIT_P",
+                "JEV_AGENT_STABLE_ENOUGH_P",
+                "JEV_AGENT_STABLE_ORIGIN_P",
+                "JEV_AGENT_STABLE_STEPS",
+            ):
+                if os.environ.get(name):
+                    env_vars.setdefault(name, os.environ[name])
 
         env_vars["AGENT_INTERNET_ACCESS"] = self.internet_access_mode
 
@@ -485,6 +523,10 @@ class ContainerRunner:
             env_vars["API_HOSTNAME"] = "host.docker.internal"
             mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
+
+        # jev_agent keeps its per-environment explore results in a host directory shared across runs
+        if os.environ.get("JEV_AGENT_CACHE_DIR"):
+            env_vars["JEV_AGENT_CACHE_DIR"] = JEV_AGENT_CACHE_CONTAINER_PATH
 
         if self._agent_tools_volume is not None:
             env_vars["PATH"] = CONTAINER_PATH
@@ -558,6 +600,11 @@ class ContainerRunner:
         if self.config.workspace_path:
             self.config.workspace_path.mkdir(parents=True, exist_ok=True)
             args.extend(["-v", f"{self.config.workspace_path.resolve()}:/workspace"])
+
+        cache_dir = os.environ.get("JEV_AGENT_CACHE_DIR")
+        if cache_dir:
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            args.extend(["-v", f"{Path(cache_dir).resolve()}:{JEV_AGENT_CACHE_CONTAINER_PATH}"])
 
         # Mount logs directory (for composite command tee output)
         if self.config.logs_path:

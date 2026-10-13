@@ -89,6 +89,21 @@ def provider_endpoint_rules(
             return _required_custom_base(environment, agent, model)
         return _provider_rules(_provider_from_model(model), environment)
 
+    if agent in {"jev_diag", "jev_agent"}:
+        backend = environment.get("JEV_DIAG_BACKEND", "").strip()
+        # jev_agent's optional generative LLM (JEV_AGENT_LLM_MODEL): Codex CLI on the ChatGPT subscription by
+        # default, or the OpenAI Responses API with JEV_AGENT_LLM_BACKEND=api.
+        llm_urls: list[str] = []
+        if agent == "jev_agent" and environment.get("JEV_AGENT_LLM_MODEL", "").strip():
+            if environment.get("JEV_AGENT_LLM_BACKEND", "codex").strip().lower() == "api":
+                llm_urls = ["https://api.openai.com"]
+            else:
+                llm_urls = ["https://chatgpt.com", "https://auth.openai.com"]
+        if backend == "openai_decisions":
+            return _rules_from_urls([environment.get("DECISIONS_URL") or "https://api.openai.com", *llm_urls])
+        if backend == "openrouter":
+            return _rules_from_urls([environment.get("DECISIONS_URL") or "https://openrouter.ai", *llm_urls])
+
     raise ValueError(
         f"Filtered internet access does not know the model provider for agent '{policy.agent_name}'. "
         "Use a supported agent or run with --internet-access open."

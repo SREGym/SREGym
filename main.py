@@ -86,6 +86,7 @@ def run_preflight_check(
         "gemini": "clients.geminicli.driver",
         "cursor": "clients.cursor.driver",
         "jev_diag": "clients.jev_diag.driver",
+        "jev_agent": "clients.jev_agent.driver",
     }
     module_path = agent_driver_modules.get(agent_name)
     if not module_path:

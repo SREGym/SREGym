@@ -119,3 +119,9 @@ agents:
     kickoff_env: null
     install_script: null
     agent_version: null
+  - name: jev_agent
+    kickoff_command: python -m clients.jev_agent.driver
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: install-codex.sh  # Codex CLI for the subscription LLM (escalation and report)
+    agent_version: null
