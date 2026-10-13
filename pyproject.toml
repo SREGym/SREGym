@@ -232,6 +232,7 @@ packages = [
     "atif_converter.atif",
     "sregym",
     "sregym.traces",
+    "sregym.viewer",
     "clients",
     "scripts",
     "llm_backend",
@@ -241,3 +242,4 @@ packages = [
 [tool.setuptools.package-data]
 atif_converter = ["README.md"]
 "atif_converter.atif" = ["UPSTREAM.md"]
+"sregym.viewer" = ["templates/*.html", "static/*.css"]
