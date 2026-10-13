@@ -123,11 +123,6 @@ class CursorAgent:
         """
         return usage_metrics()
 
-    def generate_trajectory(self, problem_id: str) -> Path | None:
-        """Cursor CLI trajectories are not wired into the visualizer yet."""
-        del problem_id
-        return None
-
     def _build_command(self, instruction: str) -> list[str]:
         command = [
             "agent",
