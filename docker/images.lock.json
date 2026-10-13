@@ -1,4 +1,6 @@
 {
+  "mattermost-server": "ghcr.io/sregym/mattermost:11.7.0@sha256:82b758dbf24caecc7690097fa7b6a33216b2e9e4e5527fbf67033009969f4875",
+  "stripe-backend": "ghcr.io/sregym/stripe-marathon:20261010@sha256:2bb5997c3fa8177e77045e59ff17d66ca20e8040a666e28848ca4b8bd9406cc9",
   "openwhisk-controller": "ghcr.io/sregym/openwhisk:20260913-controller@sha256:5e0192aa01f0f1dd01aeec01a4ca94880060afd5a1507b8bc5420e8af6fdce36",
   "openwhisk-invoker": "ghcr.io/sregym/openwhisk:20260913-invoker@sha256:458fe8a374cbfc31fe6375a6888e23834589422ef4af672d1979ae4d26bf55fc",
   "openwhisk-utility": "ghcr.io/sregym/openwhisk:20260913-utility@sha256:26279c46d843b2772542267b022cb4f265c48b18f259ef9a9d0b8bd2fcdb6fe4",

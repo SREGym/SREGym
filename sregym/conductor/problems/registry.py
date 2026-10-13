@@ -32,6 +32,11 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.apps.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
+from sregym.conductor.problems.apps.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
+from sregym.conductor.problems.apps.gitlab.notification_unannounced import (
+    GitLabNotificationUnannouncedAmbiguityProblem,
+)
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
@@ -94,9 +99,10 @@ from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop im
     StaleHostAliasesDNSPoisoningAstronomyShop,
 )
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
+from sregym.conductor.problems.apps.stripe.feature_config import StripeFeatureConfigProblem
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
-from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
-from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
+from sregym.conductor.problems.apps.train_ticket.f17 import TrainTicketF17
+from sregym.conductor.problems.apps.train_ticket.f22 import TrainTicketF22
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
@@ -184,6 +190,12 @@ class ProblemRegistry:
             "service_wrong_pod_selection_hotel_reservation": ServiceWrongPodSelectionHotelReservation,
             "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
+            "gitlab_notification_unannounced_ambiguity_replicated": lambda: GitLabNotificationUnannouncedAmbiguityProblem(
+                scale_tier="replicated"
+            ),
+            "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittentProblem(scale_tier="replicated"),
+            "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAuditProblem(scale_tier="replicated"),
+            "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,

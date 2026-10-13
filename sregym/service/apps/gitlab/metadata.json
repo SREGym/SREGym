@@ -1,0 +1,8 @@
+{
+  "Name": "GitLab CE prototype",
+  "Namespace": "gitlab-ce",
+  "Desc": "GitLab Community Edition with external CloudNativePG PostgreSQL, persistent Redis, repository storage and configuration. One application pod runs Puma, Sidekiq and Gitaly. This bounded single-host prototype is not a production HA deployment.",
+  "frontend_service": "gitlab-ce",
+  "frontend_port": 80,
+  "Supported Operations": ["Read and write projects, issues and Git files", "Inspect PostgreSQL primary and replicas", "Inspect application and Redis logs"]
+}
