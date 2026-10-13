@@ -1,0 +1,19 @@
+{
+  "app": "hotel_reservation",
+  "title": "Abandoned directory recovery replays a retired rate generation",
+  "fault_layer": "app-config",
+  "fault_primitive": "Recurring native Consul snapshot restoration with agent-registration quiescence from a detached process inside an existing recommendation container",
+  "root_cause_class": "native_directory_recovery_generation_rollback",
+  "incident_class": "Unmanaged disaster-recovery procedure continues after an instance replacement and repeatedly restores obsolete service-discovery state",
+  "affected_components": [
+    "consul",
+    "rate",
+    "search",
+    "frontend",
+    "recommendation"
+  ],
+  "symptoms": "Hotel searches fail with search dependency unavailable while every application pod remains Running and Ready. Search emits downstream rate Unavailable warnings. The rate process and Kubernetes Service remain healthy, but Consul advertises a retired rate pod address. Repairs of the discovery catalog regress after approximately three and a half minutes.",
+  "generation": {
+    "tier": "hard"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "app": "hotel_reservation",
+  "title": "Detached catalog exporter republishes shell literals into the profile cache",
+  "fault_layer": "data",
+  "fault_primitive": "Recurring Memcached publication of Mongo shell JavaScript literals under existing hotel keys",
+  "root_cause_class": "orphaned_catalog_shell_literal_cache_publication",
+  "incident_class": "Abandoned operational refresh process with a serialization contract regression",
+  "affected_components": [
+    "frontend",
+    "profile",
+    "memcached-profile",
+    "mongodb-reservation"
+  ],
+  "symptoms": "Hotel search and recommendation requests terminate with frontend HTTP handler panics and empty replies. Application pods remain Running and Ready, the persistent catalog is correct, and direct backend RPC calls can succeed. Flushing or restarting the cache restores service until the next scheduled publication.",
+  "generation": {
+    "tier": "hard"
+  }
+}

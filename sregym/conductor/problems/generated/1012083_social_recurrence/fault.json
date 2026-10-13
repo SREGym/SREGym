@@ -1,0 +1,19 @@
+{
+  "app": "social_network",
+  "title": "Timeline snapshot destination drifts back to the runtime configuration path",
+  "fault_layer": "app-config",
+  "fault_primitive": "Detached in-container snapshot loop repeatedly changes Redis RDB destination and reinstates write protection",
+  "root_cause_class": "snapshot_config_file_destination_alias_recurrence",
+  "incident_class": "Leftover operator maintenance process with incorrect snapshot path derivation",
+  "affected_components": [
+    "media-mongodb",
+    "user-timeline-redis",
+    "user-timeline-service",
+    "compose-post-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "All pods remain Running and Ready. User timeline reads that populate the cache and post submissions fail with Redis MISCONF errors. Redis reports failed background RDB saves and permission errors at the mounted configuration path. Roughly 40% of requests fail in the live validation, with large error-log surges in user-timeline-service and nginx-thrift.",
+  "generation": {
+    "tier": "hard"
+  }
+}

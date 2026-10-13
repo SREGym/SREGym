@@ -111,6 +111,7 @@ from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.service.kubectl import KubeCtl
+from sregym.conductor.problems.generated_problem import generated_problems
 
 
 # fmt: off
@@ -276,6 +277,8 @@ class ProblemRegistry:
             "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
         }
 # fmt: on
+        # Generated mitigation-only problems (gen_<name>).
+        self.PROBLEM_REGISTRY.update(generated_problems())
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 
