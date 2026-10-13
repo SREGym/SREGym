@@ -1,0 +1,54 @@
+schema_version = "1.4"
+
+# Evidence collected from the sregym sidecar after the agent container stops.
+# Harbor re-creates each file at the same path in the separate verifier.
+artifacts = [
+    { source = "{{grade_path}}", service = "{{service_name}}" },
+    { source = "{{log_dir}}", service = "{{service_name}}" },
+]
+
+[task]
+name = "sregym/{{task_name}}"
+description = "Diagnose and mitigate an injected fault in the {{app_name}} application on Kubernetes."
+authors = [{ name = "SREGym Team" }]
+keywords = {{keywords}}
+
+[metadata]
+sregym_problem_id = "{{problem_id}}"
+application = "{{app_name}}"
+category = "sre"
+tags = {{keywords}}
+
+[verifier]
+timeout_sec = 120.0
+# The agent container is stopped before grading, so it cannot interfere.
+environment_mode = "separate"
+
+# Grade with the problem's mitigation oracle inside the sidecar, which holds
+# the pre-fault baseline captured during setup.
+[[verifier.collect]]
+service = "{{service_name}}"
+command = "curl -fsS --max-time {{grade_timeout}} -X POST http://127.0.0.1:{{grade_port}}/grade -o /dev/null"
+timeout_sec = {{grade_timeout_hook}}
+
+[agent]
+timeout_sec = {{agent_timeout}}
+
+[environment]
+# Covers building the agent image and pulling the backend image. Cluster and
+# problem setup are waited for by the healthcheck below.
+build_timeout_sec = 1800.0
+# Sized for the whole Compose stack (four-node KIND cluster and application).
+# The local Docker backend applies these limits to the agent container only.
+cpus = {{cpus}}
+memory_mb = {{memory_mb}}
+storage_mb = {{storage_mb}}
+
+# Blocks until the sidecar has deployed the application and injected the fault
+# (each check waits up to {{ready_wait}}s), and fails fast if setup failed.
+[environment.healthcheck]
+command = "sregym-ready {{ready_wait}}"
+timeout_sec = {{ready_timeout}}
+interval_sec = 5.0
+start_period_sec = 0.0
+retries = {{ready_retries}}
