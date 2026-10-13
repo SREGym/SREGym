@@ -51,6 +51,12 @@ EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
 CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
 
 
+def problem_cleanup_timeout(conductor) -> float:
+    """Allow stateful reference recovery its own budget after agent grading."""
+    problem = getattr(conductor, "problem", None)
+    return getattr(problem, "cleanup_timeout_seconds", CLEANUP_DRAIN_TIMEOUT_SECONDS)
+
+
 def _http_endpoint(value: str) -> str:
     """Validate an additional endpoint supplied on the command line."""
     try:
@@ -266,7 +272,7 @@ def driver_loop(
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
             try:
                 conductor.finish_problem_in_background()
-                await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
             except TimeoutError:
                 conductor.abandon_submission_work()
                 conductor.results["cleanup_timed_out"] = True
@@ -517,7 +523,7 @@ def driver_loop(
                     console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
                     if conductor.close_submissions():
                         try:
-                            await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                            await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                         except TimeoutError:
                             abort_campaign_after_attempt = True
                             conductor.abandon_submission_work()
@@ -623,7 +629,7 @@ def driver_loop(
                 # freezing the attempt snapshot or starting another attempt.
                 if not abort_campaign_after_attempt and conductor.close_submissions():
                     try:
-                        await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                        await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                     except TimeoutError:
                         abort_campaign_after_attempt = True
                         conductor.abandon_submission_work()
