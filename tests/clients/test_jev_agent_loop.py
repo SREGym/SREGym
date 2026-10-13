@@ -806,7 +806,8 @@ def test_jev_diag_configure_accepts_jev_agent(monkeypatch):
 
     monkeypatch.setenv("JEV_DIAG_BACKEND", "openai_decisions")
     monkeypatch.setenv("DECISIONS_OPENAI_API_KEY", "test")
-    monkeypatch.delenv(MODEL_ENV, raising=False)
+    # configure() writes MODEL_ENV itself; setting it here first makes monkeypatch restore the original after the test
+    monkeypatch.setenv(MODEL_ENV, "")
     args = SimpleNamespace(agent="jev_agent", model="gpt-6-luna", judge_model="judge", use_external_harness=False)
     configure(args)
     import os
