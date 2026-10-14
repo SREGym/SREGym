@@ -7,6 +7,7 @@ import sregym.conductor.oracles.missing_stale_cache_fallback_mitigation as oracl
 from sregym.conductor.oracles.missing_stale_cache_fallback_mitigation import (
     MissingStaleCacheFallbackMitigationOracle,
     ProbeUnavailable,
+    UpstreamRecoveryError,
 )
 from sregym.conductor.oracles.mitigation import MitigationOracle
 
@@ -116,7 +117,7 @@ class FakeShop:
             raise RuntimeError("product-catalog did not answer quickly after removing the delay")
         self.latency = 0
         if self.upstream_code != "OK":
-            raise RuntimeError("product-catalog did not answer quickly after removing the delay")
+            raise UpstreamRecoveryError("product-catalog did not answer quickly after removing the delay")
 
     def apply_delay(self, keep_alive, latency=None):
         self.schedule = keep_alive
@@ -567,6 +568,23 @@ def test_delay_that_cannot_be_lifted_is_environmental(evaluate):
     shop = FakeShop()
     shop.can_lift = False
     _assert_fails(evaluate(shop), "impairment_unavailable", "environment_error")
+
+
+def test_fast_rpc_does_not_hide_unresolved_chaos_cleanup(evaluate):
+    shop = FakeShop()
+    shop.remove_delay = Mock(side_effect=RuntimeError("nine generated NetworkChaos children remain"))
+    shop.measure_upstream = Mock(return_value={"s": 0.006, "code": "OK"})
+    _assert_fails(evaluate(shop), "impairment_unavailable", "environment_error")
+    shop.measure_upstream.assert_not_called()
+
+
+def test_transient_upstream_recovery_can_be_rechecked_after_confirmed_cleanup():
+    shop = FakeShop()
+    shop.remove_delay = Mock(side_effect=UpstreamRecoveryError("connection still recovering"))
+    shop.measure_upstream = Mock(return_value={"s": 0.006, "code": "OK"})
+    oracle = MissingStaleCacheFallbackMitigationOracle(problem=shop)
+    assert oracle._lift_delay() is None
+    shop.measure_upstream.assert_called_once()
 
 
 def test_delay_that_cannot_be_applied_is_environmental(evaluate):

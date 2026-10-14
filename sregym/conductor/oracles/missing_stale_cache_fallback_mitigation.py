@@ -10,6 +10,10 @@ class ProbeUnavailable(RuntimeError):
     """The probe itself could not run (no client pod, exec failed), so nothing is known about recommendation."""
 
 
+class UpstreamRecoveryError(RuntimeError):
+    """Chaos cleanup completed, but product-catalog has not recovered yet."""
+
+
 class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
     """
     Mitigation oracle for the missing stale-cache fallback problem.
@@ -358,8 +362,11 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
         try:
             self.problem.remove_delay()
             return None
-        except RuntimeError as exc:
+        except UpstreamRecoveryError as exc:
             error = str(exc)
+        except RuntimeError as exc:
+            print(f"ERROR: product-catalog delay cleanup did not complete: {exc}")
+            return self.fail("impairment_unavailable", message=f"could not remove the delay: {exc}")
 
         upstream = self.problem.measure_upstream()
         if upstream is None:

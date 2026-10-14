@@ -33,6 +33,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.missing_stale_cache_fallback_mitigation import (
     MissingStaleCacheFallbackMitigationOracle,
     ProbeUnavailable,
+    UpstreamRecoveryError,
 )
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
@@ -301,7 +302,7 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
     def remove_delay(self) -> None:
         self._delete_chaos()
         if not self.wait_for_delay(active=False):
-            raise RuntimeError("product-catalog did not answer quickly after removing the delay")
+            raise UpstreamRecoveryError("product-catalog did not answer quickly after removing the delay")
 
     def incident_running(self) -> bool:
         if not self._chaos_crds_installed():
@@ -714,49 +715,44 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         return len(out.split()) == 2
 
     def _delete_chaos(self) -> None:
-        """
-        Delete Schedule and NetworkChaos, then wait until no chaos object of ours is left.
-
-        Every command is checked: a failed delete or list (for example Forbidden) raises instead of passing as
-        "nothing left". If Chaos Mesh can't finish deleting an object (its finalizer is stuck, for example after an
-        injection that failed), the finalizer is stripped, the way SREGym's noise manager does it. A delay left
-        behind on the pods still shows up in remove_delay(), which times product-catalog directly.
-        """
+        """Stop the Schedule and let Chaos Mesh recover every generated delay before deletion completes."""
         if not self._chaos_crds_installed():
             return
-        try:
-            self.kubectl.exec_command_checked(
-                f"kubectl delete {self.CHAOS_RESOURCES} {self.CHAOS_NAME} -n {self.namespace} "
-                "--ignore-not-found --wait=true --timeout=60s",
-                timeout=90,
-            )
-        except RuntimeError as exc:
-            if "timed out waiting for the condition" not in str(exc):
-                raise
-            print(f"WARNING: Chaos Mesh did not finish deleting {self.CHAOS_NAME}, stripping its finalizers")
-            patch = shlex.quote(json.dumps({"metadata": {"finalizers": []}}))
-            for name in self._chaos_objects():
+        deadline = time.monotonic() + 60
+        left = self._chaos_objects()
+        while left:
+            for name in left:
+                if not name.startswith("schedule.chaos-mesh.org/"):
+                    continue
                 try:
                     self.kubectl.exec_command_checked(
-                        f"kubectl patch {name} -n {self.namespace} --type merge -p {patch}", timeout=30
+                        f"kubectl annotate {name} -n {self.namespace} experiment.chaos-mesh.org/pause=true --overwrite",
+                        timeout=30,
                     )
-                except RuntimeError as patch_exc:
-                    if "NotFound" not in str(patch_exc):
+                except RuntimeError as exc:
+                    if "NotFound" not in str(exc):
                         raise
-        deadline = time.monotonic() + 60
-        left: list[str] = []
-        while time.monotonic() < deadline:
-            left = self._chaos_objects()
-            if not left:
-                return
+            # Delete children explicitly, independent of garbage collection of the Schedule. Children may outlive
+            # a previously deleted Schedule or appear during its last reconciliation. Keep their recovery finalizers.
+            self.kubectl.exec_command_checked(
+                f"kubectl delete {' '.join(left)} -n {self.namespace} "
+                "--ignore-not-found --cascade=background --wait=false",
+                timeout=30,
+            )
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"chaos objects named {self.CHAOS_NAME}* still present after 60s: {left}")
             time.sleep(2)
-        raise RuntimeError(f"chaos objects named {self.CHAOS_NAME}* still present after 60s: {left}")
+            left = self._chaos_objects()
 
     def _chaos_objects(self) -> list[str]:
         out = self.kubectl.exec_command_checked(
             f"kubectl get {self.CHAOS_RESOURCES} -n {self.namespace} -o name", timeout=30
         )
-        return [line for line in out.split() if f"/{self.CHAOS_NAME}" in line]
+        return [
+            line
+            for line in out.split()
+            if line.partition("/")[2] == self.CHAOS_NAME or line.partition("/")[2].startswith(f"{self.CHAOS_NAME}-")
+        ]
 
     def _namespace_exists(self) -> bool:
         out = self.kubectl.exec_command_checked(

@@ -9,7 +9,7 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 import sregym.conductor.problems.missing_stale_cache_fallback_astronomy_shop as problem_module
-from sregym.conductor.oracles.missing_stale_cache_fallback_mitigation import ProbeUnavailable
+from sregym.conductor.oracles.missing_stale_cache_fallback_mitigation import ProbeUnavailable, UpstreamRecoveryError
 from sregym.conductor.problems.missing_stale_cache_fallback_astronomy_shop import MissingStaleCacheFallbackAstronomyShop
 
 
@@ -71,11 +71,14 @@ CRDS = "crd/schedules.chaos-mesh.org\ncrd/networkchaos.chaos-mesh.org\n"
 
 
 def test_chaos_delete_is_checked_bounded_and_uses_full_resource_names(problem):
-    problem.kubectl.exec_command_checked = Mock(side_effect=[CRDS, "", ""])
+    problem.kubectl.exec_command_checked = Mock(
+        side_effect=[CRDS, "networkchaos.chaos-mesh.org/catalog-latency", "", ""]
+    )
     problem._delete_chaos()
-    delete = problem.kubectl.exec_command_checked.call_args_list[1].args[0]
-    assert "schedules.chaos-mesh.org,networkchaos.chaos-mesh.org catalog-latency -n astronomy-shop" in delete
-    assert "--timeout=60s" in delete
+    delete = problem.kubectl.exec_command_checked.call_args_list[2].args[0]
+    assert "networkchaos.chaos-mesh.org/catalog-latency -n astronomy-shop" in delete
+    assert "--wait=false" in delete and "--cascade=background" in delete
+    assert problem.kubectl.exec_command_checked.call_args_list[2].kwargs["timeout"] == 30
     problem.kubectl.exec_command.assert_not_called()
 
 
@@ -98,28 +101,85 @@ def test_chaos_that_outlives_the_delete_is_reported(problem, monkeypatch):
         problem._delete_chaos()
 
 
-def test_chaos_stuck_on_its_finalizer_is_stripped_and_checked(problem, monkeypatch):
-    # Seen in CI: Chaos Mesh couldn't apply a delay, and the object then never finished deleting.
+def test_chaos_stuck_on_its_finalizer_is_not_discarded(problem, monkeypatch):
     monkeypatch.setattr(problem_module, "time", Clock())
     stuck = "networkchaos.chaos-mesh.org/catalog-latency\n"
-    listings = iter([stuck, stuck, ""])
 
     def run(command, **kwargs):
         if "get crd" in command:
             return CRDS
-        if command.startswith("kubectl delete"):
+        if command.startswith("kubectl delete") and "--wait=true" in command:
             raise RuntimeError("error: timed out waiting for the condition on networkchaos/catalog-latency")
         if command.startswith("kubectl get"):
-            return next(listings)
+            return stuck
+        if command.startswith("kubectl patch"):
+            pytest.fail("Cleanup must not remove finalizers to make the resources disappear")
+        return ""
+
+    problem.kubectl.exec_command_checked = Mock(side_effect=run)
+    with pytest.raises(RuntimeError, match="still present after 60s"):
+        problem._delete_chaos()
+    assert not any("patch" in c.args[0] for c in problem.kubectl.exec_command_checked.call_args_list)
+
+
+@pytest.mark.parametrize("parent_present", [True, False])
+def test_cleanup_deletes_all_generated_children_even_when_parent_is_gone(problem, monkeypatch, parent_present):
+    monkeypatch.setattr(problem_module, "time", Clock())
+    children = [f"networkchaos.chaos-mesh.org/catalog-latency-{i}" for i in range(9)]
+    schedule = "schedule.chaos-mesh.org/catalog-latency"
+    resources = ([schedule] if parent_present else []) + children
+    # A final Schedule reconciliation can create another child while deletion is starting.
+    late = "networkchaos.chaos-mesh.org/catalog-latency-late"
+    lists = iter(["\n".join(resources), late, ""])
+
+    def run(command, **kwargs):
+        if "get crd" in command:
+            return CRDS
+        if command.startswith("kubectl get"):
+            return next(lists)
         return ""
 
     problem.kubectl.exec_command_checked = Mock(side_effect=run)
     problem._delete_chaos()
-    patches = [c.args[0] for c in problem.kubectl.exec_command_checked.call_args_list if "kubectl patch" in c.args[0]]
-    assert patches == [
-        "kubectl patch networkchaos.chaos-mesh.org/catalog-latency -n astronomy-shop --type merge "
-        '-p \'{"metadata": {"finalizers": []}}\''
+    commands = [call.args[0] for call in problem.kubectl.exec_command_checked.call_args_list]
+    deletes = [c for c in commands if c.startswith("kubectl delete")]
+    assert all(child in deletes[0] for child in children)
+    assert late in deletes[1]
+    if parent_present:
+        pause = next(c for c in commands if c.startswith("kubectl annotate"))
+        assert "pause=true --overwrite" in pause
+        assert commands.index(pause) < commands.index(deletes[0])
+    assert not any("finalizers" in command for command in commands)
+
+
+def test_cleanup_only_selects_the_base_name_and_generated_children(problem):
+    problem.kubectl.exec_command_checked.return_value = (
+        "networkchaos.chaos-mesh.org/catalog-latency-x\n"
+        "schedule.chaos-mesh.org/catalog-latency\n"
+        "networkchaos.chaos-mesh.org/catalog-latencyother\n"
+        "networkchaos.chaos-mesh.org/other-catalog-latency\n"
+    )
+    assert problem._chaos_objects() == [
+        "networkchaos.chaos-mesh.org/catalog-latency-x",
+        "schedule.chaos-mesh.org/catalog-latency",
     ]
+
+
+def test_remove_delay_requires_cleanup_and_a_fast_upstream(problem):
+    problem._delete_chaos = Mock()
+    problem.wait_for_delay = Mock(return_value=False)
+    with pytest.raises(UpstreamRecoveryError):
+        problem.remove_delay()
+    problem._delete_chaos.assert_called_once()
+    problem.wait_for_delay.assert_called_once_with(active=False)
+
+
+def test_remove_delay_does_not_probe_after_cleanup_error(problem):
+    problem._delete_chaos = Mock(side_effect=RuntimeError("children remain"))
+    problem.wait_for_delay = Mock()
+    with pytest.raises(RuntimeError, match="children remain"):
+        problem.remove_delay()
+    problem.wait_for_delay.assert_not_called()
 
 
 def test_failed_chaos_cleanup_fails_recovery(problem):
