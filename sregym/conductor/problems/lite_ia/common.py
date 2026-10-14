@@ -15,11 +15,7 @@ import time
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.incident_arena import OutcomeSpec, evaluate_outcome
-from sregym.service.apps.frappe.application import Frappe
-from sregym.service.apps.saleor.application import Saleor
-from sregym.service.apps.slack_spine.application import SlackSpine
-
-APPS = {"frappe": Frappe, "saleor": Saleor, "slack_spine": SlackSpine}
+from sregym.service.apps.app_registry import AppRegistry
 
 # Fault-free profiles compiled into each app's load generator, looped for the
 # whole run (``continuous_load_profile`` sets ``loop`` and the deadline). Frappe
@@ -53,9 +49,9 @@ PROPAGATION_S = 60
 
 def make_app(app_name: str):
     """Build an Incident Arena app with its continuous, fault-free load profile."""
-    if app_name not in APPS:
-        raise ValueError(f"Unsupported app name: {app_name} (expected one of {sorted(APPS)})")
-    app = APPS[app_name]()
+    if app_name not in LOAD_PROFILES:
+        raise ValueError(f"Unsupported load profile: {app_name} (expected one of {sorted(LOAD_PROFILES)})")
+    app = AppRegistry().get_app_instance(app_name)
     app.set_load_profile(*LOAD_PROFILES[app_name])
     app.configure(DEPLOY_VALUES.get(app_name, {}))
     return app
