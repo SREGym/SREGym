@@ -1,9 +1,10 @@
 import csv
 import importlib.util
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -11,7 +12,13 @@ SPEC = importlib.util.spec_from_file_location(
     "dind_campaign", Path(__file__).resolve().parents[2] / "docker/dind/campaign.py"
 )
 campaign = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(campaign)
+LAUNCHER_SPEC = importlib.util.spec_from_file_location(
+    "run", Path(__file__).resolve().parents[2] / "docker/dind/run.py"
+)
+launcher = importlib.util.module_from_spec(LAUNCHER_SPEC)
+LAUNCHER_SPEC.loader.exec_module(launcher)
+with patch.dict(sys.modules, {"run": launcher}):
+    SPEC.loader.exec_module(campaign)
 
 
 @pytest.fixture
