@@ -53,7 +53,15 @@ from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
-def ported(problem: Problem, app_name: str, *, component: str, description: str, oracle_factory) -> None:
+def ported(
+    problem: Problem,
+    app_name: str,
+    *,
+    component: str,
+    description: str,
+    oracle_factory,
+    root_cause_namespace: str | None = None,
+) -> None:
     """Shared constructor body: app, timing, ground truth and oracles."""
     Problem.__init__(problem, app=make_app(app_name))
     problem.app_name = app_name
@@ -61,7 +69,9 @@ def ported(problem: Problem, app_name: str, *, component: str, description: str,
     problem.baseline_duration_s = BASELINE_S
     problem.propagation_duration_s = PROPAGATION_S
     problem.root_cause = problem.build_structured_root_cause(
-        component=component, namespace=problem.namespace, description=description
+        component=component,
+        namespace=problem.namespace if root_cause_namespace is None else root_cause_namespace,
+        description=description,
     )
     problem.diagnosis_oracle = LLMAsAJudgeOracle(problem=problem, expected=problem.root_cause)
     problem.mitigation_oracle = with_app_health(problem, oracle_factory(problem))
@@ -107,7 +117,8 @@ class ServiceDNSResolutionFailureIA(ServiceDNSResolutionFailure):
         ported(
             self,
             app_name,
-            component=f"configmap/coredns in kube-system (NXDOMAIN template for `{faulty_service}`)",
+            component="configmap/coredns",
+            root_cause_namespace="kube-system",
             description=(
                 f"CoreDNS (kube-system/coredns Corefile) is configured with an NXDOMAIN template for "
                 f"`{faulty_service}.<namespace>.svc.cluster.local`, so in-cluster lookups for this service name "

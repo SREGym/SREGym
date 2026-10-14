@@ -155,6 +155,7 @@ class StaleCoreDNSConfigSlack(StaleCoreDNSConfig):
             self,
             APP,
             component="configmap/coredns",
+            root_cause_namespace="kube-system",
             description=(
                 "The CoreDNS Corefile (ConfigMap `coredns` in `kube-system`) carries a stale `template ANY ANY "
                 "svc.cluster.local` block that answers NXDOMAIN for every name matching `.*\\.svc\\.cluster\\.local`, "
