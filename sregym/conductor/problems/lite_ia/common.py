@@ -10,16 +10,14 @@ before the fault (:class:`LoadgenHealthOracle`).
 
 from __future__ import annotations
 
-import logging
 import time
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.compound import CompoundedOracle
+from sregym.conductor.oracles.incident_arena import OutcomeSpec, evaluate_outcome
 from sregym.service.apps.frappe.application import Frappe
 from sregym.service.apps.saleor.application import Saleor
 from sregym.service.apps.slack_spine.application import SlackSpine
-
-logger = logging.getLogger(__name__)
 
 APPS = {"frappe": Frappe, "saleor": Saleor, "slack_spine": SlackSpine}
 
@@ -64,23 +62,14 @@ def make_app(app_name: str):
 
 
 class LoadgenHealthOracle(Oracle):
-    """The app's own users are served about as well as before the fault.
-
-    The baseline is the load generator's error rate over the healthy window
-    before injection. At evaluation the oracle lets traffic settle for
-    ``SOAK_S`` seconds and then measures a fresh ``WINDOW_S``-second window,
-    so only traffic sent after the agent finished counts. That window must
-    carry traffic and fail no more than
-    ``max(ABS_CEILING, BASELINE_FACTOR * baseline + SLACK)``, capped at
-    ``MAX_CEILING`` so a baseline taken during warm-up cannot excuse a broken app.
-    """
+    """Compare a complete post-repair traffic window with the healthy baseline."""
 
     FAILURE_CLASSES = {
-        "no_traffic": "agent_error",
-        "error_rate_above_baseline": "agent_error",
+        "service_unhealthy": "ambiguous",
+        "no_traffic_observed": "ambiguous",
         "loadgen_unavailable": "ambiguous",
     }
-    WINDOW_S = 60.0
+    WINDOW_S = 120.0
     SOAK_S = 30.0
     ABS_CEILING = 0.05
     BASELINE_FACTOR = 2.0
@@ -91,7 +80,7 @@ class LoadgenHealthOracle(Oracle):
         super().__init__(problem)
         self.window_s = float(window_s if window_s is not None else self.WINDOW_S)
         self.soak_s = float(soak_s if soak_s is not None else self.SOAK_S)
-        self.baseline_error_rate: float | None = None
+        self.baseline: dict | None = None
 
     @property
     def workload(self):
@@ -100,48 +89,86 @@ class LoadgenHealthOracle(Oracle):
             app.create_workload()
         return app.wrk
 
-    def _window(self) -> dict:
-        latest = self.workload.latest_sent_s()
-        if latest is None:
-            return {"offered": 0}
-        return self.workload.summary(max(0.0, float(latest) - self.window_s))
+    def _state(self, *, episode: str | None = None, minimum: float = 0.0) -> dict:
+        state = self.workload.status()
+        latest = state.get("latest_sent_s")
+        current_episode = state.get("episode_id")
+        if latest is None or current_episode is None or float(latest) < minimum:
+            raise RuntimeError("The workload measurement window is incomplete")
+        if episode is not None and current_episode != episode:
+            raise RuntimeError("The workload restarted during the measurement window")
+        return state
+
+    def _completed_window(self, since: float, until: float, episode: str) -> dict:
+        # The pinned application declares the longest possible request path.
+        # Late completion records must join the closed arrival cohort.
+        time.sleep(self.problem.app.WORKLOAD_COMPLETION_TIMEOUT_S)
+        self._state(episode=episode, minimum=until)
+        return self.workload.summary(since, until_s=until)
+
+    @classmethod
+    def _limits(cls, stats: dict) -> dict:
+        ceiling = min(cls.MAX_CEILING, max(cls.ABS_CEILING, cls.BASELINE_FACTOR * stats["error_rate"] + cls.SLACK))
+        return {"error_rate_max": ceiling, "goodput_min_ratio": 1.0 - ceiling}
+
+    @staticmethod
+    def _latency_bands(stats: dict) -> dict:
+        return {
+            kind: max(1000.0, 2.0 * value["p_ms"])
+            for kind, value in (stats.get("latency") or {}).items()
+            if value.get("n") and value.get("p_ms") is not None
+        }
+
+    def _spec(self, summary: dict) -> OutcomeSpec:
+        baseline = self.baseline
+        if baseline is None:
+            raise RuntimeError("The healthy workload baseline is missing")
+        drivers = baseline.get("by_driver") or {}
+        # A file download exists only after a session chooses an uploaded file;
+        # it is not a periodic driver. Grade it when present, not by absence.
+        intermittent = {"session_file_download"} if self.problem.app.app_id == "slack-spine" else set()
+        required = set(drivers) - intermittent
+        observed = set(summary.get("by_driver") or {})
+        thresholds = {
+            **self._limits(baseline),
+            "p99_ms_by_phase": self._latency_bands(baseline),
+            "by_driver": {name: self._limits(drivers.get(name) or baseline) for name in required | observed},
+        }
+        return OutcomeSpec(thresholds, tolerance=0.0)
 
     def capture_baseline(self) -> None:
-        try:
-            summary = self._window()
-            self.baseline_error_rate = float(summary.get("error_rate") or 0.0)
-            print(
-                f"[LoadgenHealth] baseline: offered={summary.get('offered')} error_rate={self.baseline_error_rate:.4f}"
-            )
-        except Exception as exc:  # The ceiling falls back to ABS_CEILING.
-            logger.warning("Could not capture load generator baseline: %s", exc)
-            self.baseline_error_rate = None
-
-    def ceiling(self) -> float:
-        base = self.baseline_error_rate or 0.0
-        return min(self.MAX_CEILING, max(self.ABS_CEILING, self.BASELINE_FACTOR * base + self.SLACK))
+        state = self._state(minimum=self.window_s)
+        until = float(state["latest_sent_s"])
+        self.baseline = self._completed_window(until - self.window_s, until, state["episode_id"])
+        checks = evaluate_outcome(self.baseline, self._spec(self.baseline))
+        if not self.baseline.get("by_driver") or any(not check.passed for check in checks):
+            self.baseline = None
+            raise RuntimeError("The pre-injection workload baseline is not healthy and complete")
+        print(
+            f"[LoadgenHealth] baseline: {self.baseline['offered']} requests; error_rate={self.baseline['error_rate']}"
+        )
 
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Load generator health ==")
         try:
-            start = self.workload.latest_sent_s()
-            time.sleep(self.soak_s + self.window_s)
-            since = None if start is None else float(start) + self.soak_s
-            summary = self.workload.summary(since)
+            first = self._state()
+            time.sleep(self.soak_s)
+            start = self._state(episode=first["episode_id"], minimum=float(first["latest_sent_s"]))
+            time.sleep(self.window_s)
+            end = self._state(episode=start["episode_id"], minimum=float(start["latest_sent_s"]) + self.window_s * 0.9)
+            summary = self._completed_window(
+                float(start["latest_sent_s"]), float(end["latest_sent_s"]), start["episode_id"]
+            )
+            checks = evaluate_outcome(summary, self._spec(summary))
         except Exception as exc:
             print(f"❌ Load generator ledger unavailable: {exc}")
             return self.fail("loadgen_unavailable", error=str(exc))
-        offered = int(summary.get("offered") or 0)
-        error_rate = summary.get("error_rate")
-        ceiling = self.ceiling()
-        detail = {"offered": offered, "error_rate": error_rate, "ceiling": ceiling, "window_s": self.window_s}
-        if offered == 0:
-            print("❌ The load generator sent no traffic in the window")
-            return self.fail("no_traffic", **detail)
-        if error_rate is None or float(error_rate) > ceiling:
-            print(f"❌ Error rate {error_rate} exceeds {ceiling:.3f} (baseline {self.baseline_error_rate})")
-            return self.fail("error_rate_above_baseline", **detail)
-        print(f"✅ {offered} requests, error rate {float(error_rate):.4f} <= {ceiling:.3f}")
+        detail = {"summary": summary, "checks": [check.as_dict() for check in checks]}
+        for check in checks:
+            print(f"{'✅' if check.passed else '❌'} {check.name}: {check.detail}")
+        failed = next((check for check in checks if not check.passed), None)
+        if failed:
+            return self.fail(failed.reason, **detail)
         return {"success": True, **detail}
 
 

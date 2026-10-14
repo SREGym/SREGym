@@ -40,13 +40,13 @@ CEILING_MULTIPLIER = 1.20
 FLOOR_MULTIPLIER = 0.80
 
 
-def relaxed_ceiling(value: float, maximum: float | None = None) -> float:
-    result = float(value) * CEILING_MULTIPLIER
+def relaxed_ceiling(value: float, maximum: float | None = None, *, tolerance: float = 0.20) -> float:
+    result = float(value) * (1.0 + tolerance)
     return min(maximum, result) if maximum is not None else result
 
 
-def relaxed_floor(value: float) -> float:
-    return max(0.0, float(value) * FLOOR_MULTIPLIER)
+def relaxed_floor(value: float, *, tolerance: float = 0.20) -> float:
+    return max(0.0, float(value) * (1.0 - tolerance))
 
 
 @dataclass
@@ -85,6 +85,9 @@ class OutcomeSpec:
     latency_baseline: dict[str, Any] | None = None
     latency_baseline_factor: float = LATENCY_BASELINE_FACTOR
     completion_timeout_s: float = 0.0
+    # Native incident contracts include a 20% band tolerance. Calibrated
+    # callers can use zero when their supplied limits already include slack.
+    tolerance: float = 0.20
 
     @property
     def latency_percentile(self) -> float:
@@ -111,7 +114,7 @@ def evaluate_outcome(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRe
         return results
 
     if "error_rate_max" in thresholds:
-        limit = relaxed_ceiling(thresholds["error_rate_max"], maximum=1.0)
+        limit = relaxed_ceiling(thresholds["error_rate_max"], maximum=1.0, tolerance=spec.tolerance)
         value = summary.get("error_rate")
         results.append(
             CheckResult(
@@ -122,7 +125,7 @@ def evaluate_outcome(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRe
             )
         )
     if "goodput_min_ratio" in thresholds:
-        limit = relaxed_floor(thresholds["goodput_min_ratio"])
+        limit = relaxed_floor(thresholds["goodput_min_ratio"], tolerance=spec.tolerance)
         value = _scheduled_goodput(summary)
         results.append(
             CheckResult(
@@ -144,12 +147,12 @@ def evaluate_outcome(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRe
         detail: dict[str, Any] = {"offered": stats.get("offered", 0)}
         passed = bool(stats.get("offered"))
         if passed and "goodput_min_ratio" in limits:
-            floor = relaxed_floor(limits["goodput_min_ratio"])
+            floor = relaxed_floor(limits["goodput_min_ratio"], tolerance=spec.tolerance)
             value = _scheduled_goodput(stats)
             detail["goodput"] = {"value": value, "limit": floor, "dropped": stats.get("dropped", 0)}
             passed = passed and value is not None and value >= floor
         if passed and "error_rate_max" in limits:
-            ceiling = relaxed_ceiling(limits["error_rate_max"], maximum=1.0)
+            ceiling = relaxed_ceiling(limits["error_rate_max"], maximum=1.0, tolerance=spec.tolerance)
             value = stats.get("error_rate")
             detail["error_rate"] = {"value": value, "limit": ceiling}
             passed = (value if value is not None else 1.0) <= ceiling
@@ -169,13 +172,18 @@ def _latency_checks(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRes
             spec.thresholds.get("p99_ms_by_phase") or {},
             baseline.get("overall") or {},
             spec.latency_baseline_factor,
+            spec.tolerance,
         )
     ]
     by_driver = summary.get("by_driver") or {}
     for driver, bands in sorted((spec.thresholds.get("latency_by_driver") or {}).items()):
         stats = (by_driver.get(driver) or {}).get("latency") or {}
         healthy = (baseline.get("by_driver") or {}).get(driver) or {}
-        results.append(_latency_check(f"driver_{driver}_latency", stats, bands, healthy, spec.latency_baseline_factor))
+        results.append(
+            _latency_check(
+                f"driver_{driver}_latency", stats, bands, healthy, spec.latency_baseline_factor, spec.tolerance
+            )
+        )
     return results
 
 
@@ -191,6 +199,7 @@ def _latency_check(
     bands: dict[str, Any],
     healthy: dict[str, Any] | None = None,
     factor: float = LATENCY_BASELINE_FACTOR,
+    tolerance: float = 0.20,
 ) -> CheckResult:
     per_kind = {}
     passed = True
@@ -205,7 +214,7 @@ def _latency_check(
             continue
         healthy_p = (healthy or {}).get(kind)
         effective = max(float(band), factor * float(healthy_p)) if healthy_p is not None else float(band)
-        limit = relaxed_ceiling(effective)
+        limit = relaxed_ceiling(effective, tolerance=tolerance)
         ok = value <= limit
         passed = passed and ok
         per_kind[kind] = {

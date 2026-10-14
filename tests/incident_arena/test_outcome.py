@@ -50,6 +50,14 @@ def test_bands_use_the_incident_arena_tolerance():
     assert relaxed_floor(0.8) == 0.8 * 0.8
 
 
+def test_calibrated_bands_can_disable_additional_tolerance():
+    measurement = _summary(error_rate=0.06)
+    assert _by_name(evaluate_outcome(measurement, OutcomeSpec(THRESHOLDS)))["sustained_error_rate"].passed
+    assert not _by_name(evaluate_outcome(measurement, OutcomeSpec(THRESHOLDS, tolerance=0)))[
+        "sustained_error_rate"
+    ].passed
+
+
 def test_healthy_soak_passes_every_gate():
     results = evaluate_outcome(_summary(), OutcomeSpec(THRESHOLDS))
     assert all(r.passed for r in results), [r for r in results if not r.passed]
