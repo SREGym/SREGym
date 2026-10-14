@@ -21,7 +21,6 @@ from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissi
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 from sregym.conductor.problems.lite_ia.k8s import ported, reopen_connections
-from sregym.conductor.problems.lite_ia.kafka import KafkaPoisonPillHOLBlockIA
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from sregym.conductor.problems.resource_request import ResourceRequestTooLarge
@@ -30,6 +29,7 @@ from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.images import WORKLOAD_IMBALANCE_PROXY_IMAGE
+from sregym.service.apps.slack_spine.index_lane import IndexLaneOperations
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -442,7 +442,7 @@ class IndexLaneLagOracle(Oracle):
         return {"success": True, **detail}
 
 
-class KafkaQueueProblemsSlack(KafkaQueueProblems):
+class KafkaQueueProblemsSlack(IndexLaneOperations, KafkaQueueProblems):
     """A queue overload meets a slowed consumer on Slack Spine's search-index lane.
 
     The original flips the OpenTelemetry demo's ``kafkaQueueProblems`` flag,
@@ -465,15 +465,6 @@ class KafkaQueueProblemsSlack(KafkaQueueProblems):
     PROBE_PREFIX = "lagprobe"
     SLOW_ENV = {"HANDLER_MS": "4000", "LANE_CONCURRENCY": "1"}
     BURST = 300
-
-    # Broker and toolbox helpers shared with the poison-pill port.
-    _broker_pod = KafkaPoisonPillHOLBlockIA._broker_pod
-    rpk = KafkaPoisonPillHOLBlockIA.rpk
-    _toolbox_probe = KafkaPoisonPillHOLBlockIA._toolbox_probe
-    _message = KafkaPoisonPillHOLBlockIA._message
-    send_probes = KafkaPoisonPillHOLBlockIA.send_probes
-    search = KafkaPoisonPillHOLBlockIA.search
-    _rollout = KafkaPoisonPillHOLBlockIA._rollout
 
     def __init__(self, app_name: str = "slack_spine", channel_id: str = "chan-0"):
         self.channel_id = channel_id
