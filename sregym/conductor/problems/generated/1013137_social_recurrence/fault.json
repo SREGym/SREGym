@@ -1,0 +1,16 @@
+{
+  "app": "social_network",
+  "title": "Abandoned form schema publisher restores a truncated request argument budget",
+  "fault_layer": "app-code",
+  "fault_primitive": "Recurring publication of a three-field OpenResty form parser limit by an unmanaged process in another container",
+  "root_cause_class": "orphaned_form_field_budget_reconciliation",
+  "incident_class": "Incomplete retirement of an operational configuration publisher after an API schema refactor",
+  "affected_components": [
+    "nginx-thrift",
+    "media-frontend"
+  ],
+  "symptoms": "Post submissions return HTTP 400 with Incomplete arguments even though clients supply the required fields. Timeline reads and all pod readiness states remain healthy. Frontend error logs surge. A direct configuration repair works temporarily before the frontend configuration and rollout change again.",
+  "generation": {
+    "tier": "hard"
+  }
+}
