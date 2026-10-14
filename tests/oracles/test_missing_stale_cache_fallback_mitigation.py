@@ -350,6 +350,83 @@ def test_broken_service_fails_when_healthy(evaluate):
     _assert_fails(evaluate(shop), "recommendations_failing_when_healthy", "agent_error")
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"ok": False, "ms": 10.0, "code": "HTTP_503"},
+        {"ok": False, "ms": 10.0, "code": "UNAVAILABLE"},
+        {"ok": True, "ms": 10.0, "ids": []},
+        {"ok": True, "ms": 10.0, "ids": CATALOG[:4]},
+        {"ok": True, "ms": 10.0, "ids": ["PROBE00000", "NOT_IN_CATALOG"]},
+    ],
+)
+def test_broken_or_invalid_frontend_fails_while_recommendation_is_healthy(evaluate, answer):
+    shop = FakeShop()
+    shop.probe_frontend = Mock(return_value=[answer])
+    result = evaluate(shop)
+    _assert_fails(result, "frontend_unhealthy", "agent_error")
+    assert "with product-catalog healthy" in result["detail"]["message"]
+
+
+def test_frontend_must_recover_after_cache_expiry(evaluate):
+    shop = FakeShop()
+    probe = shop.probe_frontend
+
+    def unavailable_after_recovery(*args, **kwargs):
+        if not shop.latency and shop.fell_back:
+            return [{"ok": False, "ms": 10.0, "code": "HTTP_503"}]
+        return probe(*args, **kwargs)
+
+    shop.probe_frontend = unavailable_after_recovery
+    result = evaluate(shop)
+    _assert_fails(result, "frontend_unhealthy", "agent_error")
+    assert "after product-catalog recovered" in result["detail"]["message"]
+
+
+@pytest.mark.parametrize("code", ["EXEC_FAILED", "NO_OUTPUT"])
+def test_unavailable_frontend_probe_is_an_environment_error(evaluate, code):
+    shop = FakeShop()
+    shop.probe_frontend = Mock(return_value=[{"ok": False, "ms": 0.0, "code": code}])
+    _assert_fails(evaluate(shop), "probe_unavailable", "environment_error")
+
+
+def test_frontend_can_retry_a_transient_failure(evaluate):
+    shop = FakeShop()
+    probe = shop.probe_frontend
+    failed = False
+
+    def transient(*args, **kwargs):
+        nonlocal failed
+        if not failed:
+            failed = True
+            return [{"ok": False, "ms": 10.0, "code": "HTTP_503"}]
+        return probe(*args, **kwargs)
+
+    shop.probe_frontend = transient
+    assert evaluate(shop)["success"] is True
+
+
+def test_frontend_can_rank_other_valid_products_ahead_of_the_new_product(evaluate):
+    shop = FakeShop()
+    probe = shop.probe_frontend
+
+    def ranked_frontend(count, interval_s, deadline_s, exclude_id):
+        answers = probe(count, interval_s, deadline_s, exclude_id)
+        for answer in answers:
+            if answer["ok"] and answer["ids"]:
+                answer["ids"] = sorted(set(shop.caches[shop.pods[0]][0]) - {exclude_id})[:4]
+        return answers
+
+    shop.probe_frontend = ranked_frontend
+    assert evaluate(shop)["success"] is True
+
+
+def test_frontend_cannot_keep_serving_old_products_after_cache_expiry(evaluate):
+    shop = FakeShop()
+    shop.probe_frontend = Mock(return_value=[{"ok": True, "ms": 10.0, "ids": CATALOG[1:5]}])
+    _assert_fails(evaluate(shop), "stale_data_served_past_limit", "agent_error")
+
+
 def test_every_replica_gets_the_new_catalog(evaluate):
     shop = FakeShop(replicas=2)
     assert evaluate(shop)["success"] is True

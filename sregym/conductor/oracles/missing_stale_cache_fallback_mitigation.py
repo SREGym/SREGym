@@ -28,6 +28,7 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
          temporarily removes the delay, inserts a new product P1 to the catalog, and waits until recommendation
          returns P1, through the Service and from every pod of the rollout. This rejects hard-coded lists and
          fixes that drop the dependency, and it fills the in-memory caches the agent's restart cleared.
+         The frontend must also return valid catalog products.
       3. After the incident's delay is applied again, recommendation keeps working despite the slowdown. At least
          90% of requests must succeed, and at least 90% must succeed within 0.25 seconds less than the delay. If a
          request is still waiting on product-catalog, it cannot return that early, so simply increasing the timeout
@@ -44,9 +45,9 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
          go through the client pod and through the real frontend, so a service can't treat the oracle's requests
          differently from real traffic.
       5. Once product-catalog is healthy again, new catalog data shows up within the same 2 minutes. The oracle
-         inserts a product P2 and waits for it to appear. Together with steps 2 and 4, this makes
-         "bounded staleness" concrete: stale data is served only while product-catalog is failing, and
-         never for more than 2 minutes.
+         inserts a product P2 and waits for it to appear. The frontend must return valid catalog products again.
+         Together with steps 2 and 4, this makes "bounded staleness" concrete: stale data is served only while
+         product-catalog is failing, and never for more than 2 minutes.
 
     Targeted calls go through the recommendation Service from a short-lived client pod built from the stock
     recommendation image, the way the frontend reaches it. So a broken Service, a stray pod behind it, or
@@ -96,6 +97,7 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
 
     FAILURE_CLASSES = {
         "recommendations_failing_when_healthy": FailureClass.AGENT_ERROR,
+        "frontend_unhealthy": FailureClass.AGENT_ERROR,
         "recommendations_failing_under_degradation": FailureClass.AGENT_ERROR,
         "recommendations_too_slow_under_degradation": FailureClass.AGENT_ERROR,
         "recommendations_empty": FailureClass.AGENT_ERROR,
@@ -544,22 +546,33 @@ class MissingStaleCacheFallbackMitigationOracle(MitigationOracle):
     def _wait_for_product(
         self, product_id: str, others: list[str], window_s: float | None = None
     ) -> tuple[bool, dict | None]:
-        # Excluding every other product leaves exactly one valid answer
+        # Recommendation must return exactly the new product. The frontend can sample or rank products, so
+        # require a non-empty response from the current catalog, within the same freshness deadline.
         deadline = time.monotonic() + (window_s or self.FRESHNESS_WINDOW_S)
+        excluded_id = others[0]
+        frontend_ids = {product_id, *others} - {excluded_id}
         last = None
 
         while time.monotonic() < deadline:
             last = self.problem.probe_recommendations(1, 0, self.HEALTHY_DEADLINE_S, exclude_ids=others)[0]
             if last["ok"] and last["ids"] == [product_id]:
-                return True, last
+                frontend = self.problem.probe_frontend(1, 0, self.HEALTHY_DEADLINE_S, excluded_id)[0]
+                if frontend["ok"] and frontend["ids"] and set(frontend["ids"]) <= frontend_ids:
+                    print(f"SUCCESS: frontend returned valid catalog products {frontend['ids']}")
+                    return True, last
+                last = {**frontend, "path": "frontend"}
             time.sleep(self.FRESHNESS_POLL_S)
 
         return False, last
 
     def _stale_failure(self, when: str, last: dict | None, window_s: float | None = None) -> dict:
         if last is not None and last.get("code") in ("EXEC_FAILED", "NO_OUTPUT"):
-            print(f"ERROR: could not probe recommendation: {last}")
+            print(f"ERROR: could not probe {last.get('path', 'recommendation')}: {last}")
             return self.fail("probe_unavailable", message=str(last))
+
+        if last is not None and last.get("path") == "frontend":
+            print(f"ERROR: frontend did not return valid catalog products {when}: {last}")
+            return self.fail("frontend_unhealthy", message=f"{when}: last answer {last}")
 
         if last is None or not last["ok"]:
             print(f"ERROR: recommendation fails {when}: {last}")

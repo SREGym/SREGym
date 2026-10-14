@@ -122,10 +122,8 @@ for i in range(count):
 class MissingStaleCacheFallbackAstronomyShop(Problem):
     RECOMMENDATION = "recommendation"
     PRODUCT_CATALOG = "product-catalog"
-    # The chart's addresses. Probes call recommendation through its Service, as the frontend does, or ask the
-    # frontend itself. The delay is confirmed by timing product-catalog's pods directly.
+    # Call recommendation through its Service. Confirm the delay at product-catalog's pod addresses.
     RECOMMENDATION_ADDR = "recommendation:8080"
-    FRONTEND_ADDR = "frontend:8080"
     LOCAL_ADDR = "localhost:8080"
     UPSTREAM_PORT = 8080
     # The client pod runs the stock image with no app labels, so neither the Service nor the delay selects it,
@@ -384,10 +382,11 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
 
     def probe_frontend(self, count: int, interval_s: float, deadline_s: float, exclude_id: str) -> list[dict]:
         """
-        Ask the frontend for recommendations for one product, from the client pod. Same result shape as
-        probe_recommendations(), with the frontend's product ids.
+        Ask for recommendations through the application's entry point, from the client pod.
+        Same result shape as probe_recommendations(), with the frontend's product ids.
         """
-        args = [str(count), str(interval_s), str(deadline_s), exclude_id, self.FRONTEND_ADDR]
+        address = f"{self.app.frontend_service}:{self.app.frontend_port}"
+        args = [str(count), str(interval_s), str(deadline_s), exclude_id, address]
         try:
             out = self._exec_in_client(_FRONTEND_SCRIPT, args, timeout=count * (interval_s + deadline_s) + 60)
         except RuntimeError as exc:

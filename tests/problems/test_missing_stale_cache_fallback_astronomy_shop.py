@@ -31,6 +31,7 @@ def problem():
     problem.delay = "3s"
     problem.delay_seconds = 3.0
     problem.delay_active_min_s = 2.4
+    problem.app = SimpleNamespace(frontend_service="frontend-proxy", frontend_port=8080)
     problem._client = None
     problem._client_image = None
     problem.kubectl = SimpleNamespace(exec_command=Mock(return_value=""), exec_command_checked=Mock(return_value=""))
@@ -346,11 +347,14 @@ def test_upstream_without_a_running_pod_cannot_be_timed(problem):
     assert problem.measure_upstream() is None
 
 
-def test_frontend_probes_ask_the_frontend_from_the_client_pod(problem):
+@pytest.mark.parametrize("service,port", [("frontend-proxy", 8080), ("shop-gateway", 9090)])
+def test_frontend_probes_use_the_application_entry_point(problem, service, port):
+    problem.app.frontend_service = service
+    problem.app.frontend_port = port
     problem._exec_in_client = Mock(return_value='{"ok": true, "ms": 40.0, "ids": ["1YMWWN1N4O"]}\n')
     assert problem.probe_frontend(1, 0, 7.0, "0PUK6V6EV0") == [{"ok": True, "ms": 40.0, "ids": ["1YMWWN1N4O"]}]
     script, args = problem._exec_in_client.call_args.args[:2]
-    assert args[-2:] == ["0PUK6V6EV0", "frontend:8080"]
+    assert args[-2:] == ["0PUK6V6EV0", f"{service}:{port}"]
     assert "/api/recommendations?productIds=" in script
 
 
