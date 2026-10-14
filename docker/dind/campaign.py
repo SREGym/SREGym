@@ -9,8 +9,8 @@ the Codex subscription credentials at /root/.codex/auth.json, and a results dire
 <out>/<problem><suffix>/<run-id>/. Each retry uses fresh storage. A problem is
 complete only when its container exits successfully and records all N complete attempts.
 
-Campaigns that run at the same time need distinct --name-prefix values, or one removes the other's
-containers. --max-containers-file caps the DinD containers running host-wide across all of them.
+Container names are unique across launches. --max-containers-file caps the DinD containers
+running host-wide across campaigns.
 """
 
 import argparse

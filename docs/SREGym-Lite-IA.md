@@ -3,11 +3,16 @@
 This suite runs the current SREGym-Lite faults on Frappe/ERPNext, Saleor and
 Slack Spine instead of Hotel Reservation, Social Network and Astronomy Shop.
 
-Each port keeps the original fault's causal mechanism and state-based mitigation oracle, aimed at a
-real component of the new app, and adds one requirement: after the agent finishes, the chart's own
-load generator must serve traffic about as well as before the fault (`LoadgenHealthOracle`, a fresh
-60 s window measured after a 30 s settle). Ports live in `sregym/conductor/problems/lite_ia/`;
-`LITE_IA_PORTS` maps every Lite id to its port.
+Each port adapts an existing fault to a real component of the new application.
+Its mitigation oracle checks both the repair and application recovery.
+`LoadgenHealthOracle` checks a fresh, closed 120-second traffic window after a
+30-second settling period. It checks correct responses, dropped requests,
+traffic coverage, and latency against the healthy baseline.
+The shared-memory worker fault instead checks the web API and a fresh background job.
+
+Problems and oracles live in their existing `apps/<app>/` packages, grouped by
+fault family. `problems/environment_ports.py` records the source-to-port mapping.
+Named suites remain in `problem_sets.py`.
 
 ```bash
 uv run main.py --suite sregym-lite-ia --agent codex --model gpt-6-sol --judge-backend codex
@@ -45,17 +50,17 @@ Notes:
 private Docker daemon and kind cluster, so pass `--registry-mirrors` (sets `SREGYM_REGISTRY_MIRRORS`,
 see the DinD README) to avoid Docker Hub's unauthenticated pull limit.
 
-Campaigns that run at the same time need distinct `--name-prefix` values: containers are named after
-the problem, and a second campaign would otherwise remove the first one's running container. Use
-`--max-containers-file` to cap DinD containers host-wide across campaigns (the limit is re-read, so it
-can be changed while campaigns run), `--suffix .topup1` to add attempts in a separate results
-directory, and `--env KEY=VALUE` to pass settings such as `SREGYM_CLEANUP_DRAIN_TIMEOUT_S` into
-each run.
+Each launch gets a unique container name and result directory. Retries cannot
+reuse stale CSVs. A problem is complete only when the process exits successfully
+and records every requested attempt as complete. Incomplete campaigns exit nonzero.
+Authentication copies stay in private temporary storage outside the result directory.
 
-## Fixed environment decoys
+Use `--max-containers-file` to limit host-wide concurrency, `--suffix .topup1`
+to separate campaign outputs, and `--env KEY=VALUE` for additional settings.
 
-Three harmless-looking properties of the larger apps made agents blame them instead of the
-injected fault. They are fixed in the default deployment:
+## Healthy deployment defaults
+
+The suite removes these unrelated deployment problems before fault injection:
 
 | App | Was | Now |
 |---|---|---|
