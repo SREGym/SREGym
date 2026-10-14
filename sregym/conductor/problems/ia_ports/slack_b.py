@@ -392,12 +392,17 @@ class IndexLaneLagOracle(Oracle):
     """Slack Spine's search-index lane keeps up with its queue again.
 
     Passes when the ``index`` consumer group's total lag on ``jobs.index`` is
-    back under ``max_lag`` and a fresh probe message sent through svc-message
-    becomes searchable within ``freshness_s`` seconds (its partition is the one
-    the backlog was built on).
+    back under ``max_lag``, all accepted burst messages are searchable, and a
+    fresh message becomes searchable within ``freshness_s`` seconds.
     """
 
-    FAILURE_CLASSES = {"lag_not_drained": "agent_error", "message_not_indexed": "agent_error"}
+    FAILURE_CLASSES = {
+        "lag_not_drained": "agent_error",
+        "message_not_indexed": "agent_error",
+        "accepted_messages_missing": "agent_error",
+        "backlog_not_recorded": "ambiguous",
+        "search_unavailable": "ambiguous",
+    }
 
     def __init__(self, problem, max_lag: int = 25, freshness_s: float = 60):
         super().__init__(problem)
@@ -414,7 +419,7 @@ class IndexLaneLagOracle(Oracle):
             lag_after = problem.total_lag()
         except Exception as exc:
             print(f"❌ Could not observe the index lane: {exc}")
-            return self.fail("message_not_indexed", error=str(exc))
+            return self.fail("search_unavailable", error=str(exc))
         detail = {"lag": lag, "lag_after_probe": lag_after, "probe_searchable": found}
         if lag_after > self.max_lag:
             print(f"❌ {problem.CONSUMER_GROUP} lag on {problem.TOPIC} is {lag} -> {lag_after} (max {self.max_lag})")
@@ -422,6 +427,17 @@ class IndexLaneLagOracle(Oracle):
         if not found:
             print(f"❌ probe message was not searchable within {self.freshness_s:.0f}s")
             return self.fail("message_not_indexed", **detail)
+        if not problem.backlog_ids:
+            return self.fail("backlog_not_recorded", **detail)
+        try:
+            indexed = problem.search(problem.backlog_ids, must=problem.backlog_ids, wait_s=self.freshness_s)
+        except Exception as exc:
+            return self.fail("search_unavailable", error=str(exc), **detail)
+        missing = sorted(set(problem.backlog_ids) - indexed)
+        detail.update(backlog_count=len(problem.backlog_ids), missing_count=len(missing))
+        if missing:
+            print(f"❌ {len(missing)} accepted messages are not searchable")
+            return self.fail("accepted_messages_missing", missing_ids=missing, **detail)
         print(f"✅ lag {lag_after} <= {self.max_lag}; probe searchable within {self.freshness_s:.0f}s")
         return {"success": True, **detail}
 
@@ -465,6 +481,7 @@ class KafkaQueueProblemsSlack(KafkaQueueProblems):
         self.faulty_service = self.CONSUMER_DEPLOYMENT
         self.feature_flag = None
         self.run_tag = uuid.uuid4().hex[:8]
+        self.backlog_ids: list[str] = []
         ported(
             self,
             app_name,
@@ -501,9 +518,15 @@ class KafkaQueueProblemsSlack(KafkaQueueProblems):
         )
         self._rollout()
         ids = [f"{self.PROBE_PREFIX}{self.run_tag}{uuid.uuid4().hex[:12]}" for _ in range(self.BURST)]
+        self.backlog_ids = []
         for start in range(0, len(ids), 100):
             chunk = ids[start : start + 100]
-            self._toolbox_probe({"post": [self._message(i, "bulk import") for i in chunk], "org_id": self.org_id})
+            accepted = self._toolbox_probe(
+                {"post": [self._message(i, "bulk import") for i in chunk], "org_id": self.org_id}
+            )
+            self.backlog_ids.extend(accepted["posted"])
+        if set(self.backlog_ids) != set(ids):
+            raise RuntimeError("the message API did not accept the complete burst")
         time.sleep(20)
         print(f"Index lane slowed ({env}); {self.BURST} messages queued; lag now {self.total_lag()}")
 
