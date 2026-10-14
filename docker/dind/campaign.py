@@ -6,8 +6,8 @@
 
 Each problem gets its own outer container (private Docker daemon + kind cluster), a private copy of
 the Codex subscription credentials at /root/.codex/auth.json, and a results directory
-<out>/<problem><suffix>/. A problem whose container produced no results CSV is retried once
-(infrastructure failure); a CSV with fewer than N attempts is reported as incomplete.
+<out>/<problem><suffix>/<run-id>/. Each retry uses fresh storage. A problem is
+complete only when its container exits successfully and records all N complete attempts.
 
 Campaigns that run at the same time need distinct --name-prefix values, or one removes the other's
 containers. --max-containers-file caps the DinD containers running host-wide across all of them.
@@ -16,6 +16,7 @@ containers. --max-containers-file caps the DinD containers running host-wide acr
 import argparse
 import concurrent.futures
 import contextlib
+import csv
 import datetime
 import fcntl
 import json
@@ -25,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 AUTH = Path.home() / ".codex" / "auth.json"
@@ -85,6 +87,21 @@ def result_csvs(out: Path) -> list[Path]:
     return sorted(p for p in out.rglob("*_results.csv") if not p.name.startswith("_running_"))
 
 
+def complete_attempts(files: list[Path], problem: str) -> set[int]:
+    states: dict[int, set[str]] = {}
+    for path in files:
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("problem_id") != problem:
+                    continue
+                try:
+                    attempt = int(row.get("attempt", ""))
+                except ValueError:
+                    continue
+                states.setdefault(attempt, set()).add(row.get("run_status", ""))
+    return {attempt for attempt, values in states.items() if values == {"complete"}}
+
+
 def _run_attempt(problem, args, run_dir: Path, auth_copy: Path, name: str) -> tuple[int, float]:
     command = [
         "docker",
@@ -124,22 +141,31 @@ def _run_attempt(problem, args, run_dir: Path, auth_copy: Path, name: str) -> tu
         *args.extra,
     ]
     with open(run_dir / "campaign.log", "w") as handle:
-        with slot_lock(args):
-            wait_for_slot(args)
-            subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
-            started = time.monotonic()
-            proc = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
-            wait_until_listed(name, proc)
-        code = proc.wait()
+        proc = None
+        try:
+            with slot_lock(args):
+                wait_for_slot(args)
+                started = time.monotonic()
+                proc = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
+                wait_until_listed(name, proc)
+            code = proc.wait()
+        except BaseException:
+            if proc is not None:
+                subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True, timeout=60)
+                proc.wait(timeout=60)
+            raise
     return code, (time.monotonic() - started) / 60
 
 
 def run_problem(problem: str, args) -> dict:
     out = (args.out / f"{problem}{args.suffix}").resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    history = []
     for attempt in range(1, args.retries + 2):
-        run_dir = out if attempt == 1 else out.with_name(f"{problem}.retry{attempt - 1}")
-        run_dir.mkdir(parents=True, exist_ok=True)
-        name = f"{args.name_prefix}-{problem}"[:63].replace("_", "-")
+        run_id = uuid.uuid4().hex[:12]
+        run_dir = out / run_id
+        run_dir.mkdir()
+        name = f"{args.name_prefix}-{problem}"[:50].replace("_", "-") + f"-{run_id}"
         log(f"START {problem} (try {attempt}) -> {run_dir}")
         with tempfile.TemporaryDirectory(prefix="sregym-codex-") as credentials:
             auth_copy = Path(credentials) / "auth.json"
@@ -147,10 +173,25 @@ def run_problem(problem: str, args) -> dict:
             auth_copy.chmod(0o600)
             code, minutes = _run_attempt(problem, args, run_dir, auth_copy, name)
         csvs = result_csvs(run_dir)
+        complete = complete_attempts(csvs, problem)
+        success = code == 0 and complete == set(range(1, args.attempts + 1))
+        history.append(
+            {"exit": code, "minutes": minutes, "complete_attempts": len(complete), "directory": str(run_dir)}
+        )
         log(f"END {problem} (try {attempt}) exit={code} {minutes:.0f}min csv={[str(c) for c in csvs]}")
-        if csvs:
-            return {"problem": problem, "exit": code, "minutes": minutes, "csv": [str(c) for c in csvs]}
-    return {"problem": problem, "exit": code, "minutes": minutes, "csv": []}
+        result = {
+            "problem": problem,
+            "success": success,
+            "exit": code,
+            "minutes": minutes,
+            "complete_attempts": len(complete),
+            "requested_attempts": args.attempts,
+            "csv": [str(c) for c in csvs],
+            "runs": history,
+        }
+        if success:
+            return result
+    return result
 
 
 def main() -> int:
@@ -171,6 +212,8 @@ def main() -> int:
     parser.add_argument("--max-containers-file", type=Path, help="file holding the host-wide DinD container limit")
     parser.add_argument("--extra", nargs=argparse.REMAINDER, default=[])
     args = parser.parse_args()
+    if args.attempts < 1 or args.jobs < 1 or args.retries < 0:
+        parser.error("attempts and jobs must be positive; retries must be nonnegative")
     args.out.mkdir(parents=True, exist_ok=True)
     summary = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -184,9 +227,9 @@ def main() -> int:
                 summary.append(future.result())
             except Exception as exc:  # keep the campaign going
                 summary.append({"problem": futures[future], "error": repr(exc)})
-            (args.out / "campaign-summary.json").write_text(json.dumps(summary, indent=2))
+            (args.out / f"campaign-summary{args.suffix}.json").write_text(json.dumps(summary, indent=2))
     log("CAMPAIGN DONE")
-    return 0
+    return 0 if all(result.get("success", False) for result in summary) else 1
 
 
 if __name__ == "__main__":
