@@ -106,6 +106,19 @@ def test_healthy_app_capacity(offline_cluster, tmp_path, app_id, name, replicas)
         assert container["resources"]["limits"]["cpu"] == "4"
 
 
+def test_frappe_exporter_readiness_does_not_scrape_redis(offline_cluster, tmp_path):
+    from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
+
+    docs = _render(FrappeDeskAndQueueOutage(), tmp_path)
+    for name in ("redis-exporter-cache", "redis-exporter-queue"):
+        deployment = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == name)
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        assert container["readinessProbe"]["httpGet"] == {"path": "/health", "port": "http"}
+        assert container["env"][0]["name"] == "REDIS_ADDR"
+        service = next(d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == name)
+        assert service["spec"]["ports"][0]["port"] == 9121
+
+
 def test_slack_problem_specific_knobs_render(offline_cluster, tmp_path):
     from sregym.conductor.problems.apps.slack_spine.maintenance import SlackMaintenanceCollision
     from sregym.conductor.problems.apps.slack_spine.strict_mode import SlackSendsFailStrictMode
