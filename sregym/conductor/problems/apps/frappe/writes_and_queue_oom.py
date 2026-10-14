@@ -6,6 +6,7 @@ from sregym.conductor.problems.apps.frappe.backlog import StrandedBacklogSeed
 from sregym.conductor.problems.apps.frappe.base import FrappeProblem
 from sregym.conductor.problems.apps.frappe.faults import MariaDBGlobal, RedisQueueFlags, SiteGrantRevocation
 from sregym.service.apps.frappe.operations import is_off
+from sregym.service.apps.helpers import image_reference
 
 
 class FrappeWritesAndQueueOOM(FrappeProblem):
@@ -31,9 +32,12 @@ class FrappeWritesAndQueueOOM(FrappeProblem):
     ]
 
     def deploy_values(self):
-        values = self.task.task_values
         return {
-            "images": values["images"],
+            "images": {
+                "main": image_reference("frappe-toolbox-legacy"),
+                "loadgen": image_reference("frappe-loadgen-legacy"),
+                "frappeAdmin": image_reference("frappe-admin-legacy"),
+            },
             # A deliberately tiny, evicting cache tier: a decoy, not a cause.
             "erpnext": {
                 "redis-cache": {"master": {"extraFlags": ["--maxmemory", "4mb", "--maxmemory-policy", "allkeys-lru"]}}

@@ -6,6 +6,7 @@ import shlex
 from pathlib import Path
 
 from sregym.service.apps.components.incident_arena import IncidentArenaApplication
+from sregym.service.apps.helpers import image_reference
 
 
 class Frappe(IncidentArenaApplication):
@@ -32,6 +33,15 @@ class Frappe(IncidentArenaApplication):
 
     def __init__(self):
         super().__init__(self.metadata_file)
+        self.configure(
+            {
+                "images": {
+                    "main": image_reference("frappe-toolbox"),
+                    "loadgen": image_reference("frappe-loadgen"),
+                    "frappeAdmin": image_reference("frappe-admin"),
+                }
+            }
+        )
         self.frontend_service = "svc-frappe-web"
         self.frontend_port = 8000
 

@@ -15,6 +15,7 @@ group "default" {
   targets = [
     "mattermost-server",
     "stripe-backend",
+    "incident-arena",
     "hotel-reservation",
     "locust-exporter",
     "wrk2",
@@ -46,6 +47,7 @@ group "publish" {
   targets = [
     "mattermost-server",
     "stripe-backend",
+    "incident-arena",
     "hotel-reservation",
     "locust-exporter",
     "wrk2",
@@ -147,6 +149,96 @@ target "_common" {
 
 group "postmortem-apps" {
   targets = ["mattermost-server", "stripe-backend"]
+}
+
+group "incident-arena" {
+  targets = [
+    "frappe-toolbox", "frappe-loadgen", "frappe-admin",
+    "frappe-toolbox-legacy", "frappe-loadgen-legacy", "frappe-admin-legacy",
+    "saleor-toolbox", "saleor-loadgen", "saleor-server",
+    "slack-spine-app", "slack-spine-app-v2", "slack-spine-app-v3",
+    "slack-spine-builder", "slack-spine-go", "slack-spine-python",
+    "slack-spine-toolbox", "slack-spine-loadgen", "slack-spine-pgbouncer",
+    "slack-spine-minio",
+  ]
+}
+
+target "frappe-images" {
+  inherits = ["_common"]
+  name = "frappe-${image.name}"
+  matrix = {
+    image = [
+      { name = "toolbox", component = "toolbox", tag = "toolbox-v2", digest = "d40b49eb1c050f14d4fa91ad5bb894ee1db61724466caea903ee0a952574210e", repository = "frappe-main" },
+      { name = "loadgen", component = "loadgen", tag = "loadgen-v2", digest = "0372494536eb9a0b40745cdc92a1915ec5b144a67f8bc509845eba5e411b310c", repository = "frappe-loadgen" },
+      { name = "admin", component = "admin", tag = "admin-v2", digest = "9975944f1d375dea6afb9c35159f978c4d82691f232e4818ff7faff66121cd2d", repository = "frappe-admin-sidecar" },
+      { name = "toolbox-legacy", component = "toolbox", tag = "toolbox-v1", digest = "6204c277489b115057dbe2bb3465f7ba95327c3928e1be9076d92e960d94c9a7", repository = "frappe-main" },
+      { name = "loadgen-legacy", component = "loadgen", tag = "loadgen-v1", digest = "9229609b8adf60157608f47abbba82b96a31efc26044ec41c793d1db8b1c6c87", repository = "frappe-loadgen" },
+      { name = "admin-legacy", component = "admin", tag = "admin-v1", digest = "8682d96965e833d5d95814b612a67b8b206f9b6fdb694af40a975f9599e9dea6", repository = "frappe-admin-sidecar" },
+    ]
+  }
+  context = "docker/apps/frappe/${image.component}"
+  args = { UPSTREAM_IMAGE = "ghcr.io/abundant-ai/sre-world/${image.repository}@sha256:${image.digest}" }
+  tags = ["${REGISTRY}/frappe:${IMAGE_TAG}-${image.tag}"]
+}
+
+target "saleor-images" {
+  inherits = ["_common"]
+  name = "saleor-${image.name}"
+  matrix = {
+    image = [
+      { name = "toolbox", digest = "ece6147d06e9f60750b33827302a063cebfa4112e1a37f002dd778b441c09ba5", repository = "saleor-main" },
+      { name = "loadgen", digest = "cdee1728463bbaa0c2665a809bb39b5c7919a48a4575fd629b3c4f6a857f812e", repository = "saleor-loadgen" },
+    ]
+  }
+  context = "docker/apps/saleor/${image.name}"
+  args = { UPSTREAM_IMAGE = "ghcr.io/abundant-ai/sre-world/${image.repository}@sha256:${image.digest}" }
+  tags = ["${REGISTRY}/saleor:${IMAGE_TAG}-${image.name}"]
+}
+
+target "saleor-server" {
+  inherits = ["_common"]
+  context = "docker/apps/saleor/server"
+  tags = ["${REGISTRY}/saleor:${IMAGE_TAG}-server"]
+}
+
+target "slack-spine-images" {
+  inherits = ["_common"]
+  name = "slack-spine-${image.name}"
+  matrix = {
+    image = [
+      { name = "app", component = "app", variant = "normal", repository = "slack-app", digest = "e050b1d953721145ee580e1baf1e424c55aa31c37a15c909e296c9607c8f7f4a" },
+      { name = "app-v2", component = "app", variant = "seq-lock", repository = "slack-app", digest = "4a0a6587c7023bbe553a2f3b08db7c2597190313cd5674909d65185793133d93" },
+      { name = "app-v3", component = "app", variant = "normal", repository = "slack-app", digest = "b73d144c2d817481956653e34095f38cfdc70e554d78f3521e72d0d1d6cd15fd" },
+      { name = "builder", component = "builder", variant = "normal", repository = "slack-app-builder", digest = "5201d7a4c6e4313c2b9d01209ff6aed413af6f4cc2e11d667631f0ce4920fa07" },
+      { name = "python", component = "python", variant = "normal", repository = "slack-py", digest = "c3a51b1ab5082f337ae5e8c1f2d60467273b1e73440580fc7e1132564b943c12" },
+      { name = "toolbox", component = "toolbox", variant = "normal", repository = "slack-main", digest = "e3dec9737ddfb496b7c380ff529248bf4216514f0d0127f91e41973c05d940f9" },
+      { name = "loadgen", component = "loadgen", variant = "normal", repository = "slack-loadgen", digest = "5a8bfa7e291a3e9ddc32eca99d291531964f08e3b1e269bd59fc9236a1eebbd2" },
+      { name = "pgbouncer", component = "pgbouncer", variant = "normal", repository = "slack-pgbouncer", digest = "70dc0e4aefb23ba0646a3410358732ba8358f3b8aa95b8595f2decbba56ceff0" },
+    ]
+  }
+  context = "docker/apps/slack_spine/${image.component}"
+  args = {
+    UPSTREAM_IMAGE = "ghcr.io/abundant-ai/sre-world/${image.repository}@sha256:${image.digest}"
+    VARIANT = image.variant
+  }
+  tags = ["${REGISTRY}/slack-spine:${IMAGE_TAG}-${image.name}"]
+}
+
+target "slack-spine-go" {
+  inherits = ["_common"]
+  context = "docker/apps/slack_spine/go"
+  contexts = { go-source = "https://github.com/yuekai/sre-world.git#1f1a815e70f0f94f6307fd9854b26db963900ffe:substrates/slack-spine/go" }
+  tags = ["${REGISTRY}/slack-spine:${IMAGE_TAG}-go"]
+}
+
+target "slack-spine-minio" {
+  inherits = ["_common"]
+  context = "docker/apps/slack_spine/minio"
+  contexts = {
+    minio-source = "https://github.com/minio/minio.git#5bf41aff1702adf2a11fa96a7b68f8651191e24d"
+    mc-source = "https://github.com/minio/mc.git#04c5116c9bdf8b762acc54b5500a9a276a5ec05a"
+  }
+  tags = ["${REGISTRY}/slack-spine:${IMAGE_TAG}-minio"]
 }
 
 target "mattermost-server" {

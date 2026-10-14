@@ -61,8 +61,9 @@ Error-rate and goodput limits do not change with the measured baseline.
 
 ## Requirements
 
-The pinned application images are AMD64-only.
-These applications require an AMD64 cluster with capacity for the application and SREGym's observability stack.
+The pinned images provide Linux/AMD64 and Linux/ARM64 builds.
+Native ARM execution testing is still pending.
+The cluster needs capacity for the application and SREGym's observability stack.
 Slack Spine contains about 40 pods.
 Frappe's first site creation and Saleor's database initialization can take several minutes.
 

@@ -6,6 +6,7 @@ import shlex
 from pathlib import Path
 
 from sregym.service.apps.components.incident_arena import IncidentArenaApplication
+from sregym.service.apps.helpers import image_reference
 
 
 class Saleor(IncidentArenaApplication):
@@ -28,6 +29,15 @@ class Saleor(IncidentArenaApplication):
 
     def __init__(self):
         super().__init__(self.metadata_file)
+        self.configure(
+            {
+                "images": {
+                    "main": image_reference("saleor-toolbox"),
+                    "loadgen": image_reference("saleor-loadgen"),
+                    "saleorApp": image_reference("saleor-server"),
+                }
+            }
+        )
         self.frontend_service = "svc-saleor-api"
         self.frontend_port = 8000
 

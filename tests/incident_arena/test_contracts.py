@@ -150,10 +150,27 @@ def test_problem_constructs_offline(offline_cluster, problem_cls):
 
 def test_image_tier_tasks_deploy_their_release_build(offline_cluster):
     from sregym.conductor.problems.apps.slack_spine.lock_leaks import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
+    from sregym.service.apps.helpers import image_reference
 
-    for cls in (SlackSeqLockLeak, SlackDistractorVolumeSeqLock):
+    for cls, image_id in (
+        (SlackSeqLockLeak, "slack-spine-app-v2"),
+        (SlackDistractorVolumeSeqLock, "slack-spine-app-v3"),
+    ):
         problem = cls()
-        assert problem.app.deploy_overrides["images"]["app"] == problem.task.task_values["images"]["app"]
+        assert problem.app.deploy_overrides["images"]["app"] == image_reference(image_id)
+        assert problem.app.deploy_overrides["images"]["app"] != image_reference("slack-spine-app")
+
+
+def test_frappe_queue_oom_keeps_its_original_image_generation(offline_cluster):
+    from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import FrappeWritesAndQueueOOM
+    from sregym.service.apps.helpers import image_reference
+
+    images = FrappeWritesAndQueueOOM().app.deploy_overrides["images"]
+    assert images == {
+        "main": image_reference("frappe-toolbox-legacy"),
+        "loadgen": image_reference("frappe-loadgen-legacy"),
+        "frappeAdmin": image_reference("frappe-admin-legacy"),
+    }
 
 
 def test_compliance_window_is_context_not_a_cause(offline_cluster):

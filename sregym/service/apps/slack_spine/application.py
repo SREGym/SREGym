@@ -7,6 +7,7 @@ import shlex
 from pathlib import Path
 
 from sregym.service.apps.components.incident_arena import IncidentArenaApplication
+from sregym.service.apps.helpers import image_reference
 
 APP_ROLES = ("auth", "workspace", "channel", "message", "thread", "file", "search", "notification", "platform")
 
@@ -27,6 +28,20 @@ class SlackSpine(IncidentArenaApplication):
 
     def __init__(self):
         super().__init__(self.metadata_file)
+        self.configure(
+            {
+                "images": {
+                    "app": image_reference("slack-spine-app"),
+                    "appBuilder": image_reference("slack-spine-builder"),
+                    "go": image_reference("slack-spine-go"),
+                    "py": image_reference("slack-spine-python"),
+                    "main": image_reference("slack-spine-toolbox"),
+                    "loadgen": image_reference("slack-spine-loadgen"),
+                    "pgbouncer": image_reference("slack-spine-pgbouncer"),
+                    "minio": image_reference("slack-spine-minio"),
+                }
+            }
+        )
         self.frontend_service = "svc-message"
         self.frontend_port = 8000
 

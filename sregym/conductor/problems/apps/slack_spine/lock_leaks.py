@@ -7,6 +7,7 @@ import time
 from sregym.conductor.oracles.incident_arena import CheckResult
 from sregym.conductor.problems.apps.slack_spine.base import SlackSpineProblem
 from sregym.conductor.problems.apps.slack_spine.components import TERMINATE_HOLDERS_SQL, SlackLeg
+from sregym.service.apps.helpers import image_reference
 
 
 class LeakedSequencerLock(SlackLeg):
@@ -22,8 +23,8 @@ class LeakedSequencerLock(SlackLeg):
     RECURRENCE_WAIT_S = 45
 
     def deploy_values(self):
-        # The task's pinned release build (shared by every application role).
-        return {"images": {"app": self.problem.task.task_values["images"]["app"]}}
+        # Native builds of the same task release, shared by every application role.
+        return {"images": {"app": image_reference("slack-spine-app-v2")}}
 
     def inject(self) -> None:
         # The release is the fault; wait until its leaked lock is held.
@@ -79,8 +80,7 @@ class SessionHandoffLock(SlackLeg):
     RECURRENCE_WAIT_S = 30
 
     def deploy_values(self):
-        # The task's pinned release build (shared by every application role).
-        return {"images": {"app": self.problem.task.task_values["images"]["app"]}}
+        return {"images": {"app": image_reference("slack-spine-app-v3")}}
 
     def _mode(self) -> dict:
         return self.slack.admin("message", "/internal/s13/cp")
