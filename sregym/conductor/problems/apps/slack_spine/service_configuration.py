@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sregym.conductor.oracles.apps.slack_spine.ports import _UrlPortOracle
 from sregym.conductor.oracles.compound import CompoundedOracle
+from sregym.conductor.oracles.incorrect_port import IncorrectPortAssignmentMitigationOracle
 from sregym.conductor.oracles.missing_env_variable_mitigation import MissingEnvVariableMitigationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.oracles.scale_pod_zero_mitigation import ScalePodZeroMitigationOracle
@@ -70,7 +70,7 @@ class IncorrectPortAssignmentSlack(Problem):
                 "svc-channel revalidates the org policy on svc-workspace for every message send, so message posts "
                 "fail with 503 `authz_unavailable` while the svc-workspace pod stays Running and Ready."
             ),
-            oracle_factory=_UrlPortOracle,
+            oracle_factory=lambda problem: IncorrectPortAssignmentMitigationOracle(problem, address_is_url=True),
         )
 
     def _set_port(self, port: str) -> None:

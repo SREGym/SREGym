@@ -1,5 +1,6 @@
 import contextlib
 import time
+from urllib.parse import urlsplit
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
@@ -17,9 +18,10 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
     probe_image = "fullstorydev/grpcurl:v1.9.3"
     probe_rpc = "oteldemo.ProductCatalogService/ListProducts"
 
-    def __init__(self, problem, *, require_source_ready: bool = True):
+    def __init__(self, problem, *, require_source_ready: bool = True, address_is_url: bool = False):
         super().__init__(problem)
         self.require_source_ready = require_source_ready
+        self.address_is_url = address_is_url
 
     @staticmethod
     def _desired_replicas(deployment) -> int:
@@ -48,7 +50,14 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
         for container in deployment.spec.template.spec.containers or []:
             for env_var in container.env or []:
                 if env_var.name == self.problem.env_var:
-                    return env_var.value or None
+                    address = env_var.value or None
+                    if address and self.address_is_url:
+                        parsed = urlsplit(address if "://" in address else "//" + address)
+                        if not parsed.hostname or parsed.port is None:
+                            return None
+                        host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+                        return f"{host}:{parsed.port}"
+                    return address
         return None
 
     def _has_ready_service_endpoint(self) -> bool:
