@@ -505,42 +505,12 @@ class InitContainerDependencyHangSlack(InitContainerDependencyHang):
 # --------------------------------------------------------------------------- #
 # k8s_target_port-misconfig
 # --------------------------------------------------------------------------- #
-class _TargetPortOracle(TargetPortMisconfigMitigationOracle):
-    """The Service targets the container's port again, by name (``http``) or number (8000)."""
-
-    def evaluate(self) -> dict:
-        kubectl = self.problem.kubectl
-        target_port = kubectl.get_service_json(self.problem.faulty_service, self.problem.namespace)["spec"]["ports"][0][
-            "targetPort"
-        ]
-        if target_port not in self.problem.valid_target_ports:
-            print("== Mitigation Evaluation ==")
-            print(f"❌ Service {self.problem.faulty_service} targetPort is {target_port}")
-            return self.fail("fault_still_present", target_port=target_port)
-        # The original check compares against Social Network's 9090: hand it a
-        # view where the (already validated) healthy port reads as 9090.
-        original = kubectl.get_service_json
-
-        def healthy_view(name, namespace, deserialize=True):
-            data = original(name, namespace, deserialize)
-            if name == self.problem.faulty_service:
-                data["spec"]["ports"][0]["targetPort"] = 9090
-            return data
-
-        kubectl.get_service_json = healthy_view
-        try:
-            return super().evaluate()
-        finally:
-            kubectl.get_service_json = original
-
-
 class K8STargetPortMisconfigSlack(K8STargetPortMisconfig):
     def __init__(self, faulty_service: str = "svc-workspace", client_deployment: str = "svc-channel"):
         self.faulty_service = faulty_service
         self.client_deployment = client_deployment
         self.from_port = "http"
         self.to_port = 9999
-        self.valid_target_ports = ("http", 8000, "8000")
         ported(
             self,
             APP,
@@ -551,7 +521,9 @@ class K8STargetPortMisconfigSlack(K8STargetPortMisconfig):
                 "connection refused; svc-channel revalidates the org policy on svc-workspace for every message send, "
                 "so sends fail with 503 `authz_unavailable` while every pod stays Running and Ready."
             ),
-            oracle_factory=_TargetPortOracle,
+            oracle_factory=lambda problem: TargetPortMisconfigMitigationOracle(
+                problem, valid_target_ports=("http", 8000)
+            ),
         )
 
     def _set_target_port(self, value) -> None:

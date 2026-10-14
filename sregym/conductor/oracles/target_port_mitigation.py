@@ -5,6 +5,12 @@ from sregym.conductor.oracles.utils import is_exact_match
 class TargetPortMisconfigMitigationOracle(Oracle):
     importance = 1.0
 
+    def __init__(self, problem, *, valid_target_ports: tuple[int | str, ...] = (9090,)):
+        super().__init__(problem)
+        if not valid_target_ports:
+            raise ValueError("At least one valid target port is required")
+        self.valid_target_ports = valid_target_ports
+
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation ==")
 
@@ -13,10 +19,10 @@ class TargetPortMisconfigMitigationOracle(Oracle):
         faulty_service = self.problem.faulty_service
         results = {}
 
-        # Check if target port has been reset to 9090
+        # Validate the real Service response against the application's ports.
         configs = kubectl.get_service_json(faulty_service, namespace)
         target_port = configs["spec"]["ports"][0]["targetPort"]
-        all_normal = is_exact_match(target_port, 9090)
+        all_normal = any(is_exact_match(target_port, value) for value in self.valid_target_ports)
 
         if all_normal:
             # Check if all services (not only faulty service) is back to normal (Running)
