@@ -794,6 +794,14 @@ def test_filtered_egress_rules_for_jev_agent():
         policy, {"JEV_DIAG_BACKEND": "openrouter", "JEV_AGENT_LLM_MODEL": "gpt-6-luna", "JEV_AGENT_LLM_BACKEND": "api"}
     )
     assert set(rules) == {EndpointRule("openrouter.ai", 443), EndpointRule("api.openai.com", 443)}
+    # no JEV_DIAG_BACKEND: Jev through the TypeSafe SDK
+    assert provider_endpoint_rules(policy, {}) == (EndpointRule("api.typesafe.ai", 443),)
+    rules = provider_endpoint_rules(policy, {"JEV_AGENT_LLM_MODEL": "gpt-6-sol"})
+    assert set(rules) == {
+        EndpointRule("api.typesafe.ai", 443),
+        EndpointRule("chatgpt.com", 443),
+        EndpointRule("auth.openai.com", 443),
+    }
     diag = InternetPolicy.from_mode("filtered", agent_name="jev_diag", model_id="jev-latest")
     assert provider_endpoint_rules(diag, {"JEV_DIAG_BACKEND": "openrouter", "JEV_AGENT_LLM_MODEL": "x"}) == (
         EndpointRule("openrouter.ai", 443),

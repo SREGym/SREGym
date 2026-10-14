@@ -103,6 +103,8 @@ def provider_endpoint_rules(
             return _rules_from_urls([environment.get("DECISIONS_URL") or "https://api.openai.com", *llm_urls])
         if backend == "openrouter":
             return _rules_from_urls([environment.get("DECISIONS_URL") or "https://openrouter.ai", *llm_urls])
+        if not backend:  # the default decision model: Jev through the TypeSafe SDK
+            return _rules_from_urls([environment.get("TYPESAFE_BASE_URL") or "https://api.typesafe.ai", *llm_urls])
 
     raise ValueError(
         f"Filtered internet access does not know the model provider for agent '{policy.agent_name}'. "
