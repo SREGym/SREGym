@@ -22,6 +22,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -84,70 +85,67 @@ def result_csvs(out: Path) -> list[Path]:
     return sorted(p for p in out.rglob("*_results.csv") if not p.name.startswith("_running_"))
 
 
+def _run_attempt(problem, args, run_dir: Path, auth_copy: Path, name: str) -> tuple[int, float]:
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--privileged",
+        "--cgroupns=private",
+        "--name",
+        name,
+        "--stop-timeout",
+        "45",
+        "--cpus",
+        str(args.cpus),
+        "--memory",
+        args.memory,
+        "--mount",
+        f"type=bind,src={run_dir},dst=/opt/sregym/results",
+        "--mount",
+        f"type=bind,src={auth_copy},dst=/root/.codex/auth.json",
+        *[x for mirror in [args.registry_mirrors] if mirror for x in ("--env", f"SREGYM_REGISTRY_MIRRORS={mirror}")],
+        *[x for kv in args.env for x in ("--env", kv)],
+        args.image,
+        "uv",
+        "run",
+        "--frozen",
+        "main.py",
+        "--problem",
+        problem,
+        "--agent",
+        "codex",
+        "--model",
+        args.model,
+        "--judge-backend",
+        "codex",
+        "--n-attempts",
+        str(args.attempts),
+        *args.extra,
+    ]
+    with open(run_dir / "campaign.log", "w") as handle:
+        with slot_lock(args):
+            wait_for_slot(args)
+            subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
+            started = time.monotonic()
+            proc = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
+            wait_until_listed(name, proc)
+        code = proc.wait()
+    return code, (time.monotonic() - started) / 60
+
+
 def run_problem(problem: str, args) -> dict:
     out = (args.out / f"{problem}{args.suffix}").resolve()
     for attempt in range(1, args.retries + 2):
         run_dir = out if attempt == 1 else out.with_name(f"{problem}.retry{attempt - 1}")
         run_dir.mkdir(parents=True, exist_ok=True)
-        auth_copy = run_dir / "codex-auth.json"
-        shutil.copyfile(AUTH, auth_copy)
-        auth_copy.chmod(0o600)
         name = f"{args.name_prefix}-{problem}"[:63].replace("_", "-")
-        command = [
-            "docker",
-            "run",
-            "--rm",
-            "--privileged",
-            "--cgroupns=private",
-            "--name",
-            name,
-            "--stop-timeout",
-            "45",
-            "--cpus",
-            str(args.cpus),
-            "--memory",
-            args.memory,
-            "--mount",
-            f"type=bind,src={run_dir},dst=/opt/sregym/results",
-            "--mount",
-            f"type=bind,src={auth_copy},dst=/root/.codex/auth.json",
-            *[
-                x
-                for mirror in [args.registry_mirrors]
-                if mirror
-                for x in ("--env", f"SREGYM_REGISTRY_MIRRORS={mirror}")
-            ],
-            *[x for kv in args.env for x in ("--env", kv)],
-            args.image,
-            "uv",
-            "run",
-            "--frozen",
-            "main.py",
-            "--problem",
-            problem,
-            "--agent",
-            "codex",
-            "--model",
-            args.model,
-            "--judge-backend",
-            "codex",
-            "--n-attempts",
-            str(args.attempts),
-            *args.extra,
-        ]
-        with open(run_dir / "campaign.log", "w") as handle:
-            # Hold the slot lock until the new container is listed: otherwise every waiting
-            # thread passes the check before any of the containers it starts appear.
-            with slot_lock(args):
-                wait_for_slot(args)
-                subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
-                log(f"START {problem} (try {attempt}) -> {run_dir}")
-                started = time.monotonic()
-                proc = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
-                wait_until_listed(name, proc)
-            code = proc.wait()
-        minutes = (time.monotonic() - started) / 60
-        auth_copy.unlink(missing_ok=True)
+        log(f"START {problem} (try {attempt}) -> {run_dir}")
+        with tempfile.TemporaryDirectory(prefix="sregym-codex-") as credentials:
+            auth_copy = Path(credentials) / "auth.json"
+            shutil.copyfile(AUTH, auth_copy)
+            auth_copy.chmod(0o600)
+            code, minutes = _run_attempt(problem, args, run_dir, auth_copy, name)
         csvs = result_csvs(run_dir)
         log(f"END {problem} (try {attempt}) exit={code} {minutes:.0f}min csv={[str(c) for c in csvs]}")
         if csvs:
