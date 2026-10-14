@@ -13,23 +13,24 @@ from sregym.conductor.oracles.env_variable_shadowing_mitigation import EnvVariab
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.oracles.wrong_bin_mitigation import WrongBinMitigationOracle
 from sregym.conductor.problems.apps.saleor.helpers import API, API_SERVICE, APP, WORKER, _replace_deployment
+from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
 from sregym.conductor.problems.secret_rotation_stale_env_credentials import (
     SecretRotationStaleEnvCredentialsAstronomyShop,
 )
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
-from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.utils.decorators import mark_fault_injected
 
 
-class WrongBinUsageSaleor(WrongBinUsage):
+class WrongBinUsageSaleor(Problem):
     """saleor-api runs the image's Celery worker entrypoint instead of uvicorn."""
 
     def __init__(self, faulty_service: str = API, wrong_binary_source: str = WORKER):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.wrong_binary_source = wrong_binary_source
         # WrongBinMitigationOracle: the API container's command must run this binary again.
@@ -77,6 +78,7 @@ class WrongBinUsageSaleor(WrongBinUsage):
 
 class SidecarPortConflictSaleor(SidecarPortConflict):
     def __init__(self, faulty_service: str = API):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -96,6 +98,7 @@ class RBACMisconfigurationSaleor(RBACMisconfiguration):
     """The init container's kubectl needs a mounted token to reach the RBAC check, so automount is forced on."""
 
     def __init__(self, faulty_service: str = API):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -146,6 +149,7 @@ class EnvVariableShadowingIA(EnvVariableShadowing):
         health_path: str = "/health/",
         expected_content: str = "",
     ):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.container_name = container_name
         self.service_name = service_name
@@ -192,6 +196,7 @@ class WrongDNSPolicyIA(WrongDNSPolicy):
     def __init__(
         self, app_name: str = "saleor", faulty_service: str = "saleor-api", service_name: str = "svc-saleor-api"
     ):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.service_name = service_name
         configure_port(
@@ -219,6 +224,7 @@ class SecretRotationStaleEnvCredentialsIA(SecretRotationStaleEnvCredentialsAstro
         container_name: str = "api",
         service_name: str = "svc-saleor-api",
     ):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.container_name = container_name
         self.service_name = service_name

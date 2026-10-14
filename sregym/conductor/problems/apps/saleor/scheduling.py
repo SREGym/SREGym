@@ -6,13 +6,14 @@ from sregym.conductor.oracles.assign_non_existent_node_mitigation import AssignN
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.apps.saleor.helpers import API, API_SERVICE, APP, WORKER
 from sregym.conductor.problems.assign_non_existent_node import AssignNonExistentNode
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 
 
 class AssignNonExistentNodeSaleor(AssignNonExistentNode):
     def __init__(self, faulty_service: str = API):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -31,6 +32,7 @@ class AssignNonExistentNodeSaleor(AssignNonExistentNode):
 
 class PVCClaimMismatchSaleor(PVCClaimMismatch):
     def __init__(self):
+        super().__init__(app=make_app(APP))
         self.faulty_service = [API, WORKER]
         configure_port(
             self,

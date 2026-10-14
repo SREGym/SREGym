@@ -21,22 +21,20 @@ from sregym.conductor.problems.apps.slack_spine.manifests import (
     _rollout_status,
     _with_port,
 )
+from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.environment import (
     configure_port,
+    make_app,
     reopen_connections,
 )
-from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
-from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
-from sregym.conductor.problems.missing_service import MissingService
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_port_conflict import ServicePortConflict
-from sregym.conductor.problems.target_port import K8STargetPortMisconfig
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.utils.decorators import mark_fault_injected
 
 
-class IncorrectPortAssignmentSlack(IncorrectPortAssignment):
+class IncorrectPortAssignmentSlack(Problem):
     """svc-workspace's REDIS_URL points at the wrong Redis port.
 
     svc-workspace serves org settings from a Redis cache; svc-channel
@@ -55,6 +53,7 @@ class IncorrectPortAssignmentSlack(IncorrectPortAssignment):
         correct_port: str = "6379",
         incorrect_port: str = "6380",
     ):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.env_var = env_var
         self.correct_port = correct_port
@@ -104,6 +103,7 @@ class MissingEnvVariableSlack(MissingEnvVariable):
     """REDIS_URL is removed from svc-notification, which refuses to start without it."""
 
     def __init__(self, faulty_service: str = "svc-notification", env_var: str = "REDIS_URL"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.app_name = APP
         self.env_var = env_var
@@ -131,6 +131,7 @@ class MissingEnvVariableSlack(MissingEnvVariable):
 
 class ScalePodZeroSlack(ScalePodSocialNet):
     def __init__(self, faulty_service: str = "svc-notification"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -145,8 +146,9 @@ class ScalePodZeroSlack(ScalePodSocialNet):
         )
 
 
-class K8STargetPortMisconfigSlack(K8STargetPortMisconfig):
+class K8STargetPortMisconfigSlack(Problem):
     def __init__(self, faulty_service: str = "svc-workspace", client_deployment: str = "svc-channel"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.client_deployment = client_deployment
         self.from_port = "http"
@@ -189,6 +191,7 @@ class K8STargetPortMisconfigSlack(K8STargetPortMisconfig):
 
 class ServicePortConflictSlack(ServicePortConflict):
     def __init__(self, faulty_service: str = "svc-workspace"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.app_name = APP
         self.conflicting_port = 9100
@@ -235,10 +238,11 @@ class ServicePortConflictSlack(ServicePortConflict):
         super().inject_fault()
 
 
-class MissingServiceSlack(MissingService):
+class MissingServiceSlack(Problem):
     """The Service `svc-channel` is deleted; svc-message's per-send authz check can no longer resolve it."""
 
     def __init__(self, faulty_service: str = "svc-channel", client_deployment: str = "svc-message"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.client_deployment = client_deployment
         self.app_name = APP
@@ -280,10 +284,11 @@ class MissingServiceSlack(MissingService):
         print(f"Recreated service {self.faulty_service}")
 
 
-class MissingConfigMapSlack(MissingConfigMap):
+class MissingConfigMapSlack(Problem):
     """The shared `app-config` ConfigMap is deleted and svc-message restarted (scale 0 -> 1, as the original)."""
 
     def __init__(self, faulty_service: str = "svc-message", configmap: str = "app-config"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.configmap = configmap
         self.app_name = APP
@@ -323,6 +328,7 @@ class MissingConfigMapSlack(MissingConfigMap):
 
 class WrongServiceSelectorIA(WrongServiceSelector):
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-channel", port: int = 8000):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.expected_service_port = port
         configure_port(

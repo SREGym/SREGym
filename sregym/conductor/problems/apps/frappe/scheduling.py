@@ -5,7 +5,7 @@ from __future__ import annotations
 from sregym.conductor.oracles.assign_non_existent_node_mitigation import AssignNonExistentNodeMitigationOracle
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.incorrect_port import IncorrectPortAssignmentMitigationOracle
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -23,6 +23,7 @@ class IncorrectPortAssignmentIA(IncorrectPortAssignment):
         correct_port: str = "8000",
         incorrect_port: str = "8001",
     ):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.env_var = env_var
         self.correct_port = correct_port

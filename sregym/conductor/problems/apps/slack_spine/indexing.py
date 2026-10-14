@@ -9,13 +9,12 @@ import uuid
 
 from sregym.conductor.oracles.apps.slack_spine.indexing import IndexLaneLagOracle, IndexLaneProgressOracle
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
-from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.service.apps.slack_spine.index_lane import IndexLaneOperations
 from sregym.utils.decorators import mark_fault_injected
 
 
-class KafkaQueueProblemsSlack(IndexLaneOperations, KafkaQueueProblems):
+class KafkaQueueProblemsSlack(IndexLaneOperations, Problem):
     """A queue overload meets a slowed consumer on Slack Spine's search-index lane.
 
     The original flips the OpenTelemetry demo's ``kafkaQueueProblems`` flag,
@@ -40,6 +39,7 @@ class KafkaQueueProblemsSlack(IndexLaneOperations, KafkaQueueProblems):
     BURST = 300
 
     def __init__(self, app_name: str = "slack_spine", channel_id: str = "chan-0"):
+        super().__init__(app=make_app(app_name))
         self.channel_id = channel_id
         self.org_id = f"org-{channel_id}"
         self.faulty_service = self.CONSUMER_DEPLOYMENT
@@ -121,6 +121,7 @@ class KafkaPoisonPillHOLBlockIA(IndexLaneOperations, Problem):
     PROBE_PREFIX = "idxprobe"
 
     def __init__(self, app_name: str = "slack_spine", channel_id: str = "chan-0"):
+        super().__init__(app=make_app(app_name))
         self.channel_id = channel_id
         self.org_id = f"org-{channel_id}"
         self.faulty_service = self.CONSUMER_DEPLOYMENT

@@ -22,7 +22,7 @@ from sregym.conductor.problems.apps.frappe.helpers import (
     selector_of,
 )
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import BAD_RANGE as EPHEMERAL_BAD_RANGE
 from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import SYSCTL_NAME as EPHEMERAL_SYSCTL
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
@@ -44,6 +44,7 @@ class EphemeralPortRangeFrappe(Problem):
     MIN_PORTS = 1024
 
     def __init__(self, app_name: str = APP, faulty_service: str = GUNICORN):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -98,6 +99,7 @@ class NodeConntrackExhaustionFrappe(NodeConntrackExhaustionHotelReservation):
     """Conntrack flood pinned to the node that runs gunicorn (and, via the RWO volume, the bench)."""
 
     def __init__(self, app_name: str = APP, frontend: str = GUNICORN):
+        super().__init__(app=make_app(app_name))
         self.frontend_deployment = frontend
         self.victim_node = self.gateway_node = None
         self.original_conntrack_max = self.target_connections = None
@@ -152,6 +154,7 @@ class LoadGeneratorFloodHomepageFrappe(Problem):
     IMAGE = "busybox:1.36"
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = WEB_SERVICE
         configure_port(
             self,
@@ -295,6 +298,7 @@ class ExpiredTlsFrappe(ExpiredTlsHotelReservation):
     HOST = "erp.frappe.local"
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.problem_id = "expired_tls_frappe"
         self.secret_name = "erp-tls"
         self.ingress_name = "erp-ingress"

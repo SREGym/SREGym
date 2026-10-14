@@ -17,10 +17,8 @@ from sregym.conductor.problems.apps.slack_spine.helpers import (
 )
 from sregym.conductor.problems.apps.slack_spine.manifests import APP, _rollout_status
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
-from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.incorrect_image import IncorrectImage, _OriginalImage
-from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.utils.decorators import mark_fault_injected
 
@@ -31,6 +29,7 @@ class IncorrectImageSlack(IncorrectImage):
     BAD_IMAGE = "app-image:latest"
 
     def __init__(self, faulty_service: str = "svc-thread"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = [faulty_service]
         self._original_images: dict[str, _OriginalImage] = {}
         configure_port(
@@ -51,7 +50,7 @@ class IncorrectImageSlack(IncorrectImage):
         self.injector = ApplicationFaultInjector(namespace=self.namespace)
 
 
-class FaultyImageCorrelatedSlack(FaultyImageCorrelated):
+class FaultyImageCorrelatedSlack(Problem):
     """A correlated bad rollout pins several TypeScript svc-* roles to the Go real-time image.
 
     As in the original (Hotel Reservation services pinned to the Social Network
@@ -62,6 +61,7 @@ class FaultyImageCorrelatedSlack(FaultyImageCorrelated):
     def __init__(
         self, faulty_services: tuple[str, ...] = ("svc-message", "svc-channel", "svc-thread", "svc-workspace")
     ):
+        super().__init__(app=make_app(APP))
         self.faulty_service = list(faulty_services)
         self._original_images: dict[str, _OriginalImage] = {}
         self.bad_image = "unresolved"  # the chart's Go-tier image, resolved at inject time
@@ -109,7 +109,7 @@ class FaultyImageCorrelatedSlack(FaultyImageCorrelated):
             _rollout_status(self, service)
 
 
-class UpdateIncompatibleCorrelatedSlack(UpdateIncompatibleCorrelated):
+class UpdateIncompatibleCorrelatedSlack(Problem):
     """Slack's Postgres StatefulSets (`db`, `db-replica`) are upgraded in place to postgres:17.
 
     Their PVCs hold PostgreSQL 16 data directories; a 17 server refuses to
@@ -119,6 +119,7 @@ class UpdateIncompatibleCorrelatedSlack(UpdateIncompatibleCorrelated):
     BAD_IMAGE = "postgres:17"
 
     def __init__(self, statefulsets: tuple[str, ...] = ("db", "db-replica")):
+        super().__init__(app=make_app(APP))
         self.faulty_service = list(statefulsets)
         self.original_images: dict[str, tuple[str, str]] = {}
         configure_port(
@@ -187,6 +188,7 @@ class ImageSlowLoadSlack(Problem):
     HOLD_MS = "10000"
 
     def __init__(self, role: str = "notification"):
+        super().__init__(app=make_app(APP))
         self.role = role
         self.faulty_service = f"svc-{role}"
         self.event = "store_consistency_strict"

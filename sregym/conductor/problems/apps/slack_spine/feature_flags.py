@@ -5,7 +5,7 @@ from __future__ import annotations
 from sregym.conductor.oracles.apps.slack_spine.feature_flags import SequencerModeOracle
 from sregym.conductor.problems.apps.slack_spine.helpers import APP, wait_rollout
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -21,6 +21,7 @@ class FeatureFlagLatentBugSlack(Problem):
     """
 
     def __init__(self, faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.flag_key = "SEQUENCER_MODE"
         configure_port(

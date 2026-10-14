@@ -17,16 +17,14 @@ from sregym.conductor.oracles.wrong_pod_selection_mitigation import WrongPodSele
 from sregym.conductor.problems import finalizer_deadlock_controller as finalizer_module
 from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.cronjob_sidecar_blocks_completion import CronJobSidecarBlocksCompletionHotelReservation
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
-from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation import (
-    ServiceWrongPodSelectionHotelReservation,
-)
 from sregym.utils.decorators import mark_fault_injected
 
 
 class CronJobSidecarBlocksCompletionIA(CronJobSidecarBlocksCompletionHotelReservation):
     def __init__(self, app_name: str = "frappe"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = self.CRONJOB_NAME
         self.cronjob_name = self.CRONJOB_NAME
         configure_port(
@@ -52,6 +50,7 @@ class CronJobSidecarBlocksCompletionIA(CronJobSidecarBlocksCompletionHotelReserv
 
 class FinalizerDeadlockControllerIA(FinalizerDeadlockController):
     def __init__(self, app_name: str = "frappe"):
+        super().__init__(app=make_app(app_name))
         self.configmap_name = finalizer_module._CONFIGMAP_NAME
         self.finalizer = finalizer_module._FINALIZER
         self.controller_name = finalizer_module._CONTROLLER_NAME
@@ -86,7 +85,7 @@ class FinalizerDeadlockControllerIA(FinalizerDeadlockController):
         self.rbac_v1 = client.RbacAuthorizationV1Api()
 
 
-class ServiceWrongPodSelectionIA(ServiceWrongPodSelectionHotelReservation):
+class ServiceWrongPodSelectionIA(Problem):
     """Frappe's web Service also selects the long-queue worker pods (no HTTP port)."""
 
     ROUTE_LABEL_KEY = "service-route"
@@ -99,6 +98,7 @@ class ServiceWrongPodSelectionIA(ServiceWrongPodSelectionHotelReservation):
         wrong_deployment: str = "erp-worker-l",
         port: int = 8000,
     ):
+        super().__init__(app=make_app(app_name))
         self.frontend_service = service
         self.target_deployment = target_deployment
         self.wrong_deployment = wrong_deployment
@@ -170,6 +170,7 @@ class RollingUpdateMisconfiguredIA(Problem):
     }
 
     def __init__(self, app_name: str = "frappe", faulty_service: str = "erp-worker-l"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.saved: dict | None = None
         configure_port(

@@ -18,15 +18,15 @@ from sregym.conductor.problems.apps.slack_spine.helpers import (
 from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.environment import (
     configure_port,
+    make_app,
     reopen_connections,
 )
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
-from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.utils.decorators import mark_fault_injected
 
 
-class StaleCoreDNSConfigSlack(StaleCoreDNSConfig):
+class StaleCoreDNSConfigSlack(Problem):
     """Cluster-wide NXDOMAIN template for ``svc.cluster.local`` in CoreDNS.
 
     Established connections survive the change, so svc-message (the users'
@@ -36,6 +36,7 @@ class StaleCoreDNSConfigSlack(StaleCoreDNSConfig):
     """
 
     def __init__(self, faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -97,6 +98,7 @@ class StaleHostAliasesSlack(Problem):
     )
 
     def __init__(self, faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.saved: dict | None = None
         configure_port(
@@ -219,6 +221,7 @@ class StaleHostAliasesSlack(Problem):
 
 class ServiceDNSResolutionFailureIA(ServiceDNSResolutionFailure):
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-thread"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,

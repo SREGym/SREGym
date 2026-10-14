@@ -3,6 +3,7 @@ from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -10,8 +11,8 @@ from sregym.utils.decorators import mark_fault_injected
 class RBACMisconfiguration(Problem):
     """Deprecated in SREGym 1.1 after reaching 100% overall pass@3."""
 
-    def __init__(self, faulty_service: str = "frontend"):
-        super().__init__(app=AstronomyShop())
+    def __init__(self, faulty_service: str = "frontend", *, app: Application | None = None):
+        super().__init__(app=app if app is not None else AstronomyShop())
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
 

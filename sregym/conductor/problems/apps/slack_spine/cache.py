@@ -6,7 +6,7 @@ import shlex
 
 from sregym.conductor.oracles.apps.slack_spine.cache import RedisAuthMitigationOracle
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -27,6 +27,7 @@ class RedisAuthDisruptionIA(Problem):
         cli: str = "redis-cli",
         client_deployments: tuple[str, ...] = ("svc-message", "svc-channel", "presence", "dispatcher"),
     ):
+        super().__init__(app=make_app(app_name))
         self.cache_ref = cache_ref
         self.container = container
         self.cli = cli

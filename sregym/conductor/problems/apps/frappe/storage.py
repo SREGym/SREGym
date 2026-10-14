@@ -7,7 +7,7 @@ import json
 from sregym.conductor.oracles.apps.frappe.state import FrappeFaultStateOracle
 from sregym.conductor.problems.apps.frappe.helpers import APP, GUNICORN, site_db_probe, state_file
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.mongo_storage_faults import FAULT_POD_NAMESPACE
 from sregym.service.apps.frappe.application import Frappe
 from sregym.service.apps.frappe.operations import site_database
@@ -29,6 +29,7 @@ class SilentDataCorruptionFrappe(Problem):
     SNAPSHOT_ROOT = "/var/lib/sregym-snapshots"
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = self.STS
         configure_port(
             self,

@@ -9,19 +9,20 @@ import time
 from sregym.conductor.oracles.duplicate_pvc_mounts_mitigation import DuplicatePVCMountsMitigationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.apps.slack_spine.manifests import _clean_deployment_manifest, _selector
+from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.environment import (
     configure_port,
+    make_app,
 )
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
-from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
-from sregym.conductor.problems.resource_request import ResourceRequestTooLarge
+from sregym.conductor.problems.resource_request import ResourceRequest
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.utils.decorators import mark_fault_injected
 
 
-class ResourceRequestTooLargeSlack(ResourceRequestTooLarge):
+class ResourceRequestTooLargeSlack(ResourceRequest):
     """svc-channel requests twice the largest node's memory; its recreated pod never schedules.
 
     svc-channel resolves channel authorization for every message send, so
@@ -30,6 +31,7 @@ class ResourceRequestTooLargeSlack(ResourceRequestTooLarge):
     """
 
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-channel"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -59,7 +61,7 @@ class ResourceRequestTooLargeSlack(ResourceRequestTooLarge):
         return dyaml
 
 
-class PodAntiAffinityDeadlockSlack(PodAntiAffinityDeadlock):
+class PodAntiAffinityDeadlockSlack(Problem):
     """svc-thread gets a required pod anti-affinity that no node can satisfy.
 
     The anti-affinity term selects the chart-wide label every Slack Spine pod
@@ -72,6 +74,7 @@ class PodAntiAffinityDeadlockSlack(PodAntiAffinityDeadlock):
     ANTI_AFFINITY_LABELS = {"app.kubernetes.io/name": "slack-spine"}
 
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-thread"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.original_replicas: int | None = None
         configure_port(
@@ -135,6 +138,7 @@ class TaintNoTolerationSlack(TaintNoToleration):
     """Every node is tainted and svc-thread only tolerates an unrelated key; its pods are rescheduled."""
 
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-thread"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -197,6 +201,7 @@ class PersistentVolumeAffinityViolationSlack(PersistentVolumeAffinityViolation):
     """svc-notification mounts a PV bound to one worker but is pinned to another."""
 
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-notification"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -215,6 +220,7 @@ class PersistentVolumeAffinityViolationSlack(PersistentVolumeAffinityViolation):
 
 class DuplicatePVCMountsIA(DuplicatePVCMounts):
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-search"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,

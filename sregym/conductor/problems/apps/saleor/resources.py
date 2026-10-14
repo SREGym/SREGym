@@ -26,19 +26,20 @@ from sregym.conductor.problems.apps.saleor.helpers import (
     state_file,
 )
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
-from sregym.conductor.problems.resource_request import ResourceRequestTooSmall
+from sregym.conductor.problems.resource_request import ResourceRequest
 from sregym.utils.decorators import mark_fault_injected
 
 
-class ResourceRequestTooSmallSaleor(ResourceRequestTooSmall):
+class ResourceRequestTooSmallSaleor(ResourceRequest):
     """On saleor-api: the load generator never waits on Celery, so a worker outage is invisible to users."""
 
     def __init__(self, faulty_service: str = API):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -71,6 +72,7 @@ class NightlyRebalanceOOMSaleor(NightlyRebalanceOOM):
     actor_image = "alpine/k8s:1.28.3"
 
     def __init__(self, faulty_service: str = API):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self._target_container = None
         self._original_memory_limit = None
@@ -192,6 +194,7 @@ class PriorityPreemptionCascadeSaleor(PriorityPreemptionCascadeHotelReservation)
     UNPROTECTED_PEERS = ("loadgen",)
 
     def __init__(self, faulty_service: str = API, service_name: str = API_SERVICE):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         # PriorityPreemptionMitigationOracle checks this Service's endpoints.
         self.service_name = service_name
@@ -290,6 +293,7 @@ while True:
 """
 
     def __init__(self, app_name: str = APP, faulty_service: str = API):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.forced_ulimit = 1024
         self.flooder_thread = None
@@ -409,6 +413,7 @@ class NamespaceMemoryLimitIA(Problem):
     rollout_timeout_seconds = 600
 
     def __init__(self, app_name: str = "saleor", statefulset: str = "postgres"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = statefulset
         configure_port(
             self,

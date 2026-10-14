@@ -6,7 +6,7 @@ import json
 import time
 
 from sregym.conductor.oracles.hpa_control_plane_mitigation import HPAControlPlaneMitigationOracle
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 
 
@@ -21,6 +21,7 @@ class HPAMissingEffectiveCPURequestSlack(HPAMissingEffectiveCPURequest):
     HPA_NAME = "svc-message-capacity"
 
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,

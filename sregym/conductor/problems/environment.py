@@ -64,8 +64,7 @@ def configure_port(
     root_cause_namespace: str | None = None,
     health_oracle_factory=None,
 ) -> None:
-    """Shared constructor body: app, timing, ground truth and oracles."""
-    Problem.__init__(problem, app=make_app(app_name))
+    """Configure grading and timing after the fault constructor initializes its state."""
     problem.app_name = app_name
     problem.kubectl = KubeCtl()
     problem.baseline_duration_s = BASELINE_S

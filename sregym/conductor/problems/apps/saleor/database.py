@@ -26,7 +26,7 @@ from sregym.conductor.problems.apps.saleor.helpers import (
     state_file,
 )
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.integer_overflow_primary_key_astronomy_shop import IntegerOverflowPrimaryKeyAstronomyShop
 from sregym.conductor.problems.postgres_lock_contention_product_catalog import PostgresLockContentionProductCatalog
 from sregym.utils.decorators import mark_fault_injected
@@ -52,6 +52,7 @@ class IntegerOverflowPrimaryKeySaleor(IntegerOverflowPrimaryKeyAstronomyShop):
     SENTINEL_PSP = "pi_3PqLrS2eZvKYlo2C1x8Kq7bN"
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.problem_id = "integer_overflow_primary_key_saleor"
         self.faulty_service = [API]
         self._baseline_review_ids = None
@@ -298,6 +299,7 @@ class PostgresLockContentionSaleor(PostgresLockContentionProductCatalog):
     HOLDER_IMAGE = "postgres:16"
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.problem_id = "postgres_lock_contention_saleor"
         self.faulty_service = [API]
         configure_port(
@@ -412,6 +414,7 @@ class _WorkerRoleFault(Problem):
     DESCRIPTION = ""
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = WORKER
         configure_port(
             self,

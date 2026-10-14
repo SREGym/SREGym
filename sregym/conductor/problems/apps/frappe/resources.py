@@ -14,7 +14,7 @@ from sregym.conductor.oracles.apps.frappe.state import FrappeFaultStateOracle
 from sregym.conductor.oracles.apps.frappe.workers import DevShmFrappeOracle, FrappeWorkerHealthOracle
 from sregym.conductor.problems.apps.frappe.helpers import APP, replace_pods_with_patch, rollout_status, selector_of
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.service.apps.frappe.application import Frappe
 from sregym.service.runtime_images import REDIS_CLIENT_IMAGE
 from sregym.utils.decorators import mark_fault_injected
@@ -32,6 +32,7 @@ class ValkeyMemoryDisruptionFrappe(Problem):
     CACHE = Frappe.REDIS_CACHE_STATEFULSET
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = self.CACHE
         configure_port(
             self,
@@ -135,6 +136,7 @@ class DevShmExhaustionFrappe(Problem):
     scratch_mib = 80
 
     def __init__(self, app_name: str = APP, worker: str = Frappe.WORKER_DEPLOYMENT, container: str = "long"):
+        super().__init__(app=make_app(app_name))
         self.worker_name = self.faulty_service = worker
         self.container = container
         configure_port(

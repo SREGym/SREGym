@@ -17,6 +17,7 @@ from sregym.conductor.problems.apps.slack_spine.helpers import APP, delete_pods,
 from sregym.conductor.problems.calico_route_reflector_label_drift import CalicoRouteReflectorLabelDriftHotelReservation
 from sregym.conductor.problems.environment import (
     configure_port,
+    make_app,
     reopen_connections,
 )
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
@@ -41,6 +42,7 @@ class PodCIDRExhaustionSlack(PodCIDRExhaustionHotelReservation):
     BLOCK_SIZE = 64
 
     def __init__(self, faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -162,6 +164,7 @@ class CalicoRouteReflectorLabelDriftSlack(CalicoRouteReflectorLabelDriftHotelRes
     CROSS_NODE_PAIR = ("svc-message", "svc-auth")
 
     def __init__(self):
+        super().__init__(app=make_app(APP))
         self.faulty_service = None
         self.frontend_probe_path = "/healthz"
         self.route_reflector_node = None
@@ -219,6 +222,7 @@ class IngressMisrouteSlack(IngressMisroute):
     PATH = "/api"
 
     def __init__(self, correct_service: str = "svc-message", wrong_service: str = "svc-thread"):
+        super().__init__(app=make_app(APP))
         self.path = self.PATH
         self.correct_service = correct_service
         self.wrong_service = wrong_service
@@ -345,6 +349,7 @@ class NetworkPolicyBlockIA(NetworkPolicyBlock):
     def __init__(
         self, app_name: str = "slack_spine", faulty_service: str = "svc-auth", client_deployment: str = "svc-message"
     ):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.client_deployment = client_deployment
         self.policy_name = f"deny-all-{faulty_service}"
@@ -396,6 +401,7 @@ class InternalTrafficPolicyLocalIA(InternalTrafficPolicyLocalAstronomyShop):
     CALLER_POD_LABEL_SELECTOR = "app.kubernetes.io/component=svc-message"
 
     def __init__(self, app_name: str = "slack_spine"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = self.FAULTY_SERVICE
         self.pod_node: str | None = None
         self.victim_node: str | None = None

@@ -15,7 +15,7 @@ from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
         if name.startswith(("service_dns_resolution_failure_", "stale_coredns_config_"))
     ],
 )
-def test_coredns_metadata_does_not_change_the_application_namespace(monkeypatch, name, factory):
+def test_coredns_metadata_does_not_change_the_application_namespace(offline_port_cluster, monkeypatch, name, factory):
     monkeypatch.setattr(environment, "KubeCtl", Mock)
     monkeypatch.setattr(
         environment,

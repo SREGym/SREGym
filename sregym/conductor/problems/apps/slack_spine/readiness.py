@@ -9,6 +9,7 @@ from sregym.conductor.oracles.sustained_readiness import SustainedReadinessOracl
 from sregym.conductor.problems.apps.slack_spine.manifests import APP
 from sregym.conductor.problems.environment import (
     configure_port,
+    make_app,
 )
 from sregym.conductor.problems.init_container_dependency_hang import InitContainerDependencyHang
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
@@ -18,6 +19,7 @@ from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 
 class LivenessProbeMisconfigurationSlack(LivenessProbeMisconfiguration):
     def __init__(self, faulty_service: str = "svc-workspace"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.app_name = APP
         configure_port(
@@ -45,6 +47,7 @@ class InitContainerDependencyHangSlack(InitContainerDependencyHang):
     """Faithful to the original: the new ReplicaSet hangs in Init while the old pod keeps serving."""
 
     def __init__(self, faulty_service: str = "svc-file"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.app_name = APP
         configure_port(
@@ -65,6 +68,7 @@ class InitContainerDependencyHangSlack(InitContainerDependencyHang):
 
 class ReadinessProbeMisconfigurationIA(ReadinessProbeMisconfiguration):
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,

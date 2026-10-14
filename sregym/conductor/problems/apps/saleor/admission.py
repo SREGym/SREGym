@@ -6,13 +6,14 @@ from kubernetes import client
 
 from sregym.conductor.oracles.admission_webhook_outage_mitigation import AdmissionWebhookOutageMitigationOracle
 from sregym.conductor.problems.admission_webhook_outage import AdmissionWebhookOutage
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 
 
 class AdmissionWebhookOutageIA(AdmissionWebhookOutage):
     def __init__(
         self, app_name: str = "saleor", faulty_service: str = "saleor-api", service_name: str = "svc-saleor-api"
     ):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.service_name = service_name
         # saleor-api runs one replica behind the load generator: the oracle's

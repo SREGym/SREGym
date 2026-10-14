@@ -11,13 +11,13 @@ import yaml
 from sregym.conductor.oracles.apps.slack_spine.retry_storm import ChannelRetryStormOracle, RetryStormMitigationOracle
 from sregym.conductor.problems.apps.slack_spine.helpers import _FETCH_MANY, _SPIKE_SCRIPT, APP, DEFAULT_MESH, _prom_sum
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.service.apps.slack_spine.configuration import patch_role_db_config
 from sregym.utils.decorators import mark_fault_injected
 
 
-class RetryStormCollapseIA(Problem):
-    """Aggressive mesh retries on svc-channel latch a retry storm on svc-workspace."""
+class RetryStormProblem(Problem):
+    """Shared setup and operations for Slack Spine retry-storm faults."""
 
     CALLER_ROLE = "channel"  # mesh client with the aggressive retry policy
     BACKEND_ROLE = "workspace"  # bounded backend (uncached reads, small pool)
@@ -59,39 +59,7 @@ class RetryStormCollapseIA(Problem):
     min_base_hold_ms = 100  # cost of an uncached settings read
 
     def __init__(self, app_name: str = "slack_spine"):
-        configure_port(
-            self,
-            app_name,
-            component=f"svc-{self.CALLER_ROLE} -> svc-{self.BACKEND_ROLE} mesh retry policy",
-            description=(
-                f"A metastable retry storm on the send path. Every message send (svc-message POST /messages) "
-                f"resolves channel authz on svc-channel (/authz/resolve), which revalidates the org policy on "
-                f"svc-workspace (GET /orgs/:id/settings) through svc-channel's mesh client. That client's policy "
-                f"(`roles.channel.mesh` in ConfigMap app-config, also returned by svc-channel GET /admin/config) "
-                f"is aggressive: {self.caller_mesh['retries']} attempts, retryOnTimeout=true, "
-                f"{self.caller_mesh['perTryTimeoutMs']} ms per-try timeout, {self.caller_mesh['backoffMs']} ms "
-                f"backoff. svc-workspace is a bounded backend: settings are read uncached from Postgres "
-                f"(SETTINGS_UNCACHED=1, {self.backend_env['SETTINGS_BASE_HOLD_MS']} ms per read) through a "
-                f"{self.backend_db['pool_size'] + self.backend_db['max_overflow']}-connection pool (pool_size "
-                f"{self.backend_db['pool_size']} + max_overflow {self.backend_db['max_overflow']}), about 60 "
-                "reads/s against about 30 sends/s, so normal traffic is healthy. A transient "
-                "`org_policy_revalidate` runtime event on svc-workspace (about 10 s, already cleared) made each "
-                "read 250 ms slower; the pool's wait queue grew past the 750 ms per-try timeout, svc-channel "
-                "retried the timed-out calls, and the abandoned attempts still waited for and held pooled "
-                "connections. About three attempts per send keep demand (~90/s) above the pool's capacity after "
-                "the event ended, so the queue stays full, every attempt times out, and sends fail with 503 "
-                "`authz_unavailable` (svc-workspace pool saturated, svc-channel http_client_attempts_total "
-                "dominated by timeouts). The sustaining cause is the timeout/retry/queue feedback loop, not the "
-                "expired event, which reverting does not fix. The workspace pool is smaller than every peer role's "
-                "(20 + 10), so a diagnosis naming that bounded capacity together with the retry amplification is "
-                "correct; one that only calls the pool too small, without the retry/timeout feedback that keeps "
-                "it saturated after the event, is incomplete. Valid mitigations bring the retry policy (stop "
-                "retrying timeouts, fewer attempts, or a sane circuit breaker) and/or the workspace capacity "
-                "(within the peer-uniform pool) into a safe envelope so the backlog drains and a repeated "
-                "trigger is survived."
-            ),
-            oracle_factory=RetryStormMitigationOracle,
-        )
+        super().__init__(app=make_app(app_name))
         self.app.set_load_profile(*self.load_profile)
         self.app.configure(
             {
@@ -303,7 +271,47 @@ class RetryStormCollapseIA(Problem):
         print(f"Restored the default mesh policy on svc-{self.CALLER_ROLE}")
 
 
-class ChannelRetryStormBase(RetryStormCollapseIA):
+class RetryStormCollapseIA(RetryStormProblem):
+    """Aggressive mesh retries on svc-channel latch a retry storm on svc-workspace."""
+
+    def __init__(self, app_name: str = "slack_spine"):
+        super().__init__(app_name)
+        configure_port(
+            self,
+            app_name,
+            component=f"svc-{self.CALLER_ROLE} -> svc-{self.BACKEND_ROLE} mesh retry policy",
+            description=(
+                f"A metastable retry storm on the send path. Every message send (svc-message POST /messages) "
+                f"resolves channel authz on svc-channel (/authz/resolve), which revalidates the org policy on "
+                f"svc-workspace (GET /orgs/:id/settings) through svc-channel's mesh client. That client's policy "
+                f"(`roles.channel.mesh` in ConfigMap app-config, also returned by svc-channel GET /admin/config) "
+                f"is aggressive: {self.caller_mesh['retries']} attempts, retryOnTimeout=true, "
+                f"{self.caller_mesh['perTryTimeoutMs']} ms per-try timeout, {self.caller_mesh['backoffMs']} ms "
+                f"backoff. svc-workspace is a bounded backend: settings are read uncached from Postgres "
+                f"(SETTINGS_UNCACHED=1, {self.backend_env['SETTINGS_BASE_HOLD_MS']} ms per read) through a "
+                f"{self.backend_db['pool_size'] + self.backend_db['max_overflow']}-connection pool (pool_size "
+                f"{self.backend_db['pool_size']} + max_overflow {self.backend_db['max_overflow']}), about 60 "
+                "reads/s against about 30 sends/s, so normal traffic is healthy. A transient "
+                "`org_policy_revalidate` runtime event on svc-workspace (about 10 s, already cleared) made each "
+                "read 250 ms slower; the pool's wait queue grew past the 750 ms per-try timeout, svc-channel "
+                "retried the timed-out calls, and the abandoned attempts still waited for and held pooled "
+                "connections. About three attempts per send keep demand (~90/s) above the pool's capacity after "
+                "the event ended, so the queue stays full, every attempt times out, and sends fail with 503 "
+                "`authz_unavailable` (svc-workspace pool saturated, svc-channel http_client_attempts_total "
+                "dominated by timeouts). The sustaining cause is the timeout/retry/queue feedback loop, not the "
+                "expired event, which reverting does not fix. The workspace pool is smaller than every peer role's "
+                "(20 + 10), so a diagnosis naming that bounded capacity together with the retry amplification is "
+                "correct; one that only calls the pool too small, without the retry/timeout feedback that keeps "
+                "it saturated after the event, is incomplete. Valid mitigations bring the retry policy (stop "
+                "retrying timeouts, fewer attempts, or a sane circuit breaker) and/or the workspace capacity "
+                "(within the peer-uniform pool) into a safe envelope so the backlog drains and a repeated "
+                "trigger is survived."
+            ),
+            oracle_factory=RetryStormMitigationOracle,
+        )
+
+
+class ChannelRetryStormBase(RetryStormProblem):
     """Metastable retry storm on svc-message's channel authz call (message -> channel).
 
     Ports of the BlueprintHotelReservation ``rpc`` retry storms (an RPC
@@ -348,6 +356,7 @@ class ChannelRetryStormBase(RetryStormCollapseIA):
     )
 
     def __init__(self, description: str, component: str | None = None):
+        super().__init__()
         configure_port(
             self,
             APP,
@@ -355,18 +364,6 @@ class ChannelRetryStormBase(RetryStormCollapseIA):
             description=f"{description} {self.CO_CAUSES}",
             oracle_factory=ChannelRetryStormOracle,
         )
-        self.app.set_load_profile(*self.load_profile)
-        self.app.configure(
-            {
-                "app": {
-                    "roles": {
-                        self.CALLER_ROLE: {"mesh": dict(self.caller_mesh)},
-                        self.BACKEND_ROLE: {"db": dict(self.backend_db), "env": dict(self.backend_env)},
-                    }
-                }
-            }
-        )
-        self._injection_attempted = False
 
     # ------------------------------------------------------------------ metrics
     def metrics(self) -> dict[str, float]:

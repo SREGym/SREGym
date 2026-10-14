@@ -50,6 +50,7 @@ from sregym.conductor.oracles.mutating_webhook_resource_limits_mitigation import
     MutatingWebhookResourceLimitsMitigationOracle,
 )
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -159,9 +160,9 @@ class MutatingWebhookResourceLimits(Problem):
         },
     )
 
-    def __init__(self):
+    def __init__(self, *, app: Application | None = None):
         self.faulty_service = "nginx-thrift"
-        self.app = SocialNetwork()
+        self.app = app if app is not None else SocialNetwork()
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.namespace = self.app.namespace

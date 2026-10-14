@@ -6,7 +6,7 @@ import copy
 
 from sregym.conductor.oracles.sustained_readiness import SustainedReadinessOracle
 from sregym.conductor.problems.apps.saleor.helpers import API, API_SERVICE, APP, _replace_deployment
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.utils.decorators import mark_fault_injected
@@ -20,6 +20,7 @@ class LivenessProbeTooAggressiveSaleor(LivenessProbeTooAggressive):
     """
 
     def __init__(self, faulty_service: str = API):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         configure_port(
             self,

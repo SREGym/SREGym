@@ -34,20 +34,24 @@ class WrongServiceSelector(Problem):
         app_factory: Callable[[], Application] | None = None,
         oracle_factory: Callable | None = None,
         expected_service_port: int | None = None,
+        app: Application | None = None,
     ):
+        if app is not None and (app_factory is not None or scale_tier is not None):
+            raise ValueError("Configure the supplied app instead of combining it with app_factory or scale_tier")
         self.app_name = app_name
         self.faulty_service = faulty_service
 
-        if app_factory is None:
-            definition = AppRegistry().get_definition(app_name)
-            app = definition.create(scale_tier)
-            oracle_factory = oracle_factory or RECOVERY_ORACLES[definition.checks(scale_tier)]
-            expected_service_port = expected_service_port or definition.service_port
-        else:
-            if scale_tier is not None:
-                raise ValueError("Configure the scale tier in app_factory instead")
-            app = app_factory()
-            oracle_factory = oracle_factory or ServiceEndpointMitigationOracle
+        if app is None:
+            if app_factory is None:
+                definition = AppRegistry().get_definition(app_name)
+                app = definition.create(scale_tier)
+                oracle_factory = oracle_factory or RECOVERY_ORACLES[definition.checks(scale_tier)]
+                expected_service_port = expected_service_port or definition.service_port
+            else:
+                if scale_tier is not None:
+                    raise ValueError("Configure the scale tier in app_factory instead")
+                app = app_factory()
+                oracle_factory = oracle_factory or ServiceEndpointMitigationOracle
         self.expected_service_port = expected_service_port or app.frontend_port
         super().__init__(app=app)
         self.kubectl = KubeCtl()
@@ -65,7 +69,7 @@ class WrongServiceSelector(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
-        self.mitigation_oracle = oracle_factory(problem=self)
+        self.mitigation_oracle = (oracle_factory or ServiceEndpointMitigationOracle)(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

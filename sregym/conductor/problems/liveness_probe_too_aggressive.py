@@ -3,6 +3,7 @@ from sregym.conductor.oracles.sustained_readiness import SustainedReadinessOracl
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -10,18 +11,19 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class LivenessProbeTooAggressive(Problem):
-    def __init__(self, app_name: str = "social_network"):
+    def __init__(self, app_name: str = "social_network", *, app: Application | None = None):
         self.app_name = app_name
         self.faulty_service = "aux-service"
 
-        if app_name == "social_network":
-            app = SocialNetwork()
-        elif app_name == "hotel_reservation":
-            app = HotelReservation()
-        elif app_name == "astronomy_shop":
-            app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
+        if app is None:
+            if app_name == "social_network":
+                app = SocialNetwork()
+            elif app_name == "hotel_reservation":
+                app = HotelReservation()
+            elif app_name == "astronomy_shop":
+                app = AstronomyShop()
+            else:
+                raise ValueError(f"Unsupported app name: {app_name}")
 
         super().__init__(app=app)
 

@@ -10,6 +10,7 @@ from kubernetes.client.rest import ApiException
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.nightly_rebalance_oom_mitigation import NightlyRebalanceOOMMitigationOracle
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -24,10 +25,16 @@ class NightlyRebalanceOOM(Problem):
     squeeze_memory = "4Mi"
     actor_image = "bitnami/kubectl:latest"
 
-    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "recommendation"):
+    def __init__(
+        self,
+        app_name: str = "hotel_reservation",
+        faulty_service: str = "recommendation",
+        *,
+        app: Application | None = None,
+    ):
         if app_name != "hotel_reservation":
             raise ValueError(f"Unsupported app name: {app_name}")
-        self.app = HotelReservation()
+        self.app = app if app is not None else HotelReservation()
         super().__init__(app=self.app, namespace=self.app.namespace)
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace

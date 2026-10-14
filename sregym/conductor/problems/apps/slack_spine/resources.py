@@ -12,17 +12,16 @@ from sregym.conductor.oracles.kubelet_eviction_threshold_misconfig_mitigation im
     KubeletEvictionThresholdMisconfigMitigationOracle,
 )
 from sregym.conductor.problems.apps.slack_spine.manifests import _SURGE_CLIENT, _clean_deployment_manifest
-from sregym.conductor.problems.cpu_throttling import CpuThrottling
-from sregym.conductor.problems.environment import configure_port, reopen_connections
+from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.environment import configure_port, make_app, reopen_connections
 from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
-from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.images import WORKLOAD_IMBALANCE_PROXY_IMAGE
 from sregym.utils.decorators import mark_fault_injected
 
 
-class CpuThrottlingSlack(CpuThrottling):
+class CpuThrottlingSlack(Problem):
     """svc-message gets a CPU limit just above its observed peak; other svc-* roles get looser decoy limits.
 
     svc-message serves most of the load generator's sessions (history reads,
@@ -50,6 +49,7 @@ class CpuThrottlingSlack(CpuThrottling):
     LOOSE_HEADROOM = 3.0
 
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         configure_port(
             self,
@@ -119,6 +119,7 @@ class KubeletEvictionThresholdMisconfigSlack(KubeletEvictionThresholdMisconfig):
     LOADGEN_SELECTOR = "app.kubernetes.io/component=loadgen"
 
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-notification"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.target_node = "<chosen at injection>"
         self.injected_threshold: float | None = None
@@ -202,7 +203,7 @@ class KubeletEvictionThresholdMisconfigSlack(KubeletEvictionThresholdMisconfig):
         )
 
 
-class WorkloadImbalanceSlack(WorkloadImbalance):
+class WorkloadImbalanceSlack(Problem):
     """A kube-proxy build with a broken endpoint probability meets a scaled-out svc-message and a load surge.
 
     As in the original: kube-proxy's DaemonSet image is replaced with SREGym's
@@ -219,6 +220,7 @@ class WorkloadImbalanceSlack(WorkloadImbalance):
     SURGE_THREADS = 128
 
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = [faulty_service]
         configure_port(
             self,

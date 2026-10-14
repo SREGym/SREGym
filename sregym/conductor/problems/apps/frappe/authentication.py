@@ -14,7 +14,7 @@ from sregym.conductor.problems.apps.frappe.helpers import (
     state_file,
 )
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.service.apps.frappe.operations import schema_privileges, site_account, site_database
 from sregym.utils.decorators import mark_fault_injected
 
@@ -28,6 +28,7 @@ class _SiteAccountFault(Problem):
     RESTART_CLIENTS = (GUNICORN,)
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = "frappe-mariadb-subchart"
         self.database = ""
         self.grantee = ""

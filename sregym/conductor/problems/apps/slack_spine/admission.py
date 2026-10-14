@@ -24,7 +24,7 @@ from sregym.conductor.problems.apps.slack_spine.helpers import (
 from sregym.conductor.problems.cumulative_admission_webhook_timeout_hotel_reservation import (
     CumulativeAdmissionWebhookTimeoutHotelReservation,
 )
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
 from sregym.utils.decorators import mark_fault_injected
 
@@ -37,6 +37,7 @@ class AdmissionWebhookTLSMismatchSlack(AdmissionWebhookTLSMismatch):
     """
 
     def __init__(self, faulty_service: str = "svc-channel"):
+        super().__init__(app=make_app(APP))
         self.faulty_service = faulty_service
         self.service_name = faulty_service
         # The oracle proves admission with a surge rollout, so the probe itself
@@ -102,6 +103,7 @@ class CumulativeAdmissionWebhookTimeoutSlack(CumulativeAdmissionWebhookTimeoutHo
     )
 
     def __init__(self, target_deployment: str = "svc-auth"):
+        super().__init__(app=make_app(APP))
         self.TARGET_DEPLOYMENT = target_deployment
         self.faulty_service = target_deployment
         total = sum(self.WEBHOOK_TIMEOUTS_S.values())
@@ -141,6 +143,7 @@ class CumulativeAdmissionWebhookTimeoutSlack(CumulativeAdmissionWebhookTimeoutHo
 
 class MutatingWebhookResourceLimitsIA(MutatingWebhookResourceLimits):
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-message"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.ca_bundle = None
         configure_port(

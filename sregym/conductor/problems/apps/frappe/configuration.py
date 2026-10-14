@@ -23,7 +23,7 @@ from sregym.conductor.problems.apps.frappe.helpers import (
 )
 from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import EdgeRequestFilterCPUSaturation
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.conductor.problems.psa_restricted_blocks_recreation import (
     PSA_ENFORCE_LABEL,
     PSA_ENFORCE_VERSION_LABEL,
@@ -43,6 +43,7 @@ class PSARestrictedBlocksRecreationFrappe(PSARestrictedBlocksRecreation):
     """
 
     def __init__(self, app_name: str = APP, faulty_service: str = GUNICORN):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self._prior_psa_labels = {}
         configure_port(
@@ -99,6 +100,7 @@ class ConfigMapDriftFrappe(Problem):
     DROPPED_KEYS = ("db_password",)
 
     def __init__(self, app_name: str = APP, faulty_service: str = GUNICORN, container: str = "gunicorn"):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.container = container
         self.expected_keys: list[str] = []
@@ -230,6 +232,7 @@ class EdgeRequestFilterIA(EdgeRequestFilterCPUSaturation):
         site_host: str = "svc-frappe-web",
         health_path: str = "/api/method/ping",
     ):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
         self.container_name = container_name
         self.service_name = service_name

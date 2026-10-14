@@ -19,7 +19,7 @@ from sregym.conductor.problems.apps.saleor.helpers import (
     state_file,
 )
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.environment import configure_port, make_app
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -34,6 +34,7 @@ class PaymentGatewayDisabledSaleor(Problem):
     """
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = API
         self.channel_id: str | None = None
         configure_port(
@@ -107,6 +108,7 @@ class ChannelDeactivatedSaleor(Problem):
     """
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = API
         configure_port(
             self,
@@ -170,6 +172,7 @@ class CatalogUnpublishedSaleor(Problem):
     CATEGORIES = ("sneakers", "t-shirts")
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = API
         self.products: list[dict] | None = None
         configure_port(
@@ -278,6 +281,7 @@ class SchemaColumnDriftSaleor(Problem):
     DRIFTED = "postcode"
 
     def __init__(self, app_name: str = APP):
+        super().__init__(app=make_app(app_name))
         self.faulty_service = API
         configure_port(
             self,
