@@ -98,7 +98,25 @@ class MitigationOracle(Oracle):
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
 
-        deployments = kubectl.list_deployments(namespace)
+        failure = self._deployment_failure(kubectl.list_deployments(namespace))
+        if failure is not None:
+            return failure
+
+        pod_list = kubectl.list_pods(namespace)
+
+        if not pod_list.items:
+            print("❌ No pods found in namespace")
+            return self.fail("no_pods_found", namespace=namespace)
+
+        unready = self.pods_unready(pod_list.items, namespace=namespace)
+        if unready is not None:
+            return unready
+
+        return {"success": True}
+
+    def _deployment_failure(self, deployments) -> dict | None:
+        """Check current rollouts against the pre-injection required workloads."""
+        namespace = self.problem.namespace
         current_deps = {dep.metadata.name: dep for dep in deployments.items}
 
         for name in self.replica_count:
@@ -125,16 +143,4 @@ class MitigationOracle(Oracle):
                     desired=desired,
                 )
 
-        pod_list = kubectl.list_pods(namespace)
-
-        if not pod_list.items:
-            print("❌ No pods found in namespace")
-            return self.fail("no_pods_found", namespace=namespace)
-
-        # The original loop tracked an ``all_normal`` flag and broke out of two
-        # levels, which left nowhere to record *which* pod was at fault.
-        unready = self.pods_unready(pod_list.items, namespace=namespace)
-        if unready is not None:
-            return unready
-
-        return {"success": True}
+        return None

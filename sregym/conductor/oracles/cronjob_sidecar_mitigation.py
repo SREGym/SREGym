@@ -41,8 +41,8 @@ import time
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
-from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.service.rollout import deployment_rollout_complete
 
 _ROLLOUT_SETTLE_SECONDS = 60
@@ -56,7 +56,7 @@ _BEHAVIOR_PROOF_TIMEOUT_S = 90
 _BEHAVIOR_PROOF_POLL_INTERVAL_S = 5
 
 
-class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
+class CronJobSidecarBlocksCompletionMitigationOracle(MitigationOracle):
     """Oracle for the CronJob-sidecar-blocks-completion fault.
 
     Attributes inherited from the Problem (set in the Problem's ``__init__``):
@@ -321,12 +321,8 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
     def _unhealthy_deployment(self, namespace):
         """Return the first Deployment with an incomplete rollout, or None."""
         deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
-        for dep in deployments.items:
-            # Components an app ships scaled to zero (Frappe's optional
-            # workers) are not unhealthy; the original apps have none.
-            if not deployment_rollout_complete(dep, allow_zero=True):
-                return dep.metadata.name
-        return None
+        failure = self._deployment_failure(deployments)
+        return failure["detail"]["deployment"] if failure else None
 
     def _fail_with(self, reason: str, message: str, **detail) -> dict:
         """Print the long-form explanation and return a coded verdict.
