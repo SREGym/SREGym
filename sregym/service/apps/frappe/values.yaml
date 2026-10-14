@@ -9,12 +9,6 @@
 global:
   imagePullPolicy: IfNotPresent
 
-images:
-  main: ghcr.io/abundant-ai/sre-world/frappe-main@sha256:d40b49eb1c050f14d4fa91ad5bb894ee1db61724466caea903ee0a952574210e
-  loadgen: ghcr.io/abundant-ai/sre-world/frappe-loadgen@sha256:0372494536eb9a0b40745cdc92a1915ec5b144a67f8bc509845eba5e411b310c
-  obsMcp: ghcr.io/abundant-ai/sre-world/frappe-obs-mcp@sha256:1646a2a67d5d0e484dc1b760c2900cb756c7986e9a86cead61175b2737883808
-  frappeAdmin: ghcr.io/abundant-ai/sre-world/frappe-admin-sidecar@sha256:9975944f1d375dea6afb9c35159f978c4d82691f232e4818ff7faff66121cd2d
-
 main:
   enabled: false
 
