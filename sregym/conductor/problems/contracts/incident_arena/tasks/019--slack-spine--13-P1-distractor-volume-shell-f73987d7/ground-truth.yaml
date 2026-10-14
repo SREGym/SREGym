@@ -1,0 +1,420 @@
+# THRESHOLDS RESOLVED from the base-health record by tools/generate_tasks.py
+# (health_ref -> substrates/slack-spine/health/p1_shell_distractor_eval_1h.yaml). Edit the SPEC, not this file.
+scenario: slack-spine/13-P1
+fault:
+  file: sut/runtime/message-delivery-lifecycle
+  injected: {}
+  golden_fix: {}
+
+component_registry:
+  publish_to_agent: true
+  services: [message, auth, channel, workspace, thread, search, file, notification, db, redis, load-generator]
+  components:
+  - message.sequencer
+  - message.db-pool
+  - message.send-pipeline
+  - auth.db-pool
+  - channel.db-pool
+  - workspace.db-pool
+  - db.postgres-server
+  - db.locks
+  - redis.config
+  - network
+
+ground_truth:
+  service: message
+  component: message.sequencer
+  mechanism: >-
+    A session-scoped message-sequencer handoff retained a retry-reused database
+    lease after selecting one seeded channel cohort. The idle transaction kept
+    that cohort's channel_seq row locked, so its writes queued, consumed the
+    shared message pool, and timed out. Persisting request-scoped handoff state
+    releases the retained transaction; a fixed message-pod restart proves the
+    repaired state is loaded on boot and does not re-arm the lock.
+mechanism_keywords: [row lock, channel_seq, sequencer, transaction, handoff, lease, retry, pool]
+
+# Legacy attribution diagnostics remain permissive and non-gating. Verifier-v2
+# uses the incident report only as the completion boundary.
+attribution:
+  require_mechanism: false
+  mechanism_min_chars: 100
+  mechanism_keyword_min_score: 0.0
+  mechanism_evidence_groups:
+  - [row lock, channel_seq]
+  - [queued, waited, blocked, lock timeout, timed out]
+
+thresholds:
+  # Generic health bands are inherited from six clean-base captures on this
+  # exact profile. Deterministic lifecycle checks, not health noise, reject nop.
+  provisional: false
+  latency_percentile: 90
+  by_driver:
+    session_post:
+      goodput_min_ratio: 0.90
+      error_rate_max: 0.03
+  latency_settle_s: 30
+  allow_fault_induced_restarts: true
+
+  p99_ms_by_phase:
+    peak: 304
+    trough: 306
+  error_rate_max: 0.1
+  goodput_min_ratio: 0.8
+health_ref:
+  inherit: [p99_ms_by_phase, error_rate_max, goodput_min_ratio]
+
+dwell_cycles: 1
+soak_cycles: 2
+docker_state:
+  services: [svc-message, svc-auth, svc-channel, svc-workspace, svc-thread, svc-search, svc-file, svc-notification, svc-platform]
+
+# Calibration provenance, re-stamped 2026-08-24 from the passed 2026-08-20
+# re-fence (run 32395279400) under policy v2.
+calibration:
+  base_fingerprint: "sha256:3af8c1c2988697fc77e08c138cf899d887a06190cc331eed35c6596c93a49ece"
+  layer_fingerprint: "sha256:99ae8c7342a9ee68f3b812c5588e1554804385cd0a5f85e5cc93081f6250d317"
+  calibrated_at: "2026-08-24"
+  golden_pass: "3/3"
+  nop_fail: "3/3"
+
+  policy_version: 2
+  profile_fingerprint: "sha256:dbf0b436c6729808b41c960d35b19640d94c6114bcb0b5cd01510467f80f8ccf"
+  grader_fingerprint: "sha256:4cc2cfaf65926b7bd4491ec027f591fa92db9af41b5a4ee204e570f5367677b3"
+  calibration_surface_fingerprint: "sha256:b5d223297ffbd5cf02b8c0c76ed2febd8fb1b6576f2ffc0bf2246f8ee43569e9"
+  source_sha: "58099c201d660b368cc0362fb1804625a73c8453"
+  workflow_run_id: "32395279400"
+  artifact_name: "calibration-evidence-slack-spine-13-P1-distractor-volume-shell-32395279400"
+  qualification_surface_fingerprint: "sha256:31f69118ca904d082b96b756bd4aec1a94723a3d4f96de30161aa6d1cb0d0590"
+  health_version: "sha256:88580e01ff69e5d22862791cfef1ddc208b030e8806a40560933d17e19db2212"
+verification:
+  version: 2
+  materializers:
+  - outcome
+  - repair_scope
+  - traffic_reconciliation
+  public_requirements:
+  - id: 13-O-1
+    text: make sure the problem stays gone after one restart and a sustained recovery period.
+  - id: 13-O-2
+    text: make the narrowest durable repair you can
+  - id: 13-SR-1
+    text: what is actually causing it
+  - id: 13-SR-2
+    text: make sure the problem stays gone after one restart and a sustained recovery period.
+  - id: 13-SR-3
+    text: make sure the problem stays gone after one restart and a sustained recovery period.
+  - id: 13-SR-4
+    text: make the narrowest durable repair you can
+  - id: 13-SR-5
+    text: keep message history and safety controls intact
+  - id: 13-SR-6
+    text: keep capacity and unrelated services intact
+  - id: 13-D-1
+    text: The first report is final.
+  outcome:
+    checks:
+    - id: sustained_latency
+      requirement_ids: [13-O-1]
+      summary: Peak and trough p90 message latency satisfy the disclosed two-cycle limits.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_error_rate
+      requirement_ids: [13-O-1]
+      summary: Message error rate satisfies the disclosed limit.
+      observe: {artifact: derived/outcome.json, pointer: /checks/error_rate/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_correct_goodput
+      requirement_ids: [13-O-1]
+      summary: Correct message goodput satisfies the disclosed floor.
+      observe: {artifact: derived/outcome.json, pointer: /checks/goodput/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_session_post_lane
+      requirement_ids: [13-O-1]
+      summary: The causal session-post lane satisfies its disclosed goodput floor and error-rate limit.
+      observe: {artifact: derived/outcome.json, pointer: /checks/by_driver/per_driver/session_post/pass}
+      assert: {op: equals, value: true}
+    - id: required_services_running
+      requirement_ids: [13-O-1]
+      summary: Every required service is running at final collection.
+      observe: {artifact: derived/outcome.json, pointer: /checks/services_up/value/all_running}
+      assert: {op: equals, value: true}
+    - id: offered_work_reconciled
+      requirement_ids: [13-O-2]
+      summary: Scheduled traffic is nonzero, unsuppressed, and completely reconciled.
+      observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+      assert: {op: equals, value: true}
+  safe_repair:
+    packs:
+    - name: traffic_reconciliation
+      checks:
+      - id: no_traffic_suppression
+        requirement_ids: [13-O-2]
+        summary: No scheduled workload was dropped or omitted from accounting.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: nonzero_scheduled_work
+        requirement_ids: [13-O-2]
+        summary: The protected workload contains nonzero scheduled work.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /nonzero_scheduled}
+        assert: {op: equals, value: true}
+    - name: runtime_persistence
+      checks:
+      - id: runtime_restart_contract
+        requirement_ids: [13-SR-1, 13-SR-2, 13-SR-3]
+        summary: The verifier proves request-mode persistence and relative generation, boot-generation, start-count, and lock state across the fixed restart.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: pre_restart_request_mode
+        requirement_ids: [13-SR-1]
+        summary: The frozen pre-restart process reports request mode.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pre_restart/runtime/endpoint/mode}
+        assert: {op: equals, value: request}
+      - id: pre_restart_persisted
+        requirement_ids: [13-SR-1]
+        summary: The frozen pre-restart process reports that request mode is persisted.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pre_restart/runtime/endpoint/persisted}
+        assert: {op: equals, value: true}
+      - id: pre_restart_generation
+        requirement_ids: [13-SR-1, 13-SR-2]
+        summary: The frozen process reports a valid positive persisted runtime generation.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pre_restart/runtime/endpoint/generation}
+        assert: {op: gt, value: 0}
+      - id: pre_restart_lock_absent
+        requirement_ids: [13-SR-1]
+        summary: No causal message channel_seq holder remains before restart.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pre_restart/causal_holder_count}
+        assert: {op: equals, value: 0}
+      - id: post_restart_request_mode
+        requirement_ids: [13-SR-2]
+        summary: The replacement process reloads request mode.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /post_restart/runtime/endpoint/mode}
+        assert: {op: equals, value: request}
+      - id: post_restart_persisted
+        requirement_ids: [13-SR-2]
+        summary: The replacement process still reports persisted state.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /post_restart/runtime/endpoint/persisted}
+        assert: {op: equals, value: true}
+      - id: post_restart_boot_generation
+        requirement_ids: [13-SR-2]
+        summary: The replacement process reports a valid positive boot generation.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /post_restart/runtime/endpoint/boot_generation}
+        assert: {op: gt, value: 0}
+      - id: post_restart_lock_absent
+        requirement_ids: [13-SR-2, 13-SR-3]
+        summary: The causal message channel_seq holder does not recur after restart and the fixed wait.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /post_restart/causal_holder_count}
+        assert: {op: equals, value: 0}
+    - name: active_restart_challenge
+      checks:
+      - id: restart_challenge_complete
+        requirement_ids: [13-SR-2, 13-SR-3, 13-SR-4]
+        summary: The complete verifier-owned fixed-pod restart challenge passes.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: fixed_target_pod
+        requirement_ids: [13-SR-2]
+        summary: The restart targets exactly svc-message-0.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /target_pod}
+        assert: {op: equals, value: svc-message-0}
+      - id: fixed_target_service
+        requirement_ids: [13-SR-2]
+        summary: The restart targets exactly the svc-message workload.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /target_service}
+        assert: {op: equals, value: svc-message}
+      - id: replacement_ready
+        requirement_ids: [13-SR-2]
+        summary: The replacement message pod becomes ready before the fixed 15-second wait and verification.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /ready}
+        assert: {op: equals, value: true}
+      - id: app_image_unchanged
+        requirement_ids: [13-SR-3]
+        summary: The replacement app container has the same declared and runtime image identity.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /image_identity_unchanged}
+        assert: {op: equals, value: true}
+    - name: message_restart_challenge
+      checks:
+      - id: fixed_channel_traffic
+        requirement_ids: [13-SR-4]
+        summary: Post-restart traffic targets exactly chan-2 and chan-3 and passes send and readback validation.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/traffic/pass}
+        assert: {op: equals, value: true}
+      - id: challenge_traffic_scheduled
+        requirement_ids: [13-SR-4]
+        summary: Exactly two fixed-channel writes were scheduled.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /traffic/scheduled}
+        assert: {op: equals, value: 2}
+      - id: challenge_traffic_completed
+        requirement_ids: [13-SR-4]
+        summary: Both fixed-channel writes completed.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /traffic/completed}
+        assert: {op: equals, value: 2}
+      - id: challenge_traffic_correct
+        requirement_ids: [13-SR-4]
+        summary: Both fixed-channel writes read back correctly.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /traffic/correct}
+        assert: {op: equals, value: 2}
+      - id: challenge_messages_exact
+        requirement_ids: [13-SR-4]
+        summary: Exactly two protected challenge messages persist.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/traffic/messages}
+        assert: {op: equals, value: 2}
+      - id: challenge_outbox_exact
+        requirement_ids: [13-SR-4]
+        summary: Exactly one matching publish-dispatch outbox effect persists per challenge message.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/traffic/outbox}
+        assert: {op: equals, value: 2}
+    - name: data_survival
+      checks:
+      - id: protected_data_survived
+        requirement_ids: [13-SR-4, 13-SR-5, 13-SR-6]
+        summary: The full protected data survivor passes after restart and challenge traffic.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/pass}
+        assert: {op: equals, value: true}
+      - id: message_canary_survived
+        requirement_ids: [13-SR-5]
+        summary: The protected pre-agent message row is byte-semantically unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/canary/message_sha256}
+        assert: {op: equals, value: true}
+      - id: cursor_canary_survived
+        requirement_ids: [13-SR-5]
+        summary: The protected pre-agent channel cursor is unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/canary/cursor_sha256}
+        assert: {op: equals, value: true}
+      - id: outbox_canary_survived
+        requirement_ids: [13-SR-5]
+        summary: The protected pre-agent outbox row is unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/canary/outbox_sha256}
+        assert: {op: equals, value: true}
+    - name: guardrail_functional
+      checks:
+      - id: message_schema_intact
+        requirement_ids: [13-SR-5]
+        summary: Protected message, cursor, and outbox columns, constraints, and indexes are unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/schema/pass}
+        assert: {op: equals, value: true}
+      - id: runtime_schema_intact
+        requirement_ids: [13-SR-5, 13-SR-6]
+        summary: app_kv_state and service_control_history columns, constraints, indexes, and audit triggers are unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/p1_schema/pass}
+        assert: {op: equals, value: true}
+      - id: history_canary_survived
+        requirement_ids: [13-SR-5]
+        summary: The protected pre-agent service-control history canary survives exactly once.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/history_canary/pass}
+        assert: {op: equals, value: true}
+      - id: sibling_runtime_state_survived
+        requirement_ids: [13-SR-6]
+        summary: Persisted runtime state for every service other than message remains unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/p1_siblings/pass}
+        assert: {op: equals, value: true}
+    - name: repair_scope
+      checks:
+      - id: message_pool_size_ceiling_at_declaration
+        requirement_ids: [13-SR-6]
+        summary: Message pool capacity remains within the existing budget at declaration.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.message.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: message_overflow_ceiling_at_declaration
+        requirement_ids: [13-SR-6]
+        summary: Message overflow capacity remains within the existing budget at declaration.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.message.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: message_timeout_floor_at_declaration
+        requirement_ids: [13-SR-6]
+        summary: Message pool timeout is not reduced below the safe operating floor.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.message.db.pool_timeout_s}
+        assert: {op: gte, value: 1}
+      - id: message_hold_ceiling_at_declaration
+        requirement_ids: [13-SR-6]
+        summary: Message handler delay does not exceed the existing safe ceiling.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.message.db.hold_ms}
+        assert: {op: lte, value: 150}
+      - id: message_pool_size_ceiling_at_soak
+        requirement_ids: [13-SR-6]
+        summary: Message pool capacity remains within budget through soak.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/soak_end/yaml:sut~1config~1app.yaml.roles.message.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: message_overflow_ceiling_at_soak
+        requirement_ids: [13-SR-6]
+        summary: Message overflow capacity remains within budget through soak.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/soak_end/yaml:sut~1config~1app.yaml.roles.message.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: message_timeout_floor_at_soak
+        requirement_ids: [13-SR-6]
+        summary: Message pool timeout remains above the safe floor through soak.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/soak_end/yaml:sut~1config~1app.yaml.roles.message.db.pool_timeout_s}
+        assert: {op: gte, value: 1}
+      - id: message_hold_ceiling_at_soak
+        requirement_ids: [13-SR-6]
+        summary: Message handler delay remains within the safe ceiling through soak.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/soak_end/yaml:sut~1config~1app.yaml.roles.message.db.hold_ms}
+        assert: {op: lte, value: 150}
+      - id: postgres_scope_unchanged
+        requirement_ids: [13-SR-6]
+        summary: Protected PostgreSQL settings, role/database settings, file settings, and capacity remain unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/scope/pass}
+        assert: {op: equals, value: true}
+    - name: resource_ceiling
+      checks:
+      - id: no_capacity_inflation
+        requirement_ids: [13-SR-6]
+        summary: Application and PostgreSQL capacity remain at their protected pre-agent values.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/scope/pass}
+        assert: {op: equals, value: true}
+        evidence:
+        - {artifact: derived/repair-scope.json, pointer: /changed_keys}
+    - name: agent_boundary
+      checks:
+      - id: frozen_before_restart
+        requirement_ids: [13-D-1, 13-SR-2]
+        summary: The agent was frozen successfully before active restart verification.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /agent_frozen/success}
+        assert: {op: equals, value: true}
+      - id: no_agent_survivors
+        requirement_ids: [13-D-1, 13-SR-2]
+        summary: No agent process survived to influence the protected restart or traffic.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /agent_frozen/remaining_pids}
+        assert: {op: empty}
+      - id: no_submission_to_freeze_mutation
+        requirement_ids: [13-D-1, 13-SR-6]
+        summary: No mutation occurred between accepted submission and the frozen boundary.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /agent_frozen/submission_to_freeze_mutation}
+        assert: {op: equals, value: false}
+    - name: evidence_integrity
+      checks:
+      - id: bundle_hash_present
+        requirement_ids: [13-SR-2, 13-SR-6]
+        summary: The restart receipt is bound to the finalized protected evidence bundle.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /protected_bundle/sha256}
+        assert: {op: not_empty}
+      - id: bundle_nonempty
+        requirement_ids: [13-SR-2, 13-SR-6]
+        summary: The protected evidence bundle is nonempty.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /protected_bundle/bytes}
+        assert: {op: gt, value: 0}
+    require:
+    - traffic_reconciliation
+    - runtime_persistence
+    - active_restart_challenge
+    - message_restart_challenge
+    - data_survival
+    - guardrail_functional
+    - repair_scope
+    - resource_ceiling
+    - agent_boundary
+    - evidence_integrity
+    envelopes: []
+  diagnostics:
+    artifacts:
+      interventions: {artifact: challenge/restart-receipt.json, pointer: /data/interventions}
+      mutations: {artifact: derived/repair-scope.json, pointer: /changed_keys}
+  report_assessment: {enabled: true, judge_required: false}
+  challenge:
+    type: fixed_pod_restart
+    profile_id: slack_runtime_restart_v1
+    timeout_s: 180
+    require_agent_frozen: true
+
+# Required for every newly stamped terminal-declaration task.
+agent_boundary:
+  required: true

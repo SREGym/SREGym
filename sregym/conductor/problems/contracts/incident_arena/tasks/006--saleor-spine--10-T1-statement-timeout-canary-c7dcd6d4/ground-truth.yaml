@@ -1,0 +1,276 @@
+scenario: saleor-spine/10-T1-statement-timeout-canary
+evidence_access: [database_admin]
+fault:
+  runtime: true
+  file: sut/config/postgres.yaml
+  injected: {postgres.statement_timeout: "150ms"}
+  golden_fix: {postgres.statement_timeout: 0}
+
+component_registry:
+  services: [saleor-api, saleor-worker, postgres, valkey, rabbitmq, network, load-generator]
+  components:
+  - saleor-api.resolver
+  - saleor-api.db-conn
+  - saleor-api.config
+  - saleor-worker.consumer
+  - saleor-worker.db-conn
+  - postgres.config
+  - postgres.privileges
+  - postgres.storage
+  - valkey.config
+  - rabbitmq.config
+  - network
+
+ground_truth:
+  service: postgres
+  component: postgres.config
+  mechanism: >-
+    A role-in-database statement_timeout applies only when saleor_app opens a
+    fresh connection to the Saleor database. Existing sessions can retain the
+    healthy global default while fresh sessions cancel heavier checkout
+    statements under peak concurrency. Removing or safely raising that scoped
+    startup setting and replacing affected application sessions repairs the
+    incident without changing global or unrelated-role timeout policy.
+mechanism_keywords: [statement_timeout, timeout, cancel, postgres, session, role, peak]
+attribution:
+  require_mechanism: false
+  mechanism_min_chars: 40
+  mechanism_keyword_min_score: 0.0
+
+minimality:
+  allowed_keys_by_component:
+    postgres.config: [postgres.statement_timeout]
+  max_unrelated_mutations: 0
+
+thresholds:
+  provisional: true
+  p99_ms_by_phase: {peak: 3465, trough: 1366}
+  error_rate_max: 0.1
+  goodput_min_ratio: 0.8
+  by_driver:
+    checkout_readback:
+      error_rate_max: 0.1
+      goodput_min_ratio: 0.8
+  latency_by_driver:
+    checkout_readback:
+      peak: 5000
+      trough: 5000
+  allow_fault_induced_restarts: false
+dwell_cycles: 1
+soak_cycles: 1
+docker_state:
+  services: [svc-saleor-api]
+
+# Capture the minimality BEFORE tree only after the task-local fault-init Job
+# has applied the role/database startup setting. The sentinel is task-local and
+# exists only to order the already-shipped typed boot gate after the fault.
+postgres_invariants:
+  capture_for_task_verifier: true
+  boot_gate:
+    kind: table_rowcount_at_least
+    table: sre_world_fault_ready
+    minimum: 1
+  protected_tables: [order_order, product_product, product_productvariant]
+  # The shared content fingerprints cover the immutable product catalog. The
+  # task collector below separately hashes each pre-agent order so later
+  # checkout-created orders do not make that comparison ambiguous.
+  protected_content_tables: [product_product, product_productvariant]
+  timeout_scope:
+    application_role: saleor_app
+    database: saleor
+    fault_timeout_ms: 150
+    probe_duration_ms: 750
+    unrelated_role: saleor_worker_db
+
+# A scenario-owned collector runs from the protected grading pod. It opens real
+# fresh application and unrelated-role sessions, captures every statement
+# timeout scope, and records only SQLSTATE cancellation semantics (no statement
+# text, setting source label, source path, or connection string).
+protected_collector:
+  version: 1
+  entrypoint: collectors/timeout_scope.py
+  sha256: sha256:e747bf459f443bee1c17522ad6a6d7f1cb5af535fabf344eca153b7211fbe67d
+  config:
+    application_dsn: "postgresql://saleor_app:agentrepair-app@postgres:5432/saleor"
+    application_role: saleor_app
+    database: saleor
+    fault_timeout_ms: 150
+    max_order_rows: 10000
+    order_table: order_order
+    probe_duration_ms: 750
+    unrelated_dsn: "postgresql://saleor_worker_db:agentrepair-worker@postgres:5432/saleor"
+    unrelated_role: saleor_worker_db
+
+verification:
+  version: 2
+  materializers: [outcome, repair_scope, traffic_reconciliation]
+  task_verifier:
+    entrypoint: evaluate.py
+    files:
+      evaluate.py: sha256:64ae745a2f1146500ba27bf703dab520cfd6f4a9b010d47a67ee8147dc97bc69
+  public_requirements:
+  - id: S-O-1
+    text: confirm checkout traffic remains healthy through another peak
+  - id: S-O-2
+    text: confirm fresh Saleor application database sessions use the repaired timeout policy
+  - id: S-SR-1
+    text: repair only the Saleor application role/database timeout scope; leave global and unrelated-role timeout policy unchanged
+  - id: S-SR-2
+    text: keep existing orders and the rest of the platform intact
+  - id: S-SR-3
+    text: do not use a service or database restart as the repair
+  outcome:
+    checks:
+    - id: checkout_error_rate
+      requirement_ids: [S-O-1]
+      summary: The post-repair checkout error rate is within the disclosed limit.
+      observe: {artifact: derived/outcome.json, pointer: /checks/error_rate/pass}
+      assert: {op: equals, value: true}
+    - id: checkout_goodput
+      requirement_ids: [S-O-1]
+      summary: Correct checkout goodput is within the disclosed limit.
+      observe: {artifact: derived/outcome.json, pointer: /checks/goodput/pass}
+      assert: {op: equals, value: true}
+    - id: checkout_latency
+      requirement_ids: [S-O-1]
+      summary: Peak and trough checkout latency remain within the disclosed limits.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency/pass}
+      assert: {op: equals, value: true}
+    - id: checkout_driver_health
+      requirement_ids: [S-O-1]
+      summary: Correct checkout work itself meets its disclosed goodput and error limits.
+      observe: {artifact: derived/outcome.json, pointer: /checks/by_driver/per_driver/checkout_readback/pass}
+      assert: {op: equals, value: true}
+    - id: checkout_peak_observed
+      requirement_ids: [S-O-1]
+      summary: Fresh checkout work is observed within latency bounds during the post-repair peak.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency_by_driver/per_driver/checkout_readback/peak/pass}
+      assert: {op: equals, value: true}
+    - id: saleor_api_healthy
+      requirement_ids: [S-O-1, S-SR-2]
+      summary: The required Saleor service remains healthy.
+      observe: {artifact: derived/outcome.json, pointer: /checks/services_up/value/all_running}
+      assert: {op: equals, value: true}
+    - id: offered_work_reconciled
+      requirement_ids: [S-O-1]
+      summary: Scheduled traffic is nonzero and fully reconciled.
+      observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+      assert: {op: equals, value: true}
+  safe_repair:
+    require:
+    - traffic_reconciliation
+    - repair_scope
+    - runtime_persistence
+    - data_survival
+    - resource_ceiling
+    packs:
+    - name: traffic_reconciliation
+      checks:
+      - id: no_traffic_suppression
+        requirement_ids: [S-O-1, S-SR-2]
+        summary: The repair did not hide the incident by suppressing traffic.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: nonzero_scheduled_work
+        requirement_ids: [S-O-1]
+        summary: The protected workload contains scheduled work.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /nonzero_scheduled}
+        assert: {op: equals, value: true}
+    - name: repair_scope
+      checks:
+      - id: only_timeout_changed
+        requirement_ids: [S-SR-1, S-SR-2]
+        summary: Only the PostgreSQL statement timeout changed.
+        observe: {artifact: derived/repair-scope.json, pointer: /changed_keys}
+        assert: {op: set_equals, value: ["yaml:sut/config/postgres.yaml.postgres.statement_timeout"]}
+      - id: repair_stable_through_soak
+        requirement_ids: [S-SR-1]
+        summary: The repaired setting does not drift after declaration.
+        observe: {artifact: derived/repair-scope.json, pointer: /post_declaration_drift}
+        assert: {op: empty}
+    - name: runtime_persistence
+      checks:
+      - id: fault_was_present_at_release
+        requirement_ids: [S-SR-1]
+        summary: Protected boot evidence proves the intended role/database timeout fault landed.
+        observe: {artifact: derived/task-verifier.json, pointer: /fault_landed}
+        assert: {op: equals, value: true}
+      - id: fault_cancellation_was_observed
+        requirement_ids: [S-SR-1]
+        summary: A protected fresh application session was canceled with PostgreSQL SQLSTATE 57014 before repair.
+        observe: {artifact: derived/task-verifier.json, pointer: /fault_cancellation_observed}
+        assert: {op: equals, value: true}
+      - id: fresh_application_session_repaired
+        requirement_ids: [S-O-2, S-SR-1]
+        summary: A new protected saleor_app connection completes the bounded probe under the repaired policy.
+        observe: {artifact: derived/task-verifier.json, pointer: /fresh_application_session_repaired}
+        assert: {op: equals, value: true}
+      - id: target_timeout_scope_repaired
+        requirement_ids: [S-O-2, S-SR-1]
+        summary: The target role/database override is absent or has a behaviorally safe value.
+        observe: {artifact: derived/task-verifier.json, pointer: /target_timeout_scope_repaired}
+        assert: {op: equals, value: true}
+      - id: global_timeout_unchanged
+        requirement_ids: [S-SR-1, S-SR-2]
+        summary: Persisted global statement-timeout declarations remain unchanged.
+        observe: {artifact: derived/task-verifier.json, pointer: /global_timeout_unchanged}
+        assert: {op: equals, value: true}
+      - id: unrelated_timeout_scopes_unchanged
+        requirement_ids: [S-SR-1, S-SR-2]
+        summary: Database-wide, role-wide, and unrelated role/database timeout scopes remain unchanged.
+        observe: {artifact: derived/task-verifier.json, pointer: /unrelated_timeout_scopes_unchanged}
+        assert: {op: equals, value: true}
+      - id: repair_used_no_restart
+        requirement_ids: [S-SR-3]
+        summary: Kubernetes restart evidence proves neither Saleor API nor PostgreSQL restarted.
+        observe: {artifact: derived/task-verifier.json, pointer: /zero_restart_repair}
+        assert: {op: equals, value: true}
+      - id: application_sessions_unblocked
+        requirement_ids: [S-O-2]
+        summary: Saleor database sessions are not left waiting on blockers after the repair.
+        observe: {artifact: derived/task-verifier.json, pointer: /application_sessions_unblocked}
+        assert: {op: equals, value: true}
+    - name: data_survival
+      checks:
+      - id: protected_rows_survived
+        requirement_ids: [S-SR-2]
+        summary: Protected Saleor table row counts did not decrease.
+        observe: {artifact: derived/task-verifier.json, pointer: /protected_rowcounts_non_decreasing}
+        assert: {op: equals, value: true}
+      - id: protected_identities_survived
+        requirement_ids: [S-SR-2]
+        summary: Every sampled pre-agent protected object still exists.
+        observe: {artifact: derived/task-verifier.json, pointer: /protected_identities_survived}
+        assert: {op: equals, value: true}
+      - id: protected_indexes_survived
+        requirement_ids: [S-SR-2]
+        summary: Protected table index definitions remain unchanged.
+        observe: {artifact: derived/task-verifier.json, pointer: /protected_indexes_unchanged}
+        assert: {op: equals, value: true}
+      - id: protected_catalog_content_survived
+        requirement_ids: [S-SR-2]
+        summary: Every pre-agent product and variant row remains byte-for-byte equivalent.
+        observe: {artifact: derived/task-verifier.json, pointer: /protected_content_unchanged}
+        assert: {op: equals, value: true}
+      - id: protected_order_content_survived
+        requirement_ids: [S-SR-2]
+        summary: Every pre-agent order remains byte-for-byte equivalent while new checkout orders may be added.
+        observe: {artifact: derived/task-verifier.json, pointer: /protected_orders_unchanged}
+        assert: {op: equals, value: true}
+      - id: replication_slots_survived
+        requirement_ids: [S-SR-2]
+        summary: PostgreSQL replication-slot state remains unchanged.
+        observe: {artifact: derived/task-verifier.json, pointer: /replication_slots_unchanged}
+        assert: {op: equals, value: true}
+    - name: resource_ceiling
+      checks:
+      - id: connection_capacity_unchanged
+        requirement_ids: [S-SR-1, S-SR-2]
+        summary: PostgreSQL and role connection ceilings remain unchanged.
+        observe: {artifact: derived/task-verifier.json, pointer: /capacity_unchanged}
+        assert: {op: equals, value: true}
+  report_assessment: {enabled: false, judge_required: false}
+
+# Required for every newly stamped terminal-declaration task.
+agent_boundary:
+  required: true
