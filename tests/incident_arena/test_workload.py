@@ -29,7 +29,7 @@ class ScriptedLoadgen(IncidentArenaLoadgen):
         self.restarts = 0
         self.starts = 0
 
-    def status(self):
+    def status(self, timeout=180):
         step = self.script.pop(0) if len(self.script) > 1 else self.script[0]
         if isinstance(step, Exception):
             raise step
@@ -38,12 +38,12 @@ class ScriptedLoadgen(IncidentArenaLoadgen):
     def restart(self, timeout_s=600):
         self.restarts += 1
 
-    def start_episode(self):
+    def start_episode(self, timeout=180):
         self.starts += 1
         return {"status": 202, "body": "{}"}
 
     def logs(self, tail=40):
-        return "sidecar stdout"
+        raise AssertionError("Do not collect logs after the deadline")
 
 
 @pytest.fixture
@@ -90,13 +90,82 @@ def test_wait_for_traffic_reports_the_sidecar_error_after_its_restarts(clock):
     assert "loadgen sidecar episode FAILED" in str(raised.value)
 
 
-def test_wait_for_traffic_times_out_with_the_pod_logs(clock):
-    loadgen = ScriptedLoadgen([STARTING])
+def test_wait_for_traffic_times_out_with_the_cached_pod_logs(clock):
+    loadgen = ScriptedLoadgen([{**STARTING, "log_tail": ["sidecar stdout"]}])
     with pytest.raises(RuntimeError, match="no traffic within 60s") as raised:
         loadgen.wait_for_traffic(timeout_s=60)
     assert "episode still starting" in str(raised.value)
     assert "last episode-start response" in str(raised.value)
     assert "sidecar stdout" in str(raised.value)
+    assert clock.now == 60
+
+
+def test_retry_delay_cannot_start_a_restart_after_the_deadline(clock):
+    loadgen = ScriptedLoadgen([FAILED])
+    with pytest.raises(RuntimeError, match="no traffic within 20s"):
+        loadgen.wait_for_traffic(timeout_s=20)
+    assert clock.now == 20
+    assert loadgen.restarts == 0
+
+
+def test_slow_restart_uses_only_the_remaining_budget(clock, monkeypatch):
+    loadgen = ScriptedLoadgen([FAILED])
+    budgets = []
+
+    def restart(timeout_s):
+        budgets.append(timeout_s)
+        clock.sleep(timeout_s)
+
+    monkeypatch.setattr(loadgen, "restart", restart)
+    with pytest.raises(RuntimeError, match="no traffic within 60s"):
+        loadgen.wait_for_traffic(timeout_s=60)
+    assert budgets == [30]
+    assert clock.now == 60
+
+
+@pytest.mark.parametrize("step", ["status", "start_episode"])
+def test_slow_ledger_commands_cannot_outlive_the_wait(clock, monkeypatch, step):
+    loadgen = ScriptedLoadgen([STARTING])
+    budgets = []
+
+    def slow_command(timeout):
+        budgets.append(timeout)
+        clock.sleep(timeout)
+        raise TimeoutError("command timed out")
+
+    monkeypatch.setattr(loadgen, step, slow_command)
+    with pytest.raises(RuntimeError, match="no traffic within 25s"):
+        loadgen.wait_for_traffic(timeout_s=25)
+    assert budgets == [25]
+    assert clock.now == 25
+
+
+def test_restart_shares_a_deadline_between_its_commands(clock):
+    calls = []
+
+    class Kubectl:
+        def exec_command_checked(self, command, timeout):
+            calls.append((command, timeout))
+            clock.sleep(4)
+
+    IncidentArenaLoadgen("ns", Kubectl()).restart(timeout_s=10)
+    assert calls[0][1] == 10
+    assert calls[1][1] == 6
+    assert "--timeout=6s" in calls[1][0]
+
+
+def test_status_and_episode_start_forward_the_command_budget(monkeypatch):
+    loadgen = IncidentArenaLoadgen("ns", None)
+    calls = []
+
+    def ledger(mode, *, timeout):
+        calls.append((mode, timeout))
+        return {}
+
+    monkeypatch.setattr(loadgen, "_run_ledger", ledger)
+    loadgen.status(timeout=7)
+    loadgen.start_episode(timeout=5)
+    assert calls == [("status", 7), ("start", 5)]
 
 
 class JobsKubeCtl:

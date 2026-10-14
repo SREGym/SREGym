@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from sregym.conductor.problems.contracts.incident_arena.base import FaultLeg
+from sregym.conductor.problems.incident_arena import FaultLeg
 from sregym.service.apps.slack_spine.application import SlackSpine
 
 LEAK_AGE_S = 15

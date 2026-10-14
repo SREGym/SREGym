@@ -69,8 +69,6 @@ class IncidentArenaApplication(Application):
     READY_TIMEOUT_S: int = 1200
     #: Bound for a complete request in the app's pinned workload image.
     WORKLOAD_COMPLETION_TIMEOUT_S: float
-    #: Pods matching this selector run the operator toolbox (repair CLIs).
-    TOOLBOX_SELECTOR = "app.kubernetes.io/component=ops-toolbox"
 
     def __init__(self, config_file):
         super().__init__(config_file)

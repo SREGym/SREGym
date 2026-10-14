@@ -59,10 +59,10 @@ def flatten(payload, prefix: str = "") -> dict[str, object]:
     return flat
 
 
-def in_safe_maintenance_window(offset_s: float, period_s: float = 60, duration_s: float = 8) -> bool:
+def in_safe_maintenance_window(offset_s: float) -> bool:
     """Incident Arena's safe offsets for the 60s cycle (30s warmup, 20s write peak).
 
     A complete run must finish before the peak starts (offset <= 22) or start
     after it ends (50 <= offset < 60).
     """
-    return (0 <= offset_s <= 22) or (50 <= offset_s < period_s)
+    return (0 <= offset_s <= 22) or (50 <= offset_s < 60)

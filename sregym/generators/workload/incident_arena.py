@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shlex
 import time
 from pathlib import Path
@@ -67,27 +68,32 @@ class IncidentArenaLoadgen(WorkloadManager):
         """Newest arrival time on the generator's clock (None before any traffic)."""
         return self._run_ledger("latest").get("latest_sent_s")
 
-    def status(self) -> dict:
+    def status(self, timeout: float = 180) -> dict:
         """Newest arrival time, the sidecar's episode-end record and its log tail."""
-        return self._run_ledger("status")
+        return self._run_ledger("status", timeout=timeout)
 
-    def start_episode(self) -> dict:
+    def start_episode(self, timeout: float = 180) -> dict:
         """Open the sidecar's episode-start gate (idempotent; the HTTP status it answered)."""
-        return self._run_ledger("start")
+        return self._run_ledger("start", timeout=timeout)
 
     def logs(self, tail: int = 40) -> str:
         return self.kubectl.exec_command(
             f"kubectl logs -n {self.namespace} deploy/{self.deployment} -c {self.container} --tail={tail}"
         )
 
-    def restart(self, timeout_s: int = 600) -> None:
+    def restart(self, timeout_s: float = 600) -> None:
         """Replace the load generator pod; its private ledger starts empty."""
+        deadline = time.monotonic() + timeout_s
         self.kubectl.exec_command_checked(
             f"kubectl rollout restart deployment/{self.deployment} -n {self.namespace}",
+            timeout=timeout_s,
         )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Load generator restart exceeded its deadline")
         self.kubectl.exec_command_checked(
-            f"kubectl rollout status deployment/{self.deployment} -n {self.namespace} --timeout={timeout_s}s",
-            timeout=timeout_s + 30,
+            f"kubectl rollout status deployment/{self.deployment} -n {self.namespace} --timeout={math.ceil(remaining)}s",
+            timeout=remaining,
         )
 
     def wait_for_traffic(
@@ -112,14 +118,20 @@ class IncidentArenaLoadgen(WorkloadManager):
         last_error: Exception | None = None
         status: dict = {}
         start: dict | None = None
+
+        def remaining() -> float:
+            return max(0.0, deadline - time.monotonic())
+
         while time.monotonic() < deadline:
             try:
-                status = self.status()
+                status = self.status(timeout=min(180, remaining()))
                 last_error = None
             except Exception as exc:  # pod still starting
                 last_error = exc
-                time.sleep(interval_s)
+                time.sleep(min(interval_s, remaining()))
                 continue
+            if not remaining():
+                break
             if status.get("latest_sent_s") is not None:
                 return float(status["latest_sent_s"])
             done = status.get("episode_done")
@@ -135,20 +147,24 @@ class IncidentArenaLoadgen(WorkloadManager):
                     max_restarts,
                     restart_delay_s,
                 )
-                time.sleep(restart_delay_s)
-                self.restart()
+                time.sleep(min(restart_delay_s, remaining()))
+                if not remaining():
+                    break
+                self.restart(timeout_s=min(600, remaining()))
                 continue
             try:
-                start = self.start_episode()
+                start = self.start_episode(timeout=min(180, remaining()))
             except Exception as exc:
                 last_error = exc
-            time.sleep(interval_s)
-        detail = f"last error: {last_error}" if last_error is not None else self._describe(status)
+            time.sleep(min(interval_s, remaining()))
+        detail = self._describe(status)
+        if last_error is not None:
+            detail += f"; last error: {last_error}"
         if start is not None:
             detail += f"; last episode-start response: {json.dumps(start)}"
-        raise RuntimeError(
-            f"load generator produced no traffic within {timeout_s:.0f}s ({detail}); recent logs:\n{self.logs()}"
-        )
+        # Status already contains the sidecar log tail. Do not start another
+        # command to collect logs after the deadline expires.
+        raise RuntimeError(f"load generator produced no traffic within {timeout_s:.0f}s ({detail})")
 
     @staticmethod
     def _describe(status: dict) -> str:
@@ -166,7 +182,7 @@ class IncidentArenaLoadgen(WorkloadManager):
         settle_s: float = 0.0,
         until_s: float | None = None,
     ) -> dict:
-        """Aggregate every arrival sent after ``since_s`` (see the ledger module)."""
+        """Aggregate arrivals in ``(since_s, until_s]`` (see the ledger module)."""
         since = "none" if since_s is None else repr(float(since_s))
         until = "none" if until_s is None else repr(float(until_s))
         result = self._run_ledger("summary", since, repr(float(latency_percentile)), repr(float(settle_s)), until)

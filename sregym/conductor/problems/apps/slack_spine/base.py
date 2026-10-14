@@ -5,7 +5,7 @@ from __future__ import annotations
 from sregym.conductor.oracles.apps.slack_spine.scope import SlackScopeGuard
 from sregym.conductor.problems.apps.slack_spine.events import AdminEvent
 from sregym.conductor.problems.apps.slack_spine.pools import RolePoolSize
-from sregym.conductor.problems.contracts.incident_arena.base import IncidentArenaProblem
+from sregym.conductor.problems.incident_arena import IncidentArenaProblem
 from sregym.service.apps.slack_spine.application import SlackSpine
 
 

@@ -156,21 +156,26 @@ def evaluate_outcome(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRe
         results.append(CheckResult(f"driver_{driver}_within_limits", passed, reason="service_unhealthy", detail=detail))
 
     if spec.gate_latency:
-        baseline = spec.latency_baseline or {}
-        factor = spec.latency_baseline_factor
-        results.append(
-            _latency_check(
-                "sustained_latency",
-                summary.get("latency") or {},
-                thresholds.get("p99_ms_by_phase") or {},
-                baseline.get("overall") or {},
-                factor,
-            )
+        results.extend(_latency_checks(summary, spec))
+    return results
+
+
+def _latency_checks(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckResult]:
+    baseline = spec.latency_baseline or {}
+    results = [
+        _latency_check(
+            "sustained_latency",
+            summary.get("latency") or {},
+            spec.thresholds.get("p99_ms_by_phase") or {},
+            baseline.get("overall") or {},
+            spec.latency_baseline_factor,
         )
-        for driver, bands in sorted((thresholds.get("latency_by_driver") or {}).items()):
-            stats = (by_driver.get(driver) or {}).get("latency") or {}
-            healthy = (baseline.get("by_driver") or {}).get(driver) or {}
-            results.append(_latency_check(f"driver_{driver}_latency", stats, bands, healthy, factor))
+    ]
+    by_driver = summary.get("by_driver") or {}
+    for driver, bands in sorted((spec.thresholds.get("latency_by_driver") or {}).items()):
+        stats = (by_driver.get(driver) or {}).get("latency") or {}
+        healthy = (baseline.get("by_driver") or {}).get(driver) or {}
+        results.append(_latency_check(f"driver_{driver}_latency", stats, bands, healthy, spec.latency_baseline_factor))
     return results
 
 
@@ -189,14 +194,15 @@ def _latency_check(
 ) -> CheckResult:
     per_kind = {}
     passed = True
-    seen = False
+    missing = []
     for kind, band in sorted(bands.items()):
         stats = latency.get(kind) or {}
         value = stats.get("p_ms")
-        if value is None:
-            per_kind[kind] = {"n": stats.get("n", 0), "value": None}
+        if value is None or not stats.get("n"):
+            missing.append(kind)
+            per_kind[kind] = {"n": stats.get("n", 0), "value": value, "pass": False}
+            passed = False
             continue
-        seen = True
         healthy_p = (healthy or {}).get(kind)
         effective = max(float(band), factor * float(healthy_p)) if healthy_p is not None else float(band)
         limit = relaxed_ceiling(effective)
@@ -210,13 +216,18 @@ def _latency_check(
             "limit": limit,
             "pass": ok,
         }
-    return CheckResult(name, passed and seen, reason="service_unhealthy", detail=per_kind)
+    return CheckResult(
+        name,
+        passed and bool(bands),
+        reason="no_traffic_observed" if missing or not bands else "service_unhealthy",
+        detail=per_kind,
+    )
 
 
 class IncidentArenaMitigationOracle(Oracle):
     """Grade an Incident Arena repair: root cause removed, safely, durably, and healthy."""
 
-    # Declaration checks + challenges + soak (~3-4 minutes) + soak-end checks.
+    # Includes durability challenges, the soak, and bounded request completion.
     evaluation_timeout_seconds = 1800
 
     # "fault_still_present" (the injected cause, read directly from the component
@@ -274,12 +285,12 @@ class IncidentArenaMitigationOracle(Oracle):
             episode = state.get("episode_id")
             if latest is None or latest < window or episode is None:
                 raise RuntimeError("Healthy workload window is incomplete")
-            time.sleep(spec.completion_timeout_s)
-            completed = workload.status()
-            if completed.get("episode_id") != episode or (completed.get("latest_sent_s") or 0) < latest:
-                raise RuntimeError("Workload restarted during latency calibration")
+            self._wait_for_completions(spec, episode, latest)
             options["until_s"] = latest
         summary = workload.summary(latest - window, **options)
+        missing = [check.name for check in _latency_checks(summary, spec) if check.reason == "no_traffic_observed"]
+        if missing:
+            raise RuntimeError(f"Healthy latency window is missing required samples: {', '.join(missing)}")
 
         def p_ms(stats: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -290,6 +301,14 @@ class IncidentArenaMitigationOracle(Oracle):
             "overall": p_ms(summary),
             "by_driver": {driver: p_ms(stats) for driver, stats in (summary.get("by_driver") or {}).items()},
         }
+
+    def _wait_for_completions(self, spec: OutcomeSpec, episode: str, until_s: float) -> None:
+        """Drain a closed arrival cohort without accepting a replacement episode."""
+        time.sleep(spec.completion_timeout_s)
+        completed = self.problem.app.wrk.status()
+        current = completed.get("latest_sent_s")
+        if completed.get("episode_id") != episode or current is None or current < until_s:
+            raise RuntimeError("Workload restarted before the measurement window completed")
 
     def _verdict(self, results: list[CheckResult]) -> dict:
         self.results = results
@@ -338,28 +357,22 @@ class IncidentArenaMitigationOracle(Oracle):
             return self._verdict(results)
         logger.info("Soaking for %.0fs from load generator mark %s", spec.soak_s, mark)
         time.sleep(spec.soak_s)
-        latest = workload.latest_sent_s()
-        options = {"latency_percentile": spec.latency_percentile, "settle_s": spec.settle_s}
-        if spec.completion_timeout_s:
-            time.sleep(spec.completion_timeout_s)
-            completed = workload.status()
-            current = completed.get("latest_sent_s")
-            if completed.get("episode_id") != episode or (
-                current is None or latest is None or latest < mark or current < latest
-            ):
-                results.append(
-                    CheckResult(
-                        "workload_window_intact",
-                        False,
-                        reason="no_traffic_observed",
-                        detail={"error": "Workload restarted before the measurement window completed"},
-                    )
-                )
-                return self._verdict(results)
-            options["until_s"] = latest
-        results.extend(problem.run_checks("soak_end"))
-        # A restarted load generator starts a new clock; grade everything it sent.
-        since = mark if (mark is not None and latest is not None and latest >= mark) else None
-        summary = workload.summary(since, **options)
+        try:
+            latest = workload.latest_sent_s()
+            options = {"latency_percentile": spec.latency_percentile, "settle_s": spec.settle_s}
+            if spec.completion_timeout_s:
+                if episode is None or latest is None or latest < mark:
+                    raise RuntimeError("Workload clock regressed during measurement")
+                self._wait_for_completions(spec, episode, latest)
+                options["until_s"] = latest
+            results.extend(problem.run_checks("soak_end"))
+            # Zero-bound legacy workloads do not identify their client episodes.
+            since = mark if latest is not None and latest >= mark else None
+            summary = workload.summary(since, **options)
+        except Exception as exc:
+            results.append(
+                CheckResult("workload_window_intact", False, reason="no_traffic_observed", detail={"error": str(exc)})
+            )
+            return self._verdict(results)
         results.extend(evaluate_outcome(summary, spec))
         return self._verdict(results)

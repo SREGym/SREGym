@@ -120,8 +120,9 @@ class IncidentArenaProblem(Problem):
         app.configure(self.deploy_values())
         app.description = self.compose_description()
 
-        self.root_cause = self.compose_root_cause()
-        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.root_causes = self.compose_root_causes()
+        self.root_cause = "\n\n".join(self.root_causes)
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_causes)
         self.mitigation_oracle = IncidentArenaMitigationOracle(problem=self)
         app.create_workload()
 
@@ -154,19 +155,27 @@ class IncidentArenaProblem(Problem):
             parts.append(self.GROUND_RULES.strip())
         return "\n\n".join(parts)
 
-    def compose_root_cause(self) -> str:
-        findings = self.task.answer_key
-        components = ", ".join(f"{f['service']}/{f['component']}" for f in findings)
-        lines = [f"{len(findings)} independent root cause(s); a complete diagnosis names every one."]
-        for index, finding in enumerate(findings, 1):
+    def compose_root_causes(self) -> list[str]:
+        """One structured expectation per independent cause, for all-cause grading."""
+        mutations: dict[str, list[str]] = {}
+        for leg in self.legs:
+            if leg.is_cause:
+                description = leg.describe()
+                if description:
+                    mutations.setdefault(leg.component, []).append(description)
+        causes = []
+        for finding in self.task.answer_key:
+            component = f"{finding['service']}/{finding['component']}"
             mechanism = " ".join(str(finding.get("mechanism", "")).split())
-            lines.append(f"{index}. {finding['service']} ({finding['component']}): {mechanism}")
-        injected = [leg.describe() for leg in self.legs if leg.is_cause and leg.describe()]
-        if injected:
-            lines.append("Injected mutation(s): " + " ".join(injected))
-        return self.build_structured_root_cause(
-            component=components, namespace=self.namespace, description="\n".join(lines)
-        )
+            descriptions = [mechanism]
+            if component in mutations:
+                descriptions.append("Injected mutation(s): " + " ".join(mutations[component]))
+            causes.append(
+                self.build_structured_root_cause(
+                    component=component, namespace=self.namespace, description="\n".join(descriptions)
+                )
+            )
+        return causes
 
     def outcome_spec(self) -> OutcomeSpec:
         return OutcomeSpec(

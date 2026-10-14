@@ -70,6 +70,27 @@ def test_latency_is_only_graded_when_the_task_gates_it():
     assert "sustained_latency" not in _by_name(evaluate_outcome(slow, OutcomeSpec(THRESHOLDS, gate_latency=False)))
 
 
+@pytest.mark.parametrize("phase", ["peak", "trough"])
+@pytest.mark.parametrize("missing", [{}, {"n": 0, "p_ms": None}, {"n": 0, "p_ms": 1}])
+def test_latency_requires_samples_in_every_graded_phase(phase, missing):
+    summary = _summary()
+    summary["latency"][phase] = missing
+    check = _by_name(evaluate_outcome(summary, OutcomeSpec(THRESHOLDS)))["sustained_latency"]
+    assert not check.passed
+    assert check.reason == "no_traffic_observed"
+    assert check.detail[phase]["pass"] is False
+
+
+def test_driver_latency_requires_its_own_phase_samples():
+    summary = _summary()
+    summary["by_driver"]["write_readback"]["latency"] = {"trough": {"n": 10, "p_ms": 100}}
+    spec = OutcomeSpec({**THRESHOLDS, "latency_by_driver": {"write_readback": {"peak": 500, "trough": 500}}})
+    checks = _by_name(evaluate_outcome(summary, spec))
+    assert checks["sustained_latency"].passed
+    assert not checks["driver_write_readback_latency"].passed
+    assert checks["driver_write_readback_latency"].reason == "no_traffic_observed"
+
+
 def test_latency_bands_rebase_on_a_slower_healthy_baseline():
     slow = _summary(latency={"peak": {"n": 50, "p_ms": 1500.0}, "trough": {"n": 50, "p_ms": 300.0}})
     absolute = _by_name(evaluate_outcome(slow, OutcomeSpec(THRESHOLDS)))["sustained_latency"]
@@ -298,3 +319,40 @@ def test_workload_restart_cannot_replace_the_measurement_window():
     assert result["success"] is False
     assert result["reason"] == "no_traffic_observed"
     assert workload.windows == []
+
+
+def test_native_baseline_rejects_missing_latency_samples(monkeypatch):
+    problem = _Problem()
+    workload = _CompletedWindowWorkload([180, 240])
+    problem.app.wrk = workload
+    problem.outcome_spec = lambda: OutcomeSpec(THRESHOLDS, completion_timeout_s=60)
+    summary = _summary()
+    summary["latency"].pop("peak")
+    monkeypatch.setattr(workload, "summary", lambda *args, **kwargs: summary)
+    with pytest.raises(RuntimeError, match="complete healthy latency window") as raised:
+        IncidentArenaMitigationOracle(problem).capture_baseline()
+    assert "missing required samples" in str(raised.value.__cause__)
+
+
+def test_missing_latency_is_an_incomplete_measurement_not_an_agent_error(monkeypatch):
+    problem = _Problem()
+    summary = _summary()
+    summary["latency"].pop("peak")
+    monkeypatch.setattr(problem.app.wrk, "summary", lambda *args, **kwargs: summary)
+    result = IncidentArenaMitigationOracle(problem).evaluate()
+    assert result["success"] is False
+    assert result["reason"] == "no_traffic_observed"
+    assert result["failure_class"] == FailureClass.AMBIGUOUS
+
+
+def test_summary_error_returns_a_measurement_failure(monkeypatch):
+    problem = _Problem()
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(problem.app.wrk, "summary", unavailable)
+    result = IncidentArenaMitigationOracle(problem).evaluate()
+    assert result["success"] is False
+    assert result["detail"]["failed_checks"] == ["workload_window_intact"]
+    assert "ledger unavailable" in result["detail"]["checks"][-1]["detail"]["error"]

@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 
 from sregym.conductor.oracles.incident_arena import CheckResult
-from sregym.conductor.problems.contracts.incident_arena.base import FaultLeg
+from sregym.conductor.problems.incident_arena import FaultLeg
 from sregym.service.apps.frappe.application import Frappe
 from sregym.service.apps.frappe.operations import (
     DEQUEUE_COMMANDS,

@@ -5,9 +5,9 @@ One directory per ported task of [abundant-ai/incident-arena](https://github.com
 Incident Arena calls task 005 `07-writes-and-queue-oom-f1db8f42`. It is stored here as
 `005--frappe--07-writes-and-queue-oom-f1db8f42` so that the directories sort in task order.
 
-The numbering gaps are deliberate. Tasks 000, 001, 003, 004, 011, 012, 015, 016 and 017
-combine faults that the tasks kept here already cover, and task 010 re-runs task 009's
-fault at a milder setting, so they are not ported (see `docs/incident-arena.md`).
+The numbering gaps are deliberate. SREGym imports ten selected tasks.
+Other combinations and parameter variants are not included.
+See [the integration guide](../../../../../../docs/incident-arena.md) for scope and execution.
 
 Each directory keeps these files from the Harbor task, unmodified:
 

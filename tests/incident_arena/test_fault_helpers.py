@@ -3,7 +3,7 @@
 import pytest
 
 from sregym.conductor.problems.apps.saleor.statement_timeout import safe_statement_timeout, timeout_ms
-from sregym.conductor.problems.contracts.incident_arena.base import FaultLeg
+from sregym.conductor.problems.incident_arena import FaultLeg
 from sregym.service.apps.frappe.operations import render_start_script, unlimited_or_at_least
 from sregym.service.apps.slack_spine.configuration import flatten, in_safe_maintenance_window, patch_role_db_config
 

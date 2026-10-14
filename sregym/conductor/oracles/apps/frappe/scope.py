@@ -21,8 +21,6 @@ class FrappeScopeGuard(FrappeLeg):
     counts of the Frappe workloads must be unchanged after the repair.
     """
 
-    WORKLOAD_SELECTOR = "app.kubernetes.io/instance=frappe"
-
     def __init__(self, owned_globals: tuple[str, ...] = (), grant_legs: tuple[SiteGrantRevocation, ...] = ()) -> None:
         super().__init__()
         self.owned_globals = set(owned_globals)

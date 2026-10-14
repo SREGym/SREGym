@@ -6,7 +6,7 @@ import json
 import re
 
 from sregym.conductor.oracles.incident_arena import CheckResult
-from sregym.conductor.problems.contracts.incident_arena.base import FaultLeg, IncidentArenaProblem
+from sregym.conductor.problems.incident_arena import FaultLeg, IncidentArenaProblem
 from sregym.service.apps.saleor.application import Saleor
 
 _TIMEOUT_MS = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|min|h)?\s*$")

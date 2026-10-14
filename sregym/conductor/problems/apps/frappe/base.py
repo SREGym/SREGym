@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sregym.conductor.oracles.apps.frappe.scope import FrappeScopeGuard
 from sregym.conductor.problems.apps.frappe.faults import MariaDBGlobal, SiteGrantRevocation
-from sregym.conductor.problems.contracts.incident_arena.base import IncidentArenaProblem
+from sregym.conductor.problems.incident_arena import IncidentArenaProblem
 from sregym.service.apps.frappe.application import Frappe
 
 

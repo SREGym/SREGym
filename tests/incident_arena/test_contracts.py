@@ -107,6 +107,9 @@ def test_problem_constructs_offline(offline_cluster, problem_cls):
     assert problem.root_cause.startswith("[fault_spec]")
     for finding in problem.task.answer_key:
         assert finding["component"] in problem.root_cause
+    assert len(problem.root_causes) == len(problem.task.answer_key)
+    expected = problem.root_causes[0] if len(problem.root_causes) == 1 else problem.root_causes
+    assert problem.diagnosis_oracle.expected == expected
     # Load generator runs the task's profile, looped for the whole run.
     loadgen = problem.app.deploy_overrides["loadgen"]
     profiles = yaml.safe_load(loadgen["profilesYaml"])["profiles"]
@@ -145,3 +148,39 @@ def test_event_legs_carry_their_latent_hold_dose(offline_cluster):
 def test_only_the_image_fault_problems_skip_the_healthy_latency_baseline():
     unhealthy = {pid for pid, cls in INCIDENT_ARENA_PROBLEMS.items() if not cls.HEALTHY_BASELINE}
     assert unhealthy == {"slack_seq_lock_leak", "slack_distractor_volume_seq_lock"}
+
+
+@pytest.mark.parametrize(
+    "problem_id",
+    [
+        "frappe_desk_and_queue_outage",
+        "frappe_writes_and_queue_oom",
+        "slack_sends_fail_strict_mode",
+    ],
+)
+def test_compound_diagnosis_requires_every_cause(offline_cluster, monkeypatch, problem_id):
+    problem = INCIDENT_ARENA_PROBLEMS[problem_id]()
+    oracle = problem.diagnosis_oracle
+
+    def evaluate_cause(solution, expectation, display_expectation=None):
+        assert all(cause in expectation for cause in problem.root_causes)
+        passed = display_expectation in solution
+        return {"success": passed, "accuracy": 100 if passed else 0}
+
+    monkeypatch.setattr(oracle, "_evaluate_single", evaluate_cause)
+    assert oracle.evaluate(problem.root_cause)["success"] is True
+    for omitted in range(len(problem.root_causes)):
+        partial = "\n\n".join(cause for index, cause in enumerate(problem.root_causes) if index != omitted)
+        verdict = oracle.evaluate(partial)
+        assert verdict["success"] is False
+        assert verdict["accuracy"] == 0
+        assert len(verdict["oracles"]) == len(problem.root_causes)
+
+
+def test_diagnosis_mutations_stay_with_their_cause(offline_cluster):
+    problem = INCIDENT_ARENA_PROBLEMS["frappe_desk_and_queue_outage"]()
+    database, queue = problem.root_causes
+    assert "SET GLOBAL max_user_connections = 8" in database
+    assert "min-replicas-to-write" not in database
+    assert "min-replicas-to-write" in queue
+    assert "SET GLOBAL max_user_connections" not in queue
