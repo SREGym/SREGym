@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.problems.lite_ia import common
+from sregym.conductor.oracles import workload_health as common
 from sregym.generators.workload.incident_arena_ledger import summarize
 
 

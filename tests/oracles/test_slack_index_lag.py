@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.problems.ia_ports.slack_b import IndexLaneLagOracle
+from sregym.conductor.oracles.apps.slack_spine.indexing import IndexLaneLagOracle
 
 
 def problem(*, lag=0, indexed=("first", "second", "fresh"), backlog=("first", "second")):

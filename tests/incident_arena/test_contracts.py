@@ -53,7 +53,7 @@ def test_problem_ids_are_registered(monkeypatch):
 
 
 def test_ported_lite_suite_matches_current_lite_order():
-    from sregym.conductor.problems.lite_ia import LITE_IA_PORTS
+    from sregym.conductor.problems.environment_ports import LITE_IA_PORTS
 
     expected = tuple(LITE_IA_PORTS[problem_id][0] for problem_id in PROBLEM_SETS["sregym-lite"])
     assert PROBLEM_SETS["sregym-lite-ia"] == expected
@@ -61,12 +61,11 @@ def test_ported_lite_suite_matches_current_lite_order():
 
 def test_all_fault_ports_remain_registered(monkeypatch):
     import sregym.conductor.problems.registry as registry_module
-    from sregym.conductor.problems.ia_ports import IA_PORT_PROBLEMS
-    from sregym.conductor.problems.lite_ia import LITE_IA_PROBLEMS
+    from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
 
     monkeypatch.setattr(registry_module, "KubeCtl", lambda: None)
     registry = registry_module.ProblemRegistry()
-    for problem_id, factory in {**LITE_IA_PROBLEMS, **IA_PORT_PROBLEMS}.items():
+    for problem_id, factory in PORTED_PROBLEMS.items():
         assert registry.get_problem(problem_id) is factory
 
 

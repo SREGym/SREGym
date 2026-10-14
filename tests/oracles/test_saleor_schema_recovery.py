@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from sregym.conductor.oracles.base import Oracle
-from sregym.conductor.problems.ia_ports import saleor_b
+from sregym.conductor.problems.apps.saleor import checkout as saleor_b
 
 
 @pytest.fixture

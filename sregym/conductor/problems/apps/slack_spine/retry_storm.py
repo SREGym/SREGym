@@ -1,99 +1,19 @@
-"""Metastable retry storm on Slack Spine's channel -> workspace policy check.
-
-Port of ``search_rate_retry_collapse_hotel_reservation``. The original puts an
-aggressive retry policy (750 ms per try, 3 attempts, small backoff) on Hotel
-Reservation's search -> rate RPC in front of a rate backend with bounded
-capacity. The system is healthy at base load; a short burst fills the
-backend's queue, calls start timing out, the retries (whose expired attempts
-still occupy the backend) keep demand above capacity, and the outage persists
-after the burst ends.
-
-Slack Spine has the same shape on its send path. Every ``POST /messages`` on
-svc-message resolves channel authz on svc-channel (``/authz/resolve``), which
-revalidates the org policy on svc-workspace (``GET /orgs/:id/settings``)
-through the servicekit mesh client (``roles.channel.mesh``). The port deploys
-
-* svc-channel with an aggressive-but-plausible mesh policy towards workspace
-  (3 attempts, retry on timeout, 750 ms per try, 50 ms backoff), and
-* svc-workspace as the bounded backend: settings read uncached from Postgres
-  (``SETTINGS_UNCACHED=1``, 100 ms per read) through a 6-connection pool, so
-  about 60 reads/s against roughly 30 sends/s of offered load.
-
-The trigger is the chart's own transient ``org_policy_revalidate`` runtime
-event on svc-workspace (the ``write_retry_storm`` profile's trigger): for a
-few seconds every read is 250 ms slower. The pool queue grows past the
-per-try timeout, svc-channel retries the timed-out calls, and because an
-abandoned attempt still waits for and holds a pooled connection, about three
-attempts per send keep demand (~90/s) above capacity after the event clears.
-Sends keep failing with ``503 authz_unavailable``.
-
-The mitigation oracle bounds the knobs an agent could game (retry counts and
-timeouts, breaker thresholds, the workspace connection budget, the policy check
-and the trigger's own cost), requires normal traffic to recover, then replays
-the trigger and requires the system to recover on its own and stay healthy.
-"""
+"""Slack Spine: retry storm."""
 
 from __future__ import annotations
 
-import contextlib
 import json
 import shlex
 import time
 
 import yaml
-from kubernetes.client.rest import ApiException
 
-from sregym.conductor.oracles.base import Oracle
-from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.apps.slack_spine.retry_storm import ChannelRetryStormOracle, RetryStormMitigationOracle
+from sregym.conductor.problems.apps.slack_spine.helpers import _FETCH_MANY, _SPIKE_SCRIPT, APP, DEFAULT_MESH, _prom_sum
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.lite_ia.k8s import ported
-from sregym.service.rollout import deployment_rollout_complete
+from sregym.conductor.problems.environment import configure_port
+from sregym.service.apps.slack_spine.configuration import patch_role_db_config
 from sregym.utils.decorators import mark_fault_injected
-
-# The chart's uniform, default-safe mesh policy (values.yaml roles.<role>.mesh).
-DEFAULT_MESH = {
-    "retries": 1,
-    "retryOnTimeout": False,
-    "perTryTimeoutMs": 3000,
-    "backoffMs": 0,
-    "breakerEnabled": False,
-    "breakerThreshold": 1000000,
-}
-
-# Fetch a list of [key, url, method, body] from inside the cluster in one exec;
-# prints {key: [status, body]}.
-_FETCH_MANY = """
-import json, sys, urllib.error, urllib.request
-out = {}
-for key, url, method, body in json.load(sys.stdin):
-    data = None if body is None else json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            out[key] = [resp.status, resp.read().decode("utf-8", "replace")]
-    except urllib.error.HTTPError as exc:
-        out[key] = [exc.code, exc.read().decode("utf-8", "replace")]
-    except Exception as exc:
-        out[key] = [0, repr(exc)]
-print(json.dumps(out))
-"""
-
-
-def _prom_sum(text: str, name: str, **labels: str) -> float:
-    """Sum every sample of ``name`` whose labels include ``labels``."""
-    total = 0.0
-    for line in text.splitlines():
-        if not line.startswith(name) or line.startswith("#"):
-            continue
-        head, _, value = line.rpartition(" ")
-        metric, _, label_text = head.partition("{")
-        if metric != name:
-            continue
-        if any(f'{key}="{val}"' not in label_text for key, val in labels.items()):
-            continue
-        with contextlib.suppress(ValueError):
-            total += float(value)
-    return total
 
 
 class RetryStormCollapseIA(Problem):
@@ -139,7 +59,7 @@ class RetryStormCollapseIA(Problem):
     min_base_hold_ms = 100  # cost of an uncached settings read
 
     def __init__(self, app_name: str = "slack_spine"):
-        ported(
+        configure_port(
             self,
             app_name,
             component=f"svc-{self.CALLER_ROLE} -> svc-{self.BACKEND_ROLE} mesh retry policy",
@@ -383,206 +303,267 @@ class RetryStormCollapseIA(Problem):
         print(f"Restored the default mesh policy on svc-{self.CALLER_ROLE}")
 
 
-class RetryStormMitigationOracle(Oracle):
-    """Safe knobs, recovered traffic, and recovery from a replayed trigger."""
+class ChannelRetryStormBase(RetryStormCollapseIA):
+    """Metastable retry storm on svc-message's channel authz call (message -> channel).
 
-    importance = 1.0
-    initial_recovery_timeout_s = 150.0
-    replay_recovery_timeout_s = 120.0
-    # After the replay the system must stay healthy this long (no slow re-latch).
-    stable_after_replay_s = 60.0
-    # Worst case: policy reads + 150 s recovery + 10 s replay + 120 s replay
-    # recovery + 60 s stability, each sample overshooting by up to ~30 s, plus
-    # the load generator health check that follows (~90 s). Well under 1200 s.
-    evaluation_timeout_seconds = 720.0
-    max_error_rate = 0.10
-    max_amplification = 1.5
-    max_timeout_share = 0.10
+    Ports of the BlueprintHotelReservation ``rpc`` retry storms (an RPC
+    config with a very low timeout and many retries; a trigger tips the
+    system; retries keep demand above the backend's capacity afterwards).
+    The Lite port already uses channel -> workspace; these use the edge one
+    hop up. Every send (``POST /messages``) resolves channel authz on
+    svc-channel (``GET /authz/resolve``) through svc-message's mesh client
+    (``roles.message.mesh``, deployed with ``caller_mesh``). svc-channel is the
+    bounded backend: strict ACL reads (``ACTIVE_EVENTS=read_consistency_strict``,
+    ``ACL_HOLD_MS=100``) hold a pooled Postgres connection per resolve, so
+    the pool bounds its throughput; an abandoned attempt still waits for and
+    holds a connection, so retries of timed-out attempts are pure extra load.
+    """
 
-    FAILURE_CLASSES = {
-        "retry_policy_outside_safe_envelope": FailureClass.AGENT_ERROR,
-        "backend_pool_outside_safe_envelope": FailureClass.AGENT_ERROR,
-        "policy_check_disabled": FailureClass.AGENT_ERROR,
-        "trigger_neutralized": FailureClass.AGENT_ERROR,
-        "traffic_did_not_recover": FailureClass.AGENT_ERROR,
-        "did_not_recover_after_trigger": FailureClass.AGENT_ERROR,
-        "metrics_unreadable": FailureClass.ENVIRONMENT_ERROR,
-        "baseline_not_captured": FailureClass.HARNESS_ERROR,
+    CALLER_ROLE = "message"
+    BACKEND_ROLE = "channel"
+    UPSTREAM_ROLE = "message"
+    caller_mesh = {
+        "retries": 3,
+        "retryOnTimeout": True,
+        "perTryTimeoutMs": 300,
+        "backoffMs": 0,
+        "breakerEnabled": False,
+        "breakerThreshold": 1000000,
     }
+    backend_env = {"ACTIVE_EVENTS": "read_consistency_strict", "ACL_HOLD_MS": "100"}
+    backend_db = {"pool_size": 8, "max_overflow": 4}
+    min_acl_hold_ms = 100
+    # Every arrival is a real send (POST /messages, then index + search readback).
+    load_profile = ("lite_slack_send", {"base": "write", "cycles": [[30.0, 30.0, 30.0, 30.0]], "soak_cycles": 2})
 
-    def __init__(self, problem):
-        super().__init__(problem)
-        self._baseline_deployments: set[str] = set()
+    # Both co-causes: the amplifying retry policy and the bounded channel pool.
+    COMPONENT = (
+        "svc-message -> svc-channel mesh retry policy (roles.message.mesh) and svc-channel DB pool "
+        "(roles.channel.db, below the peers' 20+10)"
+    )
+    CO_CAUSES = (
+        "The retry/timeout feedback loop and the bounded channel pool are co-causes; either may be called primary; "
+        "a diagnosis is incomplete only if it omits the retry/timeout amplification, or blames the strict reads or "
+        "the trigger (capacity cut / load spike) alone."
+    )
 
-    def capture_baseline(self) -> None:
-        deployments = self.problem.kubectl.apps_v1_api.list_namespaced_deployment(namespace=self.problem.namespace)
-        self._baseline_deployments = {d.metadata.name for d in deployments.items}
-
-    # ------------------------------------------------------------------ checks
-    def _shape_unhealthy(self) -> dict | None:
-        deployments = self.problem.kubectl.apps_v1_api.list_namespaced_deployment(namespace=self.problem.namespace)
-        current = {d.metadata.name: d for d in deployments.items}
-        missing = sorted(self._baseline_deployments - current.keys())
-        if missing:
-            print(f"[FAIL] Deployments are missing: {', '.join(missing)}")
-            return self.fail("required_deployment_missing", deployments=missing)
-        roles = (self.problem.UPSTREAM_ROLE, self.problem.CALLER_ROLE, self.problem.BACKEND_ROLE)
-        unrolled = sorted(f"svc-{role}" for role in roles if not deployment_rollout_complete(current[f"svc-{role}"]))
-        if unrolled:
-            print(f"[FAIL] Deployments not rolled out and Ready: {', '.join(unrolled)}")
-            return self.fail("required_deployment_not_rolled_out", deployments=unrolled)
-        return None
-
-    def _container_env(self, role: str) -> tuple[dict[str, str], int]:
-        deployment = self.problem.kubectl.apps_v1_api.read_namespaced_deployment(f"svc-{role}", self.problem.namespace)
-        container = next(c for c in deployment.spec.template.spec.containers if c.name == self.problem.CONTAINER)
-        env = {item.name: item.value for item in container.env or [] if item.value is not None}
-        return env, int(deployment.spec.replicas or 0)
-
-    def _policy_outside_envelope(self) -> dict | None:
-        p = self.problem
-        try:
-            for role in (p.UPSTREAM_ROLE, p.CALLER_ROLE):
-                for pod, config in p.admin_all(role, "/admin/config").items():
-                    mesh = config.get("mesh") or {}
-                    retries = int(mesh.get("retries", 1))
-                    timeout_ms = float(mesh.get("perTryTimeoutMs", 0))
-                    backoff_ms = float(mesh.get("backoffMs", 0))
-                    breaker = bool(mesh.get("breakerEnabled", False))
-                    threshold = int(mesh.get("breakerThreshold", DEFAULT_MESH["breakerThreshold"]))
-                    print(f"[Policy] {pod} mesh={json.dumps(mesh, sort_keys=True)}")
-                    if (
-                        retries > p.max_retries
-                        or timeout_ms > p.max_per_try_timeout_ms
-                        or backoff_ms > p.max_backoff_ms
-                        or (breaker and threshold < p.min_breaker_threshold)
-                    ):
-                        print(
-                            f"[FAIL] {pod}: mesh policy outside the safe envelope (retries <= {p.max_retries}, "
-                            f"perTryTimeoutMs <= {p.max_per_try_timeout_ms}, backoffMs <= {p.max_backoff_ms}, "
-                            f"breakerThreshold >= {p.min_breaker_threshold} when enabled)"
-                        )
-                        return self.fail("retry_policy_outside_safe_envelope", pod=pod, mesh=mesh)
-
-            backend = p.admin_all(p.BACKEND_ROLE, "/admin/config")
-            connections = 0
-            for pod, config in backend.items():
-                db = config.get("db") or {}
-                pool_size, overflow = int(db.get("pool_size", 0)), int(db.get("max_overflow", 0))
-                pool_timeout = float(db.get("pool_timeout_s", 0))
-                connections += pool_size + overflow
-                print(f"[Policy] {pod} db={json.dumps(db, sort_keys=True)}")
-                if (
-                    not 0 < pool_size <= p.max_pool_size
-                    or not 0 <= overflow <= p.max_overflow
-                    or not p.min_pool_timeout_s <= pool_timeout <= p.max_pool_timeout_s
-                ):
-                    print(
-                        f"[FAIL] {pod}: pool outside the safe envelope (pool_size <= {p.max_pool_size}, "
-                        f"max_overflow <= {p.max_overflow}, {p.min_pool_timeout_s:g} <= pool_timeout_s <= "
-                        f"{p.max_pool_timeout_s:g})"
-                    )
-                    return self.fail("backend_pool_outside_safe_envelope", pod=pod, db=db)
-            if connections > p.max_backend_connections:
-                print(f"[FAIL] svc-{p.BACKEND_ROLE} holds {connections} connections (max {p.max_backend_connections})")
-                return self.fail("backend_pool_outside_safe_envelope", connections=connections)
-
-            channel_env, _ = self._container_env(p.CALLER_ROLE)
-            message_env, _ = self._container_env(p.UPSTREAM_ROLE)
-            if channel_env.get("WORKSPACE_POLICY_CHECK") != "1" or message_env.get("AUTHZ_CHECK") != "1":
-                print("[FAIL] The send path no longer performs the authz / org policy checks")
-                return self.fail("policy_check_disabled")
-
-            workspace_env, replicas = self._container_env(p.BACKEND_ROLE)
-            strict_hold = float(workspace_env.get("SETTINGS_HOLD_MS", p.min_settings_hold_ms))
-            uncached = workspace_env.get("SETTINGS_UNCACHED") == "1"
-            base_hold = float(workspace_env.get("SETTINGS_BASE_HOLD_MS", 0))
-            if strict_hold < p.min_settings_hold_ms or (uncached and base_hold < p.min_base_hold_ms):
-                print("[FAIL] The settings read cost was lowered instead of fixing the feedback loop")
-                return self.fail("trigger_neutralized", strict_hold_ms=strict_hold, base_hold_ms=base_hold)
-        except ApiException as exc:
-            return self.fail_from_exception(exc)
-        except Exception as exc:
-            print(f"[FAIL] The effective policy could not be read: {exc}")
-            return self.fail("metrics_unreadable", error=f"{type(exc).__name__}: {exc}")
-        return None
-
-    def _unhealthy_sample(self) -> dict | None:
-        unhealthy = self._shape_unhealthy()
-        if unhealthy is not None:
-            return unhealthy
-        try:
-            sample = self.problem.sample(self.problem.sample_seconds)
-        except Exception as exc:
-            print(f"[FAIL] Metrics could not be read: {exc}")
-            return self.fail("metrics_unreadable", error=f"{type(exc).__name__}: {exc}")
-        print(f"[Health] {self.problem.describe(sample)}")
-        healthy = (
-            sample["offered"] > 0
-            and sample["authz_calls"] > 0
-            and sample["error_rate"] <= self.max_error_rate
-            and sample["amplification"] <= self.max_amplification
-            and sample["timeout_share"] <= self.max_timeout_share
+    def __init__(self, description: str, component: str | None = None):
+        configure_port(
+            self,
+            APP,
+            component=component or self.COMPONENT,
+            description=f"{description} {self.CO_CAUSES}",
+            oracle_factory=ChannelRetryStormOracle,
         )
-        if healthy:
-            return None
-        return self.fail("traffic_did_not_recover", **sample)
+        self.app.set_load_profile(*self.load_profile)
+        self.app.configure(
+            {
+                "app": {
+                    "roles": {
+                        self.CALLER_ROLE: {"mesh": dict(self.caller_mesh)},
+                        self.BACKEND_ROLE: {"db": dict(self.backend_db), "env": dict(self.backend_env)},
+                    }
+                }
+            }
+        )
+        self._injection_attempted = False
 
-    def _wait_for_healthy(self, timeout_s: float) -> dict | None:
-        deadline = time.monotonic() + timeout_s
-        last = None
-        while time.monotonic() < deadline:
-            last = self._unhealthy_sample()
-            if last is None:
-                return None
-        return last if last is not None else self.fail("traffic_did_not_recover")
-
-    def _stays_healthy(self, duration_s: float) -> dict | None:
-        deadline = time.monotonic() + duration_s
-        while time.monotonic() < deadline:
-            unhealthy = self._unhealthy_sample()
-            if unhealthy is not None:
-                return unhealthy
-        return None
+    # ------------------------------------------------------------------ metrics
+    def metrics(self) -> dict[str, float]:
+        requests = self.role_requests(self.CALLER_ROLE, "/metrics") + self.role_requests(self.BACKEND_ROLE, "/metrics")
+        replies = self.fetch_many(requests)
+        snap = {
+            k: 0.0
+            for k in (
+                "authz_calls",
+                "backend_attempts",
+                "backend_timeouts",
+                "backend_ok",
+                "pool_checked_out",
+                "pool_capacity",
+            )
+        }
+        for key, (status, text) in replies.items():
+            if int(status) != 200:
+                raise RuntimeError(f"GET {key} returned {status}: {text[:200]}")
+            if key.split("/", 1)[0] == self.CALLER_ROLE:
+                target = self.BACKEND_ROLE
+                snap["authz_calls"] += _prom_sum(
+                    text, "http_request_duration_seconds_count", method="POST", route="/messages"
+                )
+                snap["backend_attempts"] += _prom_sum(text, "http_client_attempts_total", target=target)
+                snap["backend_timeouts"] += _prom_sum(
+                    text, "http_client_attempts_total", target=target, result="timeout"
+                )
+                snap["backend_ok"] += _prom_sum(text, "http_client_attempts_total", target=target, result="ok")
+            else:
+                snap["pool_checked_out"] += _prom_sum(text, "db_pool_checked_out")
+                snap["pool_capacity"] += _prom_sum(text, "db_pool_capacity")
+        return snap
 
     @staticmethod
-    def _after_replay(verdict: dict) -> dict:
-        if verdict.get("reason") == "traffic_did_not_recover":
-            verdict = {**verdict, "reason": "did_not_recover_after_trigger"}
-        return verdict
+    def describe(sample: dict) -> str:
+        return (
+            f"loadgen offered={sample['offered']} error_rate={sample['error_rate']:.1%} "
+            f"sends={sample['authz_calls']:.0f} channel_attempts={sample['backend_attempts']:.0f} "
+            f"amplification={sample['amplification']:.2f} timeouts={sample['timeout_share']:.0%} "
+            f"pool_in_use={sample['pool_checked_out']:.0f}/{sample['pool_capacity']:.0f}"
+        )
 
-    def evaluate(self, *args, **kwargs) -> dict:
-        print("== Retry Storm Mitigation Evaluation ==")
-        if not self._baseline_deployments:
-            print("[FAIL] No healthy baseline was captured")
-            return self.fail("baseline_not_captured")
+    # ------------------------------------------------------------------ knobs
+    def set_backend_pool(self, pool_size: int, max_overflow: int) -> None:
+        """Resize svc-channel's pool live and persist it in app-config."""
+        cm = self.kubectl.core_v1_api.read_namespaced_config_map(self.app.APP_CONFIG_MAP, self.namespace)
+        text = patch_role_db_config(
+            cm.data["app.yaml"], self.BACKEND_ROLE, {"pool_size": pool_size, "max_overflow": max_overflow}
+        )
+        self.kubectl.core_v1_api.patch_namespaced_config_map(
+            self.app.APP_CONFIG_MAP, self.namespace, {"data": {"app.yaml": text}}
+        )
+        self.admin_all(
+            self.BACKEND_ROLE, "/admin/config", "PUT", {"db": {"pool_size": pool_size, "max_overflow": max_overflow}}
+        )
+        self.admin_all(self.BACKEND_ROLE, "/admin/reload", "POST")
+
+    def set_trigger(self, active: bool) -> None:  # no runtime event of our own to clear
+        return None
+
+    def tip(self) -> None:
+        raise NotImplementedError
+
+    def _arm(self) -> None:
+        return None
+
+    @mark_fault_injected
+    def inject_fault(self):
+        print("== Fault Injection ==")
         try:
-            outside = self._policy_outside_envelope()
-            if outside is not None:
-                return outside
+            self.set_caller_mesh(self.caller_mesh)
+            self._verify_healthy_baseline()
+            self._arm()
+            self.tip()
+            latched, failures = self._storm_sustained()
+            if not latched:
+                print(f"[Trigger] Storm did not latch ({'; '.join(failures)}); repeating the trigger")
+                self.tip()
+                latched, failures = self._storm_sustained()
+            if not latched:
+                raise RuntimeError("metastable state was not established: " + "; ".join(failures))
+        except Exception:
+            try:
+                self.set_caller_mesh(DEFAULT_MESH)
+            except Exception as cleanup_error:
+                print(f"[Cleanup] Failed to restore the safe mesh policy: {cleanup_error}")
+            raise
+        print(f"Fault: retry storm latched | svc-message -> svc-channel | Namespace: {self.namespace}\n")
 
-            unhealthy = self._wait_for_healthy(self.initial_recovery_timeout_s)
-            if unhealthy is not None:
-                print("[FAIL] Normal send traffic did not recover")
-                return unhealthy
-
-            print(f"[Replay] Replaying the {self.problem.trigger_seconds:.0f}s trigger")
-            self.problem._trigger(self.problem.trigger_seconds)
-            unhealthy = self._wait_for_healthy(self.replay_recovery_timeout_s)
-            if unhealthy is None:
-                unhealthy = self._stays_healthy(self.stable_after_replay_s)
-            if unhealthy is not None:
-                print("[FAIL] The system did not recover (and stay recovered) after the replayed trigger")
-                return self._after_replay(unhealthy)
-
-            outside = self._policy_outside_envelope()
-            if outside is not None:
-                return outside
-        except Exception as exc:
-            print(f"[FAIL] Error while verifying mitigation: {exc}")
-            return self.fail_from_exception(exc)
-        print("[PASS] Sends are healthy and recover after replaying the temporary trigger")
-        return {"success": True}
+    @mark_fault_injected
+    def recover_fault(self):
+        print("== Fault Recovery ==")
+        self.set_caller_mesh(DEFAULT_MESH)
+        self._injection_attempted = False
+        print("Restored the default mesh policy on svc-message")
 
 
-__all__ = ["RetryStormCollapseIA", "RetryStormMitigationOracle"]
+class CapacityDecreaseRPCRetryStormSlack(ChannelRetryStormBase):
+    """Trigger: a permanent cut of svc-channel's pool plus a transient latency pulse.
+
+    The original injects a transient latency/CPU-stress trigger and applies a
+    permanent capacity restraint. Here svc-channel's pool is cut from 8+4 to
+    ``CUT_POOL`` (persisted in app-config) and a 10 s ``org_policy_revalidate``
+    event on svc-workspace adds ~250 ms to every resolve (the org-policy check
+    precedes the ACL read), pushing it past the 300 ms per-try timeout.
+    """
+
+    CUT_POOL = (6, 1)
+    TRIGGER_EVENT = "org_policy_revalidate"
+    TRIGGER_ROLE = "workspace"
+
+    def __init__(self):
+        mesh = self.caller_mesh
+        super().__init__(
+            description=(
+                "A metastable retry storm on the send path after a capacity decrease. Every message send "
+                "(svc-message POST /messages) resolves channel authz on svc-channel (GET /authz/resolve) through "
+                "svc-message's mesh client, whose policy (`roles.message.mesh` in ConfigMap app-config, also returned "
+                f"by svc-message GET /admin/config) is aggressive: {mesh['retries']} attempts, retryOnTimeout=true, "
+                f"{mesh['perTryTimeoutMs']} ms per-try timeout, no backoff. svc-channel reads ACLs in strict mode "
+                f"(ACTIVE_EVENTS=read_consistency_strict, ACL_HOLD_MS={self.backend_env['ACL_HOLD_MS']}): each "
+                "resolve holds a pooled Postgres connection, so its pool bounds throughput. Its capacity was "
+                f"permanently decreased: the pool was cut from {self.backend_db['pool_size']}+"
+                f"{self.backend_db['max_overflow']} to {self.CUT_POOL[0]}+{self.CUT_POOL[1]} connections "
+                "(`roles.channel.db` in app-config, live on svc-channel), still enough for normal traffic. A transient "
+                "slowdown (a ~10 s `org_policy_revalidate` event on svc-workspace, already cleared) pushed resolves "
+                "past the 300 ms per-try timeout; svc-message retried the timed-out calls while the abandoned attempts "
+                "still waited for and held channel connections, so ~3 attempts per send keep demand above the reduced "
+                "pool's capacity after the event ended: the pool stays saturated, every attempt times out and sends "
+                "fail with 503 `authz_unavailable`. The sustaining cause is the timeout/retry/queue feedback loop "
+                "(made self-sustaining by the capacity cut), not the expired event. Valid mitigations bring the retry "
+                "policy (fewer attempts, a per-try timeout above the queueing delay, no retry on timeout, or a sane "
+                "breaker) and/or svc-channel's pool (at most 60 backend connections across replicas) into a safe "
+                "envelope so the "
+                "backlog drains and a repeated slowdown is survived; disabling strict ACL reads or the authz check is "
+                "not a fix."
+            ),
+        )
+
+    def _arm(self) -> None:
+        print(f"[Capacity] svc-channel pool -> {self.CUT_POOL[0]}+{self.CUT_POOL[1]} (permanent)")
+        self.set_backend_pool(*self.CUT_POOL)
+
+    def _pulse(self, active: bool) -> None:
+        self.admin_all(self.TRIGGER_ROLE, "/admin/event", "PUT", {"name": self.TRIGGER_EVENT, "active": active})
+
+    def tip(self) -> None:
+        print(f"[Trigger] {self.TRIGGER_EVENT} on svc-{self.TRIGGER_ROLE} for {self.trigger_seconds:.0f}s")
+        self._pulse(True)
+        try:
+            time.sleep(self.trigger_seconds)
+        finally:
+            self._pulse(False)
+        print("[Trigger] Event cleared")
+
+    @mark_fault_injected
+    def recover_fault(self):
+        print("== Fault Recovery ==")
+        self._pulse(False)
+        self.set_caller_mesh(DEFAULT_MESH)
+        self.set_backend_pool(self.backend_db["pool_size"], self.backend_db["max_overflow"])
+        print("Restored the default mesh policy on svc-message and svc-channel's pool")
+
+
+class LoadSpikeRPCRetryStormSlack(ChannelRetryStormBase):
+    """Trigger: a one-shot load spike of extra senders (the original: 30 s at a multiple of the base rate)."""
+
+    backend_db = {"pool_size": 6, "max_overflow": 2}
+    SPIKE_RPS = 60
+    SPIKE_SECONDS = 30
+
+    def __init__(self):
+        mesh = self.caller_mesh
+        super().__init__(
+            description=(
+                "A metastable retry storm on the send path triggered by a load spike. Every message send "
+                "(svc-message POST /messages) resolves channel authz on svc-channel (GET /authz/resolve) through "
+                "svc-message's mesh client, whose policy (`roles.message.mesh` in ConfigMap app-config, also returned "
+                f"by svc-message GET /admin/config) is aggressive: {mesh['retries']} attempts, retryOnTimeout=true, "
+                f"{mesh['perTryTimeoutMs']} ms per-try timeout, no backoff. svc-channel reads ACLs in strict mode "
+                f"(ACTIVE_EVENTS=read_consistency_strict, ACL_HOLD_MS={self.backend_env['ACL_HOLD_MS']}) through a "
+                f"{self.backend_db['pool_size']}+{self.backend_db['max_overflow']}-connection pool (`roles.channel.db`), "
+                "enough for base traffic. A transient burst of sends (an extra ~"
+                f"{self.SPIKE_RPS}/s for {self.SPIKE_SECONDS} s, already over) queued resolves past the 300 ms per-try "
+                "timeout; svc-message retried the timed-out calls while the abandoned attempts still waited for and "
+                "held channel connections, so ~3 attempts per send keep demand above the pool's capacity at base "
+                "load: the pool stays saturated, every attempt times out and sends fail with 503 "
+                "`authz_unavailable`. The sustaining cause is the timeout/retry/queue feedback loop, not the spike. "
+                "Valid mitigations bring the retry policy (fewer attempts, a per-try timeout above the queueing delay, "
+                "no retry on timeout, or a sane breaker) and/or svc-channel's pool (at most 60 backend connections "
+                "across replicas) into a safe envelope so the backlog drains and a repeated spike is survived; disabling strict ACL "
+                "reads or the authz check is not a fix."
+            ),
+        )
+
+    def tip(self) -> None:
+        print(f"[Trigger] load spike: +{self.SPIKE_RPS} sends/s for {self.SPIKE_SECONDS}s")
+        script = _SPIKE_SCRIPT.format(rps=self.SPIKE_RPS, seconds=self.SPIKE_SECONDS)
+        print(self.app.toolbox_exec("python3 -c " + shlex.quote(script), timeout=self.SPIKE_SECONDS + 60).strip())

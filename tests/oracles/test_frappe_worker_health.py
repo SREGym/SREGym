@@ -4,8 +4,8 @@ from unittest.mock import Mock
 import pytest
 from kubernetes import client
 
+from sregym.conductor.oracles.apps.frappe import workers as frappe
 from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.conductor.problems.ia_ports import frappe
 
 
 @pytest.fixture

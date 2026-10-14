@@ -21,7 +21,7 @@ SREGYM_LITE_PROBLEMS = (
 )
 
 # SREGym-Lite's faults re-targeted at the larger Incident Arena apps (Frappe,
-# Saleor, Slack Spine), in Lite order; see sregym/conductor/problems/lite_ia.
+# Saleor, Slack Spine), in Lite order; see problems/environment_ports.py.
 SREGYM_LITE_IA_PROBLEMS = (
     "cronjob_sidecar_blocks_completion_frappe",
     "edge_request_filter_cpu_saturation_frappe",

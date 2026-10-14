@@ -1,31 +1,4 @@
-"""SREGym-Lite's Kafka poison-pill head-of-line block, re-targeted at Slack Spine.
-
-The original builds a private order pipeline on Astronomy Shop's Kafka whose
-consumer stalls forever on one malformed record. Slack Spine already has that
-shape in its own async tier: ``svc-message`` enqueues every sent message
-(through ``kafkagate``) onto the ``jobs.index`` Redpanda topic, keyed by
-channel, and the ``worker-index`` lane (consumer group ``index``) indexes each
-record into the search engine, committing offsets only after handling. A
-record the worker rejects as ``document_syntax`` (a ``schema_version: v2`` +
-``body_encoding: legacy_blocks`` message from a legacy client) is retried at
-the head of its partition, with the partition paused, until the lane's error
-policy sends it to ``jobs.index.dlq``.
-
-The port sets an error policy that never quarantines ``document_syntax``
-failures (``ERROR_POLICY_JSON`` on ``worker-index``) and sends one such
-message through the real send path. Its partition stops: messages in every
-channel hashed to that partition are stored and delivered but never become
-searchable, while the pods stay Running and Ready and a restart re-reads the
-same uncommitted record.
-
-The user-facing symptom is search freshness, not HTTP errors: sends still
-return 201 and the load generator's ``session_search`` only checks that
-``/search`` answers with a well-formed hit list, so its error rate is
-unaffected. The app-health half of the oracle therefore guards the fix (the
-agent must not break the app while repairing the lane); the fault itself is
-measured by :class:`IndexLaneProgressOracle`, which drives probe messages
-through the same send -> Redpanda -> worker -> search path.
-"""
+"""Slack Spine: indexing."""
 
 from __future__ import annotations
 
@@ -34,65 +7,101 @@ import shlex
 import time
 import uuid
 
-from sregym.conductor.oracles.data_plane_progress import DataPlaneProgressOracle, PipelineValidationError
+from sregym.conductor.oracles.apps.slack_spine.indexing import IndexLaneLagOracle, IndexLaneProgressOracle
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.lite_ia.k8s import ported
+from sregym.conductor.problems.environment import configure_port
+from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.service.apps.slack_spine.index_lane import IndexLaneOperations
 from sregym.utils.decorators import mark_fault_injected
 
 
-class IndexLaneProgressOracle(DataPlaneProgressOracle):
-    """``DataPlaneProgressOracle`` over Slack Spine's ``jobs.index`` lane.
+class KafkaQueueProblemsSlack(IndexLaneOperations, KafkaQueueProblems):
+    """A queue overload meets a slowed consumer on Slack Spine's search-index lane.
 
-    Keeps the original evaluation (progress past the blocked offset, forward
-    progress over a window, progress again after the consumer pod is deleted)
-    and replaces only the snapshot. The source is the poisoned partition of
-    ``jobs.index``; a record counts as processed when the search engine returns
-    it. Each snapshot first sends a fresh probe message into the poisoned
-    channel, playing the original's ``order-stream`` producer, so progress can
-    be measured. Integrity: the poison record must still be in the log and never
-    become searchable, and every probe below the group's committed offset must
-    be searchable or quarantined in ``jobs.index.dlq`` (nothing valid skipped).
+    The original flips the OpenTelemetry demo's ``kafkaQueueProblems`` flag,
+    which floods the Kafka topic and adds a consumer-side processing delay so
+    consumer lag spikes. Here the ``worker-index`` lane (consumer group
+    ``index`` on ``jobs.index``) gets its authored per-job cost raised
+    (``HANDLER_MS``) and its concurrency dropped to one through its env, and a
+    burst of messages is pushed through the real send path. The backlog keeps
+    growing under the load generator's sends: messages are stored and delivered
+    but become searchable only after many minutes. The load generator's search
+    session only checks that ``/search`` answers, so the symptom is search
+    freshness (and the lane's lag metric), not HTTP errors.
     """
 
-    def _pipeline_snapshot(self) -> tuple[dict[int, str], int | None]:
-        problem = self.problem
-        problem.send_probes(1)
-        time.sleep(3)
-        committed = problem.committed_offset()
-        records = problem.partition_records(problem.history_start)
+    LANE = "index"
+    TOPIC = "jobs.index"
+    CONSUMER_GROUP = "index"
+    CONSUMER_DEPLOYMENT = "worker-index"
+    BROKER_SELECTOR = "app.kubernetes.io/component=redpanda"
+    PROBE_PREFIX = "lagprobe"
+    SLOW_ENV = {"HANDLER_MS": "4000", "LANE_CONCURRENCY": "1"}
+    BURST = 300
 
-        poison = records.get(problem.poison_offset)
-        if poison is None or poison.get("id") != problem.poison_id:
-            raise PipelineValidationError("the original invalid source record is no longer present")
-        probes = {offset: value["id"] for offset, value in records.items() if problem.is_probe(value)}
-        history = [offset for offset in probes if offset < problem.poison_offset]
-        if len(history) < problem.HISTORY_COUNT:
-            raise PipelineValidationError("original valid message history is no longer in the source partition")
-
-        handled = [offset for offset in probes if committed is not None and offset < committed]
-        found = problem.search(
-            [*probes.values(), problem.poison_id], must=[probes[offset] for offset in handled], wait_s=12
+    def __init__(self, app_name: str = "slack_spine", channel_id: str = "chan-0"):
+        self.channel_id = channel_id
+        self.org_id = f"org-{channel_id}"
+        self.faulty_service = self.CONSUMER_DEPLOYMENT
+        self.feature_flag = None
+        self.run_tag = uuid.uuid4().hex[:8]
+        self.backlog_ids: list[str] = []
+        configure_port(
+            self,
+            app_name,
+            component=f"deployment/{self.CONSUMER_DEPLOYMENT} (Redpanda topic {self.TOPIC}, consumer group {self.CONSUMER_GROUP})",
+            description=(
+                f"The `{self.TOPIC}` Redpanda queue is overloaded relative to its consumer. The "
+                f"`{self.CONSUMER_DEPLOYMENT}` lane (consumer group `{self.CONSUMER_GROUP}`) had its per-job "
+                f"processing cost raised to `HANDLER_MS={self.SLOW_ENV['HANDLER_MS']}` (default 8 ms) and its "
+                f"parallelism cut to `LANE_CONCURRENCY={self.SLOW_ENV['LANE_CONCURRENCY']}` (default 4) through "
+                "env vars on the deployment, so it drains well under one job per second, while a burst of "
+                "message sends (plus the normal message traffic, enqueued by svc-message through kafkagate) "
+                "filled the topic. Consumer lag (`kafka_consumergroup_lag`, `rpk group describe index`) keeps "
+                "growing: new messages are stored and delivered but take many minutes to become searchable. Pods "
+                "stay Running and Ready and no request fails. Mitigation: restore the lane's processing cost and "
+                "concurrency (deployment env or the worker's `/admin/config`) so the backlog drains, without "
+                "skipping (resetting offsets past) the queued messages."
+            ),
+            oracle_factory=IndexLaneLagOracle,
         )
-        if problem.poison_id in found:
-            raise PipelineValidationError(f"invalid source offset {problem.poison_offset} was indexed as valid")
-        missing = [offset for offset in handled if probes[offset] not in found]
-        if missing:
-            quarantined = problem.dlq_offsets()
-            missing = [offset for offset in missing if offset not in quarantined]
-        if missing:
-            raise PipelineValidationError(
-                f"valid source records were skipped, including offsets {sorted(missing)[:10]}"
+
+    def total_lag(self) -> int:
+        out = self.rpk(f"group describe {self.CONSUMER_GROUP}")
+        for line in out.splitlines():
+            if line.startswith("TOTAL-LAG"):
+                return int(line.split()[1])
+        raise RuntimeError(f"no TOTAL-LAG for group {self.CONSUMER_GROUP}: {out[-300:]!r}")
+
+    @mark_fault_injected
+    def inject_fault(self):
+        print("== Fault Injection: slow index lane + queue burst ==")
+        env = " ".join(f"{k}={v}" for k, v in self.SLOW_ENV.items())
+        self.kubectl.exec_command_checked(
+            f"kubectl set env deployment/{self.CONSUMER_DEPLOYMENT} -n {self.namespace} {env}"
+        )
+        self._rollout()
+        ids = [f"{self.PROBE_PREFIX}{self.run_tag}{uuid.uuid4().hex[:12]}" for _ in range(self.BURST)]
+        self.backlog_ids = []
+        for start in range(0, len(ids), 100):
+            chunk = ids[start : start + 100]
+            accepted = self._toolbox_probe(
+                {"post": [self._message(i, "bulk import") for i in chunk], "org_id": self.org_id}
             )
+            self.backlog_ids.extend(accepted["posted"])
+        if set(self.backlog_ids) != set(ids):
+            raise RuntimeError("the message API did not accept the complete burst")
+        time.sleep(20)
+        print(f"Index lane slowed ({env}); {self.BURST} messages queued; lag now {self.total_lag()}")
 
-        processed = {offset: doc_id for offset, doc_id in probes.items() if doc_id in found}
-        if any(offset not in processed for offset in history):
-            raise PipelineValidationError("original valid message history was not fully processed")
-        print(
-            f"   partition {problem.TOPIC}[{problem.poison_partition}]: committed={committed} "
-            f"probes={len(probes)} searchable={len(processed)} high={max(processed, default=None)}"
+    @mark_fault_injected
+    def recover_fault(self):
+        print("== Fault Recovery: restore the index lane's cost and concurrency ==")
+        env = " ".join(f"{k}-" for k in self.SLOW_ENV)
+        self.kubectl.exec_command_checked(
+            f"kubectl set env deployment/{self.CONSUMER_DEPLOYMENT} -n {self.namespace} {env}"
         )
-        return processed, committed
+        self._rollout()
 
 
 class KafkaPoisonPillHOLBlockIA(IndexLaneOperations, Problem):
@@ -120,7 +129,7 @@ class KafkaPoisonPillHOLBlockIA(IndexLaneOperations, Problem):
         self.poison_partition: int | None = None
         self.poison_offset: int | None = None
         self.history_start = 0
-        ported(
+        configure_port(
             self,
             app_name,
             component=f"deployment/{self.CONSUMER_DEPLOYMENT} (Redpanda topic {self.TOPIC})",
@@ -251,6 +260,3 @@ class KafkaPoisonPillHOLBlockIA(IndexLaneOperations, Problem):
             f"kubectl set env deployment/{self.CONSUMER_DEPLOYMENT} -n {self.namespace} {self.POLICY_ENV}-"
         )
         self._rollout()
-
-
-__all__ = ["IndexLaneProgressOracle", "KafkaPoisonPillHOLBlockIA"]
