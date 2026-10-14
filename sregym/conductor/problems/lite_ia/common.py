@@ -172,9 +172,11 @@ class LoadgenHealthOracle(Oracle):
         return {"success": True, **detail}
 
 
-def with_app_health(problem, oracle: Oracle) -> CompoundedOracle:
+def with_app_health(problem, oracle: Oracle, *, health: Oracle | None = None) -> CompoundedOracle:
     """Require ``oracle`` (the fault's own check) and recovered user traffic."""
-    compound = CompoundedOracle(problem, fault=oracle, app_health=LoadgenHealthOracle(problem))
+    compound = CompoundedOracle(
+        problem, fault=oracle, app_health=health if health is not None else LoadgenHealthOracle(problem)
+    )
     # Several fault oracles wait minutes for rollouts or replay a trigger, and
     # the health window adds SOAK_S + WINDOW_S on top.
     compound.evaluation_timeout_seconds = max(1200.0, oracle.evaluation_timeout_seconds or 0.0)

@@ -44,7 +44,7 @@ from sregym.conductor.problems.psa_restricted_blocks_recreation import (
 )
 from sregym.observer.ingress_nginx import IngressNginx
 from sregym.service.apps.frappe.application import Frappe
-from sregym.service.apps.frappe.operations import schema_privileges, site_account, site_database
+from sregym.service.apps.frappe.operations import background_job_probe, schema_privileges, site_account, site_database
 from sregym.service.runtime_images import REDIS_CLIENT_IMAGE
 from sregym.utils.decorators import mark_fault_injected
 
@@ -676,6 +676,24 @@ class DevShmFrappeOracle(DevShmMitigationOracle):
         return not any(marker in " ".join([*(c.command or []), *(c.args or [])]) for c in pod_spec.containers or [])
 
 
+class FrappeWorkerHealthOracle(MitigationOracle):
+    """Check required workloads, the web API, and new background work."""
+
+    def evaluate(self) -> dict:
+        health = super().evaluate()
+        if not health["success"]:
+            return health
+        try:
+            code, body = self.problem.app.http(f"http://{WEB_SERVICE}:8000/api/method/ping")
+            if code != 200 or json.loads(body).get("message") != "pong":
+                return self.fail("application_probe_failed", status=code)
+            job = background_job_probe(self.problem.app)
+        except Exception as exc:
+            return self.fail_from_exception(exc)
+        print(f"Background worker check: {job}")
+        return {"success": True, "background_job": job} if job["ok"] else self.fail("background_job_failed", **job)
+
+
 class DevShmExhaustionFrappe(Problem):
     """The RQ long worker stages ~80 MiB in /dev/shm before starting; the runtime default is 64 MiB."""
 
@@ -701,10 +719,8 @@ class DevShmExhaustionFrappe(Problem):
                 "template change that added the staging step)."
             ),
             oracle_factory=lambda problem: DevShmFrappeOracle(problem),
+            health_oracle_factory=FrappeWorkerHealthOracle,
         )
-        # Graded on the worker alone, as the original is: the RQ backlog the outage
-        # leaves does not drain by itself, so app health could fail a correct fix.
-        self.mitigation_oracle = self.mitigation_oracle.oracles["fault"]
 
     @property
     def worker_pod_selector(self) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 
@@ -12,6 +13,47 @@ MIB = 1024 * 1024
 MAXMEMORY_BAND = (16 * MIB, 128 * MIB)
 HEALTHY_QUEUE_FLAGS = ["--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
 DEQUEUE_COMMANDS = ("blpop", "blmove", "brpop")
+
+
+def background_job_probe(app: Frappe, timeout_s: float = 150) -> dict:
+    """Require one fresh asynchronous job to read the site database through RQ."""
+    script = f"""
+import json, time
+deadline = time.monotonic() + {timeout_s!r}
+job = None
+error = None
+try:
+    while job is None and time.monotonic() < deadline:
+        try:
+            job = frappe.enqueue("frappe.client.get_count", queue="long", timeout=30,
+                                 is_async=True, now=False, at_front=True, doctype="DocType")
+        except Exception as exc:
+            error = repr(exc)
+            time.sleep(2)
+    outcome = {{"ok": False, "error": error}}
+    if job is not None:
+        while time.monotonic() < deadline:
+            status = job.get_status(refresh=True)
+            status = getattr(status, "value", status)
+            if status in ("finished", "failed", "canceled", "stopped"):
+                value = job.result if status == "finished" else None
+                outcome = {{"ok": status == "finished" and isinstance(value, int) and value > 0,
+                            "status": status, "result": value, "job_id": job.id}}
+                break
+            time.sleep(2)
+    print("BACKGROUND_JOB=" + json.dumps(outcome))
+finally:
+    if job is not None:
+        status = job.get_status(refresh=True)
+        if getattr(status, "value", status) not in ("finished", "failed", "canceled", "stopped"):
+            job.cancel()
+        job.delete()
+"""
+    output = app.site_python(script, timeout=timeout_s + 30)
+    for line in output.splitlines():
+        if line.startswith("BACKGROUND_JOB="):
+            return json.loads(line.removeprefix("BACKGROUND_JOB="))
+    raise RuntimeError("The background job probe returned no result")
 
 
 PROTECTED_GLOBALS = (

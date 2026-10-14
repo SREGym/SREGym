@@ -61,6 +61,7 @@ def ported(
     description: str,
     oracle_factory,
     root_cause_namespace: str | None = None,
+    health_oracle_factory=None,
 ) -> None:
     """Shared constructor body: app, timing, ground truth and oracles."""
     Problem.__init__(problem, app=make_app(app_name))
@@ -74,7 +75,8 @@ def ported(
         description=description,
     )
     problem.diagnosis_oracle = LLMAsAJudgeOracle(problem=problem, expected=problem.root_cause)
-    problem.mitigation_oracle = with_app_health(problem, oracle_factory(problem))
+    health = health_oracle_factory(problem) if health_oracle_factory is not None else None
+    problem.mitigation_oracle = with_app_health(problem, oracle_factory(problem), health=health)
     problem.app.create_workload()
 
 
