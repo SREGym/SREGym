@@ -53,6 +53,12 @@ EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
 CLEANUP_DRAIN_TIMEOUT_SECONDS = float(os.environ.get("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "300"))
 
 
+def problem_cleanup_timeout(conductor) -> float:
+    """Allow stateful reference recovery its own budget after agent grading."""
+    problem = getattr(conductor, "problem", None)
+    return getattr(problem, "cleanup_timeout_seconds", CLEANUP_DRAIN_TIMEOUT_SECONDS)
+
+
 def _http_endpoint(value: str) -> str:
     """Validate an additional endpoint supplied on the command line."""
     try:
@@ -84,6 +90,7 @@ def run_preflight_check(
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
         "cursor": "clients.cursor.driver",
+        "mini-sre": "clients.mini_sre.driver",
     }
     module_path = agent_driver_modules.get(agent_name)
     if not module_path:
@@ -267,7 +274,7 @@ def driver_loop(
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
             try:
                 conductor.finish_problem_in_background()
-                await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
             except TimeoutError:
                 conductor.abandon_submission_work()
                 conductor.results["cleanup_timed_out"] = True
@@ -504,6 +511,7 @@ def driver_loop(
                     attempt=attempt,
                 )
                 agent_proc = None
+                conductor.agent_timeout_seconds = agent_timeout
 
                 if conductor.stage_sequence:
                     with _artifact_environment(run):
@@ -517,7 +525,7 @@ def driver_loop(
                     console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
                     if conductor.close_submissions():
                         try:
-                            await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                            await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                         except TimeoutError:
                             abort_campaign_after_attempt = True
                             conductor.abandon_submission_work()
@@ -530,9 +538,10 @@ def driver_loop(
                             conductor.record_incomplete_attempt("cleanup_failed")
 
                 timed_out = False
-                agent_start_time = time.time()
+                agent_start_time = time.monotonic()
+                conductor.agent_deadline_monotonic = agent_start_time + agent_timeout
                 while not abort_campaign_after_attempt and conductor.submission_stage != "done":
-                    if time.time() - agent_start_time > agent_timeout:
+                    if time.monotonic() > conductor.agent_deadline_monotonic:
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         submission_work = conductor.close_submissions()
@@ -622,7 +631,7 @@ def driver_loop(
                 # freezing the attempt snapshot or starting another attempt.
                 if not abort_campaign_after_attempt and conductor.close_submissions():
                     try:
-                        await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                        await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                     except TimeoutError:
                         abort_campaign_after_attempt = True
                         conductor.abandon_submission_work()
@@ -912,8 +921,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
         stages=tuple(args.stages) if args.stages else None,
-        baseline_override_s=args.baseline,
-        propagation_override_s=args.propagation,
+        baseline_override_s=getattr(args, "baseline", None),
+        propagation_override_s=getattr(args, "propagation", None),
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)

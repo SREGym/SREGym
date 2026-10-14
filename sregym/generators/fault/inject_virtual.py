@@ -3206,6 +3206,7 @@ class VirtualizationFaultInjector(FaultInjector):
         )
         print(f"Rollout status for {service}: {result}")
         return result
+
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
             command = (

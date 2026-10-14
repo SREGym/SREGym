@@ -1,0 +1,1 @@
+"""stripe application integration."""

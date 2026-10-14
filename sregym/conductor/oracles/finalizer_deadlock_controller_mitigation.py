@@ -239,7 +239,7 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             if pod.metadata.deletion_timestamp is None
             and not pod.metadata.name.startswith(f"{self.controller_deployment_name}-")
             # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded, not Running.
-            and not any(ref.kind == "Job" for ref in getattr(pod.metadata, "owner_references", None) or [])
+            and not self.is_completed_job_pod(pod)
         ]
         if not app_pods:
             return False, "[FAIL] No application pods found."

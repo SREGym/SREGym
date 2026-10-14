@@ -1,8 +1,7 @@
 # SREGym-Lite on Frappe, Saleor and Slack Spine (`sregym-lite-ia`)
 
-Environment scaling for SREGym 2.0: the 21 SREGym-Lite faults re-targeted from Hotel Reservation,
-Social Network and Astronomy Shop to three much larger applications: Frappe/ERPNext, Saleor and
-Slack Spine.
+This suite runs the current SREGym-Lite faults on Frappe/ERPNext, Saleor and
+Slack Spine instead of Hotel Reservation, Social Network and Astronomy Shop.
 
 Each port keeps the original fault's causal mechanism and state-based mitigation oracle, aimed at a
 real component of the new app, and adds one requirement: after the agent finishes, the chart's own
@@ -30,11 +29,7 @@ uv run main.py --suite sregym-lite-ia --agent codex --model gpt-6-sol --judge-ba
 | valkey_auth_disruption | redis_auth_disruption_slack_spine | shared `redis` |
 | secret_rotation_stale_env_credentials_astronomy_shop | secret_rotation_stale_env_credentials_saleor | `saleor-api` / `saleor_app` role |
 | unschedulable_incorrect_port_assignment | unschedulable_incorrect_port_assignment_frappe | `erp-nginx` `BACKEND` |
-| readiness_probe_misconfiguration_social_network | readiness_probe_misconfiguration_slack_spine | `svc-message` |
 | duplicate_pvc_mounts_social_network | duplicate_pvc_mounts_slack_spine | `svc-search` |
-| admission_webhook_outage_hotel_reservation | admission_webhook_outage_saleor | `saleor-api` |
-| wrong_dns_policy_astronomy_shop | wrong_dns_policy_saleor | `saleor-api` |
-| wrong_service_selector_social_network | wrong_service_selector_slack_spine | `svc-channel` |
 | rolling_update_misconfigured_social_network | rolling_update_misconfigured_frappe | `erp-worker-l` |
 | search_rate_retry_collapse_hotel_reservation | search_rate_retry_collapse_slack_spine | `svc-channel` → `svc-workspace` mesh retries |
 
@@ -64,6 +59,6 @@ injected fault. They are fixed in the default deployment:
 
 | App | Was | Now |
 |---|---|---|
-| Slack Spine | svc-message held its DB connection for 150 ms per request (peers 5–12 ms) | `db.hold_ms` 10 (`values/slack-spine.yaml`) |
+| Slack Spine | svc-message held its DB connection for 150 ms per request (peers 5–12 ms) | `db.hold_ms` 10 (`sregym/service/apps/slack_spine/values.yaml`) |
 | Frappe | scheduler Deployment at 0 replicas and the site's scheduler disabled | scheduler runs and is enabled on the site |
 | Saleor | API and worker started during the init Job's migrations and logged schema errors that stay in Loki | both start once the Jobs finish |

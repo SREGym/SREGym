@@ -7,8 +7,7 @@
 [![Quick Start](https://img.shields.io/badge/%F0%9F%9A%80-Quick%20Start-blue?style=flat-square)](#🚀quickstart)
 [![Usage](https://img.shields.io/badge/%E2%9A%99%EF%B8%8F-Usage-blue?style=flat-square)](#⚙️usage)
 [![Contributing](https://img.shields.io/badge/%F0%9F%A4%9D-Contributing-blue?style=flat-square)](./CONTRIBUTING.md)
-[![Docs](https://img.shields.io/badge/%F0%9F%93%96-Docs-blue?style=flat-square)](https://sregym.com/docs)
-[![Leaderboard](https://img.shields.io/badge/%F0%9F%8F%86-Leaderboard-blue?style=flat-square)](https://sregym.com)
+[![Leaderboard](https://img.shields.io/badge/%F0%9F%8F%86-Leaderboard-blue?style=flat-square)](https://sregym.com/leaderboard)
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
 [![arXiv](https://img.shields.io/badge/arXiv-2605.07161-b31b1b?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2605.07161)
 </div>
@@ -31,7 +30,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
 
-[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 21 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
+[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 17 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
 
 <h2 id="📦installation">📦 Installation</h2>
@@ -114,9 +113,9 @@ Or start with SREGym-Lite:
 uv run main.py --suite sregym-lite --agent stratus --model gpt-5
 ```
 
-Or run the 20 incidents ported from [Incident Arena](https://github.com/abundant-ai/incident-arena) (Frappe, Saleor and a Slack clone; see [docs/incident-arena.md](./docs/incident-arena.md)):
+Or run the SREGym-Lite faults on Frappe, Saleor and Slack Spine (see [the ported suite](./docs/SREGym-Lite-IA.md)):
 ```bash
-uv run main.py --suite incident-arena --agent stratus --model gpt-5
+uv run main.py --suite sregym-lite-ia --agent stratus --model gpt-5
 ```
 
 Use `--judge-model` to override the judge model separately (defaults to `--model`):
@@ -353,25 +352,27 @@ See the full list of supported providers and model strings in the [LiteLLM docs]
 
 </details>
 
-## Cite This
+## Cite Our Work
 If our work is useful for you, please cite it:
 
 ```bibtex
-@article{sregym:26,
-  author  = {Jackson Clark and Yiming Su and Saad Mohammad Rafid Pial and Yifang Tian and Lily Gniedziejko and Hans-Arno Jacobsen and Yinfang Chen and Tianyin Xu},
-  title   = {{SREGym: A Live Benchmark for AI SRE Agents with High-Fidelity Failure Scenarios}},
+@article{clark:arxiv:2026,
+  author = {Jackson Clark and Yiming Su and Saad Mohammad Rafid Pial and Yifang Tian and Lily Gniedziejko and Hans-Arno Jacobsen and Yinfang Chen and Tianyin Xu},
+  title = "{SREGym: A Live Benchmark for AI SRE Agents with High-Fidelity Failure Scenarios}",
   journal = {arXiv:2605.07161},
-  year    = {2026},
-  month   = may,
-  eprint  = {2605.07161},
-  archivePrefix = {arXiv}
+  year = 2026,
+  month = MAY,
 }
 ```
 
 ## Acknowledgements
-This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org).
 
-https://github.com/user-attachments/assets/e7b2ee27-e7a9-436a-858d-ee58e8bbd61d
+We are grateful to the generous support from
+* [Laude Institute](https://www.laude.org) ([Slingshots // TWO](https://www.laude.org/updates/slingshots-two))
+* OpenAI
+* [E2B for Research](https://e2b.dev/research)
+* Anthropic ([AI for Science Program](https://www.anthropic.com/news/ai-for-science-program))
+* [Cohere Labs Catalyst Grant](https://cohere.com/research/grants)
 
 ## License
 Licensed under the [MIT](LICENSE.txt) license.

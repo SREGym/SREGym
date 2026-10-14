@@ -35,7 +35,6 @@ from sregym.conductor.problems.calico_route_reflector_label_drift import (
 from sregym.conductor.problems.cumulative_admission_webhook_timeout_hotel_reservation import (
     CumulativeAdmissionWebhookTimeoutHotelReservation,
 )
-from sregym.conductor.problems.incident_arena.slack_spine import patch_role_db_config
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.lite_ia.k8s import ported
 from sregym.conductor.problems.lite_ia.retry_storm import (
@@ -48,6 +47,7 @@ from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodC
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.observer.ingress_nginx import IngressNginx
+from sregym.service.apps.slack_spine.configuration import patch_role_db_config
 from sregym.service.rollout import deployment_rollout_complete
 from sregym.utils.decorators import mark_fault_injected
 

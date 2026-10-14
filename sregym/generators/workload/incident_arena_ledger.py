@@ -24,6 +24,10 @@ Arena outcome gate (``tests/verifier/providers/outcome.py``): error rate counts
 timeouts and non-ok responses over non-dropped arrivals, goodput counts
 ok-and-correct responses over the same base, and latency uses a nearest-rank
 percentile per phase kind (peak/trough).
+
+``scheduled_goodput_ratio`` also includes dropped arrivals in its denominator.
+SREGym uses that ratio for the goodput gate; a successful minority of requests
+does not establish that the offered workload was served.
 """
 
 from __future__ import annotations
@@ -46,11 +50,27 @@ GRADER_ACCESS_HEADER = "X-SRE-World-Grader-Access"
 
 
 def grader_dir() -> str:
-    return os.environ.get("GRADER_DIR", "/grader")
+    root = os.environ.get("GRADER_DIR", "/grader")
+    current = os.path.join(root, "current")
+    # Slack's chart starts each client process in a distinct episode directory.
+    return os.path.realpath(current) if os.path.islink(current) else root
 
 
 def ledger_path() -> str:
     return os.path.join(grader_dir(), LEDGER_NAME)
+
+
+def episode_id(directory: str | None = None) -> str | None:
+    root = os.environ.get("GRADER_DIR", "/grader")
+    if os.path.islink(os.path.join(root, "current")):
+        return os.path.basename(directory or grader_dir())
+    # Workload images run Linux. This changes on pod or container replacement.
+    try:
+        with open("/proc/1/stat", encoding="utf-8") as handle:
+            started = handle.read().rsplit(")", 1)[1].split()[19]
+        return f"{os.uname().nodename}:{started}"
+    except (OSError, IndexError):
+        return None
 
 
 def read_episode_done(directory):
@@ -155,6 +175,7 @@ def _new_bucket():
 
 def _finish(bucket, pct):
     offered = bucket["offered"]
+    scheduled = offered + bucket["dropped"]
     latency = {}
     for kind, values in bucket["latency"].items():
         latency[kind] = {"n": len(values), "p_ms": percentile(values, pct)}
@@ -165,12 +186,14 @@ def _finish(bucket, pct):
         "good": bucket["good"],
         "error_rate": (bucket["failures"] / offered) if offered else None,
         "goodput_ratio": (bucket["good"] / offered) if offered else None,
+        "scheduled": scheduled,
+        "scheduled_goodput_ratio": (bucket["good"] / scheduled) if scheduled else None,
         "latency": latency,
     }
 
 
-def summarize(records, since_s=None, latency_percentile=99.0, settle_s=0.0):
-    """Aggregate arrivals sent strictly after ``since_s``.
+def summarize(records, since_s=None, latency_percentile=99.0, settle_s=0.0, until_s=None):
+    """Aggregate arrivals in ``(since_s, until_s]``.
 
     Latency samples sent within ``settle_s`` of ``since_s`` are excluded (the
     Incident Arena "settle window"); error rate and goodput keep them.
@@ -185,6 +208,8 @@ def summarize(records, since_s=None, latency_percentile=99.0, settle_s=0.0):
             continue
         sent = float(sent)
         if since_s is not None and sent <= float(since_s):
+            continue
+        if until_s is not None and sent > float(until_s):
             continue
         first = sent if first is None else min(first, sent)
         last = sent if last is None else max(last, sent)
@@ -203,10 +228,11 @@ def summarize(records, since_s=None, latency_percentile=99.0, settle_s=0.0):
             bucket["offered"] += 1
             bucket["failures"] += int(failed)
             bucket["good"] += int(good)
-            if keep_latency:
+            if keep_latency and latency is not None:
                 bucket["latency"][kind].append(float(latency))
     summary = _finish(overall, latency_percentile)
     summary["since_s"] = since_s
+    summary["until_s"] = until_s
     summary["first_sent_s"] = first
     summary["last_sent_s"] = last
     summary["latency_percentile"] = latency_percentile
@@ -228,9 +254,10 @@ def main(argv):
         print(
             json.dumps(
                 {
-                    "latest_sent_s": latest_sent_s(path),
+                    "latest_sent_s": latest_sent_s(os.path.join(directory, LEDGER_NAME)),
                     "episode_done": read_episode_done(directory),
                     "log_tail": read_log_tail(directory),
+                    "episode_id": episode_id(directory),
                 }
             )
         )
@@ -239,9 +266,10 @@ def main(argv):
         since_s = float(argv[2]) if len(argv) > 2 and argv[2] != "none" else None
         pct = float(argv[3]) if len(argv) > 3 else 99.0
         settle_s = float(argv[4]) if len(argv) > 4 else 0.0
+        until_s = float(argv[5]) if len(argv) > 5 and argv[5] != "none" else None
         try:
             with open(path, encoding="utf-8", errors="replace") as handle:
-                print(json.dumps(summarize(parse_records(handle), since_s, pct, settle_s)))
+                print(json.dumps(summarize(parse_records(handle), since_s, pct, settle_s, until_s)))
         except FileNotFoundError:
             print(json.dumps({"error": "ledger_missing", "path": path}))
         return 0

@@ -1,9 +1,9 @@
 """SREGym-Lite problems ported to the larger Incident Arena applications.
 
-Environment scaling: the same 21 Lite faults, injected into Frappe, Saleor or
-Slack Spine instead of Hotel Reservation, Social Network or Astronomy Shop.
-``LITE_IA_PORTS`` maps each Lite problem id to its port's id and factory;
-``LITE_IA_PROBLEMS`` is the registry slice, in Lite order.
+These fault families target Frappe, Saleor or Slack Spine instead of Hotel
+Reservation, Social Network or Astronomy Shop. ``LITE_IA_PORTS`` maps each
+source problem id to its port's id and factory. ``LITE_IA_PROBLEMS`` registers
+all ports, while the named suite follows the current SREGym-Lite selection.
 """
 
 from sregym.conductor.problems.lite_ia.config import (

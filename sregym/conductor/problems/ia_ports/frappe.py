@@ -33,7 +33,6 @@ from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import (
     SYSCTL_NAME as EPHEMERAL_SYSCTL,
 )
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
-from sregym.conductor.problems.incident_arena.frappe import schema_privileges, site_account, site_database
 from sregym.conductor.problems.lite_ia.k8s import ported
 from sregym.conductor.problems.mongo_storage_faults import FAULT_POD_NAMESPACE
 from sregym.conductor.problems.node_conntrack_exhaustion import NodeConntrackExhaustionHotelReservation
@@ -44,7 +43,8 @@ from sregym.conductor.problems.psa_restricted_blocks_recreation import (
     PSARestrictedBlocksRecreation,
 )
 from sregym.observer.ingress_nginx import IngressNginx
-from sregym.service.apps.incident_arena import Frappe
+from sregym.service.apps.frappe.application import Frappe
+from sregym.service.apps.frappe.operations import schema_privileges, site_account, site_database
 from sregym.service.runtime_images import REDIS_CLIENT_IMAGE
 from sregym.utils.decorators import mark_fault_injected
 

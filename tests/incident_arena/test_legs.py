@@ -2,22 +2,15 @@
 
 from types import SimpleNamespace
 
-from sregym.conductor.problems.incident_arena.frappe import (
-    FrappeScopeGuard,
-    MariaDBGlobal,
-    RedisQueueFlags,
-    SiteGrantRevocation,
-    is_off,
-    unlimited_or_at_least,
-)
-from sregym.conductor.problems.incident_arena.saleor import RoleScopedStatementTimeout
-from sregym.conductor.problems.incident_arena.slack_spine import (
-    AdminEvent,
-    MaintenanceSchedule,
-    RolePoolSize,
-    SessionHandoffLock,
-    SlackScopeGuard,
-)
+from sregym.conductor.oracles.apps.frappe.scope import FrappeScopeGuard
+from sregym.conductor.oracles.apps.slack_spine.scope import SlackScopeGuard
+from sregym.conductor.problems.apps.frappe.faults import MariaDBGlobal, RedisQueueFlags, SiteGrantRevocation
+from sregym.conductor.problems.apps.saleor.statement_timeout import RoleScopedStatementTimeout
+from sregym.conductor.problems.apps.slack_spine.events import AdminEvent
+from sregym.conductor.problems.apps.slack_spine.lock_leaks import SessionHandoffLock
+from sregym.conductor.problems.apps.slack_spine.maintenance import MaintenanceSchedule
+from sregym.conductor.problems.apps.slack_spine.pools import RolePoolSize
+from sregym.service.apps.frappe.operations import is_off, unlimited_or_at_least
 
 
 def _bind(leg, app):
@@ -287,7 +280,7 @@ def test_pool_leg_floors_and_ceilings():
     assert _passed(leg.checks("d"))["channel_pool_within_ceiling"] is False
 
     message = _bind(RolePoolSize("message", 3, 2, floors=None), app)
-    app.configs["message"]["db"].update(pool_size=8, max_overflow=4, hold_ms=150)
+    app.configs["message"]["db"].update(pool_size=8, max_overflow=4, hold_ms=10)
     assert all(r.passed for r in message.checks("d"))
 
 
@@ -446,9 +439,9 @@ def test_mandated_window_survives_recovery():
 
 
 def test_writes_and_queue_oom_reconciles_the_backlog_after_the_broker(offline_cluster):
-    from sregym.conductor.problems.incident_arena.frappe import (
+    from sregym.conductor.problems.apps.frappe.backlog import StrandedBacklogSeed
+    from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import (
         FrappeWritesAndQueueOOM,
-        StrandedBacklogSeed,
     )
 
     problem = FrappeWritesAndQueueOOM()

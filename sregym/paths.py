@@ -9,7 +9,7 @@ BASE_PARENT_DIR = Path(__file__).resolve().parent.parent
 TARGET_MICROSERVICES = BASE_PARENT_DIR / "SREGym-applications"
 
 # Cache directories
-CACHE_DIR = HOME_DIR / "cache_dir"
+CACHE_DIR = Path(os.environ.get("SREGYM_CACHE_DIR", HOME_DIR / "cache_dir"))
 LLM_CACHE_FILE = CACHE_DIR / "llm_cache.json"
 
 # Cluster baseline state snapshot (captured from a fresh cluster)
@@ -29,9 +29,6 @@ TIDB_METADATA = BASE_DIR / "service" / "metadata" / "tidb-with-operator.json"
 FLIGHT_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "flight-ticket.json"
 FLEET_CAST_METADATA = BASE_DIR / "service" / "metadata" / "fleet-cast.json"
 BLUEPRINT_HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "blueprint-hotel-reservation.json"
-FRAPPE_METADATA = BASE_DIR / "service" / "metadata" / "frappe.json"
-SALEOR_METADATA = BASE_DIR / "service" / "metadata" / "saleor.json"
-SLACK_SPINE_METADATA = BASE_DIR / "service" / "metadata" / "slack-spine.json"
 
 
 # MCP Server

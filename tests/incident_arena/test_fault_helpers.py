@@ -2,13 +2,10 @@
 
 import pytest
 
-from sregym.conductor.problems.incident_arena.frappe import render_start_script, unlimited_or_at_least
-from sregym.conductor.problems.incident_arena.saleor import safe_statement_timeout, timeout_ms
-from sregym.conductor.problems.incident_arena.slack_spine import (
-    flatten,
-    in_safe_maintenance_window,
-    patch_role_db_config,
-)
+from sregym.conductor.problems.apps.saleor.statement_timeout import safe_statement_timeout, timeout_ms
+from sregym.conductor.problems.incident_arena import FaultLeg
+from sregym.service.apps.frappe.operations import render_start_script, unlimited_or_at_least
+from sregym.service.apps.slack_spine.configuration import flatten, in_safe_maintenance_window, patch_role_db_config
 
 START_SCRIPT = """#!/bin/bash
 ARGS=("--port" "${REDIS_PORT}")
@@ -21,6 +18,14 @@ ARGS+=("--maxmemory-policy")
 ARGS+=("noeviction")
 exec redis-server "${ARGS[@]}"
 """
+
+
+def test_fault_component_requires_binding_before_use():
+    leg = FaultLeg()
+    with pytest.raises(RuntimeError, match="not bound"):
+        _ = leg.app
+    with pytest.raises(RuntimeError, match="not bound"):
+        _ = leg.namespace
 
 
 def test_start_script_flags_are_replaced_in_place():

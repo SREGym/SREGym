@@ -15,37 +15,9 @@ SREGYM_LITE_PROBLEMS = (
     "valkey_auth_disruption",
     "secret_rotation_stale_env_credentials_astronomy_shop",
     "unschedulable_incorrect_port_assignment",
-    "readiness_probe_misconfiguration_social_network",
     "duplicate_pvc_mounts_social_network",
-    "admission_webhook_outage_hotel_reservation",
-    "wrong_dns_policy_astronomy_shop",
-    "wrong_service_selector_social_network",
     "rolling_update_misconfigured_social_network",
     "search_rate_retry_collapse_hotel_reservation",
-)
-
-# The 20 incidents of Incident Arena (abundant-ai/incident-arena), in its task order.
-INCIDENT_ARENA_PROBLEMS = (
-    "incident_arena_frappe_deletes_and_jobs_fail",
-    "incident_arena_frappe_desk_and_queue_oom",
-    "incident_arena_frappe_desk_and_queue_outage",
-    "incident_arena_frappe_new_records_and_jobs_fail",
-    "incident_arena_frappe_new_records_and_queue_oom",
-    "incident_arena_frappe_writes_and_queue_oom",
-    "incident_arena_saleor_checkout_statement_timeout_canary",
-    "incident_arena_slack_split_sequencer",
-    "incident_arena_slack_maintenance_collision",
-    "incident_arena_slack_logins_unread_sends_all_slow",
-    "incident_arena_slack_logins_unread_sends_slower",
-    "incident_arena_slack_sends_crawl_then_store_slows",
-    "incident_arena_slack_sends_fail_strict_mode_plausible_pool",
-    "incident_arena_slack_sends_fail_strict_mode",
-    "incident_arena_slack_sends_fail_compliance_window",
-    "incident_arena_slack_sends_fail_strict_pool_16",
-    "incident_arena_slack_sends_slow_and_stall_every_minute",
-    "incident_arena_slack_stall_every_minute_then_crawl",
-    "incident_arena_slack_seq_lock_leak",
-    "incident_arena_slack_distractor_volume_seq_lock",
 )
 
 # SREGym-Lite's faults re-targeted at the larger Incident Arena apps (Frappe,
@@ -65,17 +37,12 @@ SREGYM_LITE_IA_PROBLEMS = (
     "redis_auth_disruption_slack_spine",
     "secret_rotation_stale_env_credentials_saleor",
     "unschedulable_incorrect_port_assignment_frappe",
-    "readiness_probe_misconfiguration_slack_spine",
     "duplicate_pvc_mounts_slack_spine",
-    "admission_webhook_outage_saleor",
-    "wrong_dns_policy_saleor",
-    "wrong_service_selector_slack_spine",
     "rolling_update_misconfigured_frappe",
     "search_rate_retry_collapse_slack_spine",
 )
 
 PROBLEM_SETS = {
     "sregym-lite": SREGYM_LITE_PROBLEMS,
-    "incident-arena": INCIDENT_ARENA_PROBLEMS,
     "sregym-lite-ia": SREGYM_LITE_IA_PROBLEMS,
 }

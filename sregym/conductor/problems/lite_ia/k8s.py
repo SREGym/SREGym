@@ -181,8 +181,6 @@ class WrongDNSPolicyIA(WrongDNSPolicy):
 class DuplicatePVCMountsIA(DuplicatePVCMounts):
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-search"):
         self.faulty_service = faulty_service
-        # The target's own readiness endpoint replaces Jaeger's query API.
-        self.health_check = (8000, "/healthz", "")
         ported(
             self,
             app_name,
@@ -193,7 +191,9 @@ class DuplicatePVCMountsIA(DuplicatePVCMounts):
                 "replicas on different nodes. With node-bound storage only one replica can use the claim, so "
                 "another replica stays Pending and the deployment remains only partially Ready."
             ),
-            oracle_factory=DuplicatePVCMountsMitigationOracle,
+            oracle_factory=lambda problem: DuplicatePVCMountsMitigationOracle(
+                problem, query_port=8000, query_path="/healthz", expected_content=""
+            ),
         )
 
 

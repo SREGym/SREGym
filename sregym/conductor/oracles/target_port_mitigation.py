@@ -23,9 +23,7 @@ class TargetPortMisconfigMitigationOracle(Oracle):
             pod_list = kubectl.list_pods(namespace)
             for pod in pod_list.items:
                 # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded by design.
-                if any(
-                    getattr(o, "kind", None) == "Job" for o in getattr(pod.metadata, "owner_references", None) or []
-                ):
+                if self.is_completed_job_pod(pod):
                     continue
                 if pod.status.container_statuses:
                     # Check container statuses

@@ -15,7 +15,9 @@ import time
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.service.apps.incident_arena import Frappe, Saleor, SlackSpine
+from sregym.service.apps.frappe.application import Frappe
+from sregym.service.apps.saleor.application import Saleor
+from sregym.service.apps.slack_spine.application import SlackSpine
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +61,6 @@ def make_app(app_name: str):
     app.set_load_profile(*LOAD_PROFILES[app_name])
     app.configure(DEPLOY_VALUES.get(app_name, {}))
     return app
-
-
-def is_job_pod(pod) -> bool:
-    """True for pods owned by a Job (one-shot migrate/seed pods that end Succeeded)."""
-    return any(ref.kind == "Job" for ref in (pod.metadata.owner_references or []))
 
 
 class LoadgenHealthOracle(Oracle):

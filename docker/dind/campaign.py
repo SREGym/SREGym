@@ -14,10 +14,10 @@ containers. --max-containers-file caps the DinD containers running host-wide acr
 """
 
 import argparse
-import contextlib
-import fcntl
 import concurrent.futures
+import contextlib
 import datetime
+import fcntl
 import json
 import shutil
 import subprocess
@@ -94,15 +94,45 @@ def run_problem(problem: str, args) -> dict:
         auth_copy.chmod(0o600)
         name = f"{args.name_prefix}-{problem}"[:63].replace("_", "-")
         command = [
-            "docker", "run", "--rm", "--privileged", "--cgroupns=private", "--name", name,
-            "--stop-timeout", "45", "--cpus", str(args.cpus), "--memory", args.memory,
-            "--mount", f"type=bind,src={run_dir},dst=/opt/sregym/results",
-            "--mount", f"type=bind,src={auth_copy},dst=/root/.codex/auth.json",
-            *[x for mirror in [args.registry_mirrors] if mirror for x in ("--env", f"SREGYM_REGISTRY_MIRRORS={mirror}")],
+            "docker",
+            "run",
+            "--rm",
+            "--privileged",
+            "--cgroupns=private",
+            "--name",
+            name,
+            "--stop-timeout",
+            "45",
+            "--cpus",
+            str(args.cpus),
+            "--memory",
+            args.memory,
+            "--mount",
+            f"type=bind,src={run_dir},dst=/opt/sregym/results",
+            "--mount",
+            f"type=bind,src={auth_copy},dst=/root/.codex/auth.json",
+            *[
+                x
+                for mirror in [args.registry_mirrors]
+                if mirror
+                for x in ("--env", f"SREGYM_REGISTRY_MIRRORS={mirror}")
+            ],
             *[x for kv in args.env for x in ("--env", kv)],
             args.image,
-            "uv", "run", "--frozen", "main.py", "--problem", problem, "--agent", "codex",
-            "--model", args.model, "--judge-backend", "codex", "--n-attempts", str(args.attempts),
+            "uv",
+            "run",
+            "--frozen",
+            "main.py",
+            "--problem",
+            problem,
+            "--agent",
+            "codex",
+            "--model",
+            args.model,
+            "--judge-backend",
+            "codex",
+            "--n-attempts",
+            str(args.attempts),
             *args.extra,
         ]
         with open(run_dir / "campaign.log", "w") as handle:

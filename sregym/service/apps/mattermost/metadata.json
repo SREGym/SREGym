@@ -1,0 +1,8 @@
+{
+  "Name": "Mattermost prototype",
+  "Namespace": "mattermost",
+  "Desc": "Mattermost Team Edition with one application server, persistent attachments and external CloudNativePG PostgreSQL. Seeded incident-response team, channels and messages support real stateful workflows.",
+  "frontend_service": "mattermost",
+  "frontend_port": 8065,
+  "Supported Operations": ["Read and create messages", "Upload and download attachments", "Inspect PostgreSQL primary and replicas", "Inspect application logs"]
+}

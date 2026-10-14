@@ -13,6 +13,8 @@ variable "REVISION" {
 
 group "default" {
   targets = [
+    "mattermost-server",
+    "stripe-backend",
     "hotel-reservation",
     "locust-exporter",
     "wrk2",
@@ -42,6 +44,8 @@ group "default" {
 
 group "publish" {
   targets = [
+    "mattermost-server",
+    "stripe-backend",
     "hotel-reservation",
     "locust-exporter",
     "wrk2",
@@ -139,6 +143,22 @@ target "_common" {
     "org.opencontainers.image.source" = "https://github.com/SREGym/SREGym"
     "org.opencontainers.image.revision" = REVISION
   }
+}
+
+group "postmortem-apps" {
+  targets = ["mattermost-server", "stripe-backend"]
+}
+
+target "mattermost-server" {
+  inherits = ["_common"]
+  context = "docker/apps/mattermost/server"
+  tags = ["${REGISTRY}/mattermost:${IMAGE_TAG}"]
+}
+
+target "stripe-backend" {
+  inherits = ["_common"]
+  context = "docker/apps/stripe/backend"
+  tags = ["${REGISTRY}/stripe-marathon:${IMAGE_TAG}"]
 }
 
 target "hotel-reservation" {

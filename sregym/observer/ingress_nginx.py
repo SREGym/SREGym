@@ -44,9 +44,12 @@ class IngressNginx:
         release record but not its IngressClass, ClusterRoles or webhook configuration, and
         Helm then refuses to adopt them (``metadata.managedFields must be nil``).
         """
-        if subprocess.run(
-            f"helm status {self.release_name} -n {self.namespace}", shell=True, capture_output=True
-        ).returncode == 0:
+        if (
+            subprocess.run(
+                f"helm status {self.release_name} -n {self.namespace}", shell=True, capture_output=True
+            ).returncode
+            == 0
+        ):
             return
         self.run_cmd(
             "kubectl delete ingressclass,clusterrole,clusterrolebinding,validatingwebhookconfiguration "

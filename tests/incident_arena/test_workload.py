@@ -1,8 +1,12 @@
+from pathlib import Path
+
 import pytest
+import yaml
 
 import sregym.generators.workload.incident_arena as workload_module
 from sregym.generators.workload.incident_arena import IncidentArenaLoadgen
-from sregym.service.apps.incident_arena.saleor import Saleor
+from sregym.service.apps.saleor.application import Saleor
+from sregym.service.helm import Helm
 
 
 class FakeClock:
@@ -25,7 +29,7 @@ class ScriptedLoadgen(IncidentArenaLoadgen):
         self.restarts = 0
         self.starts = 0
 
-    def status(self):
+    def status(self, timeout=180):
         step = self.script.pop(0) if len(self.script) > 1 else self.script[0]
         if isinstance(step, Exception):
             raise step
@@ -34,12 +38,12 @@ class ScriptedLoadgen(IncidentArenaLoadgen):
     def restart(self, timeout_s=600):
         self.restarts += 1
 
-    def start_episode(self):
+    def start_episode(self, timeout=180):
         self.starts += 1
         return {"status": 202, "body": "{}"}
 
     def logs(self, tail=40):
-        return "sidecar stdout"
+        raise AssertionError("Do not collect logs after the deadline")
 
 
 @pytest.fixture
@@ -86,13 +90,82 @@ def test_wait_for_traffic_reports_the_sidecar_error_after_its_restarts(clock):
     assert "loadgen sidecar episode FAILED" in str(raised.value)
 
 
-def test_wait_for_traffic_times_out_with_the_pod_logs(clock):
-    loadgen = ScriptedLoadgen([STARTING])
+def test_wait_for_traffic_times_out_with_the_cached_pod_logs(clock):
+    loadgen = ScriptedLoadgen([{**STARTING, "log_tail": ["sidecar stdout"]}])
     with pytest.raises(RuntimeError, match="no traffic within 60s") as raised:
         loadgen.wait_for_traffic(timeout_s=60)
     assert "episode still starting" in str(raised.value)
     assert "last episode-start response" in str(raised.value)
     assert "sidecar stdout" in str(raised.value)
+    assert clock.now == 60
+
+
+def test_retry_delay_cannot_start_a_restart_after_the_deadline(clock):
+    loadgen = ScriptedLoadgen([FAILED])
+    with pytest.raises(RuntimeError, match="no traffic within 20s"):
+        loadgen.wait_for_traffic(timeout_s=20)
+    assert clock.now == 20
+    assert loadgen.restarts == 0
+
+
+def test_slow_restart_uses_only_the_remaining_budget(clock, monkeypatch):
+    loadgen = ScriptedLoadgen([FAILED])
+    budgets = []
+
+    def restart(timeout_s):
+        budgets.append(timeout_s)
+        clock.sleep(timeout_s)
+
+    monkeypatch.setattr(loadgen, "restart", restart)
+    with pytest.raises(RuntimeError, match="no traffic within 60s"):
+        loadgen.wait_for_traffic(timeout_s=60)
+    assert budgets == [30]
+    assert clock.now == 60
+
+
+@pytest.mark.parametrize("step", ["status", "start_episode"])
+def test_slow_ledger_commands_cannot_outlive_the_wait(clock, monkeypatch, step):
+    loadgen = ScriptedLoadgen([STARTING])
+    budgets = []
+
+    def slow_command(timeout):
+        budgets.append(timeout)
+        clock.sleep(timeout)
+        raise TimeoutError("command timed out")
+
+    monkeypatch.setattr(loadgen, step, slow_command)
+    with pytest.raises(RuntimeError, match="no traffic within 25s"):
+        loadgen.wait_for_traffic(timeout_s=25)
+    assert budgets == [25]
+    assert clock.now == 25
+
+
+def test_restart_shares_a_deadline_between_its_commands(clock):
+    calls = []
+
+    class Kubectl:
+        def exec_command_checked(self, command, timeout):
+            calls.append((command, timeout))
+            clock.sleep(4)
+
+    IncidentArenaLoadgen("ns", Kubectl()).restart(timeout_s=10)
+    assert calls[0][1] == 10
+    assert calls[1][1] == 6
+    assert "--timeout=6s" in calls[1][0]
+
+
+def test_status_and_episode_start_forward_the_command_budget(monkeypatch):
+    loadgen = IncidentArenaLoadgen("ns", None)
+    calls = []
+
+    def ledger(mode, *, timeout):
+        calls.append((mode, timeout))
+        return {}
+
+    monkeypatch.setattr(loadgen, "_run_ledger", ledger)
+    loadgen.status(timeout=7)
+    loadgen.start_episode(timeout=5)
+    assert calls == [("status", 7), ("start", 5)]
 
 
 class JobsKubeCtl:
@@ -119,3 +192,48 @@ def test_wait_for_jobs_without_jobs_is_a_no_op(offline_cluster):
     app.kubectl = JobsKubeCtl([])
     app.wait_for_jobs(300)
     assert len(app.kubectl.commands) == 1
+
+
+def test_saleor_waits_for_initialization_before_starting_consumers(offline_cluster, monkeypatch):
+    app = Saleor()
+    app.configure({"saleor": {"api": {"replicaCount": 3}}})
+    events = []
+    app.kubectl.create_namespace_if_not_exist = lambda namespace: None
+    monkeypatch.setattr(
+        Helm,
+        "install",
+        lambda **cfg: events.append(
+            ("install", yaml.safe_load(Path(cfg["extra_args"][-1]).read_text()), cfg["extra_args"][-1])
+        ),
+    )
+    monkeypatch.setattr(app, "wait_for_jobs", lambda timeout: events.append(("jobs", timeout)))
+    monkeypatch.setattr(app, "wait_until_ready", lambda: events.append(("ready",)))
+    original = app._apply_release
+
+    def apply(values, *, install):
+        if install:
+            original(values, install=True)
+        else:
+            events.append(("upgrade", values))
+
+    monkeypatch.setattr(app, "_apply_release", apply)
+    app.deploy()
+    assert [e[0] for e in events] == ["install", "jobs", "upgrade", "ready"]
+    assert events[0][1]["saleor"] == {"api": {"replicaCount": 0}, "worker": {"replicaCount": 0}}
+    assert events[2][1]["saleor"]["api"]["replicaCount"] == 3
+    assert not Path(events[0][2]).exists()
+
+
+def test_failed_saleor_initialization_does_not_start_consumers(offline_cluster, monkeypatch):
+    app = Saleor()
+    app.kubectl.create_namespace_if_not_exist = lambda namespace: None
+    events = []
+    monkeypatch.setattr(app, "_apply_release", lambda values, *, install: events.append(install))
+
+    def fail(timeout):
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(app, "wait_for_jobs", fail)
+    with pytest.raises(RuntimeError, match="migration failed"):
+        app.deploy()
+    assert events == [True]

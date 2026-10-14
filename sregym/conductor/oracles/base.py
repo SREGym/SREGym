@@ -113,6 +113,12 @@ class Oracle(ABC):
                 break
         return cls.fail("oracle_raised", **detail)
 
+    @staticmethod
+    def is_completed_job_pod(pod) -> bool:
+        """Only successful Job pods are exempt from workload readiness."""
+        owners = getattr(pod.metadata, "owner_references", None) or []
+        return pod.status.phase == "Succeeded" and any(getattr(owner, "kind", None) == "Job" for owner in owners)
+
     def pods_unready(self, pods, **detail) -> dict | None:
         """Return a verdict for the first unhealthy pod or container, else None.
 
@@ -130,10 +136,7 @@ class Oracle(ABC):
         """
         for pod in pods:
             pod_name = pod.metadata.name
-            # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded by
-            # design; they are not workloads that should be Running.
-            owners = getattr(pod.metadata, "owner_references", None) or []
-            if any(getattr(owner, "kind", None) == "Job" for owner in owners):
+            if self.is_completed_job_pod(pod):
                 continue
             if pod.status.phase != "Running":
                 print(f"❌ Pod {pod_name} is in phase: {pod.status.phase}")

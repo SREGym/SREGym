@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterator
 from enum import StrEnum
 from pathlib import Path
 
@@ -30,6 +31,17 @@ class JudgeParseError(Exception):
     """Raised after all retries are exhausted when parsing checklist results."""
 
 
+# Reasoning models (Gemini 2.5+/3.x, o-series, Claude with extended thinking)
+# count their hidden reasoning tokens against ``max_tokens``. A 4096 budget was
+# often consumed by reasoning alone, so the visible JSON was cut mid-string and
+# every checklist question defaulted to "No" (SREGym-Lite finalizer run: 51.9 s
+# judge call, 620-char truncated array, ``finish_reason=length``).
+DEFAULT_JUDGE_MAX_TOKENS = 16384
+# When the provider reports ``finish_reason=length`` the retry grows the budget
+# by this factor instead of repeating the same request.
+_TRUNCATION_RETRY_FACTOR = 4
+
+
 class JudgmentResult(StrEnum):
     TRUE = "True"  # Correct diagnosis - agent identified the root cause
     FALSE = "False"  # Incorrect diagnosis - agent did not identify the root cause
@@ -43,7 +55,7 @@ class LLMJudge:
         url: str | None = None,
         api_key: str | None = None,
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
     ):
         self.provider = provider
         self.model_name = model_name
@@ -246,7 +258,7 @@ fences, no preamble, no commentary.
         url: str | None = None,
         api_key: str | None = None,
         temperature: float = 0.0,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
         checklist_path: str | None = None,
     ):
         self.provider = provider
@@ -476,6 +488,7 @@ fences, no preamble, no commentary.
 
         last_error: Exception | None = None
         for attempt in range(2):
+            response = None
             try:
                 response = self.backend.inference(messages)
                 response_text = LLMJudge._content_text(response.content)
@@ -485,7 +498,17 @@ fences, no preamble, no commentary.
                 last_error = e
                 print(f"Checklist parse attempt {attempt + 1} failed: {e}")
                 if attempt == 0:
-                    if "missing" in str(e).lower() or str(self._num_questions) in str(e):
+                    if self._was_truncated(response):
+                        # The budget, not the model, caused the failure. Repeating
+                        # the same request would truncate again.
+                        new_budget = self.max_tokens * _TRUNCATION_RETRY_FACTOR
+                        print(
+                            f"Judge response hit max_tokens={self.max_tokens} "
+                            f"(finish_reason=length); retrying with max_tokens={new_budget}"
+                        )
+                        self.max_tokens = new_budget
+                        self.backend.max_tokens = new_budget
+                    elif "missing" in str(e).lower() or str(self._num_questions) in str(e):
                         messages = [
                             SystemMessage(content=self._system_prompt),
                             HumanMessage(
@@ -509,35 +532,82 @@ fences, no preamble, no commentary.
         ]
 
     @staticmethod
+    def _was_truncated(response) -> bool:
+        """True when the provider stopped generation because ``max_tokens`` was reached."""
+        metadata = getattr(response, "response_metadata", None) or {}
+        return str(metadata.get("finish_reason", "")).lower() == "length"
+
+    @staticmethod
     def _parse_response(response_text: str, expected_question_ids: list[str]) -> list[dict]:
-        """Parse the LLM JSON response into a list of question result dicts."""
-        # Strip markdown fences
-        clean = re.sub(r"```(?:json)?\s*|\s*```", "", response_text).strip()
+        """Return the first complete, valid checklist in the response."""
+        expected_ids = set(expected_question_ids)
+        last_error = ChecklistParseError("Invalid JSON: no checklist array found")
+        for candidate in DiagnosisJudge._json_candidates(response_text):
+            try:
+                return DiagnosisJudge._validate_checklist(candidate, expected_ids)
+            except ChecklistParseError as exc:
+                last_error = exc
+        raise last_error
 
-        # Sometimes the model emits chain-of-thought text before the JSON array.
-        # Try to find the outermost JSON array.
-        bracket_start = clean.find("[")
-        bracket_end = clean.rfind("]")
-        if bracket_start != -1 and bracket_end != -1 and bracket_end > bracket_start:
-            clean = clean[bracket_start : bracket_end + 1]
+    @staticmethod
+    def _json_candidates(response_text: str) -> Iterator[object]:
+        """Decode outer JSON containers without treating nested values as candidates."""
+        decoder = json.JSONDecoder()
+        stack: list[str] = []
+        start = 0
+        # Locate container boundaries only; the JSON decoder checks their syntax.
+        # Quoted strings are single tokens, including an unfinished final string.
+        for match in re.finditer(r'"(?:\\.|[^"\\])*"?|[\[\]{}]', response_text):
+            token = match.group()
+            if token.startswith('"'):
+                continue
+            if token in ("[", "{"):
+                if not stack:
+                    start = match.start()
+                stack.append("]" if token == "[" else "}")
+                continue
+            if not stack:
+                continue
+            if token != stack.pop():
+                # A broken outer container does not define safe candidate boundaries.
+                return
+            if not stack:
+                try:
+                    candidate, end = decoder.raw_decode(response_text, start)
+                except (ValueError, RecursionError):
+                    # ValueError also covers Python's integer conversion limit.
+                    continue
+                if end == match.end():
+                    yield candidate
 
-        try:
-            data = json.loads(clean)
-        except json.JSONDecodeError as exc:
-            raise ChecklistParseError(f"Invalid JSON: {exc}") from exc
-
-        if not isinstance(data, list):
+    @staticmethod
+    def _validate_checklist(candidate: object, expected_ids: set[str]) -> list[dict]:
+        """Validate the fields consumed by grading before accepting a candidate."""
+        if not isinstance(candidate, list):
             raise ChecklistParseError("Response is not a JSON array")
 
-        expected_ids = set(expected_question_ids)
-        num_expected = len(expected_ids)
-        received_ids = {item.get("id") for item in data if isinstance(item, dict)}
+        received_ids: set[str] = set()
+        for item in candidate:
+            if not isinstance(item, dict):
+                raise ChecklistParseError("Each checklist item must be an object")
+            qid = item.get("id")
+            if not isinstance(qid, str) or qid not in expected_ids:
+                raise ChecklistParseError(f"Invalid question ID: {qid!r}")
+            if qid in received_ids:
+                raise ChecklistParseError(f"Duplicate question ID: {qid}")
+            answer = item.get("answer")
+            if not isinstance(answer, str) or answer.strip().lower() not in ("yes", "no"):
+                raise ChecklistParseError(f"Question {qid} must have a Yes/No answer")
+            for field in ("evidence", "confidence"):
+                if field in item and not isinstance(item[field], str):
+                    raise ChecklistParseError(f"Question {qid} must have a string {field}")
+            received_ids.add(qid)
 
-        if len(data) < num_expected or not expected_ids.issubset(received_ids):
-            missing = expected_ids - received_ids
-            raise ChecklistParseError(f"Expected {num_expected} questions, got {len(data)}. Missing: {missing}")
-
-        return data
+        if missing := expected_ids - received_ids:
+            raise ChecklistParseError(
+                f"Expected {len(expected_ids)} questions, got {len(candidate)}. Missing: {sorted(missing)}"
+            )
+        return candidate
 
     def _empty_report(self):
         """Return a report where all questions score No (empty/unknown answer)."""
