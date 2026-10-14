@@ -501,12 +501,15 @@ class SchemaColumnDriftSaleor(Problem):
         )
         return {line.strip() for line in rows.splitlines() if line.strip()}
 
-    def _address_count(self) -> int:
-        return int(self.app.psql(f"SELECT count(*) FROM {self.TABLE}").strip() or 0)
+    def _address_snapshot(self) -> dict:
+        rows = self.app.psql(
+            f"SELECT COALESCE(jsonb_object_agg(a.id::text, to_jsonb(a)), '{{}}'::jsonb)::text FROM {self.TABLE} a"
+        )
+        return json.loads(rows)
 
     @mark_fault_injected
     def inject_fault(self):
-        state_file(self, "schema-drift").write_text(json.dumps({"addresses": self._address_count()}))
+        state_file(self, "schema-drift").write_text(json.dumps({"addresses": self._address_snapshot()}))
         self.app.psql(f"ALTER TABLE {self.TABLE} RENAME COLUMN {self.COLUMN} TO {self.DRIFTED}")
         print(f"Renamed {self.TABLE}.{self.COLUMN} -> {self.DRIFTED}")
         expect_checkout_failure(self)
@@ -522,11 +525,19 @@ class SchemaColumnDriftSaleor(Problem):
             print(f"❌ {self.TABLE}.{self.COLUMN} is missing")
             return oracle.fail("fault_still_present", table=self.TABLE, column=self.COLUMN)
         path = state_file(self, "schema-drift")
-        before = json.loads(path.read_text()).get("addresses", 0) if path.exists() else 0
-        after = self._address_count()
-        if after < before:
-            print(f"❌ Addresses were lost ({before} -> {after})")
-            return oracle.fail("fault_still_present", detail="address rows lost", before=before, after=after)
+        if not path.exists():
+            return oracle.fail("address_baseline_unavailable")
+        before = json.loads(path.read_text())["addresses"]
+        after = self._address_snapshot()
+        changed = [
+            row_id
+            for row_id, original in before.items()
+            if row_id not in after
+            or any(field not in after[row_id] or after[row_id][field] != value for field, value in original.items())
+        ]
+        if changed:
+            print(f"❌ {len(changed)} original addresses are missing or changed")
+            return oracle.fail("original_addresses_changed", address_ids=changed)
         return require_checkout(self, oracle)
 
 
