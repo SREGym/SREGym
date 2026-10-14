@@ -1,5 +1,7 @@
 import json
 import logging
+import re
+import shlex
 import subprocess
 import time
 
@@ -44,17 +46,57 @@ class IngressNginx:
         release record but not its IngressClass, ClusterRoles or webhook configuration, and
         Helm then refuses to adopt them (``metadata.managedFields must be nil``).
         """
-        if (
-            subprocess.run(
-                f"helm status {self.release_name} -n {self.namespace}", shell=True, capture_output=True
-            ).returncode
-            == 0
-        ):
-            return
-        self.run_cmd(
-            "kubectl delete ingressclass,clusterrole,clusterrolebinding,validatingwebhookconfiguration "
-            f"-l app.kubernetes.io/instance={self.release_name} --ignore-not-found"
+        releases = json.loads(
+            self.run_cmd(
+                shlex.join(
+                    [
+                        "helm",
+                        "list",
+                        "--all",
+                        "--namespace",
+                        self.namespace,
+                        "--filter",
+                        f"^{re.escape(self.release_name)}$",
+                        "--output",
+                        "json",
+                    ]
+                )
+            )
         )
+        if releases:
+            return
+        resources = json.loads(
+            self.run_cmd(
+                shlex.join(
+                    [
+                        "kubectl",
+                        "get",
+                        "ingressclass,clusterrole,clusterrolebinding,validatingwebhookconfiguration",
+                        "-l",
+                        f"app.kubernetes.io/instance={self.release_name}",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+        )
+        for resource in resources["items"]:
+            metadata = resource["metadata"]
+            annotations = metadata.get("annotations") or {}
+            if (
+                annotations.get("meta.helm.sh/release-name") == self.release_name
+                and annotations.get("meta.helm.sh/release-namespace") == self.namespace
+            ):
+                self.run_cmd(
+                    shlex.join(
+                        [
+                            "kubectl",
+                            "delete",
+                            f"{resource['kind'].lower()}/{metadata['name']}",
+                            "--ignore-not-found",
+                        ]
+                    )
+                )
 
     def _wait_for_ready(self, timeout: int = 120):
         """Wait until the ingress controller deployment is ready."""
