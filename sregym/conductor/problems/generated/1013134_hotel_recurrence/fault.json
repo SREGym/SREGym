@@ -1,0 +1,18 @@
+{
+  "app": "hotel_reservation",
+  "title": "Abandoned catalog refresh republishes document-scoped object references",
+  "fault_layer": "data",
+  "fault_primitive": "recurring Memcached publication of unresolved JSON Pointer object references",
+  "root_cause_class": "catalog_object_reference_scope_recurrence",
+  "incident_class": "orphaned operational sync process after a serializer migration",
+  "affected_components": [
+    "frontend",
+    "profile",
+    "memcached-profile",
+    "mongodb-user"
+  ],
+  "symptoms": "Hotel searches and recommendations terminate during frontend GeoJSON assembly. Frontend logs surge with nil-address runtime errors; pods remain Running and Ready, and the persistent catalog remains intact.",
+  "generation": {
+    "tier": "hard"
+  }
+}
