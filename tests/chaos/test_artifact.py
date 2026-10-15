@@ -2,9 +2,10 @@ import json
 
 import pytest
 
-from sregym.chaos.artifact import FaultArtifact, discover
+from sregym.chaos.artifact import FaultArtifact, discover_faults
 
 META = {
+    "problem_id": "stale_rate_cache_hotel_reservation",
     "app": "hotel_reservation",
     "title": "Stale rate cache entries",
     "fault_layer": "data",
@@ -17,6 +18,7 @@ META = {
 @pytest.fixture(autouse=True)
 def _workdir(tmp_path, monkeypatch):
     monkeypatch.setenv("SREGYM_FAULT_WORKDIR", str(tmp_path / "work"))
+    monkeypatch.delenv("SREGYM_FAULT_DIRS", raising=False)
 
 
 def make(tmp_path, name="a1", meta=META, inject="kubectl -n $NAMESPACE rollout restart deploy/rate\n"):
@@ -33,7 +35,24 @@ def test_valid_artifact(tmp_path):
     artifact = FaultArtifact.load(make(tmp_path))
     assert artifact.problems() == []
     assert artifact.leak_findings() == []
-    assert artifact.problem_id == "gen_a1"
+    assert artifact.problem_id == "stale_rate_cache_hotel_reservation"
+
+
+def test_problem_id_does_not_depend_on_directory_name(tmp_path):
+    path = make(tmp_path)
+    problem_id = FaultArtifact.load(path).problem_id
+    moved = path.rename(tmp_path / "renamed_bundle")
+    assert FaultArtifact.load(moved).problem_id == problem_id
+
+
+@pytest.mark.parametrize(
+    "value", [None, "", 123, True, "123_rate", "RateCache", "rate-cache", "../cache", "rate__cache"]
+)
+def test_problem_id_requires_a_lowercase_snake_case_name(tmp_path, value):
+    artifact = FaultArtifact.load(make(tmp_path, meta={**META, "problem_id": value}))
+    assert any("problem_id" in issue for issue in artifact.problems())
+    with pytest.raises(ValueError, match="problem_id must be a lowercase snake_case name"):
+        _ = artifact.problem_id
 
 
 @pytest.mark.parametrize("value", [-1, True, "360", 3.5])
@@ -119,11 +138,11 @@ def test_equal_names_in_different_roots_do_not_share_scripts(tmp_path):
 
 
 def test_failed_recovery_retains_workspace(tmp_path):
-    from sregym.conductor.problems.generated_problem import GeneratedProblem
+    from sregym.conductor.problems.scripted_problem import ScriptedProblem
 
     path = make(tmp_path, inject='echo saved > "$ARTIFACT_DIR/state"')
     (path / "recover.sh").write_text("exit 1")
-    problem = GeneratedProblem.__new__(GeneratedProblem)
+    problem = ScriptedProblem.__new__(ScriptedProblem)
     problem.namespace = "ns"
     problem.fault_injected = True
     problem.workspace = FaultArtifact.load(path).workspace()
@@ -136,12 +155,12 @@ def test_failed_recovery_retains_workspace(tmp_path):
 
 
 def test_successful_recovery_removes_only_its_attempt_workspace(tmp_path):
-    from sregym.conductor.problems.generated_problem import GeneratedProblem
+    from sregym.conductor.problems.scripted_problem import ScriptedProblem
 
     artifact = FaultArtifact.load(make(tmp_path))
     other = artifact.workspace()
     workspace = artifact.workspace()
-    problem = GeneratedProblem.__new__(GeneratedProblem)
+    problem = ScriptedProblem.__new__(ScriptedProblem)
     problem.namespace = "ns"
     problem.workspace = workspace
     problem.fault_injected = True
@@ -155,9 +174,9 @@ def test_successful_recovery_removes_only_its_attempt_workspace(tmp_path):
 
 
 def test_recovery_before_injection_does_not_create_workspace():
-    from sregym.conductor.problems.generated_problem import GeneratedProblem
+    from sregym.conductor.problems.scripted_problem import ScriptedProblem
 
-    problem = GeneratedProblem.__new__(GeneratedProblem)
+    problem = ScriptedProblem.__new__(ScriptedProblem)
     problem.workspace = None
     problem.recover_fault()
     assert problem.workspace is None
@@ -166,8 +185,45 @@ def test_recovery_before_injection_does_not_create_workspace():
 
 def test_discover_extra_roots(tmp_path, monkeypatch):
     make(tmp_path, "b2")
-    monkeypatch.setenv("SREGYM_GENERATED_DIRS", str(tmp_path))
-    assert "gen_b2" in discover()
+    monkeypatch.setenv("SREGYM_FAULT_DIRS", str(tmp_path))
+    assert "stale_rate_cache_hotel_reservation" in discover_faults()
+
+
+def test_discover_nested_app_bundles(tmp_path, monkeypatch):
+    root = tmp_path / "apps"
+    faults = root / "hotel_reservation" / "faults"
+    faults.mkdir(parents=True)
+    path = make(faults)
+    monkeypatch.setattr("sregym.chaos.artifact.BUILTIN_FAULT_ROOT", root)
+    assert discover_faults()[META["problem_id"]].path == path
+
+
+def test_duplicate_problem_ids_are_rejected(tmp_path, monkeypatch):
+    make(tmp_path, "first")
+    make(tmp_path, "second")
+    monkeypatch.setattr("sregym.chaos.artifact.BUILTIN_FAULT_ROOT", tmp_path)
+    with pytest.raises(ValueError, match="Duplicate scripted problem ID"):
+        discover_faults()
+
+
+def test_extra_roots_cannot_shadow_builtin_ids(tmp_path, monkeypatch):
+    builtin, extra = tmp_path / "builtin", tmp_path / "extra"
+    builtin.mkdir()
+    extra.mkdir()
+    make(builtin)
+    make(extra)
+    monkeypatch.setattr("sregym.chaos.artifact.BUILTIN_FAULT_ROOT", builtin)
+    monkeypatch.setenv("SREGYM_FAULT_DIRS", str(extra))
+    with pytest.raises(ValueError, match="Duplicate scripted problem ID"):
+        discover_faults()
+
+
+def test_invalid_metadata_is_not_silently_omitted(tmp_path, monkeypatch):
+    path = make(tmp_path)
+    (path / "fault.json").write_text("{invalid")
+    monkeypatch.setattr("sregym.chaos.artifact.BUILTIN_FAULT_ROOT", tmp_path)
+    with pytest.raises(json.JSONDecodeError):
+        discover_faults()
 
 
 def test_notes_are_not_linted(tmp_path):

@@ -1,0 +1,18 @@
+{
+  "problem_id": "profile_storage_eviction_threshold_units_hotel_reservation",
+  "app": "hotel_reservation",
+  "recurrence_bound_s": 300,
+  "title": "Profile storage eviction thresholds use the wrong units",
+  "fault_layer": "app-config",
+  "fault_primitive": "Recurring MongoDB wiredTigerEngineRuntimeConfig publication from a detached mongo shell",
+  "root_cause_class": "orphaned_storage_eviction_threshold_unit_boundary",
+  "incident_class": "Cancelled storage tuning rollout with an unmanaged operational session and an ambiguous unit contract",
+  "affected_components": [
+    "mongodb-profile",
+    "profile",
+    "memcached-profile",
+    "frontend",
+    "mongodb-recommendation"
+  ],
+  "symptoms": "Hotel search and recommendation requests stall and fail while all application pods remain Running and Ready. Profile MongoDB still accepts management commands, but ordinary reads accumulate without waiting for locks. Failed reads populate incomplete cached profiles, causing frontend response-assembly panics and a large error-log surge."
+}

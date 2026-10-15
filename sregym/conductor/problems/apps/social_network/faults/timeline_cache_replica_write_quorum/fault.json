@@ -1,0 +1,20 @@
+{
+  "problem_id": "timeline_cache_replica_write_quorum_social_network",
+  "app": "social_network",
+  "recurrence_bound_s": 390,
+  "title": "Timeline caches require a nonexistent replica for writes",
+  "fault_layer": "app-config",
+  "fault_primitive": "A detached process in social-graph-mongodb periodically publishes Redis min-replicas-to-write=1 to both standalone timeline caches",
+  "root_cause_class": "orphaned_timeline_write_quorum_policy_publication",
+  "incident_class": "Leftover operational policy synchronization applies a replicated-store durability contract to standalone ephemeral caches",
+  "affected_components": [
+    "social-graph-mongodb",
+    "user-timeline-redis",
+    "home-timeline-redis",
+    "user-timeline-service",
+    "home-timeline-service",
+    "compose-post-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "All pods remain Running and Ready. Redis remains master and can answer reads and health checks, but rejects timeline writes and cache population with NOREPLICAS. Posting and some cold timeline reads fail, producing frontend and user-timeline errors. Repairs to runtime policy or restarts of destination caches work temporarily and regress within six minutes."
+}

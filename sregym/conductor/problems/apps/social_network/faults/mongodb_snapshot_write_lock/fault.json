@@ -1,0 +1,18 @@
+{
+  "problem_id": "mongodb_snapshot_write_lock_social_network",
+  "app": "social_network",
+  "recurrence_bound_s": 240,
+  "title": "MongoDB snapshot process repeatedly locks post writes",
+  "fault_layer": "data",
+  "fault_primitive": "MongoDB fsync write lock reacquired by a detached administrative shell in an existing remote container",
+  "root_cause_class": "orphaned_snapshot_quiescence_reconciliation",
+  "incident_class": "Leftover backup maintenance process with an unbounded write-freeze reconciliation loop",
+  "affected_components": [
+    "post-storage-mongodb",
+    "post-storage-service",
+    "compose-post-service",
+    "nginx-thrift",
+    "media-mongodb"
+  ],
+  "symptoms": "Publishing stalls, frontend Thrift reads time out, and end-user throughput falls far below 70 requests per second. All pods remain Running and Ready. MongoDB reads, collection contents, indexes, and Kubernetes routing remain normal; post inserts queue behind the global administrative write freeze."
+}

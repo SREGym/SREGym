@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REQUIRED_SCRIPTS = ("inject.sh", "recover.sh", "mitigate.sh")
-REQUIRED_FIELDS = ("app", "title", "fault_layer", "fault_primitive", "root_cause_class", "incident_class")
+REQUIRED_FIELDS = ("problem_id", "app", "title", "fault_layer", "fault_primitive", "root_cause_class", "incident_class")
 SUPPORTED_APPS = ("hotel_reservation", "social_network")
 # Leaks the fixer could read from cluster state. Scripts may use these words
 # in comments; resource names, labels and annotations may not.
@@ -36,12 +36,13 @@ SUSPICIOUS = re.compile(r"(?<![a-z])(" + "|".join(SUSPICIOUS_WORDS) + ")", re.I)
 # Files that can put content into the cluster (scripts, manifests, app config).
 CLUSTER_STATE_SUFFIXES = (".sh", ".py", ".yaml", ".yml", ".json", ".lua", ".conf", ".tmpl", ".cfg", ".ini", ".js")
 
-GENERATED_ROOT = Path(__file__).resolve().parents[1] / "conductor" / "problems" / "generated"
+BUILTIN_FAULT_ROOT = Path(__file__).resolve().parents[1] / "conductor" / "problems" / "apps"
+PROBLEM_ID_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*")
 
 
 def artifact_roots() -> list[Path]:
-    roots = [GENERATED_ROOT]
-    for extra in filter(None, os.environ.get("SREGYM_GENERATED_DIRS", "").split(":")):
+    roots = [BUILTIN_FAULT_ROOT]
+    for extra in filter(None, os.environ.get("SREGYM_FAULT_DIRS", "").split(os.pathsep)):
         roots.append(Path(extra))
     return roots
 
@@ -53,7 +54,10 @@ class FaultArtifact:
 
     @property
     def problem_id(self) -> str:
-        return f"gen_{self.path.name}"
+        value = self.meta.get("problem_id")
+        if not isinstance(value, str) or not PROBLEM_ID_PATTERN.fullmatch(value):
+            raise ValueError(f"{self.path}/fault.json: problem_id must be a lowercase snake_case name")
+        return value
 
     @property
     def app(self) -> str:
@@ -78,6 +82,10 @@ class FaultArtifact:
         out += [f"fault.json missing {key}" for key in REQUIRED_FIELDS if not self.meta.get(key)]
         if self.meta.get("app") not in SUPPORTED_APPS:
             out.append(f"unsupported app {self.meta.get('app')!r}")
+        try:
+            _ = self.problem_id
+        except ValueError as exc:
+            out.append(str(exc))
         try:
             _ = self.recurrence_bound_s
         except ValueError as exc:
@@ -140,16 +148,17 @@ class FaultWorkspace:
         shutil.rmtree(self.path)
 
 
-def discover() -> dict[str, FaultArtifact]:
+def discover_faults() -> dict[str, FaultArtifact]:
+    """Find app-owned fault bundles and optional SREGYM_FAULT_DIRS bundles."""
     found: dict[str, FaultArtifact] = {}
     for root in artifact_roots():
         if not root.is_dir():
             continue
-        for path in sorted(root.iterdir()):
-            if (path / "fault.json").is_file():
-                try:
-                    artifact = FaultArtifact.load(path)
-                except (OSError, json.JSONDecodeError):
-                    continue
-                found.setdefault(artifact.problem_id, artifact)
+        for metadata in sorted(root.rglob("fault.json")):
+            artifact = FaultArtifact.load(metadata.parent)
+            problem_id = artifact.problem_id
+            if problem_id in found:
+                previous = found[problem_id]
+                raise ValueError(f"Duplicate scripted problem ID {problem_id!r}: {previous.path} and {artifact.path}")
+            found[problem_id] = artifact
     return found

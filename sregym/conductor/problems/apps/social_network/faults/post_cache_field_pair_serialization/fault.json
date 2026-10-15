@@ -1,0 +1,22 @@
+{
+  "problem_id": "post_cache_field_pair_serialization_social_network",
+  "app": "social_network",
+  "recurrence_bound_s": 180,
+  "title": "Post caches contain field pairs instead of native records",
+  "fault_layer": "data",
+  "fault_primitive": "Detached content export publishes JSON field-pair records into native post-object and creator-ID cache slots",
+  "root_cause_class": "orphaned_content_export_field_pair_record_contract",
+  "incident_class": "Abandoned cache format migration with competing writers and delayed reconciliation",
+  "affected_components": [
+    "media-mongodb",
+    "post-storage-memcached",
+    "user-memcached",
+    "post-storage-service",
+    "user-mention-service",
+    "text-service",
+    "compose-post-service",
+    "user-timeline-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "Compose requests fail with stoul errors and timeline reads return HTTP 500 with a native JSON object/array type error, followed by RPC capacity loss and low throughput; all application pods remain Running and Ready. Empty home feeds can still succeed."
+}

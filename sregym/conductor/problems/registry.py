@@ -124,7 +124,7 @@ from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.service.kubectl import KubeCtl
-from sregym.conductor.problems.generated_problem import generated_problems
+from sregym.conductor.problems.scripted_problem import scripted_problems
 
 
 # fmt: off
@@ -306,8 +306,11 @@ class ProblemRegistry:
             **PORTED_PROBLEMS,
         }
 # fmt: on
-        # Generated mitigation-only problems (gen_<name>).
-        self.PROBLEM_REGISTRY.update(generated_problems())
+        scripted = scripted_problems()
+        duplicates = self.PROBLEM_REGISTRY.keys() & scripted.keys()
+        if duplicates:
+            raise ValueError(f"Scripted problem IDs already registered: {', '.join(sorted(duplicates))}")
+        self.PROBLEM_REGISTRY.update(scripted)
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 
