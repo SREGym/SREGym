@@ -9,6 +9,15 @@ from sregym.service.rollout import deployment_rollout_complete
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
 
+# Namespaced objects besides Deployments that the app depends on. Deleting one
+# leaves every pod Ready (until the next restart), so a pod walk cannot see it.
+_BASELINE_RESOURCES = (
+    ("Service", "core_v1_api", "list_namespaced_service"),
+    ("PersistentVolumeClaim", "core_v1_api", "list_namespaced_persistent_volume_claim"),
+    ("ConfigMap", "core_v1_api", "list_namespaced_config_map"),
+    ("StatefulSet", "apps_v1_api", "list_namespaced_stateful_set"),
+)
+
 
 class MitigationOracle(Oracle):
     importance = 1.0
@@ -26,6 +35,9 @@ class MitigationOracle(Oracle):
     # and "delete the deployment" passing.
     FAILURE_CLASSES = {
         "required_deployment_missing": FailureClass.AGENT_ERROR,
+        # Same reasoning for the other baseline objects: the agent either
+        # deleted one or did not restore the one the fault removed.
+        "required_resource_missing": FailureClass.AGENT_ERROR,
     }
 
     def __init__(self, problem):
@@ -35,18 +47,30 @@ class MitigationOracle(Oracle):
         # namespace is still empty and every replica check below would be
         # skipped, letting "scale to 0" and "delete the deployment" pass.
         self.replica_count = {}
+        self.resources = {}
         self.rollout_time = _ROLLOUT_SETTLE_SECONDS
 
     def capture_baseline(self) -> None:
-        """Capture pre-injection Deployments in the problem namespace.
+        """Capture pre-injection Deployments and the objects they depend on.
 
-        This is not a full resource baseline: Services and resources created by
-        inject_fault() are outside it. Faults that must preserve or validate
+        Records Deployment replica counts and the names of the namespace's
+        Services, PersistentVolumeClaims, ConfigMaps and StatefulSets. Objects
+        created by inject_fault() are outside it. Faults that must validate
         those resources need a custom mitigation oracle.
         """
         deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
         self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
+        self.resources = {
+            kind: set(items) for kind, items in self._list_resources(self.problem.kubectl, self.problem.namespace)
+        }
         self.rollout_time = _ROLLOUT_SETTLE_SECONDS
+
+    @staticmethod
+    def _list_resources(kubectl, namespace):
+        """Yield (kind, {name: object}) for each kind in _BASELINE_RESOURCES."""
+        for kind, api, method in _BASELINE_RESOURCES:
+            items = getattr(getattr(kubectl, api), method)(namespace).items
+            yield kind, {item.metadata.name: item for item in items}
 
     def _wait_for_rollouts(self, kubectl, namespace):
         """Wait for all deployments in the namespace to finish rolling out."""
@@ -111,6 +135,17 @@ class MitigationOracle(Oracle):
         unready = self.pods_unready(pod_list.items, namespace=namespace)
         if unready is not None:
             return unready
+
+        if self.resources:
+            current = dict(self._list_resources(kubectl, namespace))
+            for kind, names in self.resources.items():
+                for name in sorted(names):
+                    item = current[kind].get(name)
+                    # A PVC still mounted by a pod stays, Terminating, until the
+                    # pod goes; that is already a deletion.
+                    if item is None or item.metadata.deletion_timestamp is not None:
+                        print(f"❌ {kind} '{name}' from the healthy baseline is missing")
+                        return self.fail("required_resource_missing", kind=kind, name=name, namespace=namespace)
 
         return {"success": True}
 
