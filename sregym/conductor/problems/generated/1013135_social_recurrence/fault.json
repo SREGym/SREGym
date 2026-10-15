@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 180,
   "title": "Abandoned content export republishes field-pair cache records",
   "fault_layer": "data",
   "fault_primitive": "Detached content export publishes JSON field-pair records into native post-object and creator-ID cache slots",

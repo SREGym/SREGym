@@ -1,5 +1,6 @@
 {
   "app": "hotel_reservation",
+  "recurrence_bound_s": 180,
   "title": "HTTP transport alias in recurring frontend endpoint export",
   "fault_layer": "network",
   "fault_primitive": "Recurring EndpointSlice export binds the frontend HTTP port name to the discovery administration transport and peer inventory",

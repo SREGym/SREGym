@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 210,
   "title": "Recurring timeline checkpoint publication into live feed members",
   "fault_layer": "data",
   "fault_primitive": "Detached Redis publisher adds partition checkpoint epochs as post members in existing timeline sorted sets",

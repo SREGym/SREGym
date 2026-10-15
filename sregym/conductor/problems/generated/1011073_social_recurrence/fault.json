@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 240,
   "title": "Orphaned content snapshot coordinator reacquires the post-store write freeze",
   "fault_layer": "data",
   "fault_primitive": "MongoDB fsync write lock reacquired by a detached administrative shell in an existing remote container",

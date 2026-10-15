@@ -1,5 +1,6 @@
 {
   "app": "hotel_reservation",
+  "recurrence_bound_s": 420,
   "title": "Abandoned contact encryption publisher resumes after catalog repair",
   "fault_layer": "data",
   "fault_primitive": "recurring authenticated encryption of the existing MongoDB hotel address field from a detached cross-service publisher",

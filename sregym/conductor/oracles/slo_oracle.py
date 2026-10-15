@@ -25,11 +25,22 @@ class SLOMitigationOracle(Oracle):
         "protected_component_modified": FailureClass.AGENT_ERROR,
     }
 
-    def __init__(self, problem, sustained_seconds: int = 180, buffer_seconds: int = 30, min_rounds: int = 4):
+    def __init__(
+        self,
+        problem,
+        sustained_seconds: int = 180,
+        buffer_seconds: int = 30,
+        min_rounds: int = 4,
+        recurrence_bound_s: int = 0,
+    ):
         super().__init__(problem)
-        self.sustained_seconds = sustained_seconds
+        # Observe the next natural recurrence plus complete workload rounds.
+        # Never reinject the fault into a correctly repaired application.
+        round_s = slo.round_seconds(problem.app)
+        self.sustained_seconds = max(sustained_seconds, recurrence_bound_s + 3 * round_s if recurrence_bound_s else 0)
         self.buffer_seconds = buffer_seconds
         self.min_rounds = min_rounds
+        self.evaluation_timeout_seconds = max(900, buffer_seconds + self.sustained_seconds + 3 * round_s + 120)
         self.slo: slo.SLO | None = None
         self.baseline_verdict: slo.WindowVerdict | None = None
         self.protected_before: dict[str, str] | None = None

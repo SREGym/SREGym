@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 210,
   "title": "Recurring timeline cache session quota collapse",
   "fault_layer": "capacity",
   "fault_primitive": "Detached in-container Bash reconciler repeatedly applies Redis CONFIG SET maxclients 1 and CLIENT KILL, retaining the sole management connection",

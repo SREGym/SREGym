@@ -1,5 +1,6 @@
 {
   "app": "hotel_reservation",
+  "recurrence_bound_s": 270,
   "title": "Dormant directory refresh re-advertises a datastore endpoint as the live rate service",
   "fault_layer": "service-discovery",
   "fault_primitive": "Detached in-container directory synchronizer repeatedly overwrites existing Consul rate registrations after a four-minute stabilization interval",

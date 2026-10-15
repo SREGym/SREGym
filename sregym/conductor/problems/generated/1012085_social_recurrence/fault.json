@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 390,
   "title": "Timeline write admission regresses after cache policy repair",
   "fault_layer": "app-config",
   "fault_primitive": "A detached process in social-graph-mongodb periodically publishes Redis min-replicas-to-write=1 to both standalone timeline caches",

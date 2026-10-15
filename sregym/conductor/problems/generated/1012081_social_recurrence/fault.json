@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 240,
   "title": "Orphaned cache access sync repeatedly narrows timeline key coverage",
   "fault_layer": "app-config",
   "fault_primitive": "recurring Redis default-user key-pattern ACL reconciliation by an unmanaged detached process",

@@ -78,6 +78,9 @@ class GeneratedProblem(Problem):
     impact_window_s = 150
 
     def __init__(self, artifact: FaultArtifact):
+        problems = artifact.problems()
+        if problems:
+            raise ValueError(f"Invalid fault artifact {artifact.path}: {'; '.join(problems)}")
         self.artifact = artifact
         self.workspace: FaultWorkspace | None = None
         super().__init__(app=make_app(artifact.app))
@@ -90,7 +93,7 @@ class GeneratedProblem(Problem):
         self.app.create_workload(duration=30)
         # StreamWorkloadManager.log_history is a class attribute; keep this run's rounds separate.
         self.app.wrk.log_history = []
-        self.mitigation_oracle = SLOMitigationOracle(problem=self)
+        self.mitigation_oracle = SLOMitigationOracle(problem=self, recurrence_bound_s=artifact.recurrence_bound_s)
         self.alerts = FiringAlerts(self)
         self.gates: dict = {}
 

@@ -1,5 +1,6 @@
 {
   "app": "hotel_reservation",
+  "recurrence_bound_s": 270,
   "title": "Abandoned directory recovery replays a retired rate generation",
   "fault_layer": "app-config",
   "fault_primitive": "Recurring native Consul snapshot restoration with agent-registration quiescence from a detached process inside an existing recommendation container",

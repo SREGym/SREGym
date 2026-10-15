@@ -1,5 +1,6 @@
 {
   "app": "hotel_reservation",
+  "recurrence_bound_s": 270,
   "title": "Detached catalog exporter republishes shell literals into the profile cache",
   "fault_layer": "data",
   "fault_primitive": "Recurring Memcached publication of Mongo shell JavaScript literals under existing hotel keys",

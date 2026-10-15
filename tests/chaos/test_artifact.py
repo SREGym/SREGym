@@ -36,6 +36,12 @@ def test_valid_artifact(tmp_path):
     assert artifact.problem_id == "gen_a1"
 
 
+@pytest.mark.parametrize("value", [-1, True, "360", 3.5])
+def test_invalid_recurrence_bound_is_reported(tmp_path, value):
+    artifact = FaultArtifact.load(make(tmp_path, meta={**META, "recurrence_bound_s": value}))
+    assert "recurrence_bound_s must be a nonnegative integer" in artifact.problems()
+
+
 def test_missing_fields_and_scripts(tmp_path):
     path = make(tmp_path, meta={"app": "astronomy_shop"})
     (path / "mitigate.sh").unlink()

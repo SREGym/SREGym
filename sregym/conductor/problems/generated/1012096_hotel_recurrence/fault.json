@@ -1,5 +1,6 @@
 {
   "app": "hotel_reservation",
+  "recurrence_bound_s": 300,
   "title": "Profile storage eviction budget repeatedly returns to byte-sized thresholds",
   "fault_layer": "app-config",
   "fault_primitive": "Recurring MongoDB wiredTigerEngineRuntimeConfig publication from a detached mongo shell",

@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 180,
   "title": "Timeline reply budgets regress after cache session repair",
   "fault_layer": "app-config",
   "fault_primitive": "Redis normal-client output buffer limit repeatedly published as a MiB count instead of bytes by a detached Python maintenance process",

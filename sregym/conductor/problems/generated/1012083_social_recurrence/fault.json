@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 330,
   "title": "Timeline snapshot destination drifts back to the runtime configuration path",
   "fault_layer": "app-config",
   "fault_primitive": "Detached in-container snapshot loop repeatedly changes Redis RDB destination and reinstates write protection",

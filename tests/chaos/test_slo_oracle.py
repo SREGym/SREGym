@@ -9,7 +9,7 @@ from sregym.conductor.oracles.slo_oracle import SLOMitigationOracle
 @pytest.fixture
 def oracle(monkeypatch):
     monkeypatch.setattr(protected, "snapshot", lambda _: {})
-    app = SimpleNamespace(namespace="app", wrk=SimpleNamespace(wrk=SimpleNamespace(rate=100)))
+    app = SimpleNamespace(namespace="app", wrk=SimpleNamespace(wrk=SimpleNamespace(rate=100, duration=30)))
     return SLOMitigationOracle(SimpleNamespace(app=app), buffer_seconds=0)
 
 
@@ -48,3 +48,24 @@ def test_healthy_baseline_calibrates_latency_and_timeouts(oracle, monkeypatch):
     assert oracle.slo.p99_limit_ms == 1250
     assert oracle.slo.timeout_limit == 0.16
     assert oracle.slo.error_limit == 0.05
+
+
+def test_observation_covers_recurrence_and_complete_rounds(oracle):
+    recurring = SLOMitigationOracle(oracle.problem, sustained_seconds=180, recurrence_bound_s=390)
+    assert recurring.sustained_seconds == 483
+    assert recurring.evaluation_timeout_seconds >= recurring.buffer_seconds + 483 + 93 + 60
+
+
+def test_temporary_repair_fails_after_recurrence(oracle, monkeypatch):
+    recurring = SLOMitigationOracle(oracle.problem, buffer_seconds=0, recurrence_bound_s=390)
+    recurring.slo = slo.SLO(target_rps=100)
+
+    def collect(app, window_s, min_rounds):
+        assert window_s >= 483
+        return [
+            slo.RoundStats(time=i, requests=3000, duration_s=30, p99_ms=10, non2xx=1500 if i >= 390 else 0)
+            for i in range(0, int(window_s), 31)
+        ]
+
+    monkeypatch.setattr(slo, "collect_rounds", collect)
+    assert recurring.evaluate()["success"] is False

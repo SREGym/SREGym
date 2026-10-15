@@ -59,6 +59,14 @@ class FaultArtifact:
     def app(self) -> str:
         return self.meta["app"]
 
+    @property
+    def recurrence_bound_s(self) -> int:
+        """Maximum normal delay before an incomplete repair regresses."""
+        value = self.meta.get("recurrence_bound_s", 0)
+        if type(value) is not int or value < 0:
+            raise ValueError("recurrence_bound_s must be a nonnegative integer")
+        return value
+
     @classmethod
     def load(cls, path: Path) -> FaultArtifact:
         meta = json.loads((path / "fault.json").read_text())
@@ -70,6 +78,10 @@ class FaultArtifact:
         out += [f"fault.json missing {key}" for key in REQUIRED_FIELDS if not self.meta.get(key)]
         if self.meta.get("app") not in SUPPORTED_APPS:
             out.append(f"unsupported app {self.meta.get('app')!r}")
+        try:
+            _ = self.recurrence_bound_s
+        except ValueError as exc:
+            out.append(str(exc))
         return out
 
     def leak_findings(self) -> list[str]:

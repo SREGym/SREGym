@@ -1,5 +1,6 @@
 {
   "app": "social_network",
+  "recurrence_bound_s": 180,
   "title": "Abandoned form schema publisher restores a truncated request argument budget",
   "fault_layer": "app-code",
   "fault_primitive": "Recurring publication of a three-field OpenResty form parser limit by an unmanaged process in another container",
