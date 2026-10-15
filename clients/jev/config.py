@@ -8,7 +8,7 @@ from pathlib import Path
 MODEL_ENV = "AGENT_JEV_MODEL"
 KEY_ENV = "TYPESAFE_API_KEY"
 
-INSTRUCTION = """
+_PLANNING_INSTRUCTION = """
 DECISION SUPPORT
 Use `jev_plan` after the first observations, before choosing a root cause.
 Propose 3-5 competing explanations with a read-only test for each.
@@ -24,7 +24,9 @@ Use the observed outcomes to reject explanations, not just accumulate supporting
 If the tests do not identify a cause, propose different tests through `jev_plan`.
 Historical startup errors and Ready Pods alone do not establish the current problem.
 
-Use `jev_submit` for diagnosis before applying a repair. Supply the causal mechanism
+"""
+
+_TWO_STAGE_INSTRUCTION = """Use `jev_submit` for diagnosis before applying a repair. Supply the causal mechanism
 and fresh evidence that distinguishes it from alternatives. Wait for accepted.
 If the review refuses submission, the tool requires a new `jev_plan` before retrying.
 Propose tests that can disprove the rejected explanation and examine other application operations.
@@ -33,12 +35,38 @@ After diagnosis is accepted, apply the smallest mechanism-level repair.
 Test the original failing behavior and unaffected operations, then use `jev_submit` for mitigation.
 Check that the fix remains valid during ordinary restarts, placement changes, and requests.
 
-The planner uses Choice and Score; submission uses separate Noul evidence questions.
+"""
+
+_GUIDANCE_INSTRUCTION = """The planner uses Choice and Score; submission uses separate Noul evidence questions.
 Confidence and probability are experimental guidance, not guarantees of correctness.
 Never treat a high test ranking as proof of its cause.
 If Jev fails, report the error and continue investigating; do not assume submission succeeded.
 Do not send passwords, tokens, or API keys.
 """
+
+INSTRUCTION = _PLANNING_INSTRUCTION + _TWO_STAGE_INSTRUCTION + _GUIDANCE_INSTRUCTION
+
+_MITIGATION_INSTRUCTION = """This problem has no diagnosis submission stage.
+Investigate the cause with `jev_plan`, then apply a mechanism-level repair.
+Test the original failing behavior and unaffected operations.
+Use `jev_submit` with stage=mitigation, your diagnosis, applied_action, and before/after evidence.
+Only status=accepted confirms submission. not_submitted means no submission occurred.
+If review refuses submission, call `jev_plan`, run new tests, and retry mitigation.
+Do not bypass the review with curl or exit before an accepted submission.
+Check that the repair survives ordinary restarts and application requests.
+
+"""
+
+
+def get_instructions(stages: list[str] | None) -> tuple[str, str]:
+    """Select the Jev workflow and submission contract for the active stages."""
+    if stages == ["mitigation"]:
+        return (
+            _PLANNING_INSTRUCTION + _MITIGATION_INSTRUCTION + _GUIDANCE_INSTRUCTION,
+            "HOW TO SUBMIT:\n\n" + _MITIGATION_INSTRUCTION.rstrip("\n"),
+        )
+    return INSTRUCTION, SUBMISSION_INSTRUCTION
+
 
 SUBMISSION_INSTRUCTION = """HOW TO SUBMIT:
 

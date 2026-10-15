@@ -24,10 +24,9 @@ init_logger()
 
 from clients.codex.codex_agent import CodexAgent, custom_provider_args, filtered_runtime_args  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
-from clients.harness.stages import adapt_instruction  # noqa: E402
-from clients.jev.config import INSTRUCTION as JEV_INSTRUCTION  # noqa: E402
+from clients.harness.stages import mitigation_workflow  # noqa: E402
 from clients.jev.config import MODEL_ENV as JEV_MODEL_ENV
-from clients.jev.config import SUBMISSION_INSTRUCTION as JEV_SUBMISSION_INSTRUCTION
+from clients.jev.config import get_instructions as jev_instructions  # noqa: E402
 
 logger = logging.getLogger("all.codex.driver")
 
@@ -166,8 +165,9 @@ def build_instruction(app_info: dict) -> str:
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
     descriptions = app_info.get("descriptions", "")
+    jev_instruction, jev_submission = jev_instructions(app_info.get("stages"))
     submission_instruction = (
-        JEV_SUBMISSION_INSTRUCTION
+        jev_submission
         if os.environ.get(JEV_MODEL_ENV)
         else f"""HOW TO SUBMIT:
 
@@ -184,17 +184,7 @@ For MITIGATION stage:
 """
     ).rstrip("\n")
 
-    # Build instruction similar to how it would be done in Harbor
-    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
-
-Application: {app_name}
-Namespace: {namespace}
-
-{descriptions}
-
-CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
-
-WORKFLOW: You will perform TWO tasks in sequence:
+    workflow = f"""WORKFLOW: You will perform TWO tasks in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
@@ -211,6 +201,23 @@ TASK 2: MITIGATION
 - Your fix is also evaluated on whether it addresses the root cause, not just the symptoms
 
 {submission_instruction}
+""".rstrip("\n")
+    if app_info.get("stages") == ["mitigation"]:
+        workflow = mitigation_workflow(
+            get_api_base_url(),
+            submission_instruction=jev_submission if os.environ.get(JEV_MODEL_ENV) else None,
+        )
+
+    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
+
+Application: {app_name}
+Namespace: {namespace}
+
+{descriptions}
+
+CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
+
+{workflow}
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
@@ -219,7 +226,7 @@ Important:
 """
 
     if os.environ.get(JEV_MODEL_ENV):
-        instruction += JEV_INSTRUCTION
+        instruction += jev_instruction
     logger.info(f"Built instruction:\n{instruction}")
     return instruction
 
@@ -323,7 +330,6 @@ def main():
 
     # Build instruction
     instruction = build_instruction(app_info)
-    instruction = adapt_instruction(instruction, app_info, get_api_base_url())
 
     # Initialize Codex agent
     logs_dir = Path(args.logs_dir)
