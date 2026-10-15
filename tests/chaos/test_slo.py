@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from sregym.chaos.slo import SLO, collect_rounds, judge, parse_round
 from sregym.generators.workload.base import WorkloadEntry
 
@@ -117,6 +119,14 @@ def test_calibration_never_relaxes_absolute_ceilings():
     assert policy.error_limit == 0.05
     assert policy.timeout_limit == 0.25
     assert policy.p99_limit_ms == 5000
+
+
+@pytest.mark.parametrize("errors,expected", [(0, False), (49, False), (50, False), (51, True), (1000, True)])
+def test_absolute_error_budget_boundary(errors, expected):
+    stats = parse_round(
+        entry(ROUND.replace("2990 requests", "1000 requests").replace("290", str(errors)).replace("1.20s", "20.00ms"))
+    )
+    assert any(v.startswith("error_ratio") for v in SLO(target_rps=30).violations(stats)) is expected
 
 
 def test_log_surges():
