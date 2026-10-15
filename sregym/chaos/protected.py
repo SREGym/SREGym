@@ -38,8 +38,7 @@ _VOLATILE_ANNOTATIONS = (
 
 def _kubectl_json(args: list[str]) -> dict:
     out = subprocess.run(["kubectl", *args, "-o", "json"], capture_output=True, text=True, timeout=60)
-    if out.returncode != 0:
-        return {"items": [], "error": out.stderr.strip()[:300]}
+    out.check_returncode()
     return json.loads(out.stdout)
 
 

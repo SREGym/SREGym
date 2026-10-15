@@ -149,8 +149,15 @@ class GeneratedProblem(Problem):
             later = oracle.measure(120)
             self.gates.update(persistence=later.to_dict(), persistence_pass=later.violated)
             self.gates["new_alerts"] = sorted(set(self.gates["new_alerts"]) | set(self.alerts.new()))
+        # Request failures and latency are observable without a Prometheus alert.
+        self.gates["request_symptoms"] = sorted(
+            {reason for detail in impact.details for reason in detail["violations"]}
+        )
         self.gates["observability_pass"] = bool(
-            self.gates["new_alerts"] or self.gates["log_surges"] or self.gates["cpu_surges"]
+            self.gates["new_alerts"]
+            or self.gates["log_surges"]
+            or self.gates["cpu_surges"]
+            or (impact.measurement_complete and self.gates["request_symptoms"])
         )
         self.gates["integrity_pass"] = self.gates["integrity"]["intact"] and self.gates["workload_running"]
         self.gates["no_leak_pass"] = not self.gates["leaks"]
@@ -159,6 +166,14 @@ class GeneratedProblem(Problem):
             f"[GATES] impact={impact.violated} ({impact.violating}/{impact.rounds} rounds) "
             f"alerts={self.gates['new_alerts']} integrity={self.gates['integrity_pass']}"
         )
+        required = ["impact_pass", "observability_pass", "integrity_pass", "no_leak_pass"]
+        if persistence_s > 0:
+            required.append("persistence_pass")
+        failed = [name for name in required if not self.gates[name]]
+        if not impact.measurement_complete:
+            failed.append("complete_workload_measurement")
+        if failed:
+            raise RuntimeError(f"Generated fault validation failed: {', '.join(failed)}")
 
     def recover_fault(self):
         if self.workspace is None:
