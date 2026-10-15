@@ -1,5 +1,5 @@
 {
-  "problem_id": "post_cache_field_pair_serialization_social_network",
+  "problem_id": "post_cache_record_format_mismatch_social_network",
   "app": "social_network",
   "recurrence_bound_s": 180,
   "title": "Post caches contain field pairs instead of native records",

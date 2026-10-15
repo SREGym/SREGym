@@ -1,5 +1,5 @@
 {
-  "problem_id": "timeline_checkpoint_member_pollution_social_network",
+  "problem_id": "timeline_checkpoint_ids_in_feed_social_network",
   "app": "social_network",
   "recurrence_bound_s": 210,
   "title": "Timeline cache mixes checkpoint IDs with post IDs",

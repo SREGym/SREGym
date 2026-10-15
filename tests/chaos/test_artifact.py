@@ -138,11 +138,11 @@ def test_equal_names_in_different_roots_do_not_share_scripts(tmp_path):
 
 
 def test_failed_recovery_retains_workspace(tmp_path):
-    from sregym.conductor.problems.scripted_problem import ScriptedProblem
+    from sregym.conductor.problems.slo_problem import SLOProblem
 
     path = make(tmp_path, inject='echo saved > "$ARTIFACT_DIR/state"')
     (path / "recover.sh").write_text("exit 1")
-    problem = ScriptedProblem.__new__(ScriptedProblem)
+    problem = SLOProblem.__new__(SLOProblem)
     problem.namespace = "ns"
     problem.fault_injected = True
     problem.workspace = FaultArtifact.load(path).workspace()
@@ -155,12 +155,12 @@ def test_failed_recovery_retains_workspace(tmp_path):
 
 
 def test_successful_recovery_removes_only_its_attempt_workspace(tmp_path):
-    from sregym.conductor.problems.scripted_problem import ScriptedProblem
+    from sregym.conductor.problems.slo_problem import SLOProblem
 
     artifact = FaultArtifact.load(make(tmp_path))
     other = artifact.workspace()
     workspace = artifact.workspace()
-    problem = ScriptedProblem.__new__(ScriptedProblem)
+    problem = SLOProblem.__new__(SLOProblem)
     problem.namespace = "ns"
     problem.workspace = workspace
     problem.fault_injected = True
@@ -174,9 +174,9 @@ def test_successful_recovery_removes_only_its_attempt_workspace(tmp_path):
 
 
 def test_recovery_before_injection_does_not_create_workspace():
-    from sregym.conductor.problems.scripted_problem import ScriptedProblem
+    from sregym.conductor.problems.slo_problem import SLOProblem
 
-    problem = ScriptedProblem.__new__(ScriptedProblem)
+    problem = SLOProblem.__new__(SLOProblem)
     problem.workspace = None
     problem.recover_fault()
     assert problem.workspace is None
@@ -191,9 +191,9 @@ def test_discover_extra_roots(tmp_path, monkeypatch):
 
 def test_discover_nested_app_bundles(tmp_path, monkeypatch):
     root = tmp_path / "apps"
-    faults = root / "hotel_reservation" / "faults"
-    faults.mkdir(parents=True)
-    path = make(faults)
+    app = root / "hotel_reservation"
+    app.mkdir(parents=True)
+    path = make(app)
     monkeypatch.setattr("sregym.chaos.artifact.BUILTIN_FAULT_ROOT", root)
     assert discover_faults()[META["problem_id"]].path == path
 
@@ -202,7 +202,7 @@ def test_duplicate_problem_ids_are_rejected(tmp_path, monkeypatch):
     make(tmp_path, "first")
     make(tmp_path, "second")
     monkeypatch.setattr("sregym.chaos.artifact.BUILTIN_FAULT_ROOT", tmp_path)
-    with pytest.raises(ValueError, match="Duplicate scripted problem ID"):
+    with pytest.raises(ValueError, match="Duplicate problem ID"):
         discover_faults()
 
 
@@ -214,7 +214,7 @@ def test_extra_roots_cannot_shadow_builtin_ids(tmp_path, monkeypatch):
     make(extra)
     monkeypatch.setattr("sregym.chaos.artifact.BUILTIN_FAULT_ROOT", builtin)
     monkeypatch.setenv("SREGYM_FAULT_DIRS", str(extra))
-    with pytest.raises(ValueError, match="Duplicate scripted problem ID"):
+    with pytest.raises(ValueError, match="Duplicate problem ID"):
         discover_faults()
 
 

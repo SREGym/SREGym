@@ -1,8 +1,8 @@
 {
-  "problem_id": "frontend_endpoint_transport_mismatch_hotel_reservation",
+  "problem_id": "frontend_endpointslice_wrong_backend_hotel_reservation",
   "app": "hotel_reservation",
   "recurrence_bound_s": 180,
-  "title": "Frontend endpoint export uses the wrong transport",
+  "title": "Frontend EndpointSlice routes requests to the wrong backends",
   "fault_layer": "network",
   "fault_primitive": "Recurring EndpointSlice export binds the frontend HTTP port name to the discovery administration transport and peer inventory",
   "root_cause_class": "runtime_endpoint_export_transport_capability_alias",

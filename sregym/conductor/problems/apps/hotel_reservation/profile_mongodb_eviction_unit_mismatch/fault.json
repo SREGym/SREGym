@@ -1,8 +1,8 @@
 {
-  "problem_id": "profile_storage_eviction_threshold_units_hotel_reservation",
+  "problem_id": "profile_mongodb_eviction_unit_mismatch_hotel_reservation",
   "app": "hotel_reservation",
   "recurrence_bound_s": 300,
-  "title": "Profile storage eviction thresholds use the wrong units",
+  "title": "Profile MongoDB eviction thresholds use the wrong units",
   "fault_layer": "app-config",
   "fault_primitive": "Recurring MongoDB wiredTigerEngineRuntimeConfig publication from a detached mongo shell",
   "root_cause_class": "orphaned_storage_eviction_threshold_unit_boundary",

@@ -159,6 +159,6 @@ def discover_faults() -> dict[str, FaultArtifact]:
             problem_id = artifact.problem_id
             if problem_id in found:
                 previous = found[problem_id]
-                raise ValueError(f"Duplicate scripted problem ID {problem_id!r}: {previous.path} and {artifact.path}")
+                raise ValueError(f"Duplicate problem ID {problem_id!r}: {previous.path} and {artifact.path}")
             found[problem_id] = artifact
     return found

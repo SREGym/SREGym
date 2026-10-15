@@ -1,5 +1,5 @@
 {
-  "problem_id": "rate_service_registration_drift_hotel_reservation",
+  "problem_id": "rate_service_wrong_consul_address_hotel_reservation",
   "app": "hotel_reservation",
   "recurrence_bound_s": 270,
   "title": "Rate service registration points to MongoDB",

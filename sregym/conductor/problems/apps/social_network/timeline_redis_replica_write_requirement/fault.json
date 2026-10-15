@@ -1,11 +1,11 @@
 {
-  "problem_id": "timeline_cache_replica_write_quorum_social_network",
+  "problem_id": "timeline_redis_replica_write_requirement_social_network",
   "app": "social_network",
   "recurrence_bound_s": 390,
   "title": "Timeline caches require a nonexistent replica for writes",
   "fault_layer": "app-config",
   "fault_primitive": "A detached process in social-graph-mongodb periodically publishes Redis min-replicas-to-write=1 to both standalone timeline caches",
-  "root_cause_class": "orphaned_timeline_write_quorum_policy_publication",
+  "root_cause_class": "orphaned_timeline_replica_requirement_publication",
   "incident_class": "Leftover operational policy synchronization applies a replicated-store durability contract to standalone ephemeral caches",
   "affected_components": [
     "social-graph-mongodb",

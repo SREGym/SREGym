@@ -1,6 +1,6 @@
-"""Mitigation-only problems with script-defined fault lifecycles.
+"""Mitigation-only problems graded by the application's SLO.
 
-``ScriptedProblem`` runs a fault artifact (see ``sregym/chaos/artifact.py``)
+``SLOProblem`` runs a fault artifact (see ``sregym/chaos/artifact.py``)
 through the conductor. There is no diagnosis oracle: mitigation is graded by
 the SLO measured from the workload generator, so no LLM judge is involved in
 scoring.
@@ -74,7 +74,7 @@ class FiringAlerts:
         )
 
 
-class ScriptedProblem(Problem):
+class SLOProblem(Problem):
     # Seconds of post-injection workload used to judge impact; it doubles as
     # the propagation window before the agent starts.
     impact_window_s = 150
@@ -176,7 +176,7 @@ class ScriptedProblem(Problem):
             required.append("persistence_pass")
         failed = [name for name in required if not self.gates[name]]
         if failed:
-            raise RuntimeError(f"Scripted fault validation failed: {', '.join(failed)}")
+            raise RuntimeError(f"Fault injection validation failed: {', '.join(failed)}")
 
     @mark_fault_injected(strict=True)
     def recover_fault(self):
@@ -189,8 +189,8 @@ class ScriptedProblem(Problem):
         self.workspace = None
 
 
-def scripted_problems() -> dict[str, Callable[[], ScriptedProblem]]:
+def slo_problems() -> dict[str, Callable[[], SLOProblem]]:
     """Registry entries for every artifact under the configured roots."""
     from sregym.chaos.artifact import discover_faults
 
-    return {problem_id: partial(ScriptedProblem, artifact) for problem_id, artifact in discover_faults().items()}
+    return {problem_id: partial(SLOProblem, artifact) for problem_id, artifact in discover_faults().items()}

@@ -1,5 +1,5 @@
 {
-  "problem_id": "timeline_snapshot_path_misconfiguration_social_network",
+  "problem_id": "timeline_redis_snapshot_wrong_directory_social_network",
   "app": "social_network",
   "recurrence_bound_s": 330,
   "title": "Timeline Redis snapshot targets its configuration directory",

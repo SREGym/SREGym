@@ -5,25 +5,25 @@ import pytest
 
 from sregym.chaos import protected, slo, telemetry
 from sregym.chaos.artifact import discover_faults
-from sregym.conductor.problems.scripted_problem import ScriptedProblem, scripted_problems
+from sregym.conductor.problems.slo_problem import SLOProblem, slo_problems
 
 BUILTIN_PROBLEM_IDS = {
     "consul_stale_snapshot_restore_hotel_reservation",
-    "frontend_endpoint_transport_mismatch_hotel_reservation",
+    "frontend_endpointslice_wrong_backend_hotel_reservation",
     "frontend_form_field_limit_social_network",
     "mongodb_snapshot_write_lock_social_network",
-    "post_cache_field_pair_serialization_social_network",
+    "post_cache_record_format_mismatch_social_network",
     "profile_address_encryption_mismatch_hotel_reservation",
-    "profile_cache_shell_literal_serialization_hotel_reservation",
-    "profile_cache_unresolved_object_references_hotel_reservation",
-    "profile_storage_eviction_threshold_units_hotel_reservation",
-    "rate_service_registration_drift_hotel_reservation",
-    "timeline_cache_acl_key_restriction_social_network",
-    "timeline_cache_client_limit_social_network",
-    "timeline_cache_output_buffer_units_social_network",
-    "timeline_cache_replica_write_quorum_social_network",
-    "timeline_checkpoint_member_pollution_social_network",
-    "timeline_snapshot_path_misconfiguration_social_network",
+    "profile_cache_invalid_json_hotel_reservation",
+    "profile_cache_unresolved_json_references_hotel_reservation",
+    "profile_mongodb_eviction_unit_mismatch_hotel_reservation",
+    "rate_service_wrong_consul_address_hotel_reservation",
+    "timeline_checkpoint_ids_in_feed_social_network",
+    "timeline_redis_acl_key_restriction_social_network",
+    "timeline_redis_client_limit_too_low_social_network",
+    "timeline_redis_output_buffer_unit_mismatch_social_network",
+    "timeline_redis_replica_write_requirement_social_network",
+    "timeline_redis_snapshot_wrong_directory_social_network",
 }
 
 
@@ -34,8 +34,8 @@ def test_builtin_fault_names_and_layout(monkeypatch):
     for problem_id, artifact in faults.items():
         assert artifact.problems() == []
         assert problem_id == f"{artifact.path.name}_{artifact.app}"
-        assert artifact.path.parent.name == "faults"
-        assert artifact.path.parent.parent.name == artifact.app
+        assert artifact.path.parent.name == artifact.app
+        assert artifact.path.parent.parent.name == "apps"
 
 
 def test_every_builtin_factory_selects_its_application(monkeypatch):
@@ -45,11 +45,11 @@ def test_every_builtin_factory_selects_its_application(monkeypatch):
     monkeypatch.setattr("sregym.generators.workload.wrk2.config.load_kube_config", lambda: None)
     monkeypatch.setattr("sregym.generators.workload.wrk2.client.CoreV1Api", Mock)
     monkeypatch.setattr("sregym.generators.workload.wrk2.client.BatchV1Api", Mock)
-    factories = scripted_problems()
+    factories = slo_problems()
     assert set(factories) == BUILTIN_PROBLEM_IDS
     for problem_id, factory in factories.items():
         problem = factory()
-        assert isinstance(problem, ScriptedProblem)
+        assert isinstance(problem, SLOProblem)
         assert problem.problem_id == problem_id
         assert problem.namespace == problem.artifact.app.replace("_", "-")
         assert problem.diagnosis_oracle is None
@@ -57,7 +57,7 @@ def test_every_builtin_factory_selects_its_application(monkeypatch):
         assert not problem.fault_injected
 
 
-def test_registry_keeps_existing_and_scripted_ids(monkeypatch):
+def test_registry_keeps_existing_and_slo_ids(monkeypatch):
     from sregym.conductor.problems.registry import ProblemRegistry
 
     monkeypatch.delenv("SREGYM_FAULT_DIRS", raising=False)
@@ -69,14 +69,14 @@ def test_registry_keeps_existing_and_scripted_ids(monkeypatch):
     assert not any(problem_id.startswith("gen_") for problem_id in entries)
 
 
-def test_scripted_ids_cannot_replace_existing_registry_entries(monkeypatch):
+def test_slo_ids_cannot_replace_existing_registry_entries(monkeypatch):
     from sregym.conductor.problems.registry import ProblemRegistry
 
     monkeypatch.setattr(
-        "sregym.conductor.problems.registry.scripted_problems",
+        "sregym.conductor.problems.registry.slo_problems",
         lambda: {"misconfig_app_hotel_res": Mock()},
     )
-    with pytest.raises(ValueError, match="Scripted problem IDs already registered: misconfig_app_hotel_res"):
+    with pytest.raises(ValueError, match="SLO problem IDs already registered: misconfig_app_hotel_res"):
         ProblemRegistry()
 
 
@@ -88,8 +88,8 @@ def problem(monkeypatch):
     oracle = SimpleNamespace(
         slo=policy, baseline_verdict=slo.judge(policy, healthy), measure=Mock(return_value=slo.judge(policy, broken))
     )
-    p = ScriptedProblem.__new__(ScriptedProblem)
-    p.problem_id = "scripted_example"
+    p = SLOProblem.__new__(SLOProblem)
+    p.problem_id = "slo_example"
     p.namespace = "app"
     p.fault_injected = False
     p.mitigation_oracle = oracle

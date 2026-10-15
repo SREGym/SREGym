@@ -1,5 +1,5 @@
 {
-  "problem_id": "timeline_cache_output_buffer_units_social_network",
+  "problem_id": "timeline_redis_output_buffer_unit_mismatch_social_network",
   "app": "social_network",
   "recurrence_bound_s": 180,
   "title": "Timeline Redis output buffer limit uses the wrong units",

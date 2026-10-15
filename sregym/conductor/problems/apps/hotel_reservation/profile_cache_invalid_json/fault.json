@@ -1,5 +1,5 @@
 {
-  "problem_id": "profile_cache_shell_literal_serialization_hotel_reservation",
+  "problem_id": "profile_cache_invalid_json_hotel_reservation",
   "app": "hotel_reservation",
   "recurrence_bound_s": 270,
   "title": "Profile cache contains MongoDB shell literals instead of JSON",

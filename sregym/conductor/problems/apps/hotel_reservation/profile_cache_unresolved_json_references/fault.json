@@ -1,8 +1,8 @@
 {
-  "problem_id": "profile_cache_unresolved_object_references_hotel_reservation",
+  "problem_id": "profile_cache_unresolved_json_references_hotel_reservation",
   "app": "hotel_reservation",
   "recurrence_bound_s": 210,
-  "title": "Profile cache contains unresolved object references",
+  "title": "Profile cache contains unresolved JSON references",
   "fault_layer": "data",
   "fault_primitive": "recurring Memcached publication of unresolved JSON Pointer object references",
   "root_cause_class": "catalog_object_reference_scope_recurrence",

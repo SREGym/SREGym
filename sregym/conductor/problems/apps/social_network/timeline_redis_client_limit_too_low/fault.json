@@ -1,5 +1,5 @@
 {
-  "problem_id": "timeline_cache_client_limit_social_network",
+  "problem_id": "timeline_redis_client_limit_too_low_social_network",
   "app": "social_network",
   "recurrence_bound_s": 210,
   "title": "Timeline Redis client limit rejects application connections",

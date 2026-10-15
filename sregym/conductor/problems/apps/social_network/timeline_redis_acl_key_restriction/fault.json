@@ -1,5 +1,5 @@
 {
-  "problem_id": "timeline_cache_acl_key_restriction_social_network",
+  "problem_id": "timeline_redis_acl_key_restriction_social_network",
   "app": "social_network",
   "recurrence_bound_s": 240,
   "title": "Timeline Redis ACL excludes application keys",
