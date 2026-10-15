@@ -48,15 +48,18 @@ _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
 EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
-# Teardown under heavy host load (many parallel DinD campaigns) can exceed the
-# default; SREGYM_CLEANUP_DRAIN_TIMEOUT_S raises the deadline.
-CLEANUP_DRAIN_TIMEOUT_SECONDS = float(os.environ.get("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "300"))
+# Namespace deletion may itself wait 300 seconds, after fault recovery and Helm
+# teardown have already consumed part of the cleanup budget. Keep the outer
+# watchdog long enough for those bounded steps to finish and allow slower hosts
+# to raise it without editing the benchmark runner.
+CLEANUP_DRAIN_TIMEOUT_SECONDS = float(os.environ.get("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "600"))
 
 
 def problem_cleanup_timeout(conductor) -> float:
     """Allow stateful reference recovery its own budget after agent grading."""
     problem = getattr(conductor, "problem", None)
-    return getattr(problem, "cleanup_timeout_seconds", CLEANUP_DRAIN_TIMEOUT_SECONDS)
+    problem_timeout = getattr(problem, "cleanup_timeout_seconds", CLEANUP_DRAIN_TIMEOUT_SECONDS)
+    return max(CLEANUP_DRAIN_TIMEOUT_SECONDS, problem_timeout)
 
 
 def _http_endpoint(value: str) -> str:

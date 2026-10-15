@@ -98,8 +98,18 @@ def test_judge_preflight_is_deferred_until_effective_stages_are_known(monkeypatc
     assert calls == []
 
 
+def test_cleanup_deadline_covers_namespace_deletion_and_honors_override(monkeypatch):
+    monkeypatch.delenv("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", raising=False)
+    benchmark_main = _load_main_module()
+    assert benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS == 600
+
+    monkeypatch.setenv("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "900")
+    benchmark_main = _load_main_module()
+    assert benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS == 900
+
+
 @pytest.mark.parametrize("platform_failure, expected_attempts", [(True, 1), (False, 3)])
-@pytest.mark.parametrize("cleanup_budget", [None, 600])
+@pytest.mark.parametrize("cleanup_budget", [None, 300, 900])
 def test_deployment_retries_only_transient_failures(
     monkeypatch, tmp_path, platform_failure, expected_attempts, cleanup_budget
 ):
@@ -125,9 +135,12 @@ def test_deployment_retries_only_transient_failures(
     assert conductor.start_problem.await_count == expected_attempts
     assert conductor.finish_problem_in_background.call_count == expected_attempts
     assert conductor.wait_for_submission_work.await_count == expected_attempts
+    expected_cleanup_budget = max(
+        benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS,
+        cleanup_budget or benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS,
+    )
     assert all(
-        call.kwargs["timeout"] == (cleanup_budget or benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS)
-        for call in conductor.wait_for_submission_work.await_args_list
+        call.kwargs["timeout"] == expected_cleanup_budget for call in conductor.wait_for_submission_work.await_args_list
     )
     conductor.bind_phase_ledger.assert_called_once()
     assert results == [
