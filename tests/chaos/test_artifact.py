@@ -125,11 +125,13 @@ def test_failed_recovery_retains_workspace(tmp_path):
     (path / "recover.sh").write_text("exit 1")
     problem = GeneratedProblem.__new__(GeneratedProblem)
     problem.namespace = "ns"
+    problem.fault_injected = True
     problem.workspace = FaultArtifact.load(path).workspace()
     problem.workspace.run("inject.sh", "ns")
 
     with pytest.raises(RuntimeError, match="recover.sh failed"):
         problem.recover_fault()
+    assert problem.fault_injected
     assert (problem.workspace.path / "state").read_text().strip() == "saved"
 
 
@@ -159,6 +161,7 @@ def test_recovery_before_injection_does_not_create_workspace():
     problem.workspace = None
     problem.recover_fault()
     assert problem.workspace is None
+    assert not problem.fault_injected
 
 
 def test_discover_extra_roots(tmp_path, monkeypatch):

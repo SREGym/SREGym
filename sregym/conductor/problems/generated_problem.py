@@ -176,6 +176,7 @@ class GeneratedProblem(Problem):
         if failed:
             raise RuntimeError(f"Generated fault validation failed: {', '.join(failed)}")
 
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         if self.workspace is None:
             return
@@ -184,7 +185,6 @@ class GeneratedProblem(Problem):
             raise RuntimeError(f"recover.sh failed ({result.returncode}): {result.stderr[-500:]}")
         self.workspace.close()
         self.workspace = None
-        self.fault_injected = False
 
 
 def generated_problems() -> dict:
