@@ -68,6 +68,24 @@ def test_scripts_can_keep_state(tmp_path):
     path.chmod(0o755)
 
 
+def test_run_preserves_explicit_kubeconfig(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".kube").mkdir(parents=True)
+    (home / ".kube/config").touch()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("KUBECONFIG", "/selected/config:/selected/overlay")
+    artifact = FaultArtifact.load(make(tmp_path, inject='printf "%s" "$KUBECONFIG"'))
+
+    assert artifact.run("inject.sh", "hotel").stdout == "/selected/config:/selected/overlay"
+
+
+def test_run_keeps_kubectl_default_selection(tmp_path, monkeypatch):
+    monkeypatch.delenv("KUBECONFIG", raising=False)
+    artifact = FaultArtifact.load(make(tmp_path, inject='printf "%s" "${KUBECONFIG-unset}"'))
+
+    assert artifact.run("inject.sh", "hotel").stdout == "unset"
+
+
 def test_discover_extra_roots(tmp_path, monkeypatch):
     make(tmp_path, "b2")
     monkeypatch.setenv("SREGYM_GENERATED_DIRS", str(tmp_path))

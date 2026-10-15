@@ -104,9 +104,6 @@ class FaultArtifact:
         work = self.workdir()
         env = dict(os.environ)
         env.update(NAMESPACE=namespace, ARTIFACT_DIR=str(work))
-        admin = Path.home() / ".kube" / "config"
-        if admin.is_file():
-            env["KUBECONFIG"] = str(admin)
         return subprocess.run(
             ["bash", "-euo", "pipefail", str(work / script)],
             cwd=work,
