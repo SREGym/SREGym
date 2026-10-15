@@ -20,8 +20,19 @@ ERROR_PATTERN = (
 
 def _wget_from_prometheus(url: str) -> dict | None:
     # Same access path as AlertOracle: no dependency on cluster DNS from the host.
-    cmd = ["kubectl", "-n", "observe", "exec", "deploy/prometheus-server", "-c", "prometheus-server", "--",
-           "wget", "-qO-", url]
+    cmd = [
+        "kubectl",
+        "-n",
+        "observe",
+        "exec",
+        "deploy/prometheus-server",
+        "-c",
+        "prometheus-server",
+        "--",
+        "wget",
+        "-qO-",
+        url,
+    ]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         return json.loads(out.stdout) if out.returncode == 0 else None
@@ -31,19 +42,16 @@ def _wget_from_prometheus(url: str) -> dict | None:
 
 def error_log_counts(namespace: str, window_s: int = 120) -> dict[str, float]:
     """Error-like log lines per container over the last ``window_s`` seconds."""
-    query = (
-        f'sum by (container) (count_over_time({{namespace="{namespace}"}} |~ "{ERROR_PATTERN}" [{int(window_s)}s]))'
-    )
+    query = f'sum by (container) (count_over_time({{namespace="{namespace}"}} |~ "{ERROR_PATTERN}" [{int(window_s)}s]))'
     data = _wget_from_prometheus(f"{LOKI}/loki/api/v1/query?query={urllib.parse.quote(query)}")
     if not data or data.get("status") != "success":
         return {}
-    return {
-        r["metric"].get("container", "?"): float(r["value"][1]) for r in data.get("data", {}).get("result", [])
-    }
+    return {r["metric"].get("container", "?"): float(r["value"][1]) for r in data.get("data", {}).get("result", [])}
 
 
-def log_surges(before: dict[str, float], after: dict[str, float], min_lines: int = 30,
-               factor: float = 3.0) -> dict[str, list[float]]:
+def log_surges(
+    before: dict[str, float], after: dict[str, float], min_lines: int = 30, factor: float = 3.0
+) -> dict[str, list[float]]:
     """Containers whose error-line count rose clearly above their own baseline."""
     return {
         container: [before.get(container, 0.0), count]
@@ -64,8 +72,9 @@ def cpu_by_container(namespace: str, window_s: int = 120) -> dict[str, float]:
     return {r["metric"].get("container", "?"): float(r["value"][1]) for r in data["data"]["result"]}
 
 
-def cpu_surges(before: dict[str, float], after: dict[str, float], min_cores: float = 0.25,
-               factor: float = 2.0) -> dict[str, list[float]]:
+def cpu_surges(
+    before: dict[str, float], after: dict[str, float], min_cores: float = 0.25, factor: float = 2.0
+) -> dict[str, list[float]]:
     """Containers whose CPU use rose clearly above their own baseline (saturation, hot loops, retries)."""
     return {
         container: [round(before.get(container, 0.0), 3), round(cores, 3)]
