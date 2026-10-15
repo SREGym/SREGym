@@ -133,6 +133,25 @@ def test_failed_recovery_retains_workspace(tmp_path):
     assert (problem.workspace.path / "state").read_text().strip() == "saved"
 
 
+def test_successful_recovery_removes_only_its_attempt_workspace(tmp_path):
+    from sregym.conductor.problems.generated_problem import GeneratedProblem
+
+    artifact = FaultArtifact.load(make(tmp_path))
+    other = artifact.workspace()
+    workspace = artifact.workspace()
+    problem = GeneratedProblem.__new__(GeneratedProblem)
+    problem.namespace = "ns"
+    problem.workspace = workspace
+    problem.fault_injected = True
+
+    problem.recover_fault()
+    assert problem.workspace is None
+    assert not problem.fault_injected
+    assert not workspace.path.exists()
+    assert other.path.exists()
+    problem.recover_fault()  # Cleanup is safe after a successful earlier recovery.
+
+
 def test_recovery_before_injection_does_not_create_workspace():
     from sregym.conductor.problems.generated_problem import GeneratedProblem
 
