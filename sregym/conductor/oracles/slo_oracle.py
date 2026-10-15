@@ -21,6 +21,7 @@ class SLOMitigationOracle(Oracle):
     FAILURE_CLASSES = {
         "slo_violated": FailureClass.AGENT_ERROR,
         "slo_no_rounds": FailureClass.AMBIGUOUS,
+        "slo_incomplete_measurement": FailureClass.AMBIGUOUS,
         "protected_component_modified": FailureClass.AGENT_ERROR,
     }
 
@@ -37,6 +38,8 @@ class SLOMitigationOracle(Oracle):
         app = self.problem.app
         self.slo = slo.SLO(target_rps=slo.target_rps(app))
         rounds = slo.collect_rounds(app, window_s=90, min_rounds=3)
+        if not rounds or any(r.p99_ms is None for r in rounds):
+            raise RuntimeError("SLO baseline requires complete workload rounds with latency measurements")
         p99s = sorted(r.p99_ms for r in rounds if r.p99_ms is not None)
         if p99s:
             self.slo.baseline_p99_ms = p99s[len(p99s) // 2]
@@ -46,8 +49,10 @@ class SLOMitigationOracle(Oracle):
             self.slo.baseline_error_ratio = sorted(r.error_ratio for r in rounds)[median]
         self.baseline_verdict = slo.judge(self.slo, rounds)
         self.protected_before = protected.snapshot(app.namespace)
-        print(f"[SLO] baseline {self.baseline_verdict.violating}/{self.baseline_verdict.rounds} rounds violating; "
-              f"slo={self.slo.to_dict()}")
+        print(
+            f"[SLO] baseline {self.baseline_verdict.violating}/{self.baseline_verdict.rounds} rounds violating; "
+            f"slo={self.slo.to_dict()}"
+        )
 
     def measure(self, window_s: int) -> slo.WindowVerdict:
         rounds = slo.collect_rounds(self.problem.app, window_s=window_s, min_rounds=self.min_rounds)
@@ -66,8 +71,12 @@ class SLOMitigationOracle(Oracle):
             return self.fail("protected_component_modified", **detail)
         if verdict.rounds < self.min_rounds:
             return self.fail("slo_no_rounds", **detail)
+        if not verdict.measurement_complete:
+            return self.fail("slo_incomplete_measurement", **detail)
         if not verdict.healthy:
             print(f"[❌] SLO violated in {verdict.violating}/{verdict.rounds} rounds")
             return self.fail("slo_violated", **detail)
-        print(f"[✅] SLO met over {self.sustained_seconds}s ({verdict.violating}/{verdict.rounds} isolated noisy rounds)")
+        print(
+            f"[✅] SLO met over {self.sustained_seconds}s ({verdict.violating}/{verdict.rounds} isolated noisy rounds)"
+        )
         return {"success": True, "detail": detail}

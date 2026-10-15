@@ -154,6 +154,7 @@ class WindowVerdict:
     violating: int
     healthy: bool  # sustained: at most isolated, non-adjacent noisy rounds (see judge)
     violated: bool  # most rounds, including the latest, missed the SLO
+    measurement_complete: bool
     details: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -185,11 +186,13 @@ def judge(
     flags = [bool(d["violations"]) for d in details]
     adjacent = any(a and b for a, b in zip(flags, flags[1:], strict=False))
     allowed = max(1, int(n * noise_fraction))
+    measurement_complete = n > 0 and all(r.p99_ms is not None for r in rounds)
     return WindowVerdict(
         rounds=n,
         violating=violating,
-        healthy=n > 0 and violating <= allowed and not adjacent,
+        healthy=measurement_complete and violating <= allowed and not adjacent,
         violated=n > 0 and violating / n >= violation_fraction and bool(details[-1]["violations"]),
+        measurement_complete=measurement_complete,
         details=details,
     )
 

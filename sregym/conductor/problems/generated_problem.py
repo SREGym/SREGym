@@ -85,7 +85,9 @@ class GeneratedProblem(Problem):
         self.faulty_service = artifact.meta.get("affected_components", [])
         # Kept for bookkeeping only; never shown to the agent or graded.
         self.root_cause = artifact.meta.get("root_cause_class", "")
-        self.app.create_workload()
+        # wrk2 needs time to calibrate before it records a latency histogram.
+        # Keep the ordinary workload defaults unchanged for existing problems.
+        self.app.create_workload(duration=30)
         # StreamWorkloadManager.log_history is a class attribute; keep this run's rounds separate.
         self.app.wrk.log_history = []
         self.mitigation_oracle = SLOMitigationOracle(problem=self)

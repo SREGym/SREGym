@@ -68,6 +68,14 @@ def test_incomplete_round_is_ignored():
     assert parse_round(entry("Running 30s test @ http://x")) is None
 
 
+def test_missing_latency_is_not_a_healthy_measurement():
+    missing = parse_round(entry(ROUND.replace("1.20s", "0.00us")))
+    assert missing.p99_ms is None
+    verdict = judge(SLO(target_rps=100), [missing] * 5)
+    assert not verdict.measurement_complete
+    assert not verdict.healthy
+
+
 def test_measurement_selects_only_rounds_inside_its_window(monkeypatch):
     from sregym.chaos import slo
 
