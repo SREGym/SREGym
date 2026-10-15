@@ -63,10 +63,10 @@ def test_result_csv_publication_with_results_on_another_filesystem(tmp_path, mon
 
 
 @pytest.mark.parametrize(
-    ("stages", "external", "expected_calls"),
-    [(None, False, 1), (["diagnosis"], False, 1), (["mitigation"], False, 0), (None, True, 0)],
+    ("stages", "external"),
+    [(None, False), (["diagnosis"], False), (["mitigation"], False), (None, True)],
 )
-def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, external, expected_calls):
+def test_judge_preflight_is_deferred_until_effective_stages_are_known(monkeypatch, stages, external):
     benchmark_main = _load_main_module()
     monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
     calls = []
@@ -95,7 +95,7 @@ def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, extern
     )
     with pytest.raises(ReachedConductor):
         benchmark_main._run_benchmark(args)
-    assert len(calls) == expected_calls
+    assert calls == []
 
 
 @pytest.mark.parametrize("platform_failure, expected_attempts", [(True, 1), (False, 3)])
