@@ -33,6 +33,6 @@ json.dump({'apiVersion':'v1','kind':'List','items':objects},sys.stdout)
 PYCODE
 kubectl apply --validate=false -f publisher-access.json
 rm -f publisher-access.json
-python3 render.py "$NAMESPACE" publisher.py |
-  kubectl exec -i -n "$NAMESPACE" deployment/media-frontend -c media-frontend -- env REFRESH_TARGET=nginx-thrift python -
+kubectl exec -i -n "$NAMESPACE" deployment/media-frontend -c media-frontend -- \
+  env REFRESH_TARGET=nginx-thrift python - "$NAMESPACE" < publisher.py
 kubectl rollout status -n "$NAMESPACE" deployment/nginx-thrift --timeout=180s

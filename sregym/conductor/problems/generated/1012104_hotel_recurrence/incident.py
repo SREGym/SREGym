@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cluster operations for the recurring directory recovery incident."""
+
 import base64
 import json
 import os
@@ -16,8 +17,7 @@ STATE = ROOT / "state"
 
 
 def k(*args, data=None, check=True):
-    p = subprocess.run(["kubectl", "-n", NS, *args], input=data,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = subprocess.run(["kubectl", "-n", NS, *args], input=data, capture_output=True)
     if check and p.returncode:
         raise RuntimeError(p.stderr.decode(errors="replace"))
     return p.stdout
@@ -31,9 +31,11 @@ def pods(component=None):
     args = ["pods"]
     if component:
         args += ["-l", "io.kompose.service=" + component]
-    return [p for p in obj(*args)["items"]
-            if p.get("status", {}).get("phase") == "Running"
-            and not p["metadata"].get("deletionTimestamp")]
+    return [
+        p
+        for p in obj(*args)["items"]
+        if p.get("status", {}).get("phase") == "Running" and not p["metadata"].get("deletionTimestamp")
+    ]
 
 
 def api_pod():
@@ -43,19 +45,18 @@ def api_pod():
     return choices[0]["metadata"]["name"]
 
 
-HTTP = r'''
+HTTP = r"""
 import base64,json,sys,urllib.request
 method,path=sys.argv[1:3]
 body=sys.stdin.buffer.read()
 r=urllib.request.Request('http://consul:8500'+path,data=body if method!='GET' else None,method=method)
 with urllib.request.urlopen(r,timeout=130) as x:
     print(json.dumps({'headers':dict(x.headers),'data':base64.b64encode(x.read()).decode()}))
-'''
+"""
 
 
 def api(method, path, data=b""):
-    out = json.loads(k("exec", "-i", api_pod(), "--", "python3", "-c", HTTP,
-                       method, path, data=data))
+    out = json.loads(k("exec", "-i", api_pod(), "--", "python3", "-c", HTTP, method, path, data=data))
     return base64.b64decode(out["data"]), out["headers"]
 
 
@@ -69,11 +70,16 @@ def put(path, value=None, raw=None):
 
 
 def registration(s):
-    return {"ID": s["ID"], "Name": s.get("Service", s.get("Name")),
-            "Address": s["Address"], "Port": s["Port"],
-            "Tags": s.get("Tags") or [], "Meta": s.get("Meta") or {},
-            "Weights": s.get("Weights") or {"Passing": 1, "Warning": 1},
-            "EnableTagOverride": s.get("EnableTagOverride", False)}
+    return {
+        "ID": s["ID"],
+        "Name": s.get("Service", s.get("Name")),
+        "Address": s["Address"],
+        "Port": s["Port"],
+        "Tags": s.get("Tags") or [],
+        "Meta": s.get("Meta") or {},
+        "Weights": s.get("Weights") or {"Passing": 1, "Warning": 1},
+        "EnableTagOverride": s.get("EnableTagOverride", False),
+    }
 
 
 def logging_config(signature, restore=False):
@@ -112,7 +118,7 @@ def logging_config(signature, restore=False):
     return True
 
 
-STOP = r'''
+STOP = r"""
 import os,signal
 stopped=[]
 for name in os.listdir('/proc'):
@@ -127,9 +133,9 @@ for name in os.listdir('/proc'):
                 stopped.append(name)
     except (OSError,ProcessLookupError): pass
 print('Stopped directory recovery sessions: '+','.join(stopped))
-'''
+"""
 
-FIND = r'''
+FIND = r"""
 import json,os
 found=[]
 for name in os.listdir('/proc'):
@@ -140,7 +146,7 @@ for name in os.listdir('/proc'):
             found.append(int(name))
     except OSError: pass
 print(json.dumps(found))
-'''
+"""
 
 
 def stop_workers():
@@ -149,16 +155,14 @@ def stop_workers():
         component = p["metadata"].get("labels", {}).get("io.kompose.service", "")
         if component in {"frontend", "geo", "profile", "rate", "recommendation", "reservation", "search", "user"}:
             for c in p["spec"]["containers"]:
-                result = k("exec", p["metadata"]["name"], "-c", c["name"], "--",
-                           "python3", "-c", STOP, check=False)
+                result = k("exec", p["metadata"]["name"], "-c", c["name"], "--", "python3", "-c", STOP, check=False)
                 if result:
                     print(p["metadata"]["name"] + ": " + result.decode().strip(), flush=True)
 
 
 def reconcile():
     services = get("/v1/agent/services")
-    components = {"srv-" + c: c for c in
-                  ("geo", "profile", "rate", "recommendation", "reservation", "search", "user")}
+    components = {"srv-" + c: c for c in ("geo", "profile", "rate", "recommendation", "reservation", "search", "user")}
     desired = {}
     for name, component in components.items():
         service = obj("service", component)
@@ -169,15 +173,29 @@ def reconcile():
                 continue
             port = target
             if not isinstance(port, int):
-                port = next(x["containerPort"] for c in p["spec"]["containers"]
-                            for x in c.get("ports", []) if x.get("name") == target)
+                port = next(
+                    x["containerPort"]
+                    for c in p["spec"]["containers"]
+                    for x in c.get("ports", [])
+                    if x.get("name") == target
+                )
             logs = k("logs", p["metadata"]["name"], "--tail=500", check=False).decode(errors="replace")
-            identities = re.findall(r"name: " + re.escape(name) + r", id: ([0-9a-f-]+), address: " + re.escape(ip) + r":" + str(port), logs)
-            existing = [x for x in services.values() if x["Service"] == name
-                        and x["Address"] == ip and x["Port"] == port]
+            identities = re.findall(
+                r"name: " + re.escape(name) + r", id: ([0-9a-f-]+), address: " + re.escape(ip) + r":" + str(port), logs
+            )
+            existing = [
+                x for x in services.values() if x["Service"] == name and x["Address"] == ip and x["Port"] == port
+            ]
             ident = identities[-1] if identities else (existing[0]["ID"] if existing else p["metadata"]["uid"])
-            desired[ident] = {"ID": ident, "Name": name, "Address": ip, "Port": port,
-                              "Tags": [], "Meta": {}, "Weights": {"Passing": 1, "Warning": 1}}
+            desired[ident] = {
+                "ID": ident,
+                "Name": name,
+                "Address": ip,
+                "Port": port,
+                "Tags": [],
+                "Meta": {},
+                "Weights": {"Passing": 1, "Warning": 1},
+            }
     for ident, value in services.items():
         if value["Service"] in components and ident not in desired:
             put("/v1/agent/service/deregister/" + urllib.parse.quote(ident), {})
@@ -206,7 +224,7 @@ def reconcile():
     print("Live RPC registrations reconciled from pods, Service ports, and startup logs.", flush=True)
 
 
-WORKER = r'''
+WORKER = r"""
 import base64,ctypes,json,os,signal,sys,time,urllib.request
 payload=json.load(sys.stdin)
 snapshot=base64.b64decode(payload['snapshot'])
@@ -238,17 +256,34 @@ while True:
     time.sleep(210)
     try: restore()
     except Exception: pass
-'''
+"""
 
 
 def wait_replacement(old_names, component="rate"):
-    args = ["kubectl", "-n", NS, "get", "pods", "-l", "io.kompose.service=" + component, "--watch",
-            "--no-headers", "-o", "custom-columns=NAME:.metadata.name,DELETING:.metadata.deletionTimestamp,READY:.status.containerStatuses[*].ready,IP:.status.podIP"]
+    args = [
+        "kubectl",
+        "-n",
+        NS,
+        "get",
+        "pods",
+        "-l",
+        "io.kompose.service=" + component,
+        "--watch",
+        "--no-headers",
+        "-o",
+        "custom-columns=NAME:.metadata.name,DELETING:.metadata.deletionTimestamp,READY:.status.containerStatuses[*].ready,IP:.status.podIP",
+    ]
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         for line in p.stdout:
             fields = line.split()
-            if len(fields) == 4 and fields[0] not in old_names and fields[1] == "<none>" and fields[2] == "true" and fields[3] != "<none>":
+            if (
+                len(fields) == 4
+                and fields[0] not in old_names
+                and fields[1] == "<none>"
+                and fields[2] == "true"
+                and fields[3] != "<none>"
+            ):
                 return fields[0], fields[3]
         raise RuntimeError("Pod watch ended before a ready replacement appeared")
     finally:
@@ -291,8 +326,12 @@ def prepare(signature):
         raise RuntimeError("The replacement did not register in Consul")
     reconcile()
     healthy = api("GET", "/v1/snapshot")[0]
-    record = {"signature": signature, "snapshot": base64.b64encode(snapshot).decode(), "members": members,
-              "healthy_snapshot": base64.b64encode(healthy).decode()}
+    record = {
+        "signature": signature,
+        "snapshot": base64.b64encode(snapshot).decode(),
+        "members": members,
+        "healthy_snapshot": base64.b64encode(healthy).decode(),
+    }
     (STATE / "directory.json").write_text(json.dumps(record))
     print("Captured catalog generations around rate instance replacement.", flush=True)
     return record
@@ -318,8 +357,10 @@ def inject():
     live = {p["status"]["podIP"] for p in pods("rate")}
     if any(s["Address"] in live for s in record["members"]):
         record = prepare(signature)
-    print(k("exec", "-i", api_pod(), "--", "python3", "-c", WORKER,
-            data=json.dumps(record).encode()).decode().strip(), flush=True)
+    print(
+        k("exec", "-i", api_pod(), "--", "python3", "-c", WORKER, data=json.dumps(record).encode()).decode().strip(),
+        flush=True,
+    )
     current = get("/v1/agent/services")
     routes = [s["Address"] for s in current.values() if s["Service"] == "srv-rate"]
     assert routes and not set(routes) & {p["status"]["podIP"] for p in pods("rate")}
