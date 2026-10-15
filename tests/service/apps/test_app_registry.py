@@ -19,7 +19,17 @@ def test_catalog_discovery_does_not_construct_applications(monkeypatch):
 
     monkeypatch.setattr(kubectl.KubeCtl, "__init__", Mock(side_effect=AssertionError("cluster access")))
     registry = AppRegistry()
-    assert {"gitea", "gitlab", "mattermost", "stripe", "train-ticket", "flight-ticket"} <= set(registry.get_app_ids())
+    assert {
+        "gitea",
+        "gitlab",
+        "mattermost",
+        "stripe",
+        "train-ticket",
+        "flight-ticket",
+        "frappe",
+        "saleor",
+        "slack-spine",
+    } <= set(registry.get_app_ids())
     for definition in APPLICATIONS:
         metadata = registry.get_app_metadata(definition.app_id)
         assert registry.get_definition(metadata["Name"]) is definition

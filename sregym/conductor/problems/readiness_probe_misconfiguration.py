@@ -3,6 +3,7 @@ from sregym.conductor.oracles.readiness_probe_mitigation import ReadinessProbeMi
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -18,18 +19,19 @@ class ReadinessProbeMisconfiguration(Problem):
     deprecated in SREGym 1.1 after 21/21 successes.
     """
 
-    def __init__(self, app_name="social_network", faulty_service="user-service"):
+    def __init__(self, app_name="social_network", faulty_service="user-service", *, app: Application | None = None):
         self.app_name = app_name
         self.faulty_service = faulty_service
 
-        if app_name == "social_network":
-            app = SocialNetwork()
-        elif app_name == "hotel_reservation":
-            app = HotelReservation()
-        elif app_name == "astronomy_shop":
-            app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
+        if app is None:
+            if app_name == "social_network":
+                app = SocialNetwork()
+            elif app_name == "hotel_reservation":
+                app = HotelReservation()
+            elif app_name == "astronomy_shop":
+                app = AstronomyShop()
+            else:
+                raise ValueError(f"Unsupported app name: {app_name}")
 
         super().__init__(app=app)
 

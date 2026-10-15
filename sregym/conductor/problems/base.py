@@ -42,9 +42,9 @@ class Problem(ABC):
         return f"[fault_spec] {meta} || {description.strip()}"
 
     @abstractmethod
-    def inject_fault(self):
+    def inject_fault(self) -> bool | None:
         pass
 
     @abstractmethod
-    def recover_fault(self):
+    def recover_fault(self) -> bool | None:
         pass

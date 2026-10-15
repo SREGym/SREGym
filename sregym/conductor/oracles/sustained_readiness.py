@@ -74,6 +74,9 @@ class SustainedReadinessOracle(Oracle):
             all_normal = True
 
             for pod in pod_list.items:
+                # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded by design.
+                if self.is_completed_job_pod(pod):
+                    continue
                 if pod.status.phase != "Running":
                     if verbose:
                         print(f"⚠️ Pod {pod.metadata.name} is in phase: {pod.status.phase}")

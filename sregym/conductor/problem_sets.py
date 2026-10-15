@@ -20,4 +20,29 @@ SREGYM_LITE_PROBLEMS = (
     "search_rate_retry_collapse_hotel_reservation",
 )
 
-PROBLEM_SETS = {"sregym-lite": SREGYM_LITE_PROBLEMS}
+# SREGym-Lite's faults re-targeted at the larger Incident Arena apps (Frappe,
+# Saleor, Slack Spine), in Lite order; see problems/environment_ports.py.
+SREGYM_LITE_IA_PROBLEMS = (
+    "cronjob_sidecar_blocks_completion_frappe",
+    "edge_request_filter_cpu_saturation_frappe",
+    "network_policy_block_slack_spine",
+    "env_variable_shadowing_saleor",
+    "mutating_webhook_resource_limits_slack_spine",
+    "finalizer_deadlock_controller_frappe",
+    "kafka_poison_pill_hol_block_slack_spine",
+    "internal_traffic_policy_local_slack_spine",
+    "service_dns_resolution_failure_slack_spine",
+    "service_wrong_pod_selection_frappe",
+    "namespace_memory_limit_saleor",
+    "redis_auth_disruption_slack_spine",
+    "secret_rotation_stale_env_credentials_saleor",
+    "unschedulable_incorrect_port_assignment_frappe",
+    "duplicate_pvc_mounts_slack_spine",
+    "rolling_update_misconfigured_frappe",
+    "search_rate_retry_collapse_slack_spine",
+)
+
+PROBLEM_SETS = {
+    "sregym-lite": SREGYM_LITE_PROBLEMS,
+    "sregym-lite-ia": SREGYM_LITE_IA_PROBLEMS,
+}

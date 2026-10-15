@@ -61,6 +61,7 @@ from sregym.conductor.oracles.internal_traffic_policy_mitigation import Internal
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -80,8 +81,8 @@ class InternalTrafficPolicyLocalAstronomyShop(Problem):
     CALLER_SERVICE = "frontend"
     CALLER_POD_LABEL_SELECTOR = "app.kubernetes.io/component=frontend"
 
-    def __init__(self):
-        super().__init__(app=AstronomyShop())
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else AstronomyShop())
         self.kubectl = KubeCtl()
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()

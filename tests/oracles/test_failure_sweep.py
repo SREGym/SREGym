@@ -145,12 +145,16 @@ def test_no_oracle_claims_a_harness_error_for_itself():
     allowed = {
         # capture_baseline not having run is a sequencing failure, not a check.
         "SearchRateRetryMitigationOracle",
+        "RetryStormMitigationOracle",
+        "ChannelRetryStormOracle",
         # Our probe patch not taking effect means the test never ran.
         "RollingUpdateMitigationOracle",
         # No probe pod means nothing was measured.
         "FeatureFlagHttpProbeMitigationOracle",
         # The problem never recorded the offset to measure against.
         "DataPlaneProgressOracle",
+        # Slack Spine's index-lane port of DataPlaneProgressOracle; same table.
+        "IndexLaneProgressOracle",
     }
     for name, table in _all_subclass_tables().items():
         if name in allowed:

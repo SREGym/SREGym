@@ -1,0 +1,94 @@
+# --- fault and workload settings ---
+app:
+  logging:
+    accessEnabled: '1'
+    accessSampleRate: '1'
+    requestIdKeyspace: '64'
+    noiseSeed: '58'
+    noiseInfoMinMs: '20'
+    noiseInfoMaxMs: '40'
+    noiseWarnMinMs: '180'
+    noiseWarnMaxMs: '320'
+obs:
+  maxLogLines: 500
+resources:
+  loadgen:
+    requests:
+      cpu: 150m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+loadgen:
+  profilesYaml: "profiles:\n  p1_shell_distractor_eval_1h:\n    base: bc1_distractor_eval\n\
+    \    declare_deadline_s: 3690.0\n    soak_cycles: 3\n"
+  profile: p1_shell_distractor_eval_1h
+# --- agent access settings ---
+agentSurface:
+  profile: shell-visible
+  releaseApproved: true
+  hardenAppPods: true
+  exec:
+    enabled: false
+# --- grading-harness settings ---
+gradingHarness:
+  podState:
+    enabled: true
+  answerKey:
+    enabled: true
+  dbState:
+    enabled: false
+  lockState:
+    enabled: false
+  verifierEvidence:
+    persistent: true
+    size: 256Mi
+  verifierChallenge:
+    enabled: true
+    targetPod: svc-message-0
+    targetService: svc-message
+    readinessPath: /healthz
+    timeoutSec: 180
+    channels: chan-2,chan-3
+# --- agent report vocabulary ---
+agentReport:
+  vocabulary:
+    services:
+    - message
+    - auth
+    - channel
+    - workspace
+    - thread
+    - search
+    - file
+    - notification
+    - db
+    - redis
+    - load-generator
+    components:
+    - message.sequencer
+    - message.db-pool
+    - message.send-pipeline
+    - auth.db-pool
+    - channel.db-pool
+    - workspace.db-pool
+    - db.postgres-server
+    - db.locks
+    - redis.config
+    - network
+# --- pinned-image settings ---
+global:
+  imagePullPolicy: IfNotPresent
+images:
+  app: ghcr.io/abundant-ai/sre-world/slack-app@sha256:b73d144c2d817481956653e34095f38cfdc70e554d78f3521e72d0d1d6cd15fd
+  appBuilder: ghcr.io/abundant-ai/sre-world/slack-app-builder@sha256:5201d7a4c6e4313c2b9d01209ff6aed413af6f4cc2e11d667631f0ce4920fa07
+  go: ghcr.io/abundant-ai/sre-world/slack-go@sha256:a9c60cefb4326ff918867ab522e05a9570b5b50fccc6208372228ed341d123dd
+  py: ghcr.io/abundant-ai/sre-world/slack-py@sha256:c3a51b1ab5082f337ae5e8c1f2d60467273b1e73440580fc7e1132564b943c12
+  main: ghcr.io/abundant-ai/sre-world/slack-main@sha256:e3dec9737ddfb496b7c380ff529248bf4216514f0d0127f91e41973c05d940f9
+  obsMcp: ghcr.io/abundant-ai/sre-world/slack-obs-mcp@sha256:891670f269e57db65d9a2a896472d91a876efb9896f139efd5e503a3b9818ae9
+  loadgen: ghcr.io/abundant-ai/sre-world/slack-loadgen@sha256:5a8bfa7e291a3e9ddc32eca99d291531964f08e3b1e269bd59fc9236a1eebbd2
+  pgbouncer: ghcr.io/abundant-ai/sre-world/slack-pgbouncer@sha256:70dc0e4aefb23ba0646a3410358732ba8358f3b8aa95b8595f2decbba56ceff0
+platformTools:
+  enabled: true
+  image: ghcr.io/abundant-ai/sre-world/codex-tools@sha256:c0ed85e5280e4d70c3ec341288fd240d2d64647d952db3712f94cd27c9c08d64
+  digest: sha256:c0ed85e5280e4d70c3ec341288fd240d2d64647d952db3712f94cd27c9c08d64

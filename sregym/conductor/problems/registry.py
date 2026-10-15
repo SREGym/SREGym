@@ -38,6 +38,18 @@ from sregym.conductor.problems.apps.gitlab.notification_unannounced import (
     GitLabNotificationUnannouncedAmbiguityProblem,
 )
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
+from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
+from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
+from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import FrappeWritesAndQueueOOM
+from sregym.conductor.problems.apps.saleor.statement_timeout import SaleorCheckoutStatementTimeoutCanary
+from sregym.conductor.problems.apps.slack_spine.lock_leaks import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
+from sregym.conductor.problems.apps.slack_spine.store_consistency import SlackLoginsUnreadSendsAllSlow
+from sregym.conductor.problems.apps.slack_spine.maintenance import SlackMaintenanceCollision
+from sregym.conductor.problems.apps.slack_spine.strict_mode import (
+    SlackSendsFailComplianceWindow,
+    SlackSendsFailStrictMode,
+)
+from sregym.conductor.problems.apps.slack_spine.sequencer import SlackSplitSequencer
 from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
@@ -56,6 +68,7 @@ from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
+from sregym.conductor.problems.missing_stale_cache_fallback_astronomy_shop import MissingStaleCacheFallbackAstronomyShop
 from sregym.conductor.problems.mongo_storage_faults import LatentSectorError, SilentDataCorruption
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
@@ -161,6 +174,8 @@ class ProblemRegistry:
             "integer_overflow_primary_key_astronomy_shop": IntegerOverflowPrimaryKeyAstronomyShop,
             "missing_configmap_hotel_reservation": lambda: MissingConfigMap(app_name="hotel_reservation", faulty_service="mongodb-geo"),
             "missing_service_hotel_reservation": lambda: MissingService(app_name="hotel_reservation", faulty_service="mongodb-rate"),
+            "missing_stale_cache_fallback_astronomy_shop": MissingStaleCacheFallbackAstronomyShop,
+            "missing_stale_cache_fallback_long_delay_astronomy_shop": lambda: MissingStaleCacheFallbackAstronomyShop(delay="5s"),
             "namespace_memory_limit": NamespaceMemoryLimit,
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
@@ -275,6 +290,20 @@ class ProblemRegistry:
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
             "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
+            # ==================== FRAPPE, SALEOR AND SLACK SPINE ====================
+            # Ported from Incident Arena (abundant-ai/incident-arena); see docs/incident-arena.md.
+            "frappe_desk_and_queue_outage": FrappeDeskAndQueueOutage,
+            "frappe_writes_and_queue_oom": FrappeWritesAndQueueOOM,
+            "saleor_checkout_statement_timeout_canary": SaleorCheckoutStatementTimeoutCanary,
+            "slack_split_sequencer": SlackSplitSequencer,
+            "slack_maintenance_collision": SlackMaintenanceCollision,
+            "slack_logins_unread_sends_all_slow": SlackLoginsUnreadSendsAllSlow,
+            "slack_sends_fail_strict_mode": SlackSendsFailStrictMode,
+            "slack_sends_fail_compliance_window": SlackSendsFailComplianceWindow,
+            "slack_seq_lock_leak": SlackSeqLockLeak,
+            "slack_distractor_volume_seq_lock": SlackDistractorVolumeSeqLock,
+            # Existing faults ported to Frappe, Saleor and Slack Spine.
+            **PORTED_PROBLEMS,
         }
 # fmt: on
         # Generated mitigation-only problems (gen_<name>).

@@ -3,6 +3,7 @@ from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.apps.train_ticket import TrainTicket
@@ -17,21 +18,22 @@ class ServicePortConflict(Problem):
     another service in a different namespace (e.g., prometheus-node-exporter using port 9100).
     """
 
-    def __init__(self, app_name: str = "astronomy_shop", faulty_service: str = "ad"):
+    def __init__(self, app_name: str = "astronomy_shop", faulty_service: str = "ad", *, app: Application | None = None):
         self.app_name = app_name
         self.faulty_service = faulty_service
         self.conflicting_port = 9100  # Conflicts with prometheus-node-exporter
 
-        if app_name == "social_network":
-            app = SocialNetwork()
-        elif app_name == "hotel_reservation":
-            app = HotelReservation()
-        elif app_name == "astronomy_shop":
-            app = AstronomyShop()
-        elif app_name == "train_ticket":
-            app = TrainTicket()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
+        if app is None:
+            if app_name == "social_network":
+                app = SocialNetwork()
+            elif app_name == "hotel_reservation":
+                app = HotelReservation()
+            elif app_name == "astronomy_shop":
+                app = AstronomyShop()
+            elif app_name == "train_ticket":
+                app = TrainTicket()
+            else:
+                raise ValueError(f"Unsupported app name: {app_name}")
 
         super().__init__(app=app)
 

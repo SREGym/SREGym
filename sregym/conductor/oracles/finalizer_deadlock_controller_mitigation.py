@@ -6,12 +6,12 @@ import time
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.service.rollout import deployment_rollout_complete
 
 
-class FinalizerDeadlockControllerMitigationOracle(Oracle):
+class FinalizerDeadlockControllerMitigationOracle(MitigationOracle):
     """Require the running controller to reconcile a fresh cleanup request."""
 
     importance = 1.0
@@ -107,7 +107,7 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             deployments = kubectl.list_deployments(namespace)
             all_settled = True
             for deployment in deployments.items:
-                if not deployment_rollout_complete(deployment):
+                if not deployment_rollout_complete(deployment, allow_zero=True):
                     all_settled = False
                     break
             if all_settled:
@@ -225,9 +225,9 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
 
     def _check_app_healthy(self, kubectl, namespace) -> tuple[bool, str]:
         try:
-            for deployment in kubectl.list_deployments(namespace).items:
-                if not deployment_rollout_complete(deployment):
-                    return False, f"[FAIL] Deployment `{deployment.metadata.name}` rollout is incomplete."
+            failure = self._deployment_failure(kubectl.list_deployments(namespace))
+            if failure is not None:
+                return False, f"[FAIL] Required application Deployment check failed: {failure}"
             pods = kubectl.list_pods(namespace).items
         except Exception as exc:
             return False, f"[FAIL] Could not list pods in `{namespace}`: {exc}"
@@ -237,6 +237,8 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             for pod in pods
             if pod.metadata.deletion_timestamp is None
             and not pod.metadata.name.startswith(f"{self.controller_deployment_name}-")
+            # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded, not Running.
+            and not self.is_completed_job_pod(pod)
         ]
         if not app_pods:
             return False, "[FAIL] No application pods found."

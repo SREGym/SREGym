@@ -113,6 +113,11 @@ Or start with SREGym-Lite:
 uv run main.py --suite sregym-lite --agent stratus --model gpt-5
 ```
 
+Or run the SREGym-Lite faults on Frappe, Saleor and Slack Spine (see [the ported suite](./docs/SREGym-Lite-IA.md)):
+```bash
+uv run main.py --suite sregym-lite-ia --agent stratus --model gpt-5
+```
+
 Use `--judge-model` to override the judge model separately (defaults to `--model`):
 ```bash
 uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627

@@ -4,14 +4,22 @@ from sregym.conductor.oracles.ingress_misroute_oracle import IngressMisrouteMiti
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.observer.ingress_nginx import IngressNginx
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class IngressMisroute(Problem):
-    def __init__(self, path="/api", correct_service="frontend-service", wrong_service="recommendation-service"):
-        super().__init__(app=HotelReservation())
+    def __init__(
+        self,
+        path="/api",
+        correct_service="frontend-service",
+        wrong_service="recommendation-service",
+        *,
+        app: Application | None = None,
+    ):
+        super().__init__(app=app if app is not None else HotelReservation())
         self.kubectl = KubeCtl()
         self.path = path
         self.correct_service = correct_service
