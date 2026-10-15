@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from sregym.chaos import protected, telemetry
-from sregym.chaos.artifact import FaultArtifact
+from sregym.chaos.artifact import FaultArtifact, FaultWorkspace
 from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.slo_oracle import SLOMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -64,7 +64,11 @@ class FiringAlerts:
 
     def new(self) -> list[str]:
         return sorted(
-            {(a.get("labels") or {}).get("alertname", "?") for a in self._instances() if self._key(a) not in self.baseline}
+            {
+                (a.get("labels") or {}).get("alertname", "?")
+                for a in self._instances()
+                if self._key(a) not in self.baseline
+            }
         )
 
 
@@ -75,6 +79,7 @@ class GeneratedProblem(Problem):
 
     def __init__(self, artifact: FaultArtifact):
         self.artifact = artifact
+        self.workspace: FaultWorkspace | None = None
         super().__init__(app=make_app(artifact.app))
         self.problem_id = artifact.problem_id
         self.faulty_service = artifact.meta.get("affected_components", [])
@@ -104,7 +109,9 @@ class GeneratedProblem(Problem):
         before = protected.snapshot(self.namespace)
         leaks_before = protected.leak_scan(self.namespace)
 
-        result = self.artifact.run("inject.sh", self.namespace)
+        if self.workspace is None:
+            self.workspace = self.artifact.workspace()
+        result = self.workspace.run("inject.sh", self.namespace)
         injected_at = time.time()
         self.gates = {
             "problem_id": self.problem_id,
@@ -125,8 +132,11 @@ class GeneratedProblem(Problem):
             new_alerts=self.alerts.new(),
             **signals.changes(),
             integrity=protected.compare(before, protected.snapshot(self.namespace)),
-            leaks=sorted(f"{where}: {text}" for text, where in protected.leak_scan(self.namespace).items()
-                         if text not in leaks_before),
+            leaks=sorted(
+                f"{where}: {text}"
+                for text, where in protected.leak_scan(self.namespace).items()
+                if text not in leaks_before
+            ),
             workload_running=protected.workload_running(self.namespace),
             seconds_after_inject=round(time.time() - injected_at),
         )
@@ -149,9 +159,14 @@ class GeneratedProblem(Problem):
         )
 
     def recover_fault(self):
-        result = self.artifact.run("recover.sh", self.namespace)
+        if self.workspace is None:
+            return
+        result = self.workspace.run("recover.sh", self.namespace)
         if result.returncode != 0:
-            print(f"[WARN] recover.sh exited {result.returncode}: {result.stderr[-500:]}")
+            raise RuntimeError(f"recover.sh failed ({result.returncode}): {result.stderr[-500:]}")
+        self.workspace.close()
+        self.workspace = None
+        self.fault_injected = False
 
 
 def generated_problems() -> dict:

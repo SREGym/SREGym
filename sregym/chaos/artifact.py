@@ -90,28 +90,42 @@ class FaultArtifact:
                     findings.append(f"{file.name}:{n}: {line.strip()[:160]}")
         return findings
 
-    def workdir(self) -> Path:
-        """Writable copy of the artifact, so inject.sh can leave state for recover.sh."""
-        root = os.environ.get("SREGYM_FAULT_WORKDIR") or Path(tempfile.gettempdir()) / "sregym-fault-work"
-        work = Path(root) / self.path.name
-        if not work.is_dir():
-            shutil.copytree(self.path, work)
+    def workspace(self) -> FaultWorkspace:
+        """Copy the current artifact into a private workspace for one attempt."""
+        root = Path(os.environ.get("SREGYM_FAULT_WORKDIR") or Path(tempfile.gettempdir()) / "sregym-fault-work")
+        root.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix=f"{self.path.name}-", dir=root))
+        try:
+            shutil.copytree(self.path, work, dirs_exist_ok=True)
             for path in (work, *work.rglob("*")):
-                path.chmod(path.stat().st_mode | 0o700 if path.is_dir() else path.stat().st_mode | 0o600)
-        return work
+                path.chmod(path.stat().st_mode | (0o700 if path.is_dir() else 0o600))
+        except BaseException:
+            shutil.rmtree(work)
+            raise
+        return FaultWorkspace(work)
+
+
+@dataclass
+class FaultWorkspace:
+    """Attempt-owned scripts and recovery state; retained if recovery fails."""
+
+    path: Path
 
     def run(self, script: str, namespace: str, timeout_s: int = 900) -> subprocess.CompletedProcess:
-        work = self.workdir()
         env = dict(os.environ)
-        env.update(NAMESPACE=namespace, ARTIFACT_DIR=str(work))
+        env.update(NAMESPACE=namespace, ARTIFACT_DIR=str(self.path))
         return subprocess.run(
-            ["bash", "-euo", "pipefail", str(work / script)],
-            cwd=work,
+            ["bash", "-euo", "pipefail", str(self.path / script)],
+            cwd=self.path,
             env=env,
             capture_output=True,
             text=True,
             timeout=timeout_s,
         )
+
+    def close(self) -> None:
+        """Remove the workspace only after its recovery state is no longer needed."""
+        shutil.rmtree(self.path)
 
 
 def discover() -> dict[str, FaultArtifact]:
