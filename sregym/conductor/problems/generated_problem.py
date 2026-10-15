@@ -160,7 +160,7 @@ class GeneratedProblem(Problem):
             self.gates["new_alerts"]
             or self.gates["log_surges"]
             or self.gates["cpu_surges"]
-            or (impact.measurement_complete and self.gates["request_symptoms"])
+            or self.gates["request_symptoms"]
         )
         self.gates["integrity_pass"] = self.gates["integrity"]["intact"] and self.gates["workload_running"]
         self.gates["no_leak_pass"] = not self.gates["leaks"]
@@ -173,8 +173,6 @@ class GeneratedProblem(Problem):
         if persistence_s > 0:
             required.append("persistence_pass")
         failed = [name for name in required if not self.gates[name]]
-        if not impact.measurement_complete:
-            failed.append("complete_workload_measurement")
         if failed:
             raise RuntimeError(f"Generated fault validation failed: {', '.join(failed)}")
 

@@ -54,10 +54,18 @@ def test_no_effect_injection_is_setup_failure(problem):
 
 
 def test_missing_measurement_cannot_establish_impact(problem):
-    rounds = [slo.RoundStats(time=i, requests=3000, duration_s=30, non2xx=1500) for i in range(5)]
+    rounds = [slo.RoundStats(time=i, requests=3000, duration_s=30) for i in range(5)]
     problem.mitigation_oracle.measure.return_value = slo.judge(problem.mitigation_oracle.slo, rounds)
-    with pytest.raises(RuntimeError, match="complete_workload_measurement"):
+    with pytest.raises(RuntimeError, match="impact_pass"):
         problem.inject_fault()
+
+
+def test_explicit_outage_is_impact_even_without_completed_request_latencies(problem):
+    rounds = [slo.RoundStats(time=i, requests=0, duration_s=30, connect_errors=3000) for i in range(5)]
+    problem.mitigation_oracle.measure.return_value = slo.judge(problem.mitigation_oracle.slo, rounds)
+    problem.inject_fault()
+    assert problem.gates["impact_pass"]
+    assert problem.gates["observability_pass"]
 
 
 def test_stopped_workload_is_setup_failure(problem, monkeypatch):

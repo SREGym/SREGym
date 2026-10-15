@@ -84,7 +84,7 @@ class SLOMitigationOracle(Oracle):
             return self.fail("protected_component_modified", **detail)
         if verdict.rounds < self.min_rounds:
             return self.fail("slo_no_rounds", **detail)
-        if not verdict.measurement_complete:
+        if not verdict.measurement_complete and not verdict.violated:
             return self.fail("slo_incomplete_measurement", **detail)
         if not verdict.healthy:
             print(f"[❌] SLO violated in {verdict.violating}/{verdict.rounds} rounds")
