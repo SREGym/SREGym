@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import time
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 
 _UNITS_MS = {"us": 0.001, "ms": 1.0, "s": 1000.0, "m": 60_000.0, "h": 3_600_000.0}
@@ -139,8 +140,12 @@ class SLO:
         return out
 
     def to_dict(self) -> dict:
-        return {**asdict(self), "p99_limit_ms": self.p99_limit_ms, "timeout_limit": self.timeout_limit,
-                "error_limit": self.error_limit}
+        return {
+            **asdict(self),
+            "p99_limit_ms": self.p99_limit_ms,
+            "timeout_limit": self.timeout_limit,
+            "error_limit": self.error_limit,
+        }
 
 
 @dataclass
@@ -155,8 +160,9 @@ class WindowVerdict:
         return asdict(self)
 
 
-def judge(slo: SLO, rounds: list[RoundStats], violation_fraction: float = 0.6,
-          noise_fraction: float = 0.1) -> WindowVerdict:
+def judge(
+    slo: SLO, rounds: list[RoundStats], violation_fraction: float = 0.6, noise_fraction: float = 0.1
+) -> WindowVerdict:
     details = []
     violating = 0
     for stats in rounds:
@@ -177,7 +183,7 @@ def judge(slo: SLO, rounds: list[RoundStats], violation_fraction: float = 0.6,
     # wrk2 rounds (10s for social-network) occasionally report one p99 spike on a healthy system, so a
     # window stays healthy with a few isolated bad rounds; adjacent bad rounds mean real degradation.
     flags = [bool(d["violations"]) for d in details]
-    adjacent = any(a and b for a, b in zip(flags, flags[1:]))
+    adjacent = any(a and b for a, b in zip(flags, flags[1:], strict=False))
     allowed = max(1, int(n * noise_fraction))
     return WindowVerdict(
         rounds=n,
@@ -203,12 +209,10 @@ def collect_rounds(app, window_s: float, min_rounds: int = 1, timeout_s: float |
     reflects the system after this call.
     """
     wrk = app.wrk
-    try:
+    with suppress(Exception):
         wrk._extractlog()
-    except Exception:
-        pass
-    # Entry times are the round start times (pod clock = host clock under kind).
-    started = time.time() - 2
+    # Entry times are UTC epoch seconds, independent of the host timezone.
+    started = time.time()
     deadline = time.monotonic() + (timeout_s or window_s + 3 * round_seconds(app) + 60)
     window_end_wall = time.time() + window_s
     out: list[RoundStats] = []
@@ -218,7 +222,7 @@ def collect_rounds(app, window_s: float, min_rounds: int = 1, timeout_s: float |
             wrk._extractlog()
         except Exception:
             continue
-        out = [s for e in wrk.log_history if e.time > started and (s := parse_round(e)) is not None]
+        out = [s for e in wrk.log_history if started <= e.time <= window_end_wall and (s := parse_round(e)) is not None]
         if time.time() >= window_end_wall + round_seconds(app) and len(out) >= min_rounds:
             break
     return out

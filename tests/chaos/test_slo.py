@@ -1,4 +1,6 @@
-from sregym.chaos.slo import SLO, judge, parse_round
+from types import SimpleNamespace
+
+from sregym.chaos.slo import SLO, collect_rounds, judge, parse_round
 from sregym.generators.workload.base import WorkloadEntry
 
 ROUND = """Running 30s test @ http://10.96.0.10:5000
@@ -43,8 +45,13 @@ def test_judge_flags_errors_latency_and_throughput():
     assert any(v.startswith("error_ratio") for v in slo.violations(stats))
     assert slo.p99_limit_ms == 1000
     assert any(v.startswith("p99") for v in slo.violations(stats))
-    healthy = parse_round(entry(ROUND.replace("  Non-2xx or 3xx responses: 290\n", "").replace("1.20s", "20.00ms")
-                                .replace("timeout 10", "timeout 0")))
+    healthy = parse_round(
+        entry(
+            ROUND.replace("  Non-2xx or 3xx responses: 290\n", "")
+            .replace("1.20s", "20.00ms")
+            .replace("timeout 10", "timeout 0")
+        )
+    )
     assert slo.violations(healthy) == []
     slow = parse_round(entry(ROUND.replace("2990 requests", "1000 requests")))
     assert any(v.startswith("rps") for v in SLO(target_rps=100).violations(slow))
@@ -61,13 +68,39 @@ def test_incomplete_round_is_ignored():
     assert parse_round(entry("Running 30s test @ http://x")) is None
 
 
+def test_measurement_selects_only_rounds_inside_its_window(monkeypatch):
+    from sregym.chaos import slo
+
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr(slo.time, "time", lambda: clock.now)
+    monkeypatch.setattr(slo.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(slo.time, "sleep", lambda seconds: setattr(clock, "now", clock.now + seconds))
+    workload = SimpleNamespace(
+        wrk=SimpleNamespace(duration=10),
+        log_history=[entry(ROUND, t) for t in [99, 100, 120, 130, 131, 18000]],
+        _extractlog=lambda: None,
+    )
+    rounds = collect_rounds(SimpleNamespace(wrk=workload), window_s=30, min_rounds=3)
+    assert [r.time for r in rounds] == [100, 120, 130]
+
+
 def test_baseline_timeouts_are_tolerated():
-    noisy = parse_round(entry(ROUND.replace("  Non-2xx or 3xx responses: 290\n", "").replace("1.20s", "20.00ms")
-                              .replace("timeout 10", "timeout 186")))
+    noisy = parse_round(
+        entry(
+            ROUND.replace("  Non-2xx or 3xx responses: 290\n", "")
+            .replace("1.20s", "20.00ms")
+            .replace("timeout 10", "timeout 186")
+        )
+    )
     slo = SLO(target_rps=100, baseline_timeout_ratio=0.06)
     assert slo.violations(noisy) == []
-    hung = parse_round(entry(ROUND.replace("  Non-2xx or 3xx responses: 290\n", "").replace("1.20s", "20.00ms")
-                             .replace("timeout 10", "timeout 900")))
+    hung = parse_round(
+        entry(
+            ROUND.replace("  Non-2xx or 3xx responses: 290\n", "")
+            .replace("1.20s", "20.00ms")
+            .replace("timeout 10", "timeout 900")
+        )
+    )
     assert any(v.startswith("timeout_ratio") for v in slo.violations(hung))
 
 
