@@ -1,3 +1,4 @@
+import posixpath
 import time
 
 from sregym.conductor.oracles.base import Oracle
@@ -20,7 +21,7 @@ def _contains_command(command: list[str], wrong) -> bool:
 
 class WrongBinMitigationOracle(Oracle):
     importance = 1.0
-    # Only used with ``problem.wrong_command``: how long to wait for the fixed rollout.
+    # How long to wait for the fixed Deployment to roll out.
     rollout_timeout_s = 180.0
 
     def _rolled_out(self, kubectl, namespace: str) -> bool:
@@ -53,15 +54,15 @@ class WrongBinMitigationOracle(Oracle):
         try:
             deployment = kubectl.get_deployment(self.problem.faulty_service, namespace)
             containers = deployment.spec.template.spec.containers
-            needs_rollout = False
 
             for container in containers:
                 command = list(container.command or [])
-                if expected_command in command:
+                # The first element is the executable; later elements are its
+                # arguments. /go/bin/profile and profile are the same binary.
+                if command and posixpath.basename(command[0]) == expected_command:
                     continue
                 if wrong_command is not None and not _contains_command(command, wrong_command):
                     print(f"[i] Container '{container.name}' no longer runs the injected command: {command}")
-                    needs_rollout = True
                     continue
                 print(f"[❌] Deployment for container '{container.name}' is using wrong binary: {command}")
                 # Compared against the command the injector replaced, so
@@ -73,7 +74,9 @@ class WrongBinMitigationOracle(Oracle):
                     expected=expected_command,
                 )
 
-            if needs_rollout and not self._rolled_out(kubectl, namespace):
+            # The right binary must also start and stay Ready, not only the
+            # command that replaced the injected one.
+            if not self._rolled_out(kubectl, namespace):
                 print(f"[❌] Deployment {self.problem.faulty_service} did not roll out Ready with its new command")
                 return self.fail("fault_still_present", deployment=self.problem.faulty_service, rollout_complete=False)
 
