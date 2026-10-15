@@ -53,6 +53,10 @@ def test_f22_uses_the_created_workload_and_forwards_baseline(monkeypatch):
     kubectl.list_deployments.return_value.items = [
         SimpleNamespace(metadata=SimpleNamespace(name="ts-contacts-service"), spec=SimpleNamespace(replicas=1))
     ]
+    kubectl.core_v1_api.list_namespaced_service.return_value.items = []
+    kubectl.core_v1_api.list_namespaced_persistent_volume_claim.return_value.items = []
+    kubectl.core_v1_api.list_namespaced_config_map.return_value.items = []
+    kubectl.apps_v1_api.list_namespaced_stateful_set.return_value.items = []
     monkeypatch.setattr(train_ticket_f22, "TrainTicket", lambda: app)
     monkeypatch.setattr(train_ticket_f22, "KubeCtl", lambda: kubectl)
     monkeypatch.setattr(train_ticket_f22, "LLMAsAJudgeOracle", Mock())
