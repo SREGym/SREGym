@@ -36,18 +36,20 @@ class SLOMitigationOracle(Oracle):
 
     def capture_baseline(self) -> None:
         app = self.problem.app
-        self.slo = slo.SLO(target_rps=slo.target_rps(app))
+        policy = slo.SLO(target_rps=slo.target_rps(app))
         rounds = slo.collect_rounds(app, window_s=90, min_rounds=3)
-        if not rounds or any(r.p99_ms is None for r in rounds):
-            raise RuntimeError("SLO baseline requires complete workload rounds with latency measurements")
+        baseline = slo.judge(policy, rounds)
+        if len(rounds) < 3 or not baseline.measurement_complete:
+            raise RuntimeError("SLO baseline requires at least three complete rounds with latency measurements")
+        if not baseline.healthy:
+            raise RuntimeError(f"Application does not meet the baseline SLO: {baseline.to_dict()}")
         p99s = sorted(r.p99_ms for r in rounds if r.p99_ms is not None)
-        if p99s:
-            self.slo.baseline_p99_ms = p99s[len(p99s) // 2]
-        if rounds:
-            median = len(rounds) // 2
-            self.slo.baseline_timeout_ratio = sorted(r.timeout_ratio for r in rounds)[median]
-            self.slo.baseline_error_ratio = sorted(r.error_ratio for r in rounds)[median]
-        self.baseline_verdict = slo.judge(self.slo, rounds)
+        median = len(rounds) // 2
+        policy.baseline_p99_ms = p99s[median]
+        policy.baseline_timeout_ratio = sorted(r.timeout_ratio for r in rounds)[median]
+        policy.baseline_error_ratio = sorted(r.error_ratio for r in rounds)[median]
+        self.slo = policy
+        self.baseline_verdict = baseline
         self.protected_before = protected.snapshot(app.namespace)
         print(
             f"[SLO] baseline {self.baseline_verdict.violating}/{self.baseline_verdict.rounds} rounds violating; "

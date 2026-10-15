@@ -112,6 +112,13 @@ def test_baseline_timeouts_are_tolerated():
     assert any(v.startswith("timeout_ratio") for v in slo.violations(hung))
 
 
+def test_calibration_never_relaxes_absolute_ceilings():
+    policy = SLO(target_rps=100, baseline_error_ratio=1, baseline_timeout_ratio=1, baseline_p99_ms=10000)
+    assert policy.error_limit == 0.05
+    assert policy.timeout_limit == 0.25
+    assert policy.p99_limit_ms == 5000
+
+
 def test_log_surges():
     from sregym.chaos.telemetry import log_surges
 

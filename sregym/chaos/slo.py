@@ -109,6 +109,8 @@ class SLO:
     min_throughput_fraction: float = 0.7
     timeout_floor: float = 0.15
     timeout_margin: float = 0.10
+    max_timeout_ratio: float = 0.25
+    max_p99_ms: float = 5000.0
     baseline_p99_ms: float | None = None
     baseline_timeout_ratio: float = 0.0
     baseline_error_ratio: float = 0.0
@@ -117,15 +119,15 @@ class SLO:
     def p99_limit_ms(self) -> float:
         if self.baseline_p99_ms is None:
             return self.p99_floor_ms
-        return max(self.p99_floor_ms, self.p99_baseline_multiplier * self.baseline_p99_ms)
+        return min(self.max_p99_ms, max(self.p99_floor_ms, self.p99_baseline_multiplier * self.baseline_p99_ms))
 
     @property
     def error_limit(self) -> float:
-        return max(self.max_error_ratio, self.baseline_error_ratio + self.max_error_ratio)
+        return self.max_error_ratio
 
     @property
     def timeout_limit(self) -> float:
-        return max(self.timeout_floor, self.baseline_timeout_ratio + self.timeout_margin)
+        return min(self.max_timeout_ratio, max(self.timeout_floor, self.baseline_timeout_ratio + self.timeout_margin))
 
     def violations(self, stats: RoundStats) -> list[str]:
         out = []
