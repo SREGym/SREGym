@@ -62,7 +62,7 @@ def get_instructions(stages: list[str] | None) -> tuple[str, str]:
     """Select the Jev workflow and submission contract for the active stages."""
     if stages == ["mitigation"]:
         return (
-            _PLANNING_INSTRUCTION + _MITIGATION_INSTRUCTION + _GUIDANCE_INSTRUCTION,
+            _PLANNING_INSTRUCTION + _GUIDANCE_INSTRUCTION,
             "HOW TO SUBMIT:\n\n" + _MITIGATION_INSTRUCTION.rstrip("\n"),
         )
     return INSTRUCTION, SUBMISSION_INSTRUCTION

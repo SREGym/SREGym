@@ -36,6 +36,7 @@ def test_mitigation_only_jev_has_no_diagnosis_or_http_submission(monkeypatch):
     assert "For diagnosis, set stage=diagnosis" not in prompt
     assert "POST " not in prompt
     assert "Do not bypass the review with curl" in prompt
+    assert prompt.count("This problem has no diagnosis submission stage.") == 1
 
 
 def test_normal_jev_workflow_is_unchanged(monkeypatch):
