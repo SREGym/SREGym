@@ -7,6 +7,8 @@ An explicitly requested stage with no oracle is a conflict; the same stage
 arriving from a default is not.
 """
 
+from unittest.mock import Mock
+
 import pytest
 
 from sregym.conductor.conductor import ALL_STAGES, ConductorConfig
@@ -169,3 +171,40 @@ def test_no_available_stages_leaves_an_empty_sequence(conductor_factory):
     c.get_problem_stages()
     c._build_stage_sequence()
     assert _stage_names(c) == []
+
+
+@pytest.mark.parametrize(
+    "stages,diagnosis,mitigation,expected",
+    [
+        (None, True, True, 1),
+        (None, False, True, 0),
+        (("mitigation",), True, True, 0),
+        (("diagnosis",), True, True, 1),
+    ],
+)
+def test_preflight_uses_effective_oracles(conductor_factory, stages, diagnosis, mitigation, expected):
+    problem = FakeProblem(diagnosis=diagnosis, mitigation=mitigation)
+    if diagnosis:
+        problem.diagnosis_oracle = Mock(requires_llm_judge=True)
+    if mitigation:
+        problem.mitigation_oracle = Mock(requires_llm_judge=False)
+    conductor = conductor_factory(stages=stages, problem=problem)
+    conductor._judge_preflight = Mock()
+    conductor._judge_preflight_done = False
+    conductor.get_problem_stages()
+    conductor._build_stage_sequence()
+    conductor._preflight_active_oracles()
+    conductor._preflight_active_oracles()
+    assert conductor._judge_preflight.call_count == expected
+
+
+def test_failed_preflight_is_not_cached(conductor_factory):
+    conductor = conductor_factory()
+    conductor.problem.diagnosis_oracle = Mock(requires_llm_judge=True)
+    conductor._judge_preflight = Mock(side_effect=RuntimeError("invalid credentials"))
+    conductor._judge_preflight_done = False
+    conductor.get_problem_stages()
+    conductor._build_stage_sequence()
+    with pytest.raises(RuntimeError, match="invalid credentials"):
+        conductor._preflight_active_oracles()
+    assert not conductor._judge_preflight_done

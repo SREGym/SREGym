@@ -1,0 +1,17 @@
+{
+  "problem_id": "frontend_endpointslice_wrong_backend_hotel_reservation",
+  "app": "hotel_reservation",
+  "recurrence_bound_s": 180,
+  "title": "Frontend EndpointSlice routes requests to the wrong backends",
+  "fault_layer": "network",
+  "fault_primitive": "Recurring EndpointSlice export binds the frontend HTTP port name to the discovery administration transport and peer inventory",
+  "root_cause_class": "runtime_endpoint_export_transport_capability_alias",
+  "incident_class": "Operational service-discovery export retains an incompatible transport mapping after a naming migration",
+  "affected_components": [
+    "frontend Service",
+    "frontend EndpointSlices",
+    "Consul HTTP listener",
+    "recommendation container endpoint export"
+  ],
+  "symptoms": "Intermittent connection refusals and HTTP 404 responses affect hotel operations. Native frontend pods, Deployment, Service selector, targetPort, and legacy Endpoints remain healthy. Consul receives unrelated hotel URLs, and the existing frontend TCP endpoint alert fires."
+}
