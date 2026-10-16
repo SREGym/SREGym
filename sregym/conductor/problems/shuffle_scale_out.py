@@ -530,6 +530,7 @@ class ShuffleScaleOut(Problem):
         self.app.helper("freeze")
         self.app.run("create job --from=cronjob/finance-reconcile finance-initial")
 
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         # The lifecycle validator expects a healthy application after recovery.
         # Reset the incident to a fresh baseline; the reference repair remains
