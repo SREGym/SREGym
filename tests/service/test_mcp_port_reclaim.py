@@ -150,8 +150,12 @@ def test_launcher_passes_k8s_port_to_egress_proxy(monkeypatch, tmp_path, port):
     runner._egress._tmp_dir = tmp_path
     runner._ensure_filtered_egress({})
 
-    proxy_command = next(command for command in commands if "mitmdump" in command)
-    rule = next(arg.removeprefix("ignore_hosts=") for arg in proxy_command if arg.startswith("ignore_hosts="))
+    proxy_command = next(command for command in commands if any("mitmdump" in arg for arg in command))
+    rule = next(
+        arg.removeprefix("'ignore_hosts=").removesuffix("'")
+        for arg in proxy_command[-1].split()
+        if arg.startswith("'ignore_hosts=")
+    )
     assert re.search(rule, f"host.docker.internal:{port}")
     assert not re.search(rule, f"host.docker.internal:{port + 1}")
     assert not re.search(rule, f"host.docker.internal:{port}0")

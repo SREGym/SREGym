@@ -62,6 +62,17 @@ def problem_cleanup_timeout(conductor) -> float:
     return max(CLEANUP_DRAIN_TIMEOUT_SECONDS, problem_timeout)
 
 
+def cleanup_interrupted_problem(conductor) -> None:
+    """Give an interrupted workload the same bounded teardown as a completed run."""
+    if getattr(conductor, "problem", None) is None:
+        return
+    try:
+        cleanup = conductor.finish_problem_in_background()
+        cleanup.result(timeout=problem_cleanup_timeout(conductor))
+    except Exception as exc:
+        logger.warning("Interrupted benchmark cleanup did not finish cleanly: %s", exc)
+
+
 def _http_endpoint(value: str) -> str:
     """Validate an additional endpoint supplied on the command line."""
     try:
@@ -979,6 +990,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         run_api(conductor)
     except KeyboardInterrupt:
         # If interrupted, still try to shut down cleanly
+        cleanup_interrupted_problem(conductor)
         LAUNCHER.cleanup_all()
         request_shutdown()
     finally:

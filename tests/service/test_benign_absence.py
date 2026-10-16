@@ -2,6 +2,7 @@ import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from kubernetes.client.rest import ApiException
@@ -170,6 +171,28 @@ def test_missing_namespace_is_debug_but_other_delete_failures_are_errors(caplog)
     )
     assert missing_record.levelno == logging.DEBUG
     assert broken_record.levelno == logging.ERROR
+
+
+def test_namespace_cleanup_force_deletes_stuck_pods_after_graceful_timeout(monkeypatch, caplog):
+    kubectl = object.__new__(KubeCtl)
+    pod = SimpleNamespace(metadata=SimpleNamespace(name="stuck-pod"))
+    kubectl.core_v1_api = SimpleNamespace(
+        delete_namespace=Mock(),
+        list_namespaced_pod=Mock(return_value=SimpleNamespace(items=[pod])),
+        delete_namespaced_pod=Mock(),
+    )
+    kubectl.wait_for_namespace_deletion = Mock(side_effect=[RuntimeError("namespace still terminating"), None])
+
+    with caplog.at_level(logging.WARNING, logger="all.infra.kubectl"):
+        kubectl.delete_namespace("benchmark")
+
+    kubectl.core_v1_api.delete_namespaced_pod.assert_called_once()
+    call = kubectl.core_v1_api.delete_namespaced_pod.call_args
+    assert call.kwargs["name"] == "stuck-pod"
+    assert call.kwargs["namespace"] == "benchmark"
+    assert call.kwargs["grace_period_seconds"] == 0
+    assert kubectl.wait_for_namespace_deletion.call_count == 2
+    assert any("force-deleted 1 pod" in record.message for record in caplog.records)
 
 
 def test_no_matching_cleanup_jobs_is_a_debug_noop(monkeypatch, caplog):

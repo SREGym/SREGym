@@ -1,4 +1,5 @@
 import asyncio
+import json
 import subprocess
 from unittest.mock import Mock
 
@@ -61,6 +62,51 @@ def test_reuse_checks_the_proxy_and_never_reopens_a_stopped_proxy(monkeypatch):
     run.return_value.stdout = "false"
     with pytest.raises(RuntimeError, match="refusing to start an unrestricted agent"):
         egress.ensure_started(())
+
+
+def test_proxy_bootstrap_uses_docker_copy_instead_of_host_bind_mounts(monkeypatch):
+    egress = DockerEgress(k8s_proxy_port=17443)
+    commands = []
+    monkeypatch.setattr(egress, "_ensure_proxy_image_exists", lambda: None)
+    monkeypatch.setattr(egress, "_copy_proxy_certificate", lambda: None)
+    monkeypatch.setattr(
+        egress,
+        "_run_docker_checked",
+        lambda command, action: commands.append(command),
+    )
+
+    egress.ensure_started((EndpointRule("provider.test", 443),))
+
+    proxy_command = next(command for command in commands if command[1:3] == ["run", "-d"])
+    assert f"{egress._cert_volume}:/certs" in proxy_command
+    assert str(egress._tmp_dir) not in proxy_command
+    assert proxy_command[-3:-1] == ["sh", "-ec"]
+    assert "ignore_hosts=^host\\.docker\\.internal:17443$" in proxy_command[-1]
+    copy_commands = [command for command in commands if command[1] == "cp"]
+    assert len(copy_commands) == 3
+    assert all(command[-1].startswith(f"{egress._proxy_name}:") for command in copy_commands)
+    assert ["docker", "exec", egress._proxy_name, "touch", "/state/.sregym-proxy-ready"] in commands
+    egress.close()
+
+
+def test_blocked_request_audit_reads_the_proxy_state(monkeypatch):
+    egress = DockerEgress()
+    egress._proxy_name = "test-proxy"
+    record = {
+        "timestamp": "2026-10-16T00:00:00+00:00",
+        "method": "CONNECT",
+        "scheme": "https",
+        "host": "blocked.example",
+        "port": 443,
+        "reason": "endpoint-not-allowed",
+    }
+    monkeypatch.setattr(
+        "sregym.service.docker_egress.subprocess.run",
+        Mock(return_value=subprocess.CompletedProcess([], 0, stdout=json.dumps(record) + "\n")),
+    )
+
+    assert egress.blocked_request_count() == 1
+    assert egress.blocked_request_records() == [record]
 
 
 def test_runner_cleanup_attempts_each_resource_even_if_proxy_cleanup_fails(monkeypatch):

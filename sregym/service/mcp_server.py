@@ -15,6 +15,9 @@ from sregym.service.kubernetes_access_policy import restricted_cluster_role
 from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger("all.sregym.mcp_server")
+MCP_ROLLOUT_TIMEOUT_SECONDS = int(os.getenv("MCP_ROLLOUT_TIMEOUT_SECONDS", "300"))
+MCP_ROLLOUT_ATTEMPTS = int(os.getenv("MCP_ROLLOUT_ATTEMPTS", "2"))
+MCP_ROLLOUT_RETRY_DELAY_SECONDS = int(os.getenv("MCP_ROLLOUT_RETRY_DELAY_SECONDS", "5"))
 
 
 class MCPServer:
@@ -65,6 +68,47 @@ class MCPServer:
                         ] + [{"name": name, "value": value} for name, value in network_env.items()]
         return resources
 
+    def _rollout_diagnostics(self) -> str:
+        """Capture bounded diagnostics so a slow MCP bootstrap is debuggable."""
+        commands = (
+            f"kubectl get pods -n {self.namespace} -o wide",
+            f"kubectl get events -n {self.namespace} --sort-by=.lastTimestamp",
+        )
+        output = []
+        for command in commands:
+            try:
+                result = self.kubectl.exec_command(command)
+            except Exception as exc:
+                result = f"diagnostic command failed: {type(exc).__name__}: {exc}"
+            output.append(f"$ {command}\n{str(result)[-4000:]}")
+        return "\n".join(output)
+
+    def _wait_for_rollout(self) -> None:
+        """Wait through one transient image-pull failure before failing MCP setup."""
+        attempts = max(1, MCP_ROLLOUT_ATTEMPTS)
+        command = (
+            f"kubectl rollout status deployment/{self.service_name} -n {self.namespace} "
+            f"--timeout={MCP_ROLLOUT_TIMEOUT_SECONDS}s"
+        )
+        for attempt in range(1, attempts + 1):
+            try:
+                self.kubectl.exec_command_checked(command, timeout=MCP_ROLLOUT_TIMEOUT_SECONDS + 10)
+                return
+            except RuntimeError as exc:
+                diagnostics = self._rollout_diagnostics()
+                if attempt == attempts:
+                    raise RuntimeError(
+                        f"MCP rollout did not become ready after {attempts} attempt(s): {exc}\n{diagnostics}"
+                    ) from exc
+                logger.warning(
+                    "MCP rollout attempt %d/%d failed: %s\n%s",
+                    attempt,
+                    attempts,
+                    exc,
+                    diagnostics,
+                )
+                time.sleep(MCP_ROLLOUT_RETRY_DELAY_SECONDS)
+
     def deploy(self):
         """Apply the selected mode and wait for readiness before exposing MCP."""
         resources = self._deployment_resources()
@@ -80,10 +124,7 @@ class MCPServer:
                 f"kubectl set env deployment/{self.service_name} -n {self.namespace} {env_args}", timeout=30
             )
 
-        self.kubectl.exec_command_checked(
-            f"kubectl rollout status deployment/{self.service_name} -n {self.namespace} --timeout=180s",
-            timeout=190,
-        )
+        self._wait_for_rollout()
         if not already_running:
             self.kubectl.wait_for_ready(self.namespace)
         if not self._is_port_forward_healthy():

@@ -48,6 +48,19 @@ def test_driver_wrapper_preserves_partial_results_and_failure(monkeypatch):
     assert shutdown_called == [True]
 
 
+def test_interrupted_problem_uses_the_bounded_cleanup_budget():
+    benchmark_main = _load_main_module()
+    cleanup = Mock()
+    conductor = SimpleNamespace(
+        problem=SimpleNamespace(cleanup_timeout_seconds=42),
+        finish_problem_in_background=Mock(return_value=cleanup),
+    )
+
+    benchmark_main.cleanup_interrupted_problem(conductor)
+
+    cleanup.result.assert_called_once_with(timeout=benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS)
+
+
 def test_result_csv_publication_with_results_on_another_filesystem(tmp_path, monkeypatch):
     benchmark_main = _load_main_module()
     shared_memory = Path("/dev/shm")
