@@ -106,6 +106,7 @@ from sregym.conductor.problems.service_port_conflict import ServicePortConflict
 from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation import (
     ServiceWrongPodSelectionHotelReservation,
 )
+from sregym.conductor.problems.shuffle_scale_out import ShuffleScaleOut
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import (
@@ -130,6 +131,7 @@ from sregym.service.kubectl import KubeCtl
 class ProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {
+            "shuffle_scale_out": ShuffleScaleOut,
             # ==================== APPLICATION FAULT INJECTOR ====================
             # --- CORRELATED PROBLEMS ---
             "update_incompatible_correlated": UpdateIncompatibleCorrelated,
