@@ -232,7 +232,9 @@ class PriorityPreemptionMitigationOracle(Oracle):
         if target_unready is not None:
             return target_unready
 
-        endpoint_failure = self._service_endpoint_unready(target, namespace)
+        # The Service is named after the Deployment unless the problem says otherwise (``service_name``).
+        service_name = getattr(self.problem, "service_name", None) or target
+        endpoint_failure = self._service_endpoint_unready(service_name, namespace)
         if endpoint_failure is not None:
             return endpoint_failure
         for check in (self._any_deployment_unready, self._any_app_pod_unready):

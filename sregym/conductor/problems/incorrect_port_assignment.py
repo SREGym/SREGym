@@ -6,13 +6,21 @@ from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class IncorrectPortAssignment(Problem):
-    def __init__(self, **kwargs):
-        super().__init__(app=AstronomyShop())
+    """Model incorrect port assignment variants.
+
+    The ``incorrect_port_assignment`` configuration is deprecated in SREGym
+    1.1 after reaching 100% overall pass@3. The unschedulable variant remains
+    active.
+    """
+
+    def __init__(self, *, app: Application | None = None, **kwargs):
+        super().__init__(app=app if app is not None else AstronomyShop())
         self.kubectl = KubeCtl()
         self.faulty_service = "checkout"
         self.env_var = "PRODUCT_CATALOG_ADDR"

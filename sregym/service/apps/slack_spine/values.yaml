@@ -1,0 +1,60 @@
+# SREGym deployment overlay for the Incident Arena slack-spine chart.
+#
+# Deploys the healthy system under test with the images pinned by the
+# Incident Arena tasks, drops the Harbor harness (agent foothold, egress proxy,
+# DNS filter, in-chart Prometheus/Loki/obs-mcp) in favour of SREGym's own
+# observability stack, and replaces the foothold with an operator toolbox.
+# Problems layer their load profile and fault values on top of this file.
+global:
+  imagePullPolicy: IfNotPresent
+
+components:
+  # Harbor foothold. Disabling it also removes the agent egress proxy, DNS
+  # filter, freezer and their NetworkPolicies.
+  main: {enabled: false}
+  # SREGym deploys Prometheus, Loki and its MCP servers cluster-wide.
+  prometheus: {enabled: false}
+  loki: {enabled: false}
+  promtail: {enabled: false}
+  obsMcp: {enabled: false}
+
+obs:
+  postgresExporter:
+    enabled: true
+
+resources:
+  # These services otherwise throttle at healthy write peaks on slower CPUs.
+  message:
+    limits:
+      cpu: "2"
+  search:
+    limits:
+      cpu: "2"
+  # The search-readback lane needs headroom as the in-memory index grows.
+  searchEngine:
+    limits:
+      cpu: "8"
+
+gradingHarness:
+  # Rendered as a fault-free placeholder under sregym.enabled (see
+  # sregym.neutralAnswerKey); the load generator reads it at episode end.
+  answerKey:
+    enabled: true
+
+app:
+  roles:
+    message:
+      db:
+        hold_ms: 10
+
+sregym:
+  enabled: true
+  loadgenLabels:
+    app: load-generator
+  loadgenEnv:
+    # SREGym pins the episode start itself, possibly long after the sidecar
+    # boots (Incident Arena's 1800 s limit assumed Harbor's healthcheck).
+    - name: EPISODE_START_TIMEOUT_S
+      value: "86400"
+  toolbox:
+    enabled: true

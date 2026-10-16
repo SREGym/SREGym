@@ -264,7 +264,9 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
 
         frontend_service = getattr(self.problem.app, "frontend_service", "frontend")
         frontend_port = getattr(self.problem.app, "frontend_port", 5000)
-        url = f"http://{frontend_service}.{self.problem.namespace}.svc.cluster.local:{frontend_port}/"
+        # Ports whose frontend answers 404 on "/" set ``frontend_probe_path`` (e.g. "/healthz").
+        frontend_path = getattr(self.problem, "frontend_probe_path", "/")
+        url = f"http://{frontend_service}.{self.problem.namespace}.svc.cluster.local:{frontend_port}{frontend_path}"
         return self._probe_url_from_client_ok(
             topology["client"]["name"],
             url,

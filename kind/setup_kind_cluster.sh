@@ -39,6 +39,21 @@ if [[ ${KIND_RETAIN_ON_FAILURE:-false} == true ]]; then
 fi
 kind create cluster "${CREATE_ARGS[@]}"
 
+echo "==> Step 1b: Drop host DNS search domains from the nodes"
+# Docker copies the host's "search" list into each node's /etc/resolv.conf and
+# kubelet appends it to every pod's search list. With ndots:5 a short name such
+# as "frontend" whose AAAA lookup has no cluster answer then walks the host
+# domains. On hosts whose search domains contain a real "frontend" (for example
+# corporate networks) Envoy in astronomy-shop's frontend-proxy resolves that
+# foreign address and every request fails with 503. Pods only need the cluster
+# search domains, which kubelet adds on its own.
+CONTAINER_CLI="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
+for node in $(kind get nodes 2>/dev/null); do
+    # /etc/resolv.conf is a bind mount: rewrite the content, not the inode.
+    "${CONTAINER_CLI}" exec "${node}" sh -c \
+        'awk "!/^search /" /etc/resolv.conf > /tmp/resolv.conf.sregym && cat /tmp/resolv.conf.sregym > /etc/resolv.conf'
+done
+
 echo "==> Step 2: Install Calico CNI"
 # Cold parallel starts can briefly overload etcd while node images unpack.
 # Apply is declarative, so retrying also handles a partially applied manifest.

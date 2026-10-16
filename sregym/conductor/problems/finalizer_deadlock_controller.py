@@ -11,6 +11,7 @@ from sregym.conductor.oracles.finalizer_deadlock_controller_mitigation import (
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.service.rollout import deployment_rollout_complete
@@ -50,8 +51,8 @@ def _broken_clusterrole_rules():
 class FinalizerDeadlockController(Problem):
     """A stuck finalizer that must be fixed by restoring controller RBAC."""
 
-    def __init__(self):
-        self.app = HotelReservation()
+    def __init__(self, *, app: Application | None = None):
+        self.app = app if app is not None else HotelReservation()
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()

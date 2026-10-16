@@ -7,8 +7,7 @@
 [![Quick Start](https://img.shields.io/badge/%F0%9F%9A%80-Quick%20Start-blue?style=flat-square)](#🚀quickstart)
 [![Usage](https://img.shields.io/badge/%E2%9A%99%EF%B8%8F-Usage-blue?style=flat-square)](#⚙️usage)
 [![Contributing](https://img.shields.io/badge/%F0%9F%A4%9D-Contributing-blue?style=flat-square)](./CONTRIBUTING.md)
-[![Docs](https://img.shields.io/badge/%F0%9F%93%96-Docs-blue?style=flat-square)](https://sregym.com/docs)
-[![Leaderboard](https://img.shields.io/badge/%F0%9F%8F%86-Leaderboard-blue?style=flat-square)](https://sregym.com)
+[![Leaderboard](https://img.shields.io/badge/%F0%9F%8F%86-Leaderboard-blue?style=flat-square)](https://sregym.com/leaderboard)
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
 [![arXiv](https://img.shields.io/badge/arXiv-2605.07161-b31b1b?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2605.07161)
 </div>
@@ -31,7 +30,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
 
-[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 21 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
+[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 17 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
 
 <h2 id="📦installation">📦 Installation</h2>
@@ -112,6 +111,11 @@ uv run main.py --agent stratus --model gpt-5
 Or start with SREGym-Lite:
 ```bash
 uv run main.py --suite sregym-lite --agent stratus --model gpt-5
+```
+
+Or run the SREGym-Lite faults on Frappe, Saleor and Slack Spine (see [the ported suite](./docs/SREGym-Lite-IA.md)):
+```bash
+uv run main.py --suite sregym-lite-ia --agent stratus --model gpt-5
 ```
 
 Use `--judge-model` to override the judge model separately (defaults to `--model`):

@@ -87,6 +87,7 @@ from sregym.conductor.oracles.cronjob_sidecar_mitigation import (
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -113,14 +114,14 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
     RECOVERY_TIMEOUT_S = 180
     RECOVERY_POLL_INTERVAL_S = 5
 
-    def __init__(self, faulty_service: str = "audit-log-archiver"):
+    def __init__(self, faulty_service: str = "audit-log-archiver", *, app: Application | None = None):
         # The "faulty service" here is the CronJob itself, not one of the app's
         # microservices. The app's microservices remain healthy throughout — the
         # fault is namespace-level resource accumulation, not service breakage.
         self.faulty_service = faulty_service
         self.cronjob_name = self.CRONJOB_NAME
 
-        super().__init__(app=HotelReservation())
+        super().__init__(app=app if app is not None else HotelReservation())
 
         self.kubectl = KubeCtl()
         self.batch_v1 = client.BatchV1Api()

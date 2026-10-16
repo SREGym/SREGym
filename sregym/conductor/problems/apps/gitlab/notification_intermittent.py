@@ -1,0 +1,37 @@
+"""An ongoing SMTP impairment makes notification recovery itself stateful."""
+
+from sregym.conductor.oracles.apps.gitlab.notification_recovery import notification_report
+from sregym.conductor.problems.apps.gitlab.notification_ambiguity import GitLabNotificationAmbiguityProblem
+from sregym.service.apps.gitlab.notifications import (
+    GitLabNotificationIntermittentApplication as IntermittentApplication,
+)
+
+
+class GitLabNotificationIntermittentProblem(GitLabNotificationAmbiguityProblem):
+    application_class = IntermittentApplication
+    root_cause_description = (
+        "Wrong-primary deletion reached every PostgreSQL replica, while independently durable "
+        "Sidekiq jobs refer to pre-restore issue IDs. SMTP failures remain intermittent during recovery: "
+        "some failed sends are already accepted, others are not. Preserve acknowledged data, reconcile "
+        "each delivery against the provider audit, and prevent automatic retries from duplicating mail."
+    )
+
+    def __init__(self, scale_tier="replicated"):
+        super().__init__(scale_tier)
+        self.reference_delivery_history = []
+
+    def prepare_recovery_material(self):
+        super().prepare_recovery_material()
+        self.app.ongoing_fault(True)
+
+    def reconcile_notifications(self):
+        self.app.control("stop", "sidekiq")
+        self.reference_delivery_result = self.app.deliver_reconciled_notifications(self.notifications)
+        self.reference_delivery_history.append(self.reference_delivery_result)
+        report = notification_report(self.notifications, self.app.public_messages())
+        self.app.control("start", "sidekiq")
+        return report
+
+
+# Existing class names remain available to callers.
+GitLabNotificationIntermittent = GitLabNotificationIntermittentProblem

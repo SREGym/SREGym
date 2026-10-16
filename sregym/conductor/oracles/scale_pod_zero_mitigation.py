@@ -33,6 +33,9 @@ class ScalePodZeroMitigationOracle(Oracle):
         # Check if all services are running normally
         pod_list = kubectl.list_pods(namespace)
         for pod in pod_list.items:
+            # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded by design.
+            if self.is_completed_job_pod(pod):
+                continue
             for container_status in pod.status.container_statuses:
                 if container_status.state.waiting and container_status.state.waiting.reason == "CrashLoopBackOff":
                     print(f"Container {container_status.name} is in CrashLoopBackOff")

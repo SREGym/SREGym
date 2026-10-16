@@ -16,8 +16,9 @@ class ValkeyAuthDisruption(Problem):
             component=f"service/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "Valkey authentication is broken by an invalid password configuration, so dependent services cannot "
-                "establish cache sessions and cart-related operations fail."
+                "Valkey was reconfigured at runtime to require a password (`CONFIG SET requirepass`) that its "
+                "clients do not have, so the cart service's unauthenticated connections are rejected with NOAUTH, "
+                "the cart service cannot start or serve requests, and cart-related operations fail."
             ),
         )
 

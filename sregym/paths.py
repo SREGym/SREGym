@@ -9,7 +9,7 @@ BASE_PARENT_DIR = Path(__file__).resolve().parent.parent
 TARGET_MICROSERVICES = BASE_PARENT_DIR / "SREGym-applications"
 
 # Cache directories
-CACHE_DIR = HOME_DIR / "cache_dir"
+CACHE_DIR = Path(os.environ.get("SREGYM_CACHE_DIR", HOME_DIR / "cache_dir"))
 LLM_CACHE_FILE = CACHE_DIR / "llm_cache.json"
 
 # Cluster baseline state snapshot (captured from a fresh cluster)

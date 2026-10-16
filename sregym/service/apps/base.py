@@ -1,8 +1,19 @@
 import json
 import logging
 from pathlib import Path
+from typing import Protocol
 
 from sregym.paths import TARGET_MICROSERVICES
+
+
+class WorkloadApplication(Protocol):
+    """Optional workload contract for applications that provide background traffic."""
+
+    def create_workload(self, **kwargs) -> None: ...
+
+    def start_workload(self) -> None: ...
+
+    def stop_workload(self) -> None: ...
 
 
 class Application:
@@ -15,7 +26,7 @@ class Application:
             raise FileNotFoundError(f"{label} does not exist: {resolved}")
         return resolved
 
-    def __init__(self, config_file: str):
+    def __init__(self, config_file: str | Path):
         self.config_file = self._validated_path(config_file, "config_file")
         self.name = None
         self.namespace = None
@@ -25,6 +36,10 @@ class Application:
         self.logger = logging.getLogger("all.application")
         self.logger.propagate = True
         self.logger.setLevel(logging.DEBUG)
+
+    def deploy(self) -> None:
+        """Deploy the application and require its expected healthy state."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement deployment")
 
     def load_app_json(self):
         """Load (basic) application metadata into attributes.
