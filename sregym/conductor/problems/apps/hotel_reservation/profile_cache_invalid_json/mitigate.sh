@@ -66,6 +66,6 @@ for key in json.loads(sys.argv[1]):
     assert f.readline() in (b'DELETED\r\n',b'NOT_FOUND\r\n')
 s.close()
 '''
-k('exec','deployment/frontend','--','python3','-c',code,json.dumps(keys))
+k('exec','deployment/profile','--','python3','-c',code,json.dumps(keys))
 print('Profile cache invalidated; canonical catalog remains in MongoDB.')
 PY

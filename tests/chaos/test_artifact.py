@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 
 import pytest
 
@@ -93,6 +95,56 @@ def test_scripts_can_keep_state(tmp_path):
     workspace.close()
     assert not workspace.path.exists()
     path.chmod(0o755)
+
+
+def test_profile_cache_lifecycle_uses_the_cache_client(tmp_path, monkeypatch):
+    """Execute all three scripts with frontend-to-cache maintenance forbidden."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "kubectl-calls.jsonl"
+    kubectl = bin_dir / "kubectl"
+    kubectl.write_text(
+        f"#!{sys.executable}\n"
+        """import json, os, sys
+args = sys.argv[1:]
+with open(os.environ['KUBECTL_CALL_LOG'], 'a') as log:
+    log.write(json.dumps(args) + '\\n')
+assert args[:2] == ['-n', 'hotel-reservation']
+args = args[2:]
+if args[0] == 'rollout':
+    pass
+elif args[:2] == ['get', 'deployment']:
+    print('deployment-uid')
+elif args[:2] == ['get', 'pods']:
+    print(json.dumps({'items': []}))
+elif args[:2] == ['get', 'service']:
+    print(json.dumps({'spec': {'clusterIP': '10.0.0.1'}}))
+elif args[0] == 'exec':
+    target = args[2] if args[1] == '-i' else args[1]
+    command = args[args.index('--') + 1:]
+    if command[:2] == ['python3', '-c']:
+        assert target == 'deployment/profile', 'maintenance must use the permitted cache client'
+        print('{}')
+    elif target == 'deployment/mongodb-profile' and command[0] == 'mongo':
+        print('["1", "2"]')
+else:
+    raise AssertionError(args)
+"""
+    )
+    kubectl.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("KUBECTL_CALL_LOG", str(calls))
+    workspace = discover_faults()["profile_cache_invalid_json_hotel_reservation"].workspace()
+
+    for script in ("inject.sh", "mitigate.sh", "recover.sh"):
+        result = workspace.run(script, "hotel-reservation")
+        assert result.returncode == 0, result.stderr
+
+    maintenance = [json.loads(line) for line in calls.read_text().splitlines() if '"python3"' in line]
+    # Snapshot once, invalidate during mitigation and recovery, then restore.
+    assert len(maintenance) == 4
+    assert all("deployment/profile" in call for call in maintenance)
+    assert json.loads((workspace.path / "profile-cache.json").read_text()) == {}
 
 
 def test_run_preserves_explicit_kubeconfig(tmp_path, monkeypatch):

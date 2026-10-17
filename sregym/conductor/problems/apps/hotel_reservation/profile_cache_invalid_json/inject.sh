@@ -10,7 +10,7 @@ kubectl -n "$NAMESPACE" rollout status deployment/memcached-profile --timeout=12
 # Keep the pre-existing cache contents only for exact cleanup, never for mitigation.
 owner=$(kubectl -n "$NAMESPACE" get deployment mongodb-reservation -o jsonpath='{.metadata.uid}')
 if [[ ! -f "$ARTIFACT_DIR/profile-cache.json" || ! -f "$ARTIFACT_DIR/state-owner" || "$(cat "$ARTIFACT_DIR/state-owner" 2>/dev/null || true)" != "$owner" ]]; then
-  kubectl -n "$NAMESPACE" exec deployment/frontend -- python3 -c '
+  kubectl -n "$NAMESPACE" exec deployment/profile -- python3 -c '
 import socket,json,base64
 s=socket.create_connection(("memcached-profile",11211),10)
 f=s.makefile("rb")
