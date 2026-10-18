@@ -334,7 +334,7 @@ def build_investigation_questions(
                     "Prefer an item with one specific value over an item listing many.",
                 ],
             },
-            criteria={item["id"]: item["text"] for item in evidence},
+            criteria={item["id"]: f"Evidence item `{item['id']}` in `evidence`." for item in evidence},
         )
     candidates = detail.get("input_candidates") or []
     if candidates:
@@ -351,7 +351,7 @@ def build_investigation_questions(
 
 
 def build_cluster_questions(findings: list[dict]) -> dict[str, Choice]:
-    options = {f"F{i + 1}": f"{f.get('kind')} {f.get('name')}: {f.get('signal')}" for i, f in enumerate(findings)}
+    options = {f"F{i + 1}": f"Finding `F{i + 1}` in `findings`." for i in range(len(findings))}
     options[NONE_OPTION] = "None of these objects explains the affected workloads."
     return {
         CLUSTER_OBJECT_QUESTION: Choice(

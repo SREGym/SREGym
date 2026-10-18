@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import random
 from dataclasses import dataclass
 
 import msgspec
@@ -426,10 +427,10 @@ def test_investigate_budget_trims_real_detail_and_preserves_checks_changes_and_e
     assert "data" not in reduced["configmaps"]["settings"]
     assert all(len(c["env"]) <= 8 for c in reduced["workload"]["containers"])
     assert reduced["logs"]["repeated_failures"] == detail["logs"]["repeated_failures"]
-    assert questions[EVIDENCE_QUESTION].criteria == {e["id"]: e["text"] for e in fitted["evidence"]}
+    assert set(questions[EVIDENCE_QUESTION].criteria) == {e["id"] for e in fitted["evidence"]}
     assert detail == original
 
-    # Pathological checks/evidence must also fit, with question options using the same excerpts and ids.
+    # Pathological checks/evidence must also fit, with options referencing the retained evidence ids.
     detail["spec_checks"] = ["probe mismatch: " + "p" * 100000]
     client.scripted.append(
         FakeResponse(
@@ -445,7 +446,7 @@ def test_investigate_budget_trims_real_detail_and_preserves_checks_changes_and_e
     fitted, questions = client.calls[-1]
     assert estimate_tokens(fitted) <= tree.DETAIL_TOKEN_BUDGET
     assert fitted["candidate"]["detail"]["spec_checks"][0].startswith("probe mismatch:")
-    assert questions[EVIDENCE_QUESTION].criteria == {e["id"]: e["text"] for e in fitted["evidence"]}
+    assert set(questions[EVIDENCE_QUESTION].criteria) == {e["id"] for e in fitted["evidence"]}
 
 
 @pytest.mark.parametrize("shape", ["investigate", "cluster", "characterize", "triage"])
@@ -525,6 +526,69 @@ def test_evidence_and_characterisation_questions():
     assert set(questions[CATEGORY_QUESTION].criteria) == set(FAULT_CATEGORIES)
     assert set(questions[EVIDENCE_QUESTION].criteria) == set(ids)
     assert EVIDENCE_QUESTION not in build_characterization_questions([])
+
+
+@pytest.mark.parametrize("mode", ["characterize", "investigate", "cluster"])
+def test_question_options_reference_state_instead_of_copying_evidence(mode):
+    snap = small_snapshot()
+
+    def questions(text):
+        if mode == "cluster":
+            return tree.build_cluster_questions([{"id": "F1", "kind": "ConfigMap", "name": "dns", "signal": text}])
+        evidence = [{"id": "E7", "text": text}]
+        if mode == "characterize":
+            return build_characterization_questions(evidence)
+        return tree.build_investigation_questions(snap, "deployment/frontend", evidence, [])
+
+    short = questions("connection refused")
+    long = questions("connection refused " * 10000)
+    assert msgspec.to_builtins(short) == msgspec.to_builtins(long)
+    key = tree.CLUSTER_OBJECT_QUESTION if mode == "cluster" else EVIDENCE_QUESTION
+    option = "F1" if mode == "cluster" else "E7"
+    collection = "findings" if mode == "cluster" else "evidence"
+    assert option in long[key].criteria
+    assert collection in long[key].criteria[option]
+    assert option in long[key].criteria[option]
+
+
+def test_large_investigation_fits_state_and_question_context_limits(monkeypatch):
+    snap = small_snapshot()
+    cid = "deployment/frontend"
+    rng = random.Random(1118)
+    aliases = [
+        {
+            "ip": f"10.0.0.{i + 1}",
+            "hostnames": [".".join("".join(rng.choices("abcdefghijklmnopqrstuvwxyz", k=63)) for _ in range(3))],
+        }
+        for i in range(160)
+    ]
+    obj = deployment("frontend", ready=0, hostAliases=aliases)
+    monkeypatch.setattr(investigate, "_get_json", lambda args: obj)
+    detail = {"workload": investigate.workload_detail("Deployment", "frontend", NS)}
+    original = copy.deepcopy(detail)
+    client = FakeClient(
+        [
+            FakeResponse(
+                {
+                    tree.VERDICT_QUESTION: choice_answer({"origin": 1.0}, 1.0),
+                    tree.NEXT_QUESTION: choice_answer({tree.NONE_OPTION: 1.0}, 1.0),
+                    CATEGORY_QUESTION: choice_answer({"config_value": 1.0}, 1.0),
+                    EVIDENCE_QUESTION: choice_answer({"E3": 1.0}, 1.0),
+                }
+            )
+        ]
+    )
+    diagnoser = tree.IterativeDiagnoser(client, fetch_detail=lambda *args: detail)
+    result = diagnoser.investigate(snap, cid, classifier.ChoiceResult(cid, 1.0, {cid: 1.0}), {}, [])
+    state, questions = client.calls[0]
+    state_tokens = estimate_tokens(state)
+    question_tokens = [estimate_tokens(msgspec.to_builtins(q)) for q in questions.values()]
+    assert state_tokens <= tree.DETAIL_TOKEN_BUDGET
+    assert state_tokens + max(question_tokens) <= 32000
+    assert state_tokens + sum(question_tokens) <= 64000
+    assert len(next(e["text"] for e in state["evidence"] if e["id"] == "E3")) > 30000
+    assert result["key_evidence"].choice == "E3"
+    assert detail == original
 
 
 # --------------------------------------------------------------------------- diagnoser with a fake client
