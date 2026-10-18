@@ -16,6 +16,13 @@ _SUSTAINED_SILENCE_SECONDS = 120
 _POLL_INTERVAL_SECONDS = 10
 # Grace period before starting to check (let alerts resolve).
 _BUFFER_SECONDS = 30
+# Prometheus evaluates rules once per minute and the error-rate rules look back
+# 2 minutes, so a fault's own alert can keep firing for minutes after a correct
+# fix (SREGym#1116). Keep polling that long before calling the alerts
+# persistent, as the Stratus weak AlertOracle does.
+_RESOLVE_GRACE_SECONDS = 300
+# Room for the last poll and Prometheus query on top of the waiting windows.
+_EVALUATION_MARGIN_SECONDS = 60
 
 
 class AlertOracle(Oracle):
@@ -23,7 +30,10 @@ class AlertOracle(Oracle):
 
     Queries the Prometheus alerts API for firing alerts scoped to the
     problem's namespace.  Because alerts can be flaky, the oracle waits
-    for a sustained silence window before declaring success.
+    for a sustained silence window before declaring success.  An alert
+    that is still firing fails the check only after
+    ``resolve_grace_seconds`` of polling, because a fault's own alert can
+    keep firing for minutes after a correct fix.
     """
 
     importance = 1.0
@@ -48,12 +58,20 @@ class AlertOracle(Oracle):
         poll_interval_seconds=_POLL_INTERVAL_SECONDS,
         buffer_seconds=_BUFFER_SECONDS,
         exclude_alerts=None,
+        resolve_grace_seconds=_RESOLVE_GRACE_SECONDS,
     ):
         super().__init__(problem)
         self.sustained_silence_seconds = sustained_silence_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
         self.exclude_alerts = set(exclude_alerts or [])
+        self.resolve_grace_seconds = resolve_grace_seconds
+        # The longest evaluation: the buffer, alerts that keep firing for the
+        # whole grace window, then a full silence window. The conductor's
+        # default wait for a submitted evaluation is shorter than that.
+        self.evaluation_timeout_seconds = (
+            buffer_seconds + resolve_grace_seconds + sustained_silence_seconds + _EVALUATION_MARGIN_SECONDS
+        )
         # Alert *instances* (full label sets, not just alertname) already firing
         # before the fault was injected (environmental noise unrelated to the
         # agent). Populated by ``capture_baseline`` and ignored during
@@ -208,15 +226,13 @@ class AlertOracle(Oracle):
         print(f"⏳ Waiting {self.buffer_seconds}s buffer before checking alerts…")
         time.sleep(self.buffer_seconds)
 
-        # Poll for sustained silence. Any firing alert is an immediate failure.
+        # Poll for sustained silence. A firing alert restarts the silence window,
+        # and fails the check once it has outlasted the resolve grace window.
         start = time.monotonic()
+        silence_start = None
         last_log_second = -1
 
         while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= self.sustained_silence_seconds:
-                break
-
             try:
                 firing = self._query_firing_alerts(namespace)
             except RuntimeError as exc:
@@ -232,19 +248,30 @@ class AlertOracle(Oracle):
                 print(f"❌ Cannot reach Prometheus to check alerts in {namespace}: {exc}")
                 return self.fail("prometheus_unreachable", namespace=namespace, error=str(exc))
 
+            now = time.monotonic()
+            elapsed_int = int(now - start)
             if firing:
                 names = ", ".join(self._fmt_alert(a) for a in firing)
-                print(f"❌ Firing alerts in {namespace}: {names}")
-                return self.fail(
-                    "alerts_still_firing",
-                    namespace=namespace,
-                    alerts=sorted({a.get("labels", {}).get("alertname", "") for a in firing}),
-                )
-
-            elapsed_int = int(elapsed)
-            if elapsed_int >= last_log_second + 30:
-                print(f"🔇 No alerts firing — silence for {elapsed_int}/{self.sustained_silence_seconds}s")
-                last_log_second = elapsed_int
+                if now - start >= self.resolve_grace_seconds:
+                    print(f"❌ Firing alerts in {namespace} after {self.resolve_grace_seconds}s: {names}")
+                    return self.fail(
+                        "alerts_still_firing",
+                        namespace=namespace,
+                        alerts=sorted({a.get("labels", {}).get("alertname", "") for a in firing}),
+                    )
+                silence_start = None
+                if elapsed_int >= last_log_second + 30:
+                    print(f"⏳ Firing alerts in {namespace}: {names} (waiting for them to resolve)")
+                    last_log_second = elapsed_int
+            else:
+                if silence_start is None:
+                    silence_start = now
+                silent = now - silence_start
+                if silent >= self.sustained_silence_seconds:
+                    break
+                if elapsed_int >= last_log_second + 30:
+                    print(f"🔇 No alerts firing — silence for {int(silent)}/{self.sustained_silence_seconds}s")
+                    last_log_second = elapsed_int
 
             time.sleep(self.poll_interval_seconds)
 
