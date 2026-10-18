@@ -334,7 +334,7 @@ def build_investigation_questions(
                     "Prefer an item with one specific value over an item listing many.",
                 ],
             },
-            criteria={item["id"]: item["text"] for item in evidence},
+            criteria={item["id"]: f"Evidence item `{item['id']}` in `evidence`." for item in evidence},
         )
     candidates = detail.get("input_candidates") or []
     if candidates:
@@ -351,7 +351,7 @@ def build_investigation_questions(
 
 
 def build_cluster_questions(findings: list[dict]) -> dict[str, Choice]:
-    options = {f"F{i + 1}": f"{f.get('kind')} {f.get('name')}: {f.get('signal')}" for i, f in enumerate(findings)}
+    options = {f"F{i + 1}": f"Finding `F{i + 1}` in `findings`." for i in range(len(findings))}
     options[NONE_OPTION] = "None of these objects explains the affected workloads."
     return {
         CLUSTER_OBJECT_QUESTION: Choice(
@@ -538,7 +538,11 @@ class IterativeDiagnoser(JevDiagnoser):
             applied=trims,
         )
         response = self._ask(
-            f"investigate:{cid}", fitted, build_investigation_questions(snapshot, cid, evidence, options, detail)
+            f"investigate:{cid}",
+            fitted,
+            build_investigation_questions(
+                snapshot, cid, fitted.get("evidence") or [], options, fitted.get("candidate", {}).get("detail", {})
+            ),
         )
         verdict = ChoiceResult.from_answer(response.choices[VERDICT_QUESTION])
         nxt = ChoiceResult.from_answer(response.choices[NEXT_QUESTION])
@@ -630,7 +634,7 @@ class IterativeDiagnoser(JevDiagnoser):
         }
         fitted, _ = fit_state_to_budget({**state, "components": {}}, DETAIL_TOKEN_BUDGET)
         fitted.pop("components", None)
-        response = self._ask("cluster_objects", fitted, build_cluster_questions(findings))
+        response = self._ask("cluster_objects", fitted, build_cluster_questions(fitted.get("findings") or []))
         result = ChoiceResult.from_answer(response.choices[CLUSTER_OBJECT_QUESTION])
         chosen = None
         if result.choice != NONE_OPTION:

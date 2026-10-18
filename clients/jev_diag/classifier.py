@@ -396,7 +396,8 @@ def build_characterization_questions(evidence: list[dict]) -> dict[str, Choice]:
                     "Each option id names one item in `evidence`.",
                 ],
             },
-            criteria={item["id"]: item["text"] for item in evidence},
+            # Evidence already lives in state; repeating it here consumes the per-question context twice.
+            criteria={item["id"]: f"Evidence item `{item['id']}` in `evidence`." for item in evidence},
         )
     return questions
 
@@ -574,7 +575,9 @@ class JevDiagnoser:
                 tokens_after=estimate_tokens(detail_state),
                 applied=detail_trims,
             )
-            response2 = self._ask("characterize_fault", detail_state, build_characterization_questions(evidence))
+            response2 = self._ask(
+                "characterize_fault", detail_state, build_characterization_questions(detail_state.get("evidence") or [])
+            )
             category_result = ChoiceResult.from_answer(response2.choices[CATEGORY_QUESTION])
             if EVIDENCE_QUESTION in response2.choices:
                 evidence_result = ChoiceResult.from_answer(response2.choices[EVIDENCE_QUESTION])
