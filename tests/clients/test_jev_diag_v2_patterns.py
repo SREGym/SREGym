@@ -147,7 +147,7 @@ def test_a_wrong_setting_of_its_own_explains_a_broken_component_unless_another_o
     }
     own = keys["own-setting:deployment/tracer"]
     assert own.values == [pvc] and pvc in own.mechanism and own.predictions[0].status == SUPPORTS
-    assert "partial:deployment/tracer" not in keys  # one candidate per origin
+    assert "partial:deployment/tracer" not in keys  # observability: no bare partial
     assert "own-setting:deployment/cart" not in keys and "partial:deployment/cart" in keys  # the policy explains it
     hang = "init container hang has been running for 130s; the pod's main containers cannot start until it exits"
     restarted = comp(

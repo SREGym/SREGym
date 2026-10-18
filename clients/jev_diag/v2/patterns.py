@@ -350,8 +350,8 @@ def own_setting_explanations(snapshot: Any, covered: set[str]) -> list[Explanati
     return out
 
 
-def partial_explanations(snapshot: Any, skip: set[str] | None = None) -> list[Explanation]:
-    """'The fault is in X, mechanism unknown' for every component with symptoms (except origins in `skip`)."""
+def partial_explanations(snapshot: Any) -> list[Explanation]:
+    """'The fault is in X, mechanism unknown' for every component with symptoms."""
     return [
         Explanation(
             key=f"partial:{cid}",
@@ -361,7 +361,7 @@ def partial_explanations(snapshot: Any, skip: set[str] | None = None) -> list[Ex
             impact=impact_of(snapshot.components, cid),
         )
         for cid, comp in snapshot.components.items()
-        if not _healthy(comp) and comp.get("role") != "observability" and object_id(comp) not in (skip or set())
+        if not _healthy(comp) and comp.get("role") != "observability"
     ]
 
 
@@ -379,8 +379,7 @@ def build_explanations(snapshot: Any, details: dict[str, dict] | None = None) ->
         bad_input_explanations(snapshot, details),
     ]
     covered = {o for group in builders[:2] for e in group for o in e.impact if o != e.origin}
-    own = own_setting_explanations(snapshot, covered)
-    builders += [own, partial_explanations(snapshot, {e.origin for e in own})]
+    builders += [own_setting_explanations(snapshot, covered), partial_explanations(snapshot)]
     acts_on: dict[str, Explanation] = {}
     for group in builders:
         for e in group:
