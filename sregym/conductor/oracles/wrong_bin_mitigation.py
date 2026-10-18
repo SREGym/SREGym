@@ -1,7 +1,52 @@
+import posixpath
+import shlex
 import time
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.service.rollout import deployment_rollout_complete
+
+
+def _executable(command: list[str]) -> str | None:
+    """Resolve direct commands and transparent env/simple-shell launchers.
+
+    Do not interpret compound shell programs or substitutions: finding the
+    expected name inside one does not prove which executable it starts.
+    """
+    while command:
+        executable = posixpath.basename(command[0])
+        if executable == "env":
+            command = command[1:]
+            while command:
+                option = command[0]
+                if (
+                    option in {"-i", "--ignore-environment"}
+                    or option.startswith("--unset=")
+                    or ("=" in option and not option.startswith("-"))
+                ):
+                    command = command[1:]
+                elif option in {"-u", "--unset"} and len(command) > 1:
+                    command = command[2:]
+                elif option == "--":
+                    command = command[1:]
+                    break
+                else:
+                    break
+            while command and "=" in command[0] and not command[0].startswith("-"):
+                command = command[1:]
+            continue
+        if executable in {"sh", "bash", "dash", "ash"} and len(command) >= 3 and command[1] in {"-c", "-lc"}:
+            source = command[2]
+            if any(character in source for character in ";&|<>()$`\n\r"):
+                return None
+            try:
+                command = shlex.split(source)
+            except ValueError:
+                return None
+            if command[:1] == ["exec"]:
+                command = command[1:]
+            continue
+        return executable
+    return None
 
 
 def _contains_command(command: list[str], wrong) -> bool:
@@ -20,7 +65,7 @@ def _contains_command(command: list[str], wrong) -> bool:
 
 class WrongBinMitigationOracle(Oracle):
     importance = 1.0
-    # Only used with ``problem.wrong_command``: how long to wait for the fixed rollout.
+    # How long to wait for the fixed Deployment to roll out.
     rollout_timeout_s = 180.0
 
     def _rolled_out(self, kubectl, namespace: str) -> bool:
@@ -53,15 +98,13 @@ class WrongBinMitigationOracle(Oracle):
         try:
             deployment = kubectl.get_deployment(self.problem.faulty_service, namespace)
             containers = deployment.spec.template.spec.containers
-            needs_rollout = False
 
             for container in containers:
                 command = list(container.command or [])
-                if expected_command in command:
+                if _executable(command) == expected_command:
                     continue
                 if wrong_command is not None and not _contains_command(command, wrong_command):
                     print(f"[i] Container '{container.name}' no longer runs the injected command: {command}")
-                    needs_rollout = True
                     continue
                 print(f"[❌] Deployment for container '{container.name}' is using wrong binary: {command}")
                 # Compared against the command the injector replaced, so
@@ -73,7 +116,7 @@ class WrongBinMitigationOracle(Oracle):
                     expected=expected_command,
                 )
 
-            if needs_rollout and not self._rolled_out(kubectl, namespace):
+            if not self._rolled_out(kubectl, namespace):
                 print(f"[❌] Deployment {self.problem.faulty_service} did not roll out Ready with its new command")
                 return self.fail("fault_still_present", deployment=self.problem.faulty_service, rollout_complete=False)
 
