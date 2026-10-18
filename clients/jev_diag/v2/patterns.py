@@ -22,6 +22,10 @@ SATURATION_RE = re.compile(r"(?i)cpu|throttl|queue|overload|latency|limit|exhaus
 SETTING_RE = re.compile(r"(?i)retr|attempt|timeout|deadline|backoff|qps|rate|limit|concurren|pool|queue")
 MAX_INPUTS = 4
 POD_PREFIX_RE = re.compile(r"^pod [\w.-]+: ")
+CONNECT_CLASS = "connectivity or timeout"
+TIMEOUT_RE = re.compile(r"(?i)time ?out|timed out|deadline")
+# The team's check for an object rewritten after a reader started that the reader only reads at startup.
+STALE_RE = re.compile(r"^(\w+) ([\w.-]+) was rewritten .*still use the previous values")
 
 
 def object_id(comp: dict) -> str:
@@ -250,6 +254,9 @@ def hidden_state_explanations(snapshot: Any, details: dict[str, dict]) -> list[E
     out: list[Explanation] = []
     for target, tcomp in components.items():
         callers = sorted(src for src, classes in _caller_classes(tcomp).items() if AUTH_CLASS in classes)
+        refused = not callers and _refused_without_own_trouble(tcomp)
+        if refused:  # callers cannot connect to a server that shows no trouble of its own
+            callers = sorted(src for src, classes in _caller_classes(tcomp).items() if CONNECT_CLASS in classes)
         if not callers:
             continue
         names = ", ".join(callers)
@@ -265,7 +272,16 @@ def hidden_state_explanations(snapshot: Any, details: dict[str, dict]) -> list[E
                 ),
                 impact=sorted({object_id(components[c]) for c in callers if c in components}),
                 predictions=[
-                    Prediction(f"{names} get authentication failures from {target}", SUPPORTS, group=f"auth:{target}"),
+                    Prediction(
+                        f"{names} get authentication failures from {target}",
+                        UNKNOWN if refused else SUPPORTS,
+                        group=f"auth:{target}",
+                    ),
+                    Prediction(
+                        f"{target} shows no trouble of its own",
+                        SUPPORTS if refused else UNKNOWN,
+                        group=f"quiet:{target}",
+                    ),
                     Prediction(
                         f"{target}'s configuration was not changed",
                         CONTRADICTS if changed else SUPPORTS,
@@ -275,6 +291,51 @@ def hidden_state_explanations(snapshot: Any, details: dict[str, dict]) -> list[E
                 ],
             )
         )
+    return out
+
+
+def _refused_without_own_trouble(comp: dict) -> bool:
+    """Only other components' errors point at it (no symptoms, changes or settings of its own), and those errors are
+    failed connections rather than timeouts or overload."""
+    if set(comp.get("evidence_kinds") or []) != {"pointed_at"}:
+        return False
+    examples = [sig.split("e.g.", 1)[-1] for sig in comp.get("signals") or []]  # the quoted error, not its class
+    return not any(TIMEOUT_RE.search(x) or SATURATION_RE.search(x) for x in examples)
+
+
+def stale_read_explanations(snapshot: Any) -> list[Explanation]:
+    """A workload still running with values it read at startup from an object rewritten after it started (the
+    team's check): the workload is the origin, the rewritten object contributes."""
+    components = snapshot.components
+    out: list[Explanation] = []
+    for cid, comp in components.items():
+        sigs = comp.get("signals") or []
+        for sig in sigs:
+            m = STALE_RE.match(sig)
+            if not m:
+                continue
+            oid = object_id(comp)
+            source = f"{m.group(1).lower()}/{comp.get('namespace')}/{m.group(2)}"
+            rejected = [x for x in sigs if x.startswith("server ") and "rejects" in x]
+            out.append(
+                Explanation(
+                    key=f"stale-read:{cid}:{source}",
+                    pattern="hidden-state",
+                    origin=oid,
+                    mechanism=f"{oid} still runs with the values it read at startup: {sig}.",
+                    contributing=[source],
+                    values=[sig, *rejected[:1]],
+                    impact=impact_of(components, cid),
+                    predictions=[
+                        own_symptoms(comp, oid),
+                        Prediction(
+                            f"a server rejects what {oid} presents",
+                            SUPPORTS if rejected else UNKNOWN,
+                            group=f"rejected:{cid}",
+                        ),
+                    ],
+                )
+            )
     return out
 
 
@@ -376,6 +437,7 @@ def build_explanations(snapshot: Any, details: dict[str, dict] | None = None) ->
         dependency_explanations(snapshot),
         amplify_explanations(snapshot, details),
         hidden_state_explanations(snapshot, details),
+        stale_read_explanations(snapshot),
         bad_input_explanations(snapshot, details),
     ]
     covered = {o for group in builders[:2] for e in group for o in e.impact if o != e.origin}

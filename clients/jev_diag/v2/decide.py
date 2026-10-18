@@ -46,10 +46,17 @@ class Pick:
 
 
 def shortlist(explanations: list[Explanation], k: int = TOP_K) -> list[Explanation]:
-    """Uncontradicted chains first, then by supported evidence groups and observed impact; stable for ties."""
+    """Uncontradicted chains first, then by mechanism-specific support, all supported groups and observed impact;
+    stable for ties."""
     ranked = sorted(
         enumerate(explanations),
-        key=lambda ie: (ie[1].contradicted(), -ie[1].supported_groups(), -len(ie[1].impact), ie[0]),
+        key=lambda ie: (
+            ie[1].contradicted(),
+            -ie[1].specific_groups(),
+            -ie[1].supported_groups(),
+            -len(ie[1].impact),
+            ie[0],
+        ),
     )
     return [e for _, e in ranked[:k]]
 

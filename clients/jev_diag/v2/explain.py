@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 SUPPORTS = "supports"
 CONTRADICTS = "contradicts"
 UNKNOWN = "unknown"
+GENERIC_GROUPS = ("timing:", "symptoms:", "config:")
 
 PARTIAL = "partial"  # "the fault is in X, mechanism unknown"; always available, reported as partial
 
@@ -38,6 +39,12 @@ class Explanation:
     def supported_groups(self) -> int:
         """Distinct evidence groups that support this explanation."""
         return len({p.group or p.text for p in self.predictions if p.status == SUPPORTS})
+
+    def specific_groups(self) -> int:
+        """Supported groups that point at a mechanism (errors naming it, saturation, rejected logins, a quiet server,
+        repeated failures), not the generic ones nearly every candidate gets (timing, own symptoms, unchanged config)."""
+        groups = {p.group or p.text for p in self.predictions if p.status == SUPPORTS}
+        return len({g for g in groups if not g.startswith(GENERIC_GROUPS)})
 
     def contradicted(self) -> bool:
         return any(p.status == CONTRADICTS for p in self.predictions)
