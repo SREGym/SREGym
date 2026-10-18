@@ -21,6 +21,7 @@ DATA_CLASS = "message or data processing failure"
 SATURATION_RE = re.compile(r"(?i)cpu|throttl|queue|overload|latency|limit|exhaust|429|too many|saturat|slow")
 SETTING_RE = re.compile(r"(?i)retr|attempt|timeout|deadline|backoff|qps|rate|limit|concurren|pool|queue")
 MAX_INPUTS = 4
+POD_PREFIX_RE = re.compile(r"^pod [\w.-]+: ")
 
 
 def object_id(comp: dict) -> str:
@@ -314,17 +315,21 @@ def bad_input_explanations(snapshot: Any, details: dict[str, dict]) -> list[Expl
 def own_settings(comp: dict) -> list[str]:
     """The team's checks that found an abnormal setting of the component's own (its `configuration` evidence),
     without alerts, symptoms, changes or other components' errors."""
-    return [
-        s
-        for s in comp.get("signals") or []
-        if not s.startswith(("firing alert", *POINTED_MARKERS, *OWN_LOG_MARKERS))
-        and not any(m in s for m in (*CHANGE_MARKERS, *SYMPTOM_MARKERS))
-    ]
+    out: list[str] = []
+    for s in comp.get("signals") or []:
+        if s.startswith(("firing alert", *POINTED_MARKERS, *OWN_LOG_MARKERS)) or any(
+            m in s for m in (*CHANGE_MARKERS, *SYMPTOM_MARKERS)
+        ):
+            continue
+        s = POD_PREFIX_RE.sub("", s)  # the same finding on every replica counts once
+        if s not in out:
+            out.append(s)
+    return out
 
 
 def own_setting_explanations(snapshot: Any, covered: set[str]) -> list[Explanation]:
     """'X's own setting is wrong' for a component with symptoms and such a check, unless another object already
-    explains it (`covered`: origins and impact of change and acts-on chains). Observability components count too."""
+    explains it (`covered`: what change and acts-on chains of other objects impact). Observability components count too."""
     out: list[Explanation] = []
     for cid, comp in snapshot.components.items():
         oid = object_id(comp)
@@ -373,7 +378,7 @@ def build_explanations(snapshot: Any, details: dict[str, dict] | None = None) ->
         hidden_state_explanations(snapshot, details),
         bad_input_explanations(snapshot, details),
     ]
-    covered = {o for group in builders[:2] for e in group for o in [e.origin, *e.impact]}
+    covered = {o for group in builders[:2] for e in group for o in e.impact if o != e.origin}
     own = own_setting_explanations(snapshot, covered)
     builders += [own, partial_explanations(snapshot, {e.origin for e in own})]
     acts_on: dict[str, Explanation] = {}
