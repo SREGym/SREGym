@@ -159,3 +159,17 @@ def test_a_wrong_setting_of_its_own_explains_a_broken_component_unless_another_o
     )
     keys = {e.key: e for e in build_explanations(snapshot({"deployment/web": restarted}))}
     assert keys["own-setting:deployment/web"].values == [hang]  # its own change does not hide it; replicas count once
+
+
+def test_a_reader_still_using_values_from_before_a_rewrite_is_the_origin_and_the_object_contributes():
+    stale = (
+        "Secret db-conn was rewritten at 2026-10-18T15:53:29Z, after 1 of 1 running containers of this workload "
+        "started; it is read through env DB_URL, which are fixed when the container starts, so those containers "
+        "still use the previous values"
+    )
+    reader = comp(
+        "Deployment", "catalog", healthy=False, signals=[stale, "server deployment/db rejects logins for account u"]
+    )
+    (e,) = [e for e in build_explanations(snapshot({"deployment/catalog": reader})) if e.key.startswith("stale-read")]
+    assert e.origin == "deployment/shop/catalog" and e.contributing == ["secret/shop/db-conn"]
+    assert e.specific_groups() == 1  # the rejected logins, beyond its own symptoms

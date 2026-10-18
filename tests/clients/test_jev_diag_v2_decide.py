@@ -51,6 +51,25 @@ def test_shortlist_puts_contradicted_chains_last():
     assert [e.key for e in shortlist([LIMIT, REGEX])] == ["change:regex", "change:limit"]
 
 
+def test_shortlist_ranks_mechanism_evidence_above_generic_support():
+    generic = Explanation(
+        key="change:a",
+        pattern="change",
+        origin="deployment/shop/a",
+        mechanism="m",
+        impact=["x", "y"],
+        predictions=[Prediction("before", SUPPORTS, group="timing:a"), Prediction("sym", SUPPORTS, group="symptoms:a")],
+    )
+    specific = Explanation(
+        key="stale:b",
+        pattern="hidden-state",
+        origin="deployment/shop/b",
+        mechanism="m",
+        predictions=[Prediction("rejected", SUPPORTS, group="rejected:b")],
+    )
+    assert [e.key for e in shortlist([generic, specific])] == ["stale:b", "change:a"]
+
+
 def test_pick_averages_shuffled_asks_and_accepts_a_confident_leader():
     ask, sent = _asker({"change:regex": 0.9, "change:limit": 0.1}, {"change:regex": 0.7, "change:limit": 0.3})
     result = pick(ask, {}, [REGEX, LIMIT], rng=random.Random(1))
