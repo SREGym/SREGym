@@ -25,10 +25,9 @@ rm -f /usr/local/bin/catalog-refresh /tmp/catalog-refresh.pid /tmp/catalog-refre
 SH
 done
 
-client_pod=$(kubectl -n "$NAMESPACE" get pods -l io.kompose.service=frontend -o jsonpath='{.items[0].metadata.name}')
 catalog_pod=$(kubectl -n "$NAMESPACE" get pods -l io.kompose.service=mongodb-profile -o jsonpath='{.items[0].metadata.name}')
 catalog_ids=$(kubectl -n "$NAMESPACE" exec "$catalog_pod" -- mongo --quiet --eval 'print(JSON.stringify(db.getSiblingDB("profile-db").hotels.distinct("id")));')
-printf '%s\n' "$catalog_ids" | kubectl -n "$NAMESPACE" exec -i "$client_pod" -- python3 -c '
+printf '%s\n' "$catalog_ids" | kubectl -n "$NAMESPACE" exec -i deployment/profile -- python3 -c '
 import json, socket, sys
 keys=json.load(sys.stdin)
 with socket.create_connection(("memcached-profile",11211),10) as s:

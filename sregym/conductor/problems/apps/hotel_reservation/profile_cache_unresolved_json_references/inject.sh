@@ -10,11 +10,10 @@ if [[ ! -f "$ARTIFACT_DIR/state/deployment.uid" ]] || [[ "$(cat "$ARTIFACT_DIR/s
 fi
 
 source_pod=$(kubectl -n "$NAMESPACE" get pods -l io.kompose.service=mongodb-user -o jsonpath='{.items[0].metadata.name}')
-client_pod=$(kubectl -n "$NAMESPACE" get pods -l io.kompose.service=frontend -o jsonpath='{.items[0].metadata.name}')
 
 # Preserve the cache's existing bytes, flags, and expiration for exact cleanup.
 if [[ ! -f "$ARTIFACT_DIR/state/profile-cache.json" ]]; then
-  kubectl -n "$NAMESPACE" exec -i "$client_pod" -- python3 - <<'PY' > "$ARTIFACT_DIR/state/profile-cache.json"
+  kubectl -n "$NAMESPACE" exec -i deployment/profile -- python3 - <<'PY' > "$ARTIFACT_DIR/state/profile-cache.json"
 import base64, json, socket
 with socket.create_connection(('memcached-profile',11211),10) as s:
     f=s.makefile('rb')

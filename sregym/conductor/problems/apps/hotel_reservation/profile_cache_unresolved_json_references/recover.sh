@@ -10,8 +10,7 @@ kubectl -n "$NAMESPACE" delete pod -l io.kompose.service=mongodb-user --wait=tru
 kubectl -n "$NAMESPACE" rollout status deployment/mongodb-user --timeout=180s
 
 if [[ -f "$ARTIFACT_DIR/state/profile-cache.json" ]]; then
-  client_pod=$(kubectl -n "$NAMESPACE" get pods -l io.kompose.service=frontend -o jsonpath='{.items[0].metadata.name}')
-  kubectl -n "$NAMESPACE" exec -i "$client_pod" -- python3 -c '
+  kubectl -n "$NAMESPACE" exec -i deployment/profile -- python3 -c '
 import base64,json,socket,sys,time
 records=json.load(sys.stdin)
 with socket.create_connection(("memcached-profile",11211),10) as s:
