@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from clients.jev_diag.derive import CHANGE_MARKERS, OWN_LOG_MARKERS, POINTED_MARKERS, SYMPTOM_MARKERS
 from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2.explain import CONTRADICTS, PARTIAL, SUPPORTS, UNKNOWN, Explanation, Prediction
 
@@ -310,8 +311,42 @@ def bad_input_explanations(snapshot: Any, details: dict[str, dict]) -> list[Expl
     return out
 
 
-def partial_explanations(snapshot: Any) -> list[Explanation]:
-    """'The fault is in X, mechanism unknown' for every component with symptoms."""
+def own_settings(comp: dict) -> list[str]:
+    """The team's checks that found an abnormal setting of the component's own (its `configuration` evidence),
+    without alerts, symptoms, changes or other components' errors."""
+    return [
+        s
+        for s in comp.get("signals") or []
+        if not s.startswith(("firing alert", *POINTED_MARKERS, *OWN_LOG_MARKERS))
+        and not any(m in s for m in (*CHANGE_MARKERS, *SYMPTOM_MARKERS))
+    ]
+
+
+def own_setting_explanations(snapshot: Any, covered: set[str]) -> list[Explanation]:
+    """'X's own setting is wrong' for a component with symptoms and such a check, unless another object already
+    explains it (`covered`: origins and impact of change and acts-on chains). Observability components count too."""
+    out: list[Explanation] = []
+    for cid, comp in snapshot.components.items():
+        oid = object_id(comp)
+        own = own_settings(comp)[:3]
+        if _healthy(comp) or not own or oid in covered:
+            continue
+        out.append(
+            Explanation(
+                key=f"own-setting:{cid}",
+                pattern="own-setting",
+                origin=oid,
+                mechanism=f"{oid} has a wrong setting of its own: {'; '.join(own)}",
+                values=own,
+                impact=impact_of(snapshot.components, cid),
+                predictions=[own_symptoms(comp, oid)],
+            )
+        )
+    return out
+
+
+def partial_explanations(snapshot: Any, skip: set[str] | None = None) -> list[Explanation]:
+    """'The fault is in X, mechanism unknown' for every component with symptoms (except origins in `skip`)."""
     return [
         Explanation(
             key=f"partial:{cid}",
@@ -321,7 +356,7 @@ def partial_explanations(snapshot: Any) -> list[Explanation]:
             impact=impact_of(snapshot.components, cid),
         )
         for cid, comp in snapshot.components.items()
-        if not _healthy(comp) and comp.get("role") != "observability"
+        if not _healthy(comp) and comp.get("role") != "observability" and object_id(comp) not in (skip or set())
     ]
 
 
@@ -337,8 +372,10 @@ def build_explanations(snapshot: Any, details: dict[str, dict] | None = None) ->
         amplify_explanations(snapshot, details),
         hidden_state_explanations(snapshot, details),
         bad_input_explanations(snapshot, details),
-        partial_explanations(snapshot),
     ]
+    covered = {o for group in builders[:2] for e in group for o in [e.origin, *e.impact]}
+    own = own_setting_explanations(snapshot, covered)
+    builders += [own, partial_explanations(snapshot, {e.origin for e in own})]
     acts_on: dict[str, Explanation] = {}
     for group in builders:
         for e in group:
