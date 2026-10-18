@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from sregym.conductor.oracles.incorrect_image_mitigation import IncorrectImageMitigationOracle
+from sregym.conductor.oracles.incorrect_image_mitigation import ProductCatalogImageMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
@@ -35,7 +35,7 @@ class IncorrectImage(Problem):
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = IncorrectImageMitigationOracle(
+        self.mitigation_oracle = ProductCatalogImageMitigationOracle(
             problem=self, actual_images={"product-catalog": "app-image:latest"}
         )
 
