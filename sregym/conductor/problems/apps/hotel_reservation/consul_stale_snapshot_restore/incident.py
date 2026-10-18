@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Cluster operations for the recurring directory recovery incident."""
 
 import base64

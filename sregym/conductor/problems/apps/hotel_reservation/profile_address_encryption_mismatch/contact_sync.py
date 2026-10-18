@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Contact export storage adapter and incremental reconciliation runner."""
 
 import argparse

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Cluster-only inspection and restoration of native service registrations."""
 
 import json
