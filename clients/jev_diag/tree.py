@@ -538,7 +538,11 @@ class IterativeDiagnoser(JevDiagnoser):
             applied=trims,
         )
         response = self._ask(
-            f"investigate:{cid}", fitted, build_investigation_questions(snapshot, cid, evidence, options, detail)
+            f"investigate:{cid}",
+            fitted,
+            build_investigation_questions(
+                snapshot, cid, fitted.get("evidence") or [], options, fitted.get("candidate", {}).get("detail", {})
+            ),
         )
         verdict = ChoiceResult.from_answer(response.choices[VERDICT_QUESTION])
         nxt = ChoiceResult.from_answer(response.choices[NEXT_QUESTION])
@@ -630,7 +634,7 @@ class IterativeDiagnoser(JevDiagnoser):
         }
         fitted, _ = fit_state_to_budget({**state, "components": {}}, DETAIL_TOKEN_BUDGET)
         fitted.pop("components", None)
-        response = self._ask("cluster_objects", fitted, build_cluster_questions(findings))
+        response = self._ask("cluster_objects", fitted, build_cluster_questions(fitted.get("findings") or []))
         result = ChoiceResult.from_answer(response.choices[CLUSTER_OBJECT_QUESTION])
         chosen = None
         if result.choice != NONE_OPTION:

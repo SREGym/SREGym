@@ -69,10 +69,24 @@ _ERROR_LINE_RE = re.compile(
     r"broken pipe|unreachable|no route to host|throttl)"
 )
 _BENIGN_LINE_RE = re.compile(r"(?i)\b(errors?[:=]\s*0|0 errors|failed[:=]\s*0|no errors?)\b")
+# Explicit failure outcomes can be logged at INFO. Require protocol/status context or an unsuccessful action,
+# rather than bare numbers or words like "malformed", "authentication", or "rate limit" in startup settings.
+_FAILURE_OUTCOME_RE = re.compile(
+    r"(?i)(\b(?:NOAUTH|WRONGPASS|UNAUTHENTICATED|PERMISSION_DENIED|RESOURCE_EXHAUSTED|DATA_LOSS)\b|"
+    r"\bHTTP(?:/\d(?:\.\d)?)?\s+[45]\d\d\b|"
+    r'\b(?:status(?:_code)?|http_status|response_code)\b["\x27]?\s*[:=]?\s*["\x27]?[45]\d\d\b|'
+    r"\bauth(?:entication|orization)?\s+(?:failed|rejected|denied)\b|\bauthentication required[.!]?\s*$|"
+    r"\b(?:access denied|invalid credentials)\b|\brate[ _-]limit(?:ing)?\s+(?:exceeded|reached)\b|"
+    r"\btoo many requests\b|"
+    r"\b(?:consumer|partition|processing|worker)\b(?:\s+\w+){0,4}\s+(?:paused|stalled|blocked|stuck)"
+    r"\s+(?:at|on)\s+(?:offset|record|message|input)\b|"
+    r"\b(?:skipp(?:ing|ed)|reject(?:ing|ed)|dropp(?:ing|ed))\s+(?:an?\s+)?"
+    r"(?:malformed|corrupt(?:ed)?|invalid|unparseable)\s+(?:record|message|payload|input|data|json|document)s?\b)"
+)
 # The severity a line declares about itself, in common log formats: JSON or logfmt level fields, MongoDB's "s"
 # field, .NET console prefixes, klog/glog prefixes, bracketed levels (<error>, [warn]), and bare level tokens
-# (ERROR, WRN). The first declared level wins; lines declaring trace, debug, info, or notice are not evidence,
-# whatever words they contain.
+# (ERROR, WRN). The first declared level wins. Quiet levels suppress keyword-only matches; explicit failure
+# outcomes at INFO/NOTICE still count. TRACE/DEBUG remain excluded.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _STRUCTURED_LEVEL_RE = re.compile(
     r'(?i)"(?:level|severity|lvl|loglevel|log_level)"\s*:\s*"(?P<json>[a-z]+)"|\blevel=(?P<logfmt>[a-z]+)\b'
@@ -1176,9 +1190,12 @@ def declared_level(line: str) -> str | None:
 
 def is_error_line(line: str) -> bool:
     text = strip_ansi(line)
-    if not text.strip() or not _ERROR_LINE_RE.search(text) or _BENIGN_LINE_RE.search(text):
+    if not text.strip() or _BENIGN_LINE_RE.search(text):
         return False
-    return declared_level(text) not in _QUIET_LEVELS
+    level = declared_level(text)
+    if level in {"trace", "debug", "trc", "dbg", "trce", "dbug", "d"}:
+        return False
+    return bool(_FAILURE_OUTCOME_RE.search(text) or (level not in _QUIET_LEVELS and _ERROR_LINE_RE.search(text)))
 
 
 def signature_recency(times: list[datetime], at: datetime) -> dict:
@@ -2300,7 +2317,10 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
 
     def for_components(fn: Callable[[dict], None], *, healthy_only: bool = False) -> Callable[[dict], None]:
         def apply(state: dict) -> None:
-            for comp in state["components"].values():
+            components = list(state.get("components", {}).values())
+            if "component" in state:
+                components.append(state["component"])
+            for comp in components:
                 if healthy_only and not comp.get("healthy"):
                     continue
                 fn(comp)
@@ -2330,7 +2350,7 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
 
     def cap_cluster(key: str, n: int) -> Callable[[dict], None]:
         def apply(state: dict) -> None:
-            if len(state["cluster"].get(key, [])) > n:
+            if len(state.get("cluster", {}).get(key, [])) > n:
                 state["cluster"][key] = state["cluster"][key][:n]
 
         return apply
@@ -2391,7 +2411,7 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
         ("all: pods to 3", for_components(lambda c: _cap(c, "pods", 3))),
         ("all: previous logs to 3 lines", for_components(cap_previous_logs(3))),
         ("healthy: drop containers", for_components(drop_keys("containers"), healthy_only=True)),
-        ("cluster: drop network policy rule bodies", lambda s: s["cluster"].pop("network_policies", None)),
+        ("cluster: drop network policy rule bodies", lambda s: s.get("cluster", {}).pop("network_policies", None)),
         (
             "all: drop previous logs and resource_usage",
             for_components(drop_keys("previous_container_logs", "resource_usage")),
@@ -2407,13 +2427,104 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
     ]
 
 
+def _detail_trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
+    """Trim the investigation's own bulk before touching checks, changes, signals, or evidence."""
+
+    def logs(state: dict) -> None:
+        logs = state["candidate"]["detail"].get("logs", {})
+        for key in ("tail", "telemetry_error_samples", "previous_container_logs"):
+            logs.pop(key, None)
+        _cap(logs, "error_samples", 6)
+
+    def config(state: dict) -> None:
+        for cm in state["candidate"]["detail"].get("configmaps", {}).values():
+            cm.pop("data", None)  # names, keys, timestamps, and selected evidence remain
+
+    def env(state: dict) -> None:
+        workload = state["candidate"]["detail"].get("workload", {})
+        for c in (workload.get("containers") or []) + (workload.get("init_containers") or []):
+            _cap(c, "env", 8)  # selected changed/duplicate/address values also survive as evidence
+
+    return [("detail: reduce log samples", logs), ("detail: drop ConfigMap bodies", config), ("detail: env to 8", env)]
+
+
+def _shrink_remaining(state: dict, max_tokens: int) -> bool:
+    """Last resort for any state shape: halve the largest bulk fields, then diagnostic facts if necessary.
+
+    Keep list prefixes and stable evidence/finding ids so callers can still resolve the selected option.
+    This runs only when the normal trim steps could not meet the budget.
+    """
+    keep = {
+        "signals",
+        "spec_checks",
+        "service_checks",
+        "template_changes",
+        "admission_changes",
+        "evidence",
+        "findings",
+        "cluster_findings",
+        "probe",
+        "probe_text",
+        "repeated_failures",
+        "failing_targets",
+        "input_candidates",
+        "id",
+        "kind",
+        "name",
+        "namespace",
+        "component",
+    }
+    keep_keys = keep | {"candidate", "detail", "logs"}
+    choices = []
+
+    def visit(parent: dict | list, key: str | int, value: object, protected: bool = False) -> None:
+        protected = protected or key in keep
+        priority = 1 if protected else 0
+        if isinstance(value, str) and len(value) > 240:
+            choices.append((priority, -estimate_tokens(value), parent, key, value))
+        elif isinstance(value, list):
+            if len(value) > 1:
+                choices.append((priority, -estimate_tokens(value), parent, key, value))
+            for i, item in enumerate(value):
+                visit(value, i, item, protected)
+        elif isinstance(value, dict):
+            # Removing schema fields is more destructive than shortening their values.
+            if len(value) > 1 and any(k not in keep_keys for k in value):
+                choices.append((2 + priority, -estimate_tokens(value), parent, key, value))
+            for k, item in value.items():
+                visit(value, k, item, protected)
+
+    changed = False
+    while estimate_tokens(state) > max_tokens:
+        choices.clear()
+        for key, value in state.items():
+            visit(state, key, value)
+        if not choices:
+            break
+        _, _, parent, key, value = min(choices, key=lambda c: c[:2])
+        n = len(value) // 2
+        if isinstance(value, str):
+            parent[key] = value[:n] + "…"
+        elif isinstance(value, list):
+            parent[key] = value[:n]
+        else:
+            removable = [k for k in value if k not in keep_keys]
+            drop = set(removable[len(removable) // 2 :])
+            parent[key] = {k: v for k, v in value.items() if k not in drop}
+        changed = True
+    return changed
+
+
 def fit_state_to_budget(state: dict, max_tokens: int) -> tuple[dict, list[str]]:
     """Deep-copy `state` and apply trim steps in order until the estimate fits. Returns (state, applied)."""
     fitted = copy.deepcopy(state)
     applied: list[str] = []
-    for label, step in _trim_steps():
+    steps = _detail_trim_steps() if "detail" in state.get("candidate", {}) else _trim_steps()
+    for label, step in steps:
         if estimate_tokens(fitted) <= max_tokens:
             break
         step(fitted)
         applied.append(label)
+    if _shrink_remaining(fitted, max_tokens):
+        applied.append("remaining: halve largest fields, diagnostic facts last")
     return fitted, applied

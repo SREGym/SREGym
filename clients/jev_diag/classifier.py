@@ -574,7 +574,9 @@ class JevDiagnoser:
                 tokens_after=estimate_tokens(detail_state),
                 applied=detail_trims,
             )
-            response2 = self._ask("characterize_fault", detail_state, build_characterization_questions(evidence))
+            response2 = self._ask(
+                "characterize_fault", detail_state, build_characterization_questions(detail_state.get("evidence") or [])
+            )
             category_result = ChoiceResult.from_answer(response2.choices[CATEGORY_QUESTION])
             if EVIDENCE_QUESTION in response2.choices:
                 evidence_result = ChoiceResult.from_answer(response2.choices[EVIDENCE_QUESTION])

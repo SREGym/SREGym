@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import copy
+import json
 from dataclasses import dataclass
 
 import msgspec
 import pytest
 from typesafe_sdk import Choice, ChoiceAnswer, Noul, NoulAnswer
 
-from clients.jev_diag import classifier, collector
+from clients.jev_diag import classifier, collector, derive, investigate, tree
 from clients.jev_diag.classifier import (
     CATEGORY_QUESTION,
     COMPONENT_QUESTION,
@@ -247,6 +249,58 @@ def test_log_signals_dedupe_normalise_and_skip_info_level():
     assert signals[0]["line"].startswith("frontend: error: dial tcp 10.1.2.3:6379: connection refused")
 
 
+def test_log_filter_keeps_explicit_failures_even_at_info_level_and_rejects_normal_logs():
+    failures = [
+        "-NOAUTH Authentication required.",
+        "WRONGPASS invalid username-password pair",
+        "HTTP 429 Too Many Requests",
+        "rate limit exceeded, status 429",
+        "consumer paused at offset 1234",
+        "ERROR partition remains paused at offset=1234",
+        "ERROR partition processing paused at offset=1234",
+        "ERROR record validation failed at offset=1234: invalid input",
+        'level=info msg="skipping malformed record"',
+        '{"level":"info","status":429,"message":"request rejected"}',
+        'INFO authentication failed for user "worker"',
+        "HTTP/1.1 403 Forbidden",
+        "RPC returned RESOURCE_EXHAUSTED",
+    ]
+    normal = [
+        "INFO server started on port 429",
+        "INFO processed offset 1234 status=200",
+        'level=info msg="request timeout configured"',
+        "INFO no errors, failed=0",
+        "INFO authentication required=true",
+        "INFO rate limit configured to 429 requests per second",
+        "INFO consumer pause timeout configured to 500 ms",
+        "INFO consumer resumed at offset 1234",
+        "INFO resuming partition at offset=1234",
+        "INFO processed order_id=ORD-1234 committed_offset=1235",
+        "INFO consumer paused for rebalance",
+        "INFO malformed record count=0",
+        "DEBUG HTTP 429 retry policy configured",
+    ]
+    assert [line for line in failures if not collector.is_error_line(line)] == []
+    assert [line for line in normal if collector.is_error_line(line)] == []
+
+
+def test_dropped_log_clues_reach_derived_signals_and_repeated_failures(monkeypatch):
+    body = "INFO skipping malformed record at offset=1234"
+    lines = [f"2026-09-17T10:00:{second:02d}Z {body}" for second in (0, 15, 30)]
+    # The deciding line is outside the unfiltered 12-line tail.
+    lines += ["INFO healthy heartbeat"] * investigate.MAX_TAIL_LINES
+    monkeypatch.setattr(investigate, "run_kubectl", lambda *a, **kw: "\n".join(lines))
+    monkeypatch.setattr(collector, "now", lambda: collector.parse_time("2026-09-17T10:00:31Z"))
+    logs = investigate.log_detail(["worker-1"], NS, [])
+    assert logs["error_lines"] == 3
+    assert logs["error_samples"][0]["count"] == 3
+    assert logs["repeated_failures"][0]["constant_tokens"] == ["offset=1234"]
+    comps = make_components(deployment("worker"))
+    comps["deployment/worker"]["log_signals"] = extract_log_signals(lines)
+    derive.classify_logs(comps)
+    assert any("message or data processing failure" in s for s in comps["deployment/worker"]["signals"])
+
+
 def test_parse_alerts_accepts_mcp_literal_and_no_alerts_text():
     assert parse_alerts("No firing alerts") == []
     raw = str(
@@ -323,6 +377,100 @@ def test_fit_state_to_budget_is_a_no_op_when_small():
     fitted, applied = fit_state_to_budget(snap.to_state(), 10**6)
     assert applied == []
     assert fitted == snap.to_state()
+
+
+def test_investigate_budget_trims_real_detail_and_preserves_checks_changes_and_evidence():
+    snap = small_snapshot()
+    cid = "deployment/frontend"
+    container = investigate._container_detail(
+        {"name": "worker", "env": [{"name": f"SETTING_{i}", "value": "x" * 120} for i in range(40)]}
+    )
+    detail = {
+        "workload": {"containers": [{**container, "name": f"worker-{i}"} for i in range(8)]},
+        "spec_checks": ["probe port does not match the container port"],
+        "service_checks": ["service has no ready endpoints"],
+        "template_changes": {"revision": 2, "changes": ["container worker env PORT changed"]},
+        "configmaps": {
+            "settings": {"keys": [f"key{i}" for i in range(10)], "data": {f"key{i}": "c" * 400 for i in range(10)}}
+        },
+        "logs": {
+            "tail": ["t" * 200 for _ in range(12)],
+            "error_samples": [{"line": "connection refused", "count": 4, "state": "ongoing"}],
+            "repeated_failures": [
+                {"line": "failed offset=1234", "count": 3, "span_seconds": 30, "constant_tokens": ["offset=1234"]}
+            ],
+        },
+    }
+    original = copy.deepcopy(detail)
+    client = FakeClient(
+        [
+            FakeResponse(
+                {
+                    tree.VERDICT_QUESTION: choice_answer({"origin": 1.0}, 1.0),
+                    tree.NEXT_QUESTION: choice_answer({tree.NONE_OPTION: 1.0}, 1.0),
+                    CATEGORY_QUESTION: choice_answer({"config_value": 1.0}, 1.0),
+                },
+                usage=FakeUsage(1, 1),
+            )
+        ]
+    )
+    diagnoser = tree.IterativeDiagnoser(client, fetch_detail=lambda *a: detail)
+    result = diagnoser.investigate(snap, cid, classifier.ChoiceResult(cid, 1.0, {cid: 1.0}), {}, [])
+    fitted, questions = client.calls[0]
+    assert result["detail_tokens"] <= tree.DETAIL_TOKEN_BUDGET
+    reduced = fitted["candidate"]["detail"]
+    for key in ("spec_checks", "service_checks", "template_changes"):
+        assert reduced[key] == detail[key]
+    assert fitted["candidate"]["signals"] == snap.components[cid]["signals"]
+    assert "tail" not in reduced["logs"]
+    assert "data" not in reduced["configmaps"]["settings"]
+    assert all(len(c["env"]) <= 8 for c in reduced["workload"]["containers"])
+    assert reduced["logs"]["repeated_failures"] == detail["logs"]["repeated_failures"]
+    assert questions[EVIDENCE_QUESTION].criteria == {e["id"]: e["text"] for e in fitted["evidence"]}
+    assert detail == original
+
+    # Pathological checks/evidence must also fit, with question options using the same excerpts and ids.
+    detail["spec_checks"] = ["probe mismatch: " + "p" * 100000]
+    client.scripted.append(
+        FakeResponse(
+            {
+                tree.VERDICT_QUESTION: choice_answer({"origin": 1.0}, 1.0),
+                tree.NEXT_QUESTION: choice_answer({tree.NONE_OPTION: 1.0}, 1.0),
+                CATEGORY_QUESTION: choice_answer({"config_value": 1.0}, 1.0),
+            },
+            usage=FakeUsage(1, 1),
+        )
+    )
+    diagnoser.investigate(snap, cid, classifier.ChoiceResult(cid, 1.0, {cid: 1.0}), {}, [])
+    fitted, questions = client.calls[-1]
+    assert estimate_tokens(fitted) <= tree.DETAIL_TOKEN_BUDGET
+    assert fitted["candidate"]["detail"]["spec_checks"][0].startswith("probe mismatch:")
+    assert questions[EVIDENCE_QUESTION].criteria == {e["id"]: e["text"] for e in fitted["evidence"]}
+
+
+@pytest.mark.parametrize("shape", ["investigate", "cluster", "characterize", "triage"])
+def test_budget_handles_each_state_shape_and_is_byte_identical_when_it_fits(shape):
+    data = {f"key{i}": "界" * 400 for i in range(10)}
+    detail = {"configmaps": {"settings": {"keys": list(data), "data": data}}}
+    findings = [{"id": f"F{i + 1}", "signal": "x" * 500} for i in range(200)]
+    states = {
+        "investigate": {
+            "candidate": {"id": "deployment/worker", "detail": detail},
+            "evidence": tree.detail_evidence({}, detail),
+        },
+        "cluster": {"findings": findings, "cluster_dns": {"rules": ["forward . 10.0.0.1"]}},
+        "characterize": {"component": {"signals": ["not ready"]}, "evidence": [{"id": "E1", "text": "x" * 60000}]},
+        "triage": {"components": {}, "cluster": {"findings": findings}},
+    }
+    state = {**states[shape], "components": {}}
+    before = json.dumps(state)
+    unchanged, applied = fit_state_to_budget(state, estimate_tokens(state))
+    assert json.dumps(unchanged) == before
+    assert applied == []
+    fitted, applied = fit_state_to_budget(state, tree.DETAIL_TOKEN_BUDGET)
+    assert estimate_tokens(fitted) <= tree.DETAIL_TOKEN_BUDGET
+    assert applied
+    assert json.dumps(state) == before
 
 
 # --------------------------------------------------------------------------- questions
