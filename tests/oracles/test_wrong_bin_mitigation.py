@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sregym.conductor.oracles.wrong_bin_mitigation import WrongBinMitigationOracle
+from sregym.conductor.oracles.wrong_bin_mitigation import WrongBinMitigationOracle, _executable
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +63,51 @@ def test_profile_as_an_argument_fails(command):
 def test_right_binary_that_never_becomes_ready_fails():
     verdict = _evaluate(_deployment(["profile"], ready=0))
     assert verdict["success"] is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["env", "profile"],
+        ["/usr/bin/env", "JAEGER_SAMPLE_RATIO=1", "/go/bin/profile"],
+        ["env", "-i", "-u", "UNUSED", "--", "profile"],
+        ["env", "--", "JAEGER_SAMPLE_RATIO=1", "profile"],
+        ["sh", "-c", "profile"],
+        ["sh", "-c", "exec /go/bin/profile"],
+        ["bash", "-lc", "exec env JAEGER_SAMPLE_RATIO=1 profile"],
+    ],
+)
+def test_persistent_launchers_pass(command):
+    assert _evaluate(_deployment(command)) == {"success": True}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["env", "geo", "profile"],
+        ["env", "--split-string=geo", "profile"],
+        ["env", "-S", "geo", "profile"],
+        ["sh", "-c", "geo profile"],
+        ["sh", "-c", "echo profile; exec geo"],
+        ["sh", "-c", "profile; exec geo"],
+        ["sh", "-c", "profile && exec geo"],
+        ["sh", "-c", "profile | geo"],
+        ["sh", "-c", "profile $(geo)"],
+        ["sh", "-c", "profile\ngeo"],
+        ["sh", "-c", "profile '"],
+    ],
+)
+def test_ambiguous_or_wrong_launchers_fail(command):
+    assert _evaluate(_deployment(command))["reason"] == "fault_still_present"
+
+
+@pytest.mark.parametrize("command", [[], ["env"], ["env", "-u"], ["sh", "-c", ""], ["sh", "-c", "exec"]])
+def test_empty_or_incomplete_launchers_have_no_expected_executable(command):
+    assert _executable(command) != "profile"
+
+
+def test_launcher_without_a_completed_rollout_fails():
+    assert _evaluate(_deployment(["env", "profile"], ready=0))["success"] is False
 
 
 @pytest.mark.parametrize(
