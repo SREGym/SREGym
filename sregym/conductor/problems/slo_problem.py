@@ -22,6 +22,8 @@ from pathlib import Path
 from sregym.chaos import protected, telemetry
 from sregym.chaos.artifact import FaultArtifact, FaultWorkspace
 from sregym.conductor.oracles.alert_oracle import AlertOracle
+from sregym.conductor.oracles.apps.hotel_reservation.slo_recovery import HotelReservationRecoveryCheck
+from sregym.conductor.oracles.apps.social_network.slo_recovery import SocialNetworkRecoveryCheck
 from sregym.conductor.oracles.slo_oracle import SLOMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.utils.decorators import mark_fault_injected
@@ -95,7 +97,13 @@ class SLOProblem(Problem):
         self.app.create_workload(duration=30)
         # StreamWorkloadManager.log_history is a class attribute; keep this run's rounds separate.
         self.app.wrk.log_history = []
-        self.mitigation_oracle = SLOMitigationOracle(problem=self, recurrence_bound_s=artifact.recurrence_bound_s)
+        recovery_check = {
+            "hotel_reservation": HotelReservationRecoveryCheck,
+            "social_network": SocialNetworkRecoveryCheck,
+        }[artifact.app](self.app)
+        self.mitigation_oracle = SLOMitigationOracle(
+            problem=self, recurrence_bound_s=artifact.recurrence_bound_s, recovery_check=recovery_check
+        )
         self.alerts = FiringAlerts(self)
         self.gates: dict = {}
 

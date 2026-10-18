@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from sregym.chaos import protected, slo
+from sregym.conductor.oracles.application_recovery import RecoveryCheckResult
 from sregym.conductor.oracles.slo_oracle import SLOMitigationOracle
 
 
@@ -69,3 +70,45 @@ def test_temporary_repair_fails_after_recurrence(oracle, monkeypatch):
 
     monkeypatch.setattr(slo, "collect_rounds", collect)
     assert recurring.evaluate()["success"] is False
+
+
+@pytest.mark.parametrize("reason", [None, "application_data_changed", "application_response_invalid"])
+def test_healthy_slo_requires_application_recovery(oracle, monkeypatch, reason):
+    oracle.slo = slo.SLO(target_rps=100)
+    rounds = [slo.RoundStats(time=i, requests=3000, duration_s=30, p99_ms=10) for i in range(4)]
+    monkeypatch.setattr(slo, "collect_rounds", lambda *args, **kw: rounds)
+    oracle.recovery_check = SimpleNamespace(evaluate=lambda: RecoveryCheckResult(reason))
+    result = oracle.evaluate()
+    assert result["success"] == (reason is None)
+    if reason:
+        assert result["reason"] == reason
+
+
+def test_failed_application_baseline_does_not_leave_a_calibrated_oracle(oracle, monkeypatch):
+    rounds = [slo.RoundStats(time=i, requests=3000, duration_s=30, p99_ms=10) for i in range(4)]
+    monkeypatch.setattr(slo, "collect_rounds", lambda *args, **kw: rounds)
+
+    def fail():
+        raise ValueError("Unhealthy application")
+
+    oracle.recovery_check = SimpleNamespace(capture_baseline=fail)
+    with pytest.raises(ValueError, match="Unhealthy application"):
+        oracle.capture_baseline()
+    assert oracle.slo is None
+
+
+def test_application_probe_transport_error_is_not_agent_failure(oracle, monkeypatch):
+    import subprocess
+
+    oracle.slo = slo.SLO(target_rps=100)
+    rounds = [slo.RoundStats(time=i, requests=3000, duration_s=30, p99_ms=10) for i in range(4)]
+    monkeypatch.setattr(slo, "collect_rounds", lambda *args, **kw: rounds)
+
+    def unavailable():
+        raise subprocess.CalledProcessError(1, ["kubectl", "exec"], stderr="workload probe connection lost")
+
+    oracle.recovery_check = SimpleNamespace(evaluate=unavailable)
+    result = oracle.evaluate()
+    assert not result["success"]
+    assert result["reason"] == "oracle_command_failed"
+    assert result["failure_class"] == "ambiguous"
