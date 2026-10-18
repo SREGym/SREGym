@@ -149,3 +149,13 @@ def test_a_wrong_setting_of_its_own_explains_a_broken_component_unless_another_o
     assert own.values == [pvc] and pvc in own.mechanism and own.predictions[0].status == SUPPORTS
     assert "partial:deployment/tracer" not in keys  # one candidate per origin
     assert "own-setting:deployment/cart" not in keys and "partial:deployment/cart" in keys  # the policy explains it
+    hang = "init container hang has been running for 130s; the pod's main containers cannot start until it exits"
+    restarted = comp(
+        "Deployment",
+        "web",
+        healthy=False,
+        signals=[f"pod web-1: {hang}", f"pod web-2: {hang}"],
+        template_changes={"revision": "3", "changed_at": "2026-10-18T09:58:00+00:00", "changes": ["annotation added"]},
+    )
+    keys = {e.key: e for e in build_explanations(snapshot({"deployment/web": restarted}))}
+    assert keys["own-setting:deployment/web"].values == [hang]  # its own change does not hide it; replicas count once
