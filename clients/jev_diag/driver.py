@@ -175,9 +175,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-characterize", action="store_true", help="Skip the second (fault category) request")
     parser.add_argument(
         "--mode",
-        choices=("tree", "oneshot"),
+        choices=("tree", "oneshot", "v2"),
         default=os.environ.get("JEV_DIAG_MODE", "tree"),
-        help="tree: iterative decision tree that investigates candidates (default); oneshot: two fixed requests",
+        help="tree: iterative decision tree that investigates candidates (default); oneshot: two fixed requests; "
+        "v2: competing explanations built from the evidence, the decision model picks (clients/jev_diag/v2)",
     )
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS, help="tree mode: investigation step budget")
     parser.add_argument(
@@ -353,7 +354,13 @@ def run(args: argparse.Namespace, trace: DecisionTrace, prefix: Path, results: d
         results["success"] = True
         return "dry_run"
 
-    if args.mode == "tree":
+    if args.mode == "v2":
+        from clients.jev_diag.v2.agent import V2Diagnoser
+
+        diagnoser = V2Diagnoser(
+            fetch_detail=collect_component_detail, state_token_budget=args.state_token_budget, trace=trace
+        )
+    elif args.mode == "tree":
         probe = None
         if args.exec_probes:
             from clients.jev_diag.probes import backend_probe as probe
