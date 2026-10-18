@@ -38,6 +38,9 @@ for ident in os.listdir('/proc'):
         pass
 PY
 done
+if [[ "${1:-}" == "--stop-only" ]]; then
+  exit 0
+fi
 ENCRYPTED_COUNT="$(kubectl -n "$NAMESPACE" exec deploy/mongodb-profile -- mongo --quiet profile-db --eval 'print(db.hotels.count({address:{$type:"binData"}}))')"
 if [[ "$ENCRYPTED_COUNT" == 0 ]]; then
   invalidate_profile_cache
