@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -5,6 +7,8 @@ import pytest
 
 from sregym.chaos import protected, slo, telemetry
 from sregym.chaos.artifact import discover_faults
+from sregym.conductor.conductor import Conductor, ConductorConfig
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.slo_problem import SLOProblem, slo_problems
 
 BUILTIN_PROBLEM_IDS = {
@@ -36,25 +40,89 @@ def test_builtin_fault_names_and_layout(monkeypatch):
         assert problem_id == f"{artifact.path.name}_{artifact.app}"
         assert artifact.path.parent.name == artifact.app
         assert artifact.path.parent.parent.name == "apps"
+        assert artifact.diagnosis is not None
 
 
-def test_every_builtin_factory_selects_its_application(monkeypatch):
+@pytest.fixture
+def builtin_problems(monkeypatch):
     monkeypatch.delenv("SREGYM_FAULT_DIRS", raising=False)
     monkeypatch.setattr("sregym.service.apps.hotel_reservation.KubeCtl", Mock)
     monkeypatch.setattr("sregym.service.apps.social_network.KubeCtl", Mock)
     monkeypatch.setattr("sregym.generators.workload.wrk2.config.load_kube_config", lambda: None)
     monkeypatch.setattr("sregym.generators.workload.wrk2.client.CoreV1Api", Mock)
     monkeypatch.setattr("sregym.generators.workload.wrk2.client.BatchV1Api", Mock)
-    factories = slo_problems()
-    assert set(factories) == BUILTIN_PROBLEM_IDS
-    for problem_id, factory in factories.items():
-        problem = factory()
+    monkeypatch.setattr(
+        "sregym.conductor.oracles.llm_as_a_judge.judge.get_llm_backend_for_judge",
+        Mock(side_effect=AssertionError("Problem construction must not initialize a judge backend")),
+    )
+    return {problem_id: factory() for problem_id, factory in slo_problems().items()}
+
+
+def test_every_builtin_factory_selects_its_application_and_diagnosis(builtin_problems):
+    assert set(builtin_problems) == BUILTIN_PROBLEM_IDS
+    for problem_id, problem in builtin_problems.items():
         assert isinstance(problem, SLOProblem)
         assert problem.problem_id == problem_id
         assert problem.namespace == problem.artifact.app.replace("_", "-")
-        assert problem.diagnosis_oracle is None
+        assert isinstance(problem.diagnosis_oracle, LLMAsAJudgeOracle)
+        assert problem.diagnosis_oracle.expected == problem.root_cause
+        assert problem.diagnosis_oracle.requires_llm_judge
+        assert f"component={problem.artifact.diagnosis['component']}" in problem.root_cause
+        assert f"namespace={problem.namespace}" in problem.root_cause
+        assert problem.root_cause.endswith(problem.artifact.diagnosis["description"])
         assert problem.mitigation_oracle.problem is problem
         assert not problem.fault_injected
+
+
+def test_external_bundle_without_diagnosis_remains_mitigation_only(builtin_problems):
+    from sregym.chaos.artifact import FaultArtifact
+
+    original = next(iter(builtin_problems.values()))
+    metadata = {key: value for key, value in original.artifact.meta.items() if key != "diagnosis"}
+    problem = SLOProblem(FaultArtifact(original.artifact.path, metadata))
+    assert problem.diagnosis_oracle is None
+    assert problem.root_cause == metadata["root_cause_class"]
+
+
+@pytest.mark.parametrize(
+    "stages,expected,preflight_calls",
+    [
+        (None, ["diagnosis", "mitigation"], 1),
+        (("diagnosis",), ["diagnosis"], 1),
+        (("mitigation",), ["mitigation"], 0),
+    ],
+)
+def test_builtin_stage_selection_and_judge_preflight(builtin_problems, stages, expected, preflight_calls):
+    for problem_id, problem in builtin_problems.items():
+        conductor = Conductor.__new__(Conductor)
+        conductor.config = ConductorConfig(stages=stages)
+        conductor.logger = logging.getLogger("test.slo_stages")
+        conductor.problem_id = problem_id
+        conductor.problem = problem
+        conductor.tasklist = None
+        conductor._judge_preflight = Mock()
+        conductor._judge_preflight_done = False
+        conductor.get_problem_stages()
+        conductor._build_stage_sequence()
+        conductor._preflight_active_oracles()
+        conductor._preflight_active_oracles()
+        assert [stage["name"] for stage in conductor.stage_sequence] == expected
+        assert conductor._judge_preflight.call_count == preflight_calls
+
+
+def test_diagnosis_ground_truth_is_not_in_agent_application_info(builtin_problems, monkeypatch):
+    from sregym.conductor import conductor_api
+
+    for problem in builtin_problems.values():
+        monkeypatch.setattr(
+            conductor_api,
+            "_conductor",
+            SimpleNamespace(app=problem.app, stage_sequence=[{"name": "diagnosis"}, {"name": "mitigation"}]),
+        )
+        info = asyncio.run(conductor_api.get_app())
+        assert info["stages"] == ["diagnosis", "mitigation"]
+        assert "root_cause" not in info and "diagnosis" not in info
+        assert problem.artifact.diagnosis["description"] not in info["descriptions"]
 
 
 def test_registry_keeps_existing_and_slo_ids(monkeypatch):

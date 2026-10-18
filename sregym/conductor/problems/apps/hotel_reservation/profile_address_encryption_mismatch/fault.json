@@ -6,6 +6,10 @@
   "fault_layer": "data",
   "fault_primitive": "recurring authenticated encryption of the existing MongoDB hotel address field from a detached cross-service publisher",
   "root_cause_class": "orphaned_contact_encryption_writer_legacy_reader_contract",
+  "diagnosis": {
+    "component": "deployment/user",
+    "description": "An unmanaged contact export process in user encrypts address objects in the MongoDB profile-db.hotels collection as binary envelopes. The existing profile reader expects address objects and cannot decode that representation. Frontend search and recommendation responses then fail during GeoJSON construction because decoded hotel addresses are absent. The database remains reachable, and this is not a routing or pod-readiness failure. Restoring address objects alone is temporary because the active export process encrypts them again."
+  },
   "incident_class": "cancelled client-side encryption migration with an unmanaged reconciliation process",
   "affected_components": [
     "frontend",

@@ -6,6 +6,10 @@
   "fault_layer": "network",
   "fault_primitive": "Recurring EndpointSlice export binds the frontend HTTP port name to the discovery administration transport and peer inventory",
   "root_cause_class": "runtime_endpoint_export_transport_capability_alias",
+  "diagnosis": {
+    "component": "deployment/recommendation",
+    "description": "An endpoint exporter in recommendation repeatedly publishes an incorrect EndpointSlice for service/frontend. It maps the frontend HTTP port to port 8500 across application peer pods, rather than the real frontend HTTP backends. Requests reach unrelated listeners or closed ports, causing connection refusals and HTTP 404 responses. The frontend Deployment, Service selector, and native endpoints remain correct. Removing the extra EndpointSlice alone is temporary because the exporter recreates it."
+  },
   "incident_class": "Operational service-discovery export retains an incompatible transport mapping after a naming migration",
   "affected_components": [
     "frontend Service",

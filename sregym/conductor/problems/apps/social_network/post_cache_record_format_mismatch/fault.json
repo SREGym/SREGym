@@ -6,6 +6,10 @@
   "fault_layer": "data",
   "fault_primitive": "Detached content export publishes JSON field-pair records into native post-object and creator-ID cache slots",
   "root_cause_class": "orphaned_content_export_field_pair_record_contract",
+  "diagnosis": {
+    "component": "deployment/media-mongodb",
+    "description": "An unmanaged content export process in media-mongodb writes JSON field-pair arrays into post-storage-memcached and user-memcached. Post readers expect JSON post objects, while username:user_id cache entries must contain scalar creator IDs. The incompatible representations cause object/array decoding errors and stoul failures, breaking timeline reads and post composition. The canonical MongoDB post records remain intact. Clearing or replacing the caches alone is temporary because the export process republishes the incompatible records."
+  },
   "incident_class": "Abandoned cache format migration with competing writers and delayed reconciliation",
   "affected_components": [
     "media-mongodb",

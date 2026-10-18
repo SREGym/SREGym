@@ -6,6 +6,10 @@
   "fault_layer": "app-code",
   "fault_primitive": "Recurring publication of a three-field OpenResty form parser limit by an unmanaged process in another container",
   "root_cause_class": "orphaned_form_field_budget_reconciliation",
+  "diagnosis": {
+    "component": "deployment/media-frontend",
+    "description": "An unmanaged configuration publisher in media-frontend changes ConfigMap/nginx-thrift so ngx.req.get_post_args defaults to a three-field limit. Compose requests contain more required fields, so OpenResty drops arguments and returns HTTP 400 with Incomplete arguments. Timeline reads and pod readiness remain healthy. The publisher also restarts nginx-thrift to apply its configuration. A direct parser correction is temporary because the publisher restores the three-field policy after its maintenance delay."
+  },
   "incident_class": "Incomplete retirement of an operational configuration publisher after an API schema refactor",
   "affected_components": [
     "nginx-thrift",

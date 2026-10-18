@@ -38,6 +38,31 @@ def test_valid_artifact(tmp_path):
     assert artifact.problems() == []
     assert artifact.leak_findings() == []
     assert artifact.problem_id == "stale_rate_cache_hotel_reservation"
+    assert artifact.diagnosis is None
+
+
+def test_diagnosis_metadata(tmp_path):
+    diagnosis = {"component": "deployment/rate", "description": "A publisher restores stale rate cache records."}
+    artifact = FaultArtifact.load(make(tmp_path, meta={**META, "diagnosis": diagnosis}))
+    assert artifact.problems() == []
+    assert artifact.diagnosis == diagnosis
+
+
+@pytest.mark.parametrize("value", [None, "rate", [], 42])
+def test_diagnosis_requires_an_object(tmp_path, value):
+    artifact = FaultArtifact.load(make(tmp_path, meta={**META, "diagnosis": value}))
+    assert "diagnosis must contain component and description strings" in artifact.problems()
+    with pytest.raises(ValueError, match="diagnosis must contain"):
+        _ = artifact.diagnosis
+
+
+@pytest.mark.parametrize("field", ["component", "description"])
+@pytest.mark.parametrize("value", [None, "", " \n", 42, [], {}])
+def test_diagnosis_fields_require_nonempty_strings(tmp_path, field, value):
+    diagnosis = {"component": "deployment/rate", "description": "A publisher restores stale rate cache records."}
+    diagnosis[field] = value
+    artifact = FaultArtifact.load(make(tmp_path, meta={**META, "diagnosis": diagnosis}))
+    assert f"diagnosis.{field} must be a nonempty string" in artifact.problems()
 
 
 def test_problem_id_does_not_depend_on_directory_name(tmp_path):

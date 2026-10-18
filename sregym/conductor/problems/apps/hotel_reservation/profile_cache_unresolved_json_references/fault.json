@@ -6,6 +6,10 @@
   "fault_layer": "data",
   "fault_primitive": "recurring Memcached publication of unresolved JSON Pointer object references",
   "root_cause_class": "catalog_object_reference_scope_recurrence",
+  "diagnosis": {
+    "component": "deployment/mongodb-user",
+    "description": "An unmanaged catalog refresh process in mongodb-user writes unresolved $ref objects into memcached-profile instead of complete hotel profiles. The profile reader does not resolve these references, so required address fields remain absent despite syntactically valid JSON. Frontend search and recommendation requests fail during GeoJSON construction. The persistent profile catalog remains intact, and the user database itself is not the failed store. Clearing the cache alone is temporary because the refresh process publishes the same references again."
+  },
   "incident_class": "orphaned operational sync process after a serializer migration",
   "affected_components": [
     "frontend",

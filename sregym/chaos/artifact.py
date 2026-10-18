@@ -12,6 +12,10 @@ Scripts run with ``bash -euo pipefail`` from the artifact directory, with
 ``NAMESPACE`` (application namespace), ``ARTIFACT_DIR`` and an admin
 ``KUBECONFIG``. They are executed by the conductor, never inside an agent
 session, so the agent sees only the fault's effect on the cluster.
+
+Optional ``diagnosis`` metadata supplies a root-cause ``component`` and
+``description`` for the ordinary diagnosis judge. Bundles without this
+metadata retain their mitigation-only workflow.
 """
 
 from __future__ import annotations
@@ -71,6 +75,19 @@ class FaultArtifact:
             raise ValueError("recurrence_bound_s must be a nonnegative integer")
         return value
 
+    @property
+    def diagnosis(self) -> dict[str, str] | None:
+        """Private diagnosis ground truth; absent for mitigation-only bundles."""
+        if "diagnosis" not in self.meta:
+            return None
+        value = self.meta["diagnosis"]
+        if not isinstance(value, dict):
+            raise ValueError("diagnosis must contain component and description strings")
+        for field in ("component", "description"):
+            if not isinstance(value.get(field), str) or not value[field].strip():
+                raise ValueError(f"diagnosis.{field} must be a nonempty string")
+        return value
+
     @classmethod
     def load(cls, path: Path) -> FaultArtifact:
         meta = json.loads((path / "fault.json").read_text())
@@ -88,6 +105,10 @@ class FaultArtifact:
             out.append(str(exc))
         try:
             _ = self.recurrence_bound_s
+        except ValueError as exc:
+            out.append(str(exc))
+        try:
+            _ = self.diagnosis
         except ValueError as exc:
             out.append(str(exc))
         return out

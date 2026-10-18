@@ -6,6 +6,10 @@
   "fault_layer": "app-config",
   "fault_primitive": "Recurring native Consul snapshot restoration with agent-registration quiescence from a detached process inside an existing recommendation container",
   "root_cause_class": "native_directory_recovery_generation_rollback",
+  "diagnosis": {
+    "component": "deployment/recommendation",
+    "description": "An unmanaged catalog recovery process in recommendation repeatedly restores an old Consul snapshot and obsolete srv-rate registrations. Those registrations point to a retired rate pod instead of the current instance. Search uses these stale discovery addresses, so hotel searches fail even though the current rate pod and Kubernetes Service remain healthy. The recommendation application itself is not the failed dependency. A direct catalog repair is temporary because the recovery process restores the obsolete state again."
+  },
   "incident_class": "Unmanaged disaster-recovery procedure continues after an instance replacement and repeatedly restores obsolete service-discovery state",
   "affected_components": [
     "consul",

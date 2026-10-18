@@ -6,6 +6,10 @@
   "fault_layer": "capacity",
   "fault_primitive": "Detached in-container Bash reconciler repeatedly applies Redis CONFIG SET maxclients 1 and CLIENT KILL, retaining the sole management connection",
   "root_cause_class": "replica_count_as_cache_client_quota_reconciliation",
+  "diagnosis": {
+    "component": "deployment/media-mongodb",
+    "description": "An unmanaged session-policy process in media-mongodb uses the Redis replica count as a client connection budget and sets user-timeline-redis maxclients=1. It kills other normal clients and retains the sole connection for its own management session. Application connections then fail with connection resets or ERR max number of clients reached, breaking user timeline reads and some post submissions. Redis remains Running with normal startup configuration. Raising maxclients alone is temporary because the process restores the incorrect budget."
+  },
   "incident_class": "Abandoned operational configuration publisher with a connection-budget source mismatch",
   "affected_components": [
     "user-timeline-redis",

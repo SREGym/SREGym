@@ -6,6 +6,10 @@
   "fault_layer": "app-config",
   "fault_primitive": "Detached in-container snapshot loop repeatedly changes Redis RDB destination and reinstates write protection",
   "root_cause_class": "snapshot_config_file_destination_alias_recurrence",
+  "diagnosis": {
+    "component": "deployment/media-mongodb",
+    "description": "An unmanaged snapshot process in media-mongodb derives user-timeline-redis dir and dbfilename from Redis's own configuration file path. That path uses a read-only configuration mount, so BGSAVE fails with permission errors. With stop-writes-on-bgsave-error enabled, Redis rejects writes with MISCONF, breaking post composition and timeline reads that populate the cache. Pods remain Ready. Correcting the snapshot destination and completing one save is temporary because the process later restores the wrong path."
+  },
   "incident_class": "Leftover operator maintenance process with incorrect snapshot path derivation",
   "affected_components": [
     "media-mongodb",

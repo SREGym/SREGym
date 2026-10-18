@@ -6,6 +6,10 @@
   "fault_layer": "app-config",
   "fault_primitive": "A detached process in social-graph-mongodb periodically publishes Redis min-replicas-to-write=1 to both standalone timeline caches",
   "root_cause_class": "orphaned_timeline_replica_requirement_publication",
+  "diagnosis": {
+    "component": "deployment/social-graph-mongodb",
+    "description": "An unmanaged policy synchronizer in social-graph-mongodb repeatedly sets min-replicas-to-write=1 on user-timeline-redis and home-timeline-redis. Both caches are standalone masters with no replicas, so Redis rejects writes and cache population with NOREPLICAS. Post composition and some cold timeline reads fail, while reads of existing cached values and health checks can succeed. Pods remain Ready. Repairing runtime configuration or restarting the caches alone is temporary because the synchronizer restores the replica requirement."
+  },
   "incident_class": "Leftover operational policy synchronization applies a replicated-store durability contract to standalone ephemeral caches",
   "affected_components": [
     "social-graph-mongodb",

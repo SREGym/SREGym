@@ -6,6 +6,10 @@
   "fault_layer": "data",
   "fault_primitive": "MongoDB fsync write lock reacquired by a detached administrative shell in an existing remote container",
   "root_cause_class": "orphaned_snapshot_quiescence_reconciliation",
+  "diagnosis": {
+    "component": "deployment/media-mongodb",
+    "description": "An unmanaged snapshot coordinator in media-mongodb issues fsync with lock=true against post-storage-mongodb and leaves the administrative write freeze active. Post inserts wait behind this global lock, so compose requests stall and frontend RPC calls time out. MongoDB reads, stored posts, indexes, and Kubernetes routing remain valid. The media database itself is not the locked store. Unlocking post-storage MongoDB alone is temporary because the coordinator later acquires the write lock again."
+  },
   "incident_class": "Leftover backup maintenance process with an unbounded write-freeze reconciliation loop",
   "affected_components": [
     "post-storage-mongodb",

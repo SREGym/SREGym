@@ -1,9 +1,9 @@
-"""Mitigation-only problems graded by the application's SLO.
+"""Script-defined problems with SLO-based mitigation grading.
 
 ``SLOProblem`` runs a fault artifact (see ``sregym/chaos/artifact.py``)
-through the conductor. There is no diagnosis oracle: mitigation is graded by
-the SLO measured from the workload generator, so no LLM judge is involved in
-scoring.
+through the conductor. Bundles with diagnosis metadata use the ordinary LLM
+diagnosis judge. Mitigation uses the SLO measured by the workload generator
+and application recovery checks, not an LLM judge.
 
 Every injection also records the validity-gate measurements (impact,
 observability, integrity) in ``results/chaos_gates/``, so each fixer attempt
@@ -24,6 +24,7 @@ from sregym.chaos.artifact import FaultArtifact, FaultWorkspace
 from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.apps.hotel_reservation.slo_recovery import HotelReservationRecoveryCheck
 from sregym.conductor.oracles.apps.social_network.slo_recovery import SocialNetworkRecoveryCheck
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.slo_oracle import SLOMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.utils.decorators import mark_fault_injected
@@ -90,8 +91,17 @@ class SLOProblem(Problem):
         super().__init__(app=make_app(artifact.app))
         self.problem_id = artifact.problem_id
         self.faulty_service = artifact.meta.get("affected_components", [])
-        # Kept for bookkeeping only; never shown to the agent or graded.
-        self.root_cause = artifact.meta.get("root_cause_class", "")
+        diagnosis = artifact.diagnosis
+        if diagnosis is not None:
+            self.root_cause = self.build_structured_root_cause(
+                component=diagnosis["component"],
+                namespace=self.namespace,
+                description=diagnosis["description"],
+            )
+            self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        else:
+            # Preserve script-only external bundles that have no diagnosis task.
+            self.root_cause = artifact.meta.get("root_cause_class", "")
         # wrk2 needs time to calibrate before it records a latency histogram.
         # Keep the ordinary workload defaults unchanged for existing problems.
         self.app.create_workload(duration=30)

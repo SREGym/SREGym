@@ -6,6 +6,10 @@
   "fault_layer": "data",
   "fault_primitive": "Recurring Memcached publication of Mongo shell JavaScript literals under existing hotel keys",
   "root_cause_class": "orphaned_catalog_shell_literal_cache_publication",
+  "diagnosis": {
+    "component": "deployment/mongodb-reservation",
+    "description": "An unmanaged catalog refresh process in mongodb-reservation writes MongoDB shell literals, including ObjectId expressions, into memcached-profile hotel records. The profile reader expects JSON and cannot decode those cache values. Hotel search and recommendation requests fail during frontend response construction, while the canonical MongoDB catalog remains correct. The reservation database itself is not corrupt. Flushing the cache alone is temporary because the refresh process republishes the incompatible records."
+  },
   "incident_class": "Abandoned operational refresh process with a serialization contract regression",
   "affected_components": [
     "frontend",
