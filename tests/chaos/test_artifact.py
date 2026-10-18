@@ -180,6 +180,51 @@ else:
     assert json.loads((workspace.path / snapshot_path).read_text()) == snapshot
 
 
+def test_wiredtiger_lifecycle_uses_the_profile_cache_client(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "kubectl-calls.jsonl"
+    kubectl = bin_dir / "kubectl"
+    kubectl.write_text(
+        f"#!{sys.executable}\n"
+        """import json, os, sys
+args = sys.argv[1:]
+with open(os.environ['KUBECTL_CALL_LOG'], 'a') as log:
+    log.write(json.dumps(args) + '\\n')
+namespace = args.index('-n')
+assert args[namespace + 1] == 'hotel-reservation'
+del args[namespace:namespace + 2]
+if args[:2] == ['get', 'pods']:
+    print(json.dumps({'items': []}))
+elif args[0] == 'exec':
+    target = args[2] if args[1] == '-i' else args[1]
+    command = args[args.index('--') + 1:]
+    if command[0] == 'python3':
+        assert target == 'deploy/profile', 'cache maintenance must use profile'
+    elif 'getParameter:1' in command[-1]:
+        print(json.dumps({'wiredTigerEngineRuntimeConfig': 'eviction_target=75,eviction_trigger=90'}))
+elif args[:2] == ['delete', 'pod'] or args[0] == 'wait':
+    pass
+else:
+    raise AssertionError(args)
+"""
+    )
+    kubectl.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("KUBECTL_CALL_LOG", str(calls))
+    workspace = discover_faults()["profile_mongodb_eviction_unit_mismatch_hotel_reservation"].workspace()
+    for script in ("inject.sh", "mitigate.sh", "recover.sh"):
+        result = workspace.run(script, "hotel-reservation")
+        assert result.returncode == 0, result.stderr
+
+    maintenance = [json.loads(line) for line in calls.read_text().splitlines() if '"python3"' in line]
+    assert len(maintenance) == 3
+    assert all("deploy/profile" in call for call in maintenance)
+    assert json.loads((workspace.path / "original-runtime.json").read_text()) == {
+        "wiredTigerEngineRuntimeConfig": "eviction_target=75,eviction_trigger=90"
+    }
+
+
 def test_run_preserves_explicit_kubeconfig(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".kube").mkdir(parents=True)

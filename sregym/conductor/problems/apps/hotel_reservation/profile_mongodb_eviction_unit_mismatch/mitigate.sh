@@ -32,7 +32,7 @@ kubectl exec -n "$NAMESPACE" deploy/mongodb-profile -- mongo --quiet --eval '
 '
 
 # Failed profile lookups may have populated incomplete cached profiles.
-kubectl exec -n "$NAMESPACE" deploy/frontend -- python3 -c '
+kubectl exec -n "$NAMESPACE" deploy/profile -- python3 -c '
 import socket
 with socket.create_connection(("memcached-profile",11211),timeout=10) as connection:
     connection.sendall(b"flush_all\r\n")
