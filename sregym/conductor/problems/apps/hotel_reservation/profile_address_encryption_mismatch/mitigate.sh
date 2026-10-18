@@ -16,10 +16,8 @@ with socket.create_connection(('memcached-profile',11211),10) as s:
                 raise RuntimeError('Cache invalidation was not acknowledged')
 PY
 }
-# The publisher and its key are discovered in running containers, not in an
-# artifact-side backup. Stop all copies before restoring the live representation.
+# Stop all copies before restoring the live representation.
 PODS="$(kubectl -n "$NAMESPACE" get pods -l io.kompose.service=user -o jsonpath='{.items[*].metadata.name}')"
-RESTORED=0
 for POD in $PODS; do
   kubectl -n "$NAMESPACE" exec -i "$POD" -- python3 - <<'PY'
 import os, signal, select
@@ -39,31 +37,19 @@ for ident in os.listdir('/proc'):
     except (FileNotFoundError,ProcessLookupError):
         pass
 PY
-  if kubectl -n "$NAMESPACE" exec "$POD" -- sh -c '[ -f /tmp/contact-sync.py ] && [ -f /tmp/contact-sync.key ]' 2>/dev/null; then
-    kubectl -n "$NAMESPACE" exec "$POD" -- python3 /tmp/contact-sync.py restore
-    RESTORED=1
-  fi
 done
-if [[ "$RESTORED" == 0 ]]; then
-  ENCRYPTED_COUNT="$(kubectl -n "$NAMESPACE" exec deploy/mongodb-profile -- mongo --quiet profile-db --eval 'print(db.hotels.count({address:{$type:"binData"}}))')"
-  if [[ "$ENCRYPTED_COUNT" == 0 ]]; then
-    invalidate_profile_cache
-    printf '%s\n' 'Live catalog already uses the reader-compatible representation.'
-    exit 0
-  fi
-  # The stock hotel's reference catalog can be regenerated from the application
-  # itself if the abandoned publisher's temporary key was lost in a pod restart.
-  kubectl -n "$NAMESPACE" exec deploy/mongodb-profile -- mongo --quiet profile-db --eval '
-    var r=db.hotels.remove({address:{$type:"binData"}}); printjson(r); if(r.hasWriteError()) quit(1);'
-  PROFILE_POD="$(kubectl -n "$NAMESPACE" get pods -l io.kompose.service=profile -o jsonpath='{.items[0].metadata.name}')"
-  RESTARTS="$(kubectl -n "$NAMESPACE" get pod "$PROFILE_POD" -o jsonpath='{.status.containerStatuses[0].restartCount}')"
-  # Restart the process in its current pod, retaining its advertised pod address.
-  # The stock startup populates absent catalog records from cmd/profile/db.go.
-  kubectl -n "$NAMESPACE" exec "$PROFILE_POD" -- sh -c 'kill -TERM 1' || true
-  kubectl -n "$NAMESPACE" wait --for="jsonpath={.status.containerStatuses[0].restartCount}=$((RESTARTS+1))" "pod/$PROFILE_POD" --timeout=180s
-  kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/$PROFILE_POD" --timeout=180s
-  kubectl -n "$NAMESPACE" exec deploy/mongodb-profile -- mongo --quiet profile-db --eval '
-    if(db.hotels.count({address:{$type:"object"}}) < 80) quit(1); print("Reference catalog available");'
+ENCRYPTED_COUNT="$(kubectl -n "$NAMESPACE" exec deploy/mongodb-profile -- mongo --quiet profile-db --eval 'print(db.hotels.count({address:{$type:"binData"}}))')"
+if [[ "$ENCRYPTED_COUNT" == 0 ]]; then
   invalidate_profile_cache
+  printf '%s\n' 'Live catalog already uses the reader-compatible representation.'
+  exit 0
 fi
+# Both operational resources survive replacement of the publisher pod. A
+# missing or invalid key fails before any catalog record is changed.
+kubectl -n "$NAMESPACE" get configmap contact-export -o jsonpath='{.data.contact-sync\.py}' |
+  kubectl -n "$NAMESPACE" exec -i deploy/profile -- sh -c 'cat > /tmp/contact-sync.py'
+kubectl -n "$NAMESPACE" get secret contact-export-key -o jsonpath='{.data.key}' |
+  kubectl -n "$NAMESPACE" exec -i deploy/profile -- python3 -c 'import base64,os,sys; key=base64.b64decode(sys.stdin.read(),validate=True); assert len(key)==32; fd=os.open("/tmp/contact-sync.key",os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600); os.write(fd,key); os.close(fd)'
+kubectl -n "$NAMESPACE" exec deploy/profile -- python3 /tmp/contact-sync.py restore
+kubectl -n "$NAMESPACE" exec deploy/profile -- sh -c 'rm -f /tmp/contact-sync.py /tmp/contact-sync.key'
 printf '%s\n' 'Contact publisher stopped; live catalog and profile cache restored.'

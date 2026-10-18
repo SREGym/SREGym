@@ -228,13 +228,12 @@ def crypt(data, key, nonce):
     return bytes(out)
 
 
-def getkey(create=False):
-    if create and not os.path.exists(KEYFILE):
-        fd = os.open(KEYFILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(os.urandom(32))
+def getkey():
     with open(KEYFILE, "rb") as f:
-        return f.read()
+        key = f.read()
+    if len(key) != 32:
+        raise ValueError("Contact export key must contain 32 bytes")
+    return key
 
 
 def seal(address, key):
@@ -259,7 +258,7 @@ def encrypted(value):
 
 def migrate():
     docs = profiles()
-    key = getkey(True)
+    key = getkey()
     changes, ids = [], []
     for doc in docs:
         if isinstance(doc.get("address"), dict):
