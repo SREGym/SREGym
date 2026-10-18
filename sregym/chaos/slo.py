@@ -9,6 +9,7 @@ just move a percentile within normal jitter.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from contextlib import suppress
@@ -158,14 +159,81 @@ class WindowVerdict:
     violated: bool  # most rounds, including the latest, missed the SLO
     measurement_complete: bool
     details: list[dict] = field(default_factory=list)
+    coverage: dict | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
+@dataclass
+class MeasurementWindow:
+    """Collected rounds and the observation interval they must cover."""
+
+    rounds: list[RoundStats]
+    start: float
+    duration_s: float
+    round_interval_s: float
+    elapsed_s: float
+
+    def coverage(self) -> dict:
+        end = self.start + self.duration_s
+        # Excluding an in-progress round permits one round at the leading edge.
+        # Elsewhere, allow the generator's one-second pause and bounded jitter,
+        # not another missing round. Shorter rounds get a smaller allowance.
+        jitter_s = min(5.0, self.round_interval_s * 0.1)
+        leading_allowance_s = self.round_interval_s + jitter_s
+        gap_allowance_s = 1.0 + jitter_s
+        valid = [
+            r
+            for r in self.rounds
+            if math.isfinite(r.time)
+            and math.isfinite(r.duration_s)
+            and r.duration_s > 0
+            and self.start <= r.time <= end
+        ]
+        valid.sort(key=lambda r: r.time)
+        leading = valid[0].time - self.start if valid else self.duration_s
+        cursor = self.start
+        largest_gap = 0.0
+        overlap = 0.0
+        for index, stats in enumerate(valid):
+            if index:
+                largest_gap = max(largest_gap, stats.time - cursor)
+                overlap = max(overlap, cursor - stats.time)
+            cursor = max(cursor, stats.time + stats.duration_s)
+        trailing = max(0.0, end - cursor)
+        complete = (
+            bool(valid)
+            and len(valid) == len(self.rounds)
+            and self.elapsed_s >= self.duration_s
+            and leading <= leading_allowance_s
+            and trailing <= gap_allowance_s
+            and largest_gap <= gap_allowance_s
+            and overlap <= jitter_s
+        )
+        return {
+            "complete": complete,
+            "requested_s": self.duration_s,
+            "elapsed_s": round(self.elapsed_s, 3),
+            "leading_gap_s": round(leading, 3),
+            "trailing_gap_s": round(trailing, 3),
+            "largest_gap_s": round(largest_gap, 3),
+            "largest_overlap_s": round(overlap, 3),
+            "leading_allowance_s": round(leading_allowance_s, 3),
+            "gap_allowance_s": round(gap_allowance_s, 3),
+        }
+
+
 def judge(
-    slo: SLO, rounds: list[RoundStats], violation_fraction: float = 0.6, noise_fraction: float = 0.1
+    slo: SLO,
+    rounds: list[RoundStats] | MeasurementWindow,
+    violation_fraction: float = 0.6,
+    noise_fraction: float = 0.1,
 ) -> WindowVerdict:
+    """Judge supplied rounds; collected windows also require temporal coverage."""
+    coverage = rounds.coverage() if isinstance(rounds, MeasurementWindow) else None
+    if isinstance(rounds, MeasurementWindow):
+        rounds = sorted(rounds.rounds, key=lambda stats: stats.time)
     details = []
     violating = 0
     for stats in rounds:
@@ -188,7 +256,9 @@ def judge(
     flags = [bool(d["violations"]) for d in details]
     adjacent = any(a and b for a, b in zip(flags, flags[1:], strict=False))
     allowed = max(1, int(n * noise_fraction))
-    measurement_complete = n > 0 and all(r.p99_ms is not None for r in rounds)
+    measurement_complete = (
+        n > 0 and all(r.p99_ms is not None for r in rounds) and (coverage is None or coverage["complete"])
+    )
     return WindowVerdict(
         rounds=n,
         violating=violating,
@@ -196,6 +266,7 @@ def judge(
         violated=n > 0 and violating / n >= violation_fraction and bool(details[-1]["violations"]),
         measurement_complete=measurement_complete,
         details=details,
+        coverage=coverage,
     )
 
 
@@ -207,7 +278,7 @@ def round_seconds(app) -> float:
     return float(app.wrk.wrk.duration) + 1.0
 
 
-def collect_rounds(app, window_s: float, min_rounds: int = 1, timeout_s: float | None = None) -> list[RoundStats]:
+def collect_rounds(app, window_s: float, min_rounds: int = 1, timeout_s: float | None = None) -> MeasurementWindow:
     """Wait for wrk2 rounds that *start* in the next ``window_s`` seconds.
 
     Rounds already in progress when called are excluded, so the result only
@@ -218,8 +289,11 @@ def collect_rounds(app, window_s: float, min_rounds: int = 1, timeout_s: float |
         wrk._extractlog()
     # Entry times are UTC epoch seconds, independent of the host timezone.
     started = time.time()
-    deadline = time.monotonic() + (timeout_s or window_s + 3 * round_seconds(app) + 60)
-    window_end_wall = time.time() + window_s
+    started_monotonic = time.monotonic()
+    interval_s = round_seconds(app)
+    timeout = timeout_s if timeout_s is not None else window_s + 3 * interval_s + 60
+    deadline = started_monotonic + timeout
+    window_end_wall = started + window_s
     out: list[RoundStats] = []
     while time.monotonic() < deadline:
         time.sleep(5)
@@ -228,9 +302,15 @@ def collect_rounds(app, window_s: float, min_rounds: int = 1, timeout_s: float |
         except Exception:
             continue
         out = [s for e in wrk.log_history if started <= e.time <= window_end_wall and (s := parse_round(e)) is not None]
-        if time.time() >= window_end_wall + round_seconds(app) and len(out) >= min_rounds:
+        if time.monotonic() >= started_monotonic + window_s + interval_s and len(out) >= min_rounds:
             break
-    return out
+    return MeasurementWindow(
+        rounds=out,
+        start=started,
+        duration_s=window_s,
+        round_interval_s=interval_s,
+        elapsed_s=time.monotonic() - started_monotonic,
+    )
 
 
 def recent_rounds(app, duration_s: float) -> list[RoundStats]:

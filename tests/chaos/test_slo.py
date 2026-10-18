@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sregym.chaos.slo import SLO, collect_rounds, judge, parse_round
+from sregym.chaos.slo import SLO, MeasurementWindow, RoundStats, collect_rounds, judge, parse_round
 from sregym.generators.workload.base import WorkloadEntry
 
 ROUND = """Running 30s test @ http://10.96.0.10:5000
@@ -90,8 +90,84 @@ def test_measurement_selects_only_rounds_inside_its_window(monkeypatch):
         log_history=[entry(ROUND, t) for t in [99, 100, 120, 130, 131, 18000]],
         _extractlog=lambda: None,
     )
-    rounds = collect_rounds(SimpleNamespace(wrk=workload), window_s=30, min_rounds=3)
-    assert [r.time for r in rounds] == [100, 120, 130]
+    window = collect_rounds(SimpleNamespace(wrk=workload), window_s=30, min_rounds=3)
+    assert [r.time for r in window.rounds] == [100, 120, 130]
+    assert window.start == 100
+    assert window.duration_s == 30
+
+
+def measured_window(times, duration_s=180, round_s=30, elapsed_s=None):
+    rounds = [RoundStats(time=t, requests=100 * round_s, duration_s=round_s, p99_ms=10) for t in times]
+    return MeasurementWindow(rounds, 0, duration_s, round_s + 1, duration_s if elapsed_s is None else elapsed_s)
+
+
+@pytest.mark.parametrize("round_s", [1, 5, 10, 30, 60])
+@pytest.mark.parametrize("phase", [0, 0.5, 0.99])
+def test_continuous_window_allows_round_alignment_and_small_jitter(round_s, phase):
+    interval = round_s + 1
+    duration_s = interval * 10
+    times = [t for i in range(10) if (t := phase * interval + i * (interval + 0.01)) <= duration_s]
+    window = measured_window(times, duration_s, round_s)
+    verdict = judge(SLO(target_rps=100), window)
+    assert verdict.healthy
+    assert verdict.measurement_complete
+    assert verdict.coverage["complete"]
+
+
+@pytest.mark.parametrize(
+    "times",
+    [
+        [],
+        [0, 31, 62, 93],  # Missing tail.
+        [62, 93, 124, 155],  # Missing beginning.
+        [0, 31, 93, 124, 155],  # Missing interior round.
+        [0, 31, 62, 62, 93, 124, 155],  # Duplicate round.
+    ],
+)
+def test_incomplete_window_cannot_pass(times):
+    verdict = judge(SLO(target_rps=100), measured_window(times))
+    assert not verdict.healthy
+    assert not verdict.measurement_complete
+    assert not verdict.coverage["complete"]
+
+
+def test_clock_or_timeout_cannot_finish_observation_early():
+    window = measured_window([0, 31, 62, 93, 124, 155], elapsed_s=100)
+    assert not judge(SLO(target_rps=100), window).measurement_complete
+
+
+@pytest.mark.parametrize("duration", [0, -30, float("inf"), float("nan")])
+def test_invalid_round_duration_does_not_supply_coverage(duration):
+    window = measured_window([0, 31, 62, 93, 124, 155])
+    window.rounds[2].duration_s = duration
+    assert not judge(SLO(target_rps=100), window).measurement_complete
+
+
+def test_collection_retains_missing_tail_evidence(monkeypatch):
+    from sregym.chaos import slo
+
+    clock = SimpleNamespace(now=1000.0)
+    monkeypatch.setattr(slo.time, "time", lambda: clock.now)
+    monkeypatch.setattr(slo.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(slo.time, "sleep", lambda seconds: setattr(clock, "now", clock.now + seconds))
+    healthy = ROUND.replace("  Non-2xx or 3xx responses: 290\n", "").replace("1.20s", "20.00ms")
+    workload = SimpleNamespace(
+        wrk=SimpleNamespace(duration=30),
+        log_history=[entry(healthy, t) for t in [1001, 1032, 1063, 1094]],
+        _extractlog=lambda: None,
+    )
+    window = collect_rounds(SimpleNamespace(wrk=workload), window_s=513, min_rounds=4)
+    verdict = judge(SLO(target_rps=100), window)
+    assert clock.now == 1545
+    assert len(window.rounds) == 4
+    assert not verdict.healthy
+    assert verdict.coverage["trailing_gap_s"] == 389
+
+
+def test_zero_collection_timeout_returns_an_incomplete_window(monkeypatch):
+    workload = SimpleNamespace(wrk=SimpleNamespace(duration=30), _extractlog=lambda: None, log_history=[])
+    window = collect_rounds(SimpleNamespace(wrk=workload), window_s=90, timeout_s=0)
+    assert not judge(SLO(target_rps=100), window).measurement_complete
 
 
 def test_baseline_timeouts_are_tolerated():

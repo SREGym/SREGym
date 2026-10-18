@@ -53,10 +53,14 @@ class SLOMitigationOracle(Oracle):
     def capture_baseline(self) -> None:
         app = self.problem.app
         policy = slo.SLO(target_rps=slo.target_rps(app))
-        rounds = slo.collect_rounds(app, window_s=90, min_rounds=3)
-        baseline = slo.judge(policy, rounds)
+        window = slo.collect_rounds(app, window_s=90, min_rounds=3)
+        baseline = slo.judge(policy, window)
+        rounds = window.rounds
         if len(rounds) < 3 or not baseline.measurement_complete:
-            raise RuntimeError("SLO baseline requires at least three complete rounds with latency measurements")
+            raise RuntimeError(
+                "SLO baseline requires at least three complete rounds with latency measurements "
+                f"across its observation window: {baseline.to_dict()}"
+            )
         if not baseline.healthy:
             raise RuntimeError(f"Application does not meet the baseline SLO: {baseline.to_dict()}")
         p99s = sorted(r.p99_ms for r in rounds if r.p99_ms is not None)
@@ -92,7 +96,8 @@ class SLOMitigationOracle(Oracle):
             return self.fail("protected_component_modified", **detail)
         if verdict.rounds < self.min_rounds:
             return self.fail("slo_no_rounds", **detail)
-        if not verdict.measurement_complete and not verdict.violated:
+        if not verdict.measurement_complete:
+            print(f"[❌] SLO measurement incomplete: {verdict.coverage}")
             return self.fail("slo_incomplete_measurement", **detail)
         if not verdict.healthy:
             print(f"[❌] SLO violated in {verdict.violating}/{verdict.rounds} rounds")
