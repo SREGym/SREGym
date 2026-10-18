@@ -59,8 +59,17 @@ def _pod(name, *, phase="Running", ready=True):
     )
 
 
+class _NoResources:
+    """Typed API stand-in: every list_namespaced_* call returns no items."""
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: SimpleNamespace(items=[])
+
+
 class _KubeCtl:
     """Mutable fake cluster: set_state() models deploy / hack transitions."""
+
+    core_v1_api = apps_v1_api = _NoResources()
 
     def __init__(self, deployments=(), pods=()):
         self.set_state(deployments, pods)

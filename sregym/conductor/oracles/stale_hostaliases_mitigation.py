@@ -80,6 +80,7 @@ class StaleHostAliasesMitigationOracle(MitigationOracle):
         # are retired. Public capacity and cart operations are checked below.
         for name in getattr(self.problem, "RETIRED_ROUTES", ()):
             self.replica_count.pop(name, None)
+            self.resources.get("Service", set()).discard(name)
 
     # ── rollout helpers ────────────────────────────────────────────────
     @staticmethod

@@ -45,7 +45,14 @@ def _deployment(
     )
 
 
+class _NoResources:
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: SimpleNamespace(items=[])
+
+
 class _KubeCtl:
+    core_v1_api = apps_v1_api = _NoResources()
+
     def __init__(self, deployments):
         self.deployments = list(deployments)
 
