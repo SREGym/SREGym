@@ -6,6 +6,7 @@ from sregym.conductor.oracles.failure import classify
 
 
 class Oracle(ABC):
+    requires_llm_judge = False
     # Long-running oracles can request a larger grading budget. None preserves
     # the runner's default; this does not extend agent or cleanup deadlines.
     evaluation_timeout_seconds: float | None = None

@@ -124,6 +124,7 @@ from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.service.kubectl import KubeCtl
+from sregym.conductor.problems.slo_problem import slo_problems
 
 
 # fmt: off
@@ -305,6 +306,11 @@ class ProblemRegistry:
             **PORTED_PROBLEMS,
         }
 # fmt: on
+        slo_entries = slo_problems()
+        duplicates = self.PROBLEM_REGISTRY.keys() & slo_entries.keys()
+        if duplicates:
+            raise ValueError(f"SLO problem IDs already registered: {', '.join(sorted(duplicates))}")
+        self.PROBLEM_REGISTRY.update(slo_entries)
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 

@@ -1,0 +1,22 @@
+{
+  "problem_id": "timeline_redis_output_buffer_unit_mismatch_social_network",
+  "app": "social_network",
+  "recurrence_bound_s": 180,
+  "title": "Timeline Redis output buffer limit uses the wrong units",
+  "fault_layer": "app-config",
+  "fault_primitive": "Redis normal-client output buffer limit repeatedly published as a MiB count instead of bytes by a detached Python maintenance process",
+  "root_cause_class": "orphaned_cache_reply_budget_mib_byte_conversion",
+  "diagnosis": {
+    "component": "deployment/media-frontend",
+    "description": "An unmanaged cache session-policy process in media-frontend repeatedly sets the normal-client output buffer limit to 16 on both timeline Redis instances. The maintenance profile expresses 16 MiB, but Redis interprets this value as 16 bytes because the process omits the unit conversion. Redis disconnects clients while it constructs timeline replies, causing failed timeline requests despite healthy pods and successful small health requests. Repairing or restarting Redis alone is temporary because the policy process restores the incorrect limit."
+  },
+  "incident_class": "Abandoned operational reconciliation with a configuration unit conversion regression",
+  "affected_components": [
+    "user-timeline-redis",
+    "home-timeline-redis",
+    "user-timeline-service",
+    "home-timeline-service",
+    "media-frontend"
+  ],
+  "symptoms": "Timeline reads fail when Redis closes sessions while constructing array replies. Pods remain Running and Ready, small health requests and writes succeed, frontend and timeline services emit errors, and Redis records output-buffer disconnections. A repaired or restarted Redis cache regresses after approximately 145-153 seconds."
+}

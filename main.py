@@ -906,11 +906,6 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
             "Run it with --internet-access open or enable container isolation."
         )
 
-    # Mitigation-only runs use the problem's executable oracle, not the
-    # diagnosis judge. They must also work with key-free agents like autosubmit.
-    if not args.use_external_harness and (args.stages is None or "diagnosis" in args.stages):
-        run_judge_preflight_check()
-
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
         if internet_policy.is_filtered and not args.use_external_harness
@@ -949,7 +944,10 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         LAUNCHER.cleanup_all()
         raise
 
-    conductor = Conductor(config=conductor_config)
+    conductor = Conductor(
+        config=conductor_config,
+        judge_preflight=None if args.use_external_harness else run_judge_preflight_check,
+    )
 
     suite = getattr(args, "suite", None)
     problem_selection = (args.problem,) if args.problem else PROBLEM_SETS.get(suite)

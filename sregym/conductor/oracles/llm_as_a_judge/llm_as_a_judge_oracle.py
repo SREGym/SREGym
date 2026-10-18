@@ -11,6 +11,8 @@ from sregym.conductor.oracles.llm_as_a_judge.judge import (
 class LLMAsAJudgeOracle(Oracle):
     """Oracle that uses an LLM judge to evaluate agent solutions against expected root causes."""
 
+    requires_llm_judge = True
+
     def __init__(
         self,
         problem,
