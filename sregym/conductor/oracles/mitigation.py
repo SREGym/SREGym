@@ -14,7 +14,6 @@ _ROLLOUT_POLL_INTERVAL = 5
 _BASELINE_RESOURCES = (
     ("Service", "core_v1_api", "list_namespaced_service"),
     ("PersistentVolumeClaim", "core_v1_api", "list_namespaced_persistent_volume_claim"),
-    ("ConfigMap", "core_v1_api", "list_namespaced_config_map"),
     ("StatefulSet", "apps_v1_api", "list_namespaced_stateful_set"),
 )
 
@@ -54,9 +53,10 @@ class MitigationOracle(Oracle):
         """Capture pre-injection Deployments and the objects they depend on.
 
         Records Deployment replica counts and the names of the namespace's
-        Services, PersistentVolumeClaims, ConfigMaps and StatefulSets. Objects
-        created by inject_fault() are outside it. Faults that must validate
-        those resources need a custom mitigation oracle.
+        Services, PersistentVolumeClaims and StatefulSets. ConfigMaps follow
+        current workload references instead, so safe replacements can pass.
+        Other objects created by inject_fault() are outside the baseline.
+        Faults that must validate those resources need a custom oracle.
         """
         deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
         self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
@@ -122,7 +122,8 @@ class MitigationOracle(Oracle):
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
 
-        failure = self._deployment_failure(kubectl.list_deployments(namespace))
+        deployments = kubectl.list_deployments(namespace)
+        failure = self._deployment_failure(deployments)
         if failure is not None:
             return failure
 
@@ -136,18 +137,55 @@ class MitigationOracle(Oracle):
         if unready is not None:
             return unready
 
-        if self.resources:
-            current = dict(self._list_resources(kubectl, namespace))
-            for kind, names in self.resources.items():
-                for name in sorted(names):
-                    item = current[kind].get(name)
-                    # A PVC still mounted by a pod stays, Terminating, until the
-                    # pod goes; that is already a deletion.
-                    if item is None or item.metadata.deletion_timestamp is not None:
-                        print(f"❌ {kind} '{name}' from the healthy baseline is missing")
-                        return self.fail("required_resource_missing", kind=kind, name=name, namespace=namespace)
+        current = dict(self._list_resources(kubectl, namespace)) if self.resources else {}
+        required = dict(self.resources)
+        pod_specs = [getattr(pod, "spec", None) for pod in pod_list.items if not self.is_completed_job_pod(pod)]
+        # Templates cover the next pod too, including StatefulSets with OnDelete updates.
+        for controller in [*deployments.items, *current.get("StatefulSet", {}).values()]:
+            spec = getattr(controller, "spec", None)
+            if getattr(spec, "replicas", None) == 0:
+                continue
+            template = getattr(spec, "template", None)
+            pod_specs.append(getattr(template, "spec", None))
+        configmaps = self._required_configmaps(pod_specs)
+        if configmaps:
+            required["ConfigMap"] = configmaps
+            current["ConfigMap"] = {
+                item.metadata.name: item for item in kubectl.core_v1_api.list_namespaced_config_map(namespace).items
+            }
+
+        for kind, names in required.items():
+            for name in sorted(names):
+                item = current[kind].get(name)
+                # A mounted PVC can remain Terminating until its pod exits.
+                if item is None or item.metadata.deletion_timestamp is not None:
+                    print(f"❌ Required {kind} '{name}' is missing or Terminating")
+                    return self.fail("required_resource_missing", kind=kind, name=name, namespace=namespace)
 
         return {"success": True}
+
+    @staticmethod
+    def _required_configmaps(pod_specs) -> set[str]:
+        """Collect non-optional native references, not historical object names."""
+        references = []
+        for spec in pod_specs:
+            for volume in getattr(spec, "volumes", None) or []:
+                references.append(getattr(volume, "config_map", None))
+                projected = getattr(volume, "projected", None)
+                references.extend(
+                    getattr(source, "config_map", None) for source in getattr(projected, "sources", None) or []
+                )
+            containers = [
+                *(getattr(spec, "containers", None) or []),
+                *(getattr(spec, "init_containers", None) or []),
+            ]
+            for container in containers:
+                references.extend(
+                    getattr(source, "config_map_ref", None) for source in getattr(container, "env_from", None) or []
+                )
+                for variable in getattr(container, "env", None) or []:
+                    references.append(getattr(variable.value_from, "config_map_key_ref", None))
+        return {reference.name for reference in references if reference is not None and not reference.optional}
 
     def _deployment_failure(self, deployments) -> dict | None:
         """Check current rollouts against the pre-injection required workloads."""
