@@ -66,3 +66,20 @@ def test_none_of_these_reads_detail_then_submits_a_partial_marked_uncertain():
     assert read == ["deployment/edge-proxy"]
     assert "not established" in diag.text and "Confidence: low" in diag.text
     assert diag.investigation["pattern"] == "partial"
+
+
+def test_none_of_these_keeps_reading_components_not_read_yet():
+    snap = snapshot()
+    for name in ("cart", "consumer"):
+        snap.components[f"deployment/{name}"] = {
+            "kind": "Deployment",
+            "name": name,
+            "namespace": "shop",
+            "healthy": False,
+            "signals": ["pod phase Pending"],
+        }
+    snap.components["deployment/consumer"]["log_error_lines"] = 4
+    read = []
+    V2Diagnoser(client=Client("None of these"), fetch_detail=lambda s, cid: read.append(cid) or {}).diagnose(snap)
+    assert sorted(read) == ["deployment/cart", "deployment/edge-proxy", "deployment/consumer"]
+    assert len(read) == len(set(read)) and read[0] == "deployment/edge-proxy"  # most signals first, no rereads

@@ -87,8 +87,8 @@ class V2Diagnoser(JevDiagnoser):
         return fitted
 
     def _look_closer(self, snapshot: ClusterSnapshot, candidates: list[Explanation], route: str) -> bool:
-        """Fetch component detail: the top two origins when unsure, the most affected unexamined one when no
-        explanation fits. Returns whether anything new was read."""
+        """Fetch component detail: the top two origins when unsure, the two most affected unexamined components
+        (signals plus error logs) when no explanation fits. Returns whether anything new was read."""
         if self.fetch_detail is None:
             return False
         by_object = {
@@ -98,11 +98,12 @@ class V2Diagnoser(JevDiagnoser):
         if route == "check":  # every component the top two chains are about: origin, contributing, impact
             targets = [by_object.get(obj) for e in candidates[:2] for obj in [e.origin, *e.contributing, *e.impact]]
         else:
+            comps = snapshot.components
             ranked = sorted(
-                (cid for cid, c in snapshot.components.items() if not c.get("healthy", True)),
-                key=lambda cid: -len(snapshot.components[cid].get("signals") or []),
+                (cid for cid, c in comps.items() if not c.get("healthy", True) and cid not in self.details),
+                key=lambda cid: -(len(comps[cid].get("signals") or []) + bool(comps[cid].get("log_error_lines"))),
             )
-            targets = ranked[:1] or [by_object.get(e.origin) for e in candidates[:1]]
+            targets = ranked[:2] or [by_object.get(e.origin) for e in candidates[:1]]
         added = False
         for cid in targets:
             if cid and cid not in self.details:
