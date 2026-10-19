@@ -6,12 +6,14 @@ import argparse
 from pathlib import Path
 
 import msgspec
+import pytest
 
 from clients.jev_diag import collector as v1_collector
 from clients.jev_diag import driver as v1_driver
 from clients.jev_diag.classifier import build_component_questions as v1_questions
 from clients.jev_diag.v2 import collector as v2_collector
 from clients.jev_diag.v2 import driver as v2_driver
+from clients.jev_diag.v2 import probes
 from clients.jev_diag.v2.classifier import build_component_questions as v2_questions
 
 NS = "shop"
@@ -330,6 +332,30 @@ def test_outside_objects_link_to_the_components_they_act_on(monkeypatch):
     assert ing["components"] == ["deployment/front"] and any("0 ready endpoints" in s for s in ing["signals"])
     pc = next(f for f in found if f["kind"] == "PriorityClass")
     assert pc["components"] == ["deployment/front"] and "globalDefault True" in pc["signals"][0]
+
+
+@pytest.mark.parametrize(
+    "role,index", [(r, i) for r, cmds in probes._BACKEND_COMMANDS.items() for i in range(len(cmds))]
+)
+def test_every_backend_probe_command_renders_and_reports_an_auth_requirement(monkeypatch, role, index):
+    template = probes._BACKEND_COMMANDS[role][index][0]
+    comp = {
+        **_comp(role, "t"),
+        "pods": [{"name": "p-1", "phase": "Running", "ready": "1/1"}],
+        "containers": [{"name": role, "image": f"{role}:1", "ports": [4321]}],
+    }
+    ran = []
+
+    def run(ns, pod, container, command):  # only the template under test is installed
+        ran.append(command)
+        if command[0] != template[0]:
+            return 127, "executable file not found"
+        return 0, "command listDatabases requires authentication"
+
+    monkeypatch.setattr(probes, "run_in_pod", run)
+    result = probes.backend_probe(_snap({"deployment/db": comp}), "deployment/db")
+    assert ran[-1] == [part.replace("{port}", "4321") for part in template] and "4321" in ran[-1]
+    assert result["meaning"] == "the server requires authentication for this command"
 
 
 def test_namespaces_the_app_addresses_are_read_too(monkeypatch):
