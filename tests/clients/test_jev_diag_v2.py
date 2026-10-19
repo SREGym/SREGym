@@ -289,3 +289,60 @@ def test_adaptive_wait_reads_early_once_the_same_pods_stay_abnormal(monkeypatch)
     ok = {"pods": {"shop/a-1": {"phase": "Running", "restarts": {"a": 0}}}}
     assert _run_wait(monkeypatch, [crash, crash]) == 60  # 45 s minimum, one poll
     assert _run_wait(monkeypatch, [ok] * 10) == 120  # nothing abnormal in pods: v1's full wait
+
+
+def test_outside_objects_link_to_the_components_they_act_on(monkeypatch):
+    from clients.jev_diag.v2 import outside
+
+    ingress = {
+        "metadata": {"name": "web", "namespace": NS, "creationTimestamp": "2026-10-19T07:50:00Z"},
+        "spec": {
+            "rules": [
+                {
+                    "host": "shop",
+                    "http": {
+                        "paths": [{"path": "/", "backend": {"service": {"name": "front", "port": {"number": 80}}}}]
+                    },
+                }
+            ]
+        },
+    }
+    default_pc = {"metadata": {"name": "urgent"}, "value": 1000000, "globalDefault": True}
+    items = {"ingresses": [ingress], "priorityclasses": [default_pc], "daemonsets": [], "cronjobs": []}
+    monkeypatch.setattr(outside, "kubectl_items", lambda resource, ns, errors, **k: items.get(resource, []))
+    comps = {
+        "deployment/front": {
+            **_comp("front", "2026-10-19T07:50:00Z"),
+            "services": [{"name": "front", "ready_endpoints": 0}],
+        }
+    }
+    found = outside.collect_outside([NS], comps, {}, [], [])
+    ing = next(f for f in found if f["kind"] == "Ingress")
+    assert ing["components"] == ["deployment/front"] and any("0 ready endpoints" in s for s in ing["signals"])
+    pc = next(f for f in found if f["kind"] == "PriorityClass")
+    assert pc["components"] == ["deployment/front"] and "globalDefault True" in pc["signals"][0]
+
+
+def test_namespaces_the_app_addresses_are_read_too(monkeypatch):
+    from clients.jev_diag.v2 import outside
+
+    dep = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "env": [
+                                {"name": "DB", "value": "mysql://tidb.tidb-cluster.svc:4000/app"},
+                                {"name": "OTEL", "value": "http://otel-collector.observe.svc:4317"},
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(
+        outside, "kubectl_items", lambda resource, ns, errors, **k: [dep] if resource == "deployments" else []
+    )
+    assert outside.related_namespaces([NS], []) == ["tidb-cluster"]

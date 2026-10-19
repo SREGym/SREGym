@@ -1855,11 +1855,12 @@ def collect_snapshot(
 
     With `trend_baseline` (an earlier trend.collect_sample), growth since that sample is attached as signals.
     """
-    from clients.jev_diag.v2 import trend
+    from clients.jev_diag.v2 import outside, trend
 
     errors: list[str] = []
     namespaces = list(app_info.get("namespaces") or [app_info.get("namespace")])
     namespaces = [ns for ns in namespaces if ns]
+    namespaces += outside.related_namespaces(namespaces, errors)
     components: dict[str, dict] = {}
     pods_by_component: dict[str, list[dict]] = {}
     pod_to_component: dict[str, str] = {}
@@ -2055,6 +2056,14 @@ def collect_snapshot(
             for w in webhooks:
                 if w["configuration"] == name:
                     w["changed"] = True
+    pod_priority: dict[str, set[str]] = {}
+    for pods in raw_pods.values():
+        for pod in pods:
+            pc = (pod.get("spec") or {}).get("priorityClassName")
+            cid = pod_to_component.get((pod.get("metadata") or {}).get("name"))
+            if pc and cid:
+                pod_priority.setdefault(pc, set()).add(cid)
+    outside_objects = outside.collect_outside(namespaces, components, pod_priority, errors, changes)
     cluster_dns = summarize_cluster_dns(errors)
     dns_affected = coredns_service_overrides(cluster_dns, components)
     if dns_affected:
@@ -2119,6 +2128,7 @@ def collect_snapshot(
         "cluster_dns": compact(cluster_dns),
         "namespace_constraints": compact(constraints),
         "admission_webhooks": compact([{k: v for k, v in wh.items() if k != "_rules"} for wh in webhooks]),
+        "outside_objects": compact(outside_objects),
         "rbac": compact(rbac),
         "stuck_terminating": stuck,
         "trend": trend_summary,
