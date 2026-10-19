@@ -480,11 +480,11 @@ def test_a_caller_retrying_into_a_capped_callee_is_reported_as_the_call_path():
 def _two_faults(link: bool):
     comps = {
         "deployment/a": {**_comp("a", "t"), "signals": ["s"], "evidence_kinds": ["change", "symptoms"]},
-        "deployment/b": {**_comp("b", "t"), "signals": ["s"], "evidence_kinds": ["configuration", "symptoms"]},
+        "deployment/b": {**_comp("b", "t"), "signals": ["s"], "evidence_kinds": ["change", "symptoms"]},
         "deployment/c": _comp("c", "t"),
     }
     if link:
-        comps["deployment/b"]["errors_point_to"] = ["deployment/a"]
+        comps["deployment/b"]["_calls"] = ["deployment/a"]  # b calls a: a explains b
     return _snap(comps)
 
 
@@ -497,7 +497,7 @@ def test_failures_the_cause_does_not_explain_can_add_a_second_independent_cause(
     d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_two_faults(link=False))
     assert d.component == "deployment/a" and d.second.component == "deployment/b"
     assert "A second, independent root cause:\nRoot cause: Deployment `b`" in d.text
-    # b's errors name a: a explains b, so b is never offered as a second cause
+    # b calls a: a explains b, so b is never offered as a second cause
     client = _Answers(triage, origin, picks={"fault_start": "both"})
     d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_two_faults(link=True))
     assert d.second is None and [s["component"] for s in d.investigation["steps"]] == ["deployment/a"]

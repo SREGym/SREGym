@@ -485,28 +485,55 @@ def build_tiebreak_questions(a: str, b: str, linked: bool) -> dict[str, Choice]:
     }
 
 
-def link_facts(snapshot: ClusterSnapshot, a: str, b: str) -> list[str]:
-    """Connections code can see between two components: error lines, call paths, the same change, shared objects."""
-    from clients.jev_diag.v2.report import same_change
+def _change_time(comp: dict):
+    from clients.jev_diag.timeutil import parse_time
 
-    ca, cb = snapshot.components[a], snapshot.components[b]
+    return parse_time((comp.get("template_changes") or {}).get("changed_at") or comp.get("modified"))
+
+
+def link_facts(snapshot: ClusterSnapshot, a: str, b: str, investigated: dict | None = None) -> list[str]:
+    """Every connection code can see between two components (each taken with the workloads that got the same change
+    as it): error lines naming the other, logins one rejects from the other, addresses one calls, examined calls
+    and failing targets, timing-out call paths, shared config objects, and changes made within the same seconds."""
+    from clients.jev_diag.timeutil import seconds_between
+    from clients.jev_diag.v2.report import SAME_CHANGE_SECONDS, same_change
+
+    investigated = investigated or {}
+    side_a, side_b = {a, *same_change(snapshot, a)}, {b, *same_change(snapshot, b)}
     out = []
-    for x, y, cx in ((a, b, ca), (b, a, cb)):
-        if y in (cx.get("errors_point_to") or []):
-            out.append(f"{x}'s still-occurring error lines name {y}")
-    if b in same_change(snapshot, a):
+    if side_a & side_b:
         out.append("the same pod template change was applied to both")
-    shared = set(ca.get("config_objects") or {}) & set(cb.get("config_objects") or {})
+    for xs, ys in ((side_a, side_b), (side_b, side_a)):
+        for x in sorted(xs):
+            cx, r = snapshot.components.get(x) or {}, investigated.get(x) or {}
+            for y in sorted(ys):
+                if y in (cx.get("errors_point_to") or []):
+                    out.append(f"{x}'s still-occurring error lines name {y}")
+                if y in (cx.get("login_candidates") or []):
+                    out.append(f"{x} rejects logins that {y} may present")
+                if (
+                    y in (cx.get("_calls") or [])
+                    or y in (r.get("calls") or [])
+                    or y in (r.get("failing_targets") or [])
+                ):
+                    out.append(f"{x} calls {y}")
+    shared = set((snapshot.components[a]).get("config_objects") or {}) & set(
+        (snapshot.components[b]).get("config_objects") or {}
+    )
     out += [f"both use {obj}" for obj in sorted(shared)]
     for path in snapshot.cluster.get("call_paths") or []:
-        if {path["caller"], path["callee"]} == {a, b}:
+        if {path["caller"], path["callee"]} & side_a and {path["caller"], path["callee"]} & side_b:
             out.append(f"calls from {path['caller']} to {path['callee']} time out")
-    return out
+    ta, tb = _change_time(snapshot.components[a]), _change_time(snapshot.components[b])
+    if ta and tb and abs(seconds_between(ta, tb)) <= SAME_CHANGE_SECONDS:
+        out.append("both were changed within the same few seconds")
+    return list(dict.fromkeys(out))
 
 
 def explained_by(snapshot: ClusterSnapshot, cid: str | None, fault_object: dict | None) -> set[str]:
     """Components whose failures one cause accounts for: the cause, the same change on other workloads, the users of
-    its fault object, and every component whose errors name an explained one (callers, transitively)."""
+    its fault object, and, transitively, every component whose errors name an explained one, that calls one, or that
+    rejects logins from one."""
     from clients.jev_diag.v2.report import same_change
 
     out = set((fault_object or {}).get("components") or [])
@@ -516,7 +543,9 @@ def explained_by(snapshot: ClusterSnapshot, cid: str | None, fault_object: dict 
     while grew:
         grew = False
         for other, comp in snapshot.components.items():
-            if other not in out and set(comp.get("errors_point_to") or []) & out:
+            reaches = set(comp.get("errors_point_to") or []) | set(comp.get("_calls") or [])
+            reaches |= set(comp.get("login_candidates") or [])
+            if other not in out and reaches & out:
                 out.add(other)
                 grew = True
     return out
@@ -525,15 +554,14 @@ def explained_by(snapshot: ClusterSnapshot, cid: str | None, fault_object: dict 
 def unexplained_frontier(
     snapshot: ClusterSnapshot, explained: set[str], investigated: dict, triage: ChoiceResult
 ) -> list[str]:
-    """Failing components the concluded cause does not account for and that carry evidence of their own (a change,
-    a configuration defect, or own failure logs), most plausible first. Components already judged victims or
-    unrelated are left out."""
+    """Failing components the concluded cause does not account for and that were changed on their own, most
+    plausible first. Components already judged victims or unrelated are left out."""
     out = []
     for cid, comp in snapshot.components.items():
         kinds = set(comp.get("evidence_kinds") or [])
         if cid in explained or comp.get("role") == "observability":
             continue
-        if not kinds & {"symptoms", "own_failure_logs"} or not kinds & {"change", "configuration", "own_failure_logs"}:
+        if "change" not in kinds or not kinds & {"symptoms", "own_failure_logs"}:
             continue
         if cid in investigated and investigated[cid]["origin_p"] < MIN_ORIGIN_PROBABILITY:
             continue
@@ -826,14 +854,15 @@ class IterativeDiagnoser(JevDiagnoser):
     def tiebreak(self, snapshot: ClusterSnapshot, a: str, b: str, investigated: dict, reason: str) -> list[str]:
         """Two confirmed origins: the one where the fault started, or both when they are independent faults. Without
         a clear answer, the higher origin probability."""
-        links = link_facts(snapshot, a, b)
+        links = link_facts(snapshot, a, b, investigated)
+        own_change = all("change" in (snapshot.components[c].get("evidence_kinds") or []) for c in (a, b))
         state = {
             "application": snapshot.app,
             "why_asked": reason,
             "links": links or ["none found"],
             "sides": {a: self.side(snapshot, a, investigated), b: self.side(snapshot, b, investigated)},
         }
-        response = self._ask(f"tiebreak:{a}|{b}", state, build_tiebreak_questions(a, b, bool(links)))
+        response = self._ask(f"tiebreak:{a}|{b}", state, build_tiebreak_questions(a, b, bool(links) or not own_change))
         answer = ChoiceResult.from_answer(response.choices[TIEBREAK_QUESTION])
         p = answer.probabilities.get(answer.choice, 0.0)
         higher = max((a, b), key=lambda c: investigated[c]["origin_p"])
@@ -1060,7 +1089,7 @@ class IterativeDiagnoser(JevDiagnoser):
             second = None
 
         info = self._characterize(snapshot, concluded, investigated, kind, cluster_pick, fallback_reason)
-        if second is None and concluded in investigated and len(steps) < self.max_steps:
+        if not (paired or pair_decided) and concluded in investigated and len(steps) < self.max_steps:
             explained = explained_by(snapshot, concluded, info["fault_object"])
             frontier = unexplained_frontier(snapshot, explained, investigated, component)
             if frontier:
@@ -1074,7 +1103,7 @@ class IterativeDiagnoser(JevDiagnoser):
                     steps.append(self._step(len(steps) + 1, cand, investigated[cand]))
                     self._trace("decide", "step", **steps[-1])
                 if investigated[cand]["origin_p"] >= MIN_ORIGIN_PROBABILITY:
-                    reason = f"{cand} has failures of its own that {concluded} does not account for"
+                    reason = f"{cand} was also judged an origin in its own examination"
                     picks = self.tiebreak(snapshot, concluded, cand, investigated, reason)
                     if picks[0] != concluded:
                         concluded = picks[0]
