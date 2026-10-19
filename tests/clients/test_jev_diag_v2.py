@@ -176,3 +176,66 @@ def test_a_line_naming_several_components_points_at_the_one_it_called():
     assert _called(line, aliases, {"s", "q", "e"}) == {"e"}
     assert _called("failed to connect to valkey-cart:6379 for cart", aliases, {"c", "v"}) == {"v"}
     assert _called("cart and email unavailable", aliases, {"c", "e"}) == set()  # no called position: keep all
+
+
+def _diag(component: str, fact: str | None = None, **kw):
+    from clients.jev_diag.v2.classifier import ChoiceResult, Diagnosis
+
+    return Diagnosis(
+        component=component,
+        component_result=ChoiceResult(choice=component, confidence=0.9, probabilities={component: 0.9}),
+        fault_visible=None,
+        category_result=ChoiceResult(choice="config_value", confidence=0.9, probabilities={"config_value": 0.9}),
+        evidence_result=ChoiceResult(choice="E1", confidence=0.9, probabilities={"E1": 0.9}) if fact else None,
+        evidence=[{"id": "E1", "text": fact}] if fact else [],
+        model="m",
+        input_tokens=None,
+        output_tokens=None,
+        investigation={"steps": []},
+        **kw,
+    )
+
+
+def _snap(comps: dict):
+    return v2_collector.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster={})
+
+
+def test_report_leads_with_the_changed_workload_and_has_no_fault_type_line():
+    from clients.jev_diag.v2.report import build_report
+
+    comp = {
+        **_comp("frontend", "t"),
+        "evidence_kinds": ["change"],
+        "signals": ["only 0 of 1 desired replicas are ready"],
+        "template_changes": {"changes": ["container frontend env CART_ADDR removed (was cart:8080)"]},
+    }
+    text = build_report(_snap({"deployment/frontend": comp}), _diag("deployment/frontend", "env CART_ADDR removed"))
+    assert text.startswith("Root cause: Deployment `frontend` in namespace `shop`: env CART_ADDR removed.")
+    assert "Fault type" not in text and "Effect: only 0 of 1 desired replicas are ready." in text
+
+
+def test_report_names_the_owning_component_through_its_configmap_and_an_outside_object_first():
+    from clients.jev_diag.v2.report import build_report
+
+    db = {**_comp("db", "t"), "services": [{"name": "db"}], "signals": []}
+    fo = {
+        "kind": "ConfigMap",
+        "name": "db",
+        "namespace": NS,
+        "signal": "ConfigMap db was modified",
+        "components": ["deployment/db"],
+    }
+    text = build_report(
+        _snap({"deployment/db": db}), _diag("deployment/db", "mongod.conf tls requireTLS", fault_object=fo)
+    )
+    assert text.startswith(
+        "Root cause: Service `db` (Deployment `db`) in namespace `shop`, through its ConfigMap `db`:"
+    )
+    caller = {**_comp("user", "t"), "referenced_by_errors_from": {"deployment/api": {"dns resolution failure": 27}}}
+    api = _comp("api", "t")
+    dns = {"kind": "ConfigMap", "name": "coredns", "namespace": "kube-system", "signal": "rule answers NXDOMAIN"}
+    text = build_report(
+        _snap({"deployment/user": caller, "deployment/api": api}), _diag("deployment/user", fault_object=dns)
+    )
+    assert text.startswith("Root cause: ConfigMap `coredns` in namespace `kube-system`, acting on Deployment `user`")
+    assert "Affected (symptoms only, not causes): Deployment `api` in namespace `shop`: dns resolution failure" in text
