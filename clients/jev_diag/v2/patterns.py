@@ -287,7 +287,7 @@ def arrival_explanations(snapshot: Any) -> list[Explanation]:
             out.append(
                 Explanation(
                     key=f"arrival:{cid}",
-                    pattern="change",
+                    pattern="arrival",
                     origin=oid,
                     mechanism=(
                         f"{oid} appeared {after}s after the rest of the application and {before}s before the first "
