@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 from pathlib import Path
 from types import ModuleType
@@ -189,7 +190,9 @@ def read_cluster(
 def make_diagnoser(args: argparse.Namespace, trace: DecisionTrace, client=None) -> IterativeDiagnoser:
     """v2's diagnoser; `client` overrides the decision model client (one per arm in experiments)."""
     probe = None
-    if args.exec_probes:
+    if args.exec_probes or os.environ.get("JEV_DIAG_V2_PROBES", "1") != "0":
+        # v1's read-only health command inside a healthy-looking data store that a victim's errors name (native
+        # tools only, after a memory headroom check); on by default in v2
         from clients.jev_diag.v2.probes import backend_probe as probe
     return IterativeDiagnoser(
         client,
