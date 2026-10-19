@@ -229,14 +229,14 @@ def test_evidence_cap_keeps_some_logs_events_and_dependencies():
     assert short == ["s", "l", "env A=1"]
 
 
-def test_a_line_naming_several_components_points_at_the_one_it_called():
-    from clients.jev_diag.v2.derive import _called
+def test_an_error_line_naming_several_components_points_at_each_of_them():
+    from clients.jev_diag.v2.derive import classify_logs
 
-    aliases = {"shipping": "s", "quote": "q", "email": "e", "cart": "c", "valkey-cart": "v"}
-    line = "shipping quote failure: failed POST to email service"
-    assert _called(line, aliases, {"s", "q", "e"}) == {"e"}
-    assert _called("failed to connect to valkey-cart:6379 for cart", aliases, {"c", "v"}) == {"v"}
-    assert _called("cart and email unavailable", aliases, {"c", "e"}) == set()  # no called position: keep all
+    line = {"line": "web: ledger sync failure: failed POST to notifier service", "state": "ongoing", "count": 3}
+    comps = {f"deployment/{n}": _comp(n, "t") for n in ("ledger", "notifier")}
+    comps["deployment/web"] = {**_comp("web", "t"), "log_signals": [line]}
+    classify_logs(comps)  # word order does not say which one was called
+    assert comps["deployment/web"]["log_findings"][0]["targets"] == ["deployment/ledger", "deployment/notifier"]
 
 
 def _diag(component: str, fact: str | None = None, **kw):
