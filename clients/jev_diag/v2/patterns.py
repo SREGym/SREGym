@@ -213,9 +213,10 @@ def config_links(components: dict[str, dict], details: dict[str, dict]) -> dict[
         for c in (workload.get("init_containers") or []) + (workload.get("containers") or []):
             values += [str(e.get("value", "")) for e in c.get("env") or [] if e.get("value") is not None]
             values += [str(a) for a in c.get("args") or []]
-        text = " ".join(values).lower()
+        values = [v.lower() for v in values]
         for name, cids in names.items():
-            if re.search(HOST_RE.format(name=re.escape(name)), text):
+            pattern = HOST_RE.format(name=re.escape(name))
+            if any(re.search(pattern, v) for v in values):  # each value on its own: env order changes nothing
                 links.setdefault(cid, set()).update(c for c in cids if c != cid)
     return links
 
@@ -241,8 +242,9 @@ def error_links(components: dict[str, dict], details: dict[str, dict]) -> dict[s
     links: dict[str, set[str]] = {}
     for cid, comp in components.items():
         own_name = str(comp.get("name") or "").lower()
-        lines = [f.get("line", "") for f in (comp.get("log_findings") or []) + (comp.get("log_signals") or [])]
-        lines += [s.get("line", "") for s in ((details.get(cid) or {}).get("logs") or {}).get("error_samples") or []]
+        samples = (comp.get("log_findings") or []) + (comp.get("log_signals") or [])
+        samples += ((details.get(cid) or {}).get("logs") or {}).get("error_samples") or []
+        lines = [s.get("line", "") for s in samples if s.get("state") != "stopped"]  # still occurring, as in v1
         text = " ".join(
             line.split(":", 1)[1] if line.lower().startswith(own_name + ":") else line
             for line in lines
@@ -275,11 +277,13 @@ def dependency_explanations(snapshot: Any, details: dict[str, dict] | None = Non
             if target in components and target != cid:
                 callers.setdefault(target, []).append(cid)
     out: list[Explanation] = []
+    linked: dict[str, list[str]] = {}
     for src, targets in call_links(components, details or {}).items():
         for target in targets:
             if target in components and target not in callers and not _healthy(components[src]):
                 if _broken_itself(components[target]):
-                    out.append(_configured_dependency(components, target, src))
+                    linked.setdefault(target, []).append(src)
+    out += [_configured_dependency(components, target, sorted(srcs)) for target, srcs in sorted(linked.items())]
     for target, srcs in sorted(callers.items()):
         tcomp = components[target]
         names = ", ".join(sorted(srcs))
@@ -308,19 +312,20 @@ def dependency_explanations(snapshot: Any, details: dict[str, dict] | None = Non
     return out
 
 
-def _configured_dependency(components: dict[str, dict], target: str, src: str) -> Explanation:
-    """`target` is broken itself and `src`, which fails, is configured to call it."""
+def _configured_dependency(components: dict[str, dict], target: str, srcs: list[str]) -> Explanation:
+    """`target` is broken itself and `srcs`, which fail, call it (by configuration or their own errors)."""
     tcomp = components[target]
+    names = ", ".join(srcs)
     return Explanation(
         key=f"dependency:{target}",
         pattern="dependency",
         origin=object_id(tcomp),
-        mechanism=f"{target} is broken, so {src}, which calls it, fails.",
+        mechanism=f"{target} is broken, so {names}, which call it, fail.",
         values=[s for s in tcomp.get("signals") or [] if not s.startswith(POINTED_MARKERS)][:3],
-        impact=sorted({object_id(tcomp), object_id(components[src])}),
+        impact=sorted({object_id(tcomp), *(object_id(components[s]) for s in srcs)}),
         predictions=[
             Prediction(
-                f"{src} calls {target} (its configuration or its own errors name it)",
+                f"{names} call {target} (their configuration or their own errors name it)",
                 SUPPORTS,
                 group=f"linked:{target}",
             ),
