@@ -1925,7 +1925,7 @@ def collect_snapshot(
                 )
             comp["jobs"] = sorted(comp["jobs"], key=lambda j: j.get("start_time") or "", reverse=True)[:5]
     revisions = change_log.revision_templates(replicasets, controllerrevisions)
-    change_log.attach_template_changes(components, revisions)
+    change_log.attach_template_changes(components, revisions, change_log.application_created(components))
 
     for ns in namespaces:
         raw_pods[ns] = kubectl_items("pods", ns, errors, managed_fields=False)
