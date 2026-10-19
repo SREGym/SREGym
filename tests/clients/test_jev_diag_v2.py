@@ -357,6 +357,7 @@ def test_adaptive_wait_reads_early_once_the_same_pods_stay_abnormal(monkeypatch)
 
 def test_outside_objects_link_to_the_components_they_act_on(monkeypatch):
     from clients.jev_diag.v2 import outside
+    from clients.jev_diag.v2.derive import cluster_findings
 
     ingress = {
         "metadata": {"name": "web", "namespace": NS, "creationTimestamp": "2026-10-19T07:50:00Z"},
@@ -382,9 +383,13 @@ def test_outside_objects_link_to_the_components_they_act_on(monkeypatch):
     }
     found = outside.collect_outside([NS], comps, {}, [], [])
     ing = next(f for f in found if f["kind"] == "Ingress")
-    assert ing["components"] == ["deployment/front"] and any("0 ready endpoints" in s for s in ing["signals"])
+    assert ing["components"] == ["deployment/front"] and ing["routes"] == ["shop/ -> Service front:80"]
     pc = next(f for f in found if f["kind"] == "PriorityClass")
-    assert pc["components"] == ["deployment/front"] and "globalDefault True" in pc["signals"][0]
+    assert pc["components"] == ["deployment/front"] and "globalDefault True" in pc["settings"]
+    findings = cluster_findings({"outside_objects": found}, [])  # a healthy route or a setting is no finding
+    assert [f["signal"] for f in findings] == ["routes shop/ to Service front, which has 0 ready endpoints"]
+    comps["deployment/front"]["services"][0]["ready_endpoints"] = 1
+    assert cluster_findings({"outside_objects": outside.collect_outside([NS], comps, {}, [], [])}, []) == []
 
 
 @pytest.mark.parametrize(
