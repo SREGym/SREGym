@@ -684,6 +684,17 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict]) -> list[dict]:
                     "components": c.get("components") or [],
                 }
             )
+    for obj in cluster.get("outside_objects") or []:
+        for sig in obj.get("signals") or []:
+            out.append(
+                {
+                    "kind": obj.get("kind"),
+                    "name": obj.get("name"),
+                    "namespace": obj.get("namespace"),
+                    "signal": sig,
+                    "components": obj.get("components") or [],
+                }
+            )
     for pol in cluster.get("network_policies") or []:
         if pol.get("selects_all_pods") or pol.get("changed"):
             out.append(
