@@ -814,8 +814,8 @@ def post_process(snapshot) -> None:
     tag_roles(components)
     classify_logs(components)
     server_login_rejections(components, collected_at)
-    snapshot.cluster["call_paths"] = paths.call_paths(components)
     ranked = change_log.rank_changes(components, snapshot.cluster, collected_at)
+    snapshot.cluster["call_paths"] = paths.call_paths(components)  # after the change signals: a callee's own change
     snapshot.cluster["findings"] = cluster_findings(snapshot.cluster, ranked)
     for cid, comp in components.items():
         comp["signals"] = list(dict.fromkeys(comp["signals"]))

@@ -645,6 +645,35 @@ def test_call_settings_need_a_number_and_the_callee_named_as_a_whole_word():
     assert paths.call_paths(comps)[0]["caller_settings"] == ["AD_TIMEOUT_MS=300"]
 
 
+def test_a_callee_with_its_own_recent_change_is_no_timing_out_call_path():
+    from clients.jev_diag.timeutil import set_now
+    from clients.jev_diag.v2 import changes, derive
+
+    set_now(changes.parse_time("2026-10-19T08:00:00Z"))
+    try:
+        line = "front: call to backend failed: context deadline exceeded"
+        errors = {"line": line, "state": "ongoing", "count": 30, "first_seen_seconds_ago": 60}
+        caller = {**_comp("front", "t"), "log_signals": [errors], "_call_settings": {"BACKEND_TIMEOUT_MS": "500"}}
+        snap = _snap({"deployment/front": caller, "deployment/backend": _comp("backend", "2026-10-19T07:50:00Z")})
+        found = []
+        change = {
+            "object": "deployment/backend",
+            "kind": "Deployment",
+            "name": "backend",
+            "at": "2026-10-19T07:58:00Z",
+            "affects": ["deployment/backend"],
+            "revision_changed": True,
+            "template_changes": ["container backend env WORKERS: 16 -> 1"],
+        }
+        for changed in ([], [{**change, "restart_only": True}], [change]):
+            snap.cluster["_changes"] = changed
+            derive.post_process(snap)
+            found.append(len(snap.cluster["call_paths"]))
+    finally:
+        set_now(None)
+    assert found == [1, 1, 0]  # a restart changes no setting; the WORKERS change is the callee's own
+
+
 def _two_faults(link: bool):
     comps = {
         "deployment/a": {**_comp("a", "t"), "signals": ["s"], "evidence_kinds": ["change", "symptoms"]},
