@@ -16,7 +16,7 @@ from typing import Any
 from clients.jev_diag.classifier import ChoiceResult, Diagnosis, JevDiagnoser, _sum_usage
 from clients.jev_diag.collector import ClusterSnapshot, fit_state_to_budget
 from clients.jev_diag.tree import detail_evidence
-from clients.jev_diag.v2.decide import NONE, TOP_K, pick, pick_fact, shortlist
+from clients.jev_diag.v2.decide import NONE, TOP_K, Characterization, characterize, pick, shortlist
 from clients.jev_diag.v2.explain import PARTIAL, Explanation
 from clients.jev_diag.v2.patterns import build_explanations
 from clients.jev_diag.v2.report import build_report
@@ -25,7 +25,9 @@ logger = logging.getLogger("all.jev_diag v2.agent")
 
 STATE_BUDGET = 20000  # tokens of focused evidence per decision request
 MAX_SIGNALS = 8
-KEY_FACT_REQUESTS = 2  # beyond max_requests: the key-fact question after a mechanism-unknown answer
+CHARACTERIZE_REQUESTS = 2  # beyond max_requests: v1's characterization of the root-cause component
+FAULT_TYPE_MIN_P = 0.5  # a fault type is a claim: state it only when the model is fairly sure
+PRE_READ = 6  # components read before the first question: those the initial top candidates are about
 
 
 class V2Diagnoser(JevDiagnoser):
@@ -124,6 +126,7 @@ class V2Diagnoser(JevDiagnoser):
         if not explanations:
             raise ValueError("No component shows symptoms and no change or finding was recorded; nothing to explain.")
         started = time.monotonic()
+        self._read(snapshot, self._involved(snapshot, shortlist(explanations, TOP_K))[:PRE_READ], "pre-read")
         rounds: list[dict] = []
         result = None
         candidates: list[Explanation] = []
@@ -145,11 +148,28 @@ class V2Diagnoser(JevDiagnoser):
             if route == "accept" or not self._look_closer(snapshot, candidates, route):
                 break
         winner = self._winner(result, candidates, explanations)
-        key_fact = self._key_fact(snapshot, winner) if winner.pattern == PARTIAL else None
-        if key_fact is not None:
-            winner = key_fact
+        target = self._target(snapshot, winner)
+        char = self._characterize(snapshot, target) if target else Characterization()
+        if winner.pattern == PARTIAL and char.fact:  # no pattern explains it: the picked fact is the mechanism
+            winner = Explanation(
+                key=f"key-fact:{target}",
+                pattern="key-fact",
+                origin=winner.origin,
+                mechanism=f"{char.fact}.",
+                values=[char.fact],
+                contributing=winner.contributing,
+                impact=winner.impact,
+            )
+        fault_object = self._fault_object(snapshot, winner, explanations, target)
         uncertain = route != "accept"
-        text = build_report([winner], observed=self._observed(snapshot, winner), uncertain=uncertain)
+        text = build_report(
+            [winner],
+            observed=self._observed(snapshot, winner),
+            uncertain=uncertain,
+            key_fact=char.fact,
+            fault_type=char.category if char.category_probability >= FAULT_TYPE_MIN_P else None,
+            fault_object=fault_object,
+        )
         probs = result.probabilities if result else {}
         return Diagnosis(
             component=self._component_of(snapshot, winner),
@@ -170,40 +190,83 @@ class V2Diagnoser(JevDiagnoser):
                 "explanations": len(explanations),
                 "winner": winner.key,
                 "pattern": winner.pattern,
-                "key_fact": key_fact.values[0] if key_fact else None,
+                "key_fact": char.fact,
+                "key_fact_probability": char.fact_probability,
+                "fault_type": char.category,
+                "fault_object": fault_object.origin if fault_object else None,
                 "uncertain": uncertain,
             },
             text=text,
         )
 
-    def _key_fact(self, snapshot: ClusterSnapshot, winner: Explanation) -> Explanation | None:
-        """v1's key-evidence step for a component no pattern explains: read its detail, list its facts with the
-        team's detail_evidence, and let the model pick the one that reveals the mechanism (2 extra requests)."""
-        cid = self._component_of(snapshot, winner)
-        comp = snapshot.components.get(cid)
-        if comp is None or self.fetch_detail is None or len(self.requests) + 2 > self.max_requests + KEY_FACT_REQUESTS:
-            return None
-        if cid not in self.details:
+    def _read(self, snapshot: ClusterSnapshot, cids: list[str], route: str) -> bool:
+        """Fetch detail for components not read yet; returns whether anything new was read."""
+        added = False
+        for cid in cids:
+            if self.fetch_detail is None or not cid or cid in self.details:
+                continue
             try:
                 self.details[cid] = self.fetch_detail(snapshot, cid)
             except Exception as exc:  # noqa: BLE001 - a failed read is recorded, never fatal
                 self.details[cid] = {"error": f"{type(exc).__name__}: {exc}"}
-            self._trace("collect", "detail", component=cid, route="key-fact")
-        facts = [item["text"] for item in detail_evidence(comp, self.details[cid] or {})]
+            self._trace("collect", "detail", component=cid, route=route)
+            added = True
+        return added
+
+    @staticmethod
+    def _involved(snapshot: ClusterSnapshot, candidates: list[Explanation]) -> list[str]:
+        """Components the candidates are about (origin, contributing, impact), in candidate order."""
+        by_object = {
+            f"{c.get('kind', '').lower()}/{c.get('namespace')}/{c.get('name')}": cid
+            for cid, c in snapshot.components.items()
+        }
+        out: list[str] = []
+        for e in candidates:
+            for obj in [e.origin, *e.contributing, *e.impact]:
+                cid = by_object.get(obj)
+                if cid and cid not in out:
+                    out.append(cid)
+        return out
+
+    def _target(self, snapshot: ClusterSnapshot, winner: Explanation) -> str | None:
+        """The component to characterize: the origin when it is a component, else the first one it impacts."""
+        for cid in self._involved(snapshot, [winner]):
+            return cid
+        return None
+
+    def _characterize(self, snapshot: ClusterSnapshot, cid: str) -> Characterization:
+        """v1's characterization step: read the component, list its facts with the team's detail_evidence, ask for
+        the fact that reveals the mechanism and the fault category (CHARACTERIZE_REQUESTS extra requests)."""
+        comp = snapshot.components.get(cid)
+        if comp is None or len(self.requests) + 2 > self.max_requests + CHARACTERIZE_REQUESTS:
+            return Characterization()
+        self._read(snapshot, [cid], "characterize")
+        facts = [item["text"] for item in detail_evidence(comp, self.details.get(cid) or {})]
+        if not facts:
+            return Characterization()
         state = {"application": snapshot.app, "component": self._component_view(snapshot, cid)}
-        fact, prob = pick_fact(self._ask, state, facts, rng=self.rng)
-        if fact is None:
+        char = characterize(self._ask, state, facts, rng=self.rng)
+        self._trace("decide", "characterize", component=cid, fact=char.fact, category=char.category)
+        return char
+
+    @staticmethod
+    def _fault_object(
+        snapshot: ClusterSnapshot, winner: Explanation, explanations: list[Explanation], cid: str | None
+    ) -> Explanation | None:
+        """An outside object (change or check finding) linked to the root-cause component, when the winner is that
+        component itself: v1's "Fault object" line."""
+        if not cid or winner.pattern not in (PARTIAL, "key-fact", "own-setting", "change", "dependency"):
             return None
-        self._trace("decide", "key-fact", component=cid, fact=fact, probability=prob)
-        return Explanation(
-            key=f"key-fact:{cid}",
-            pattern="key-fact",
-            origin=winner.origin,
-            mechanism=f"{fact}.",
-            values=[fact],
-            contributing=winner.contributing,
-            impact=winner.impact,
-        )
+        comp = snapshot.components.get(cid) or {}
+        me = f"{comp.get('kind', '').lower()}/{comp.get('namespace')}/{comp.get('name')}"
+        if winner.origin != me:
+            return None
+        linked = [
+            e
+            for e in shortlist(explanations, len(explanations))
+            if e.pattern == "acts-on" and e.origin != me and me in e.impact and not e.contradicted()
+        ]
+        return linked[0] if linked else None
 
     @staticmethod
     def _winner(result, candidates: list[Explanation], explanations: list[Explanation]) -> Explanation:
