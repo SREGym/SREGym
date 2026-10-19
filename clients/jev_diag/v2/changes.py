@@ -310,14 +310,13 @@ def restart_only(diffs: list[str]) -> bool:
     return bool(diffs) and all(RESTART_ANNOTATION in d for d in diffs)
 
 
-def deploy_revision(revs: list[dict], created: datetime | None, deployed: datetime | None) -> dict:
-    """The revision current when the workload was deployed: the newest one created by MIN_CHANGE_SECONDS after the
-    later of the application's deploy time and the workload's own creation (a write that close is part of deploying
-    it), else the oldest one kept."""
-    start = max((t for t in (created, deployed) if t), default=None)
-    if start is None:
+def deploy_revision(revs: list[dict], deployed: datetime | None) -> dict:
+    """The revision current when the application was deployed: the newest one created by MIN_CHANGE_SECONDS after
+    the deploy time (a write that close is part of deploying), else the oldest one kept. A workload created later,
+    for example deleted and re-created by the fault, is compared with its first revision."""
+    if deployed is None:
         return revs[0]
-    cutoff = start + timedelta(seconds=MIN_CHANGE_SECONDS)
+    cutoff = deployed + timedelta(seconds=MIN_CHANGE_SECONDS)
     deployed_revs = [r for r in revs if (at := parse_time(r.get("created"))) and at <= cutoff]
     return deployed_revs[-1] if deployed_revs else revs[0]
 
@@ -329,7 +328,7 @@ def attach_template_changes(components: dict[str, dict], revisions: dict, deploy
         revs = revisions.get((comp["namespace"], comp["kind"], comp["name"])) or []
         if len(revs) < 2:
             continue
-        previous, current = deploy_revision(revs, parse_time(comp.get("created")), deployed), revs[-1]
+        previous, current = deploy_revision(revs, deployed), revs[-1]
         diff = template_diff(previous["template"], current["template"])
         if diff:
             comp["template_changes"] = {
