@@ -1,18 +1,22 @@
 """The submitted diagnosis, built by code from the investigation's choices and the collected facts. No model
 writes text.
 
-Five lines, in this order: Root cause, Mechanism, Details, Effect, Affected. The subject of the root-cause sentence
-is the object that holds the bad value or the bad state, and the other object involved is named in the same
-sentence with a relation word ("acting on", "its ConfigMap"). Changed values are written old -> new. Callers with
-symptoms are listed as affected, never as causes. There is no fault-category line and no probabilities.
+Lines, in this order: Root cause, Mechanism, Details, Effect, Observed, Affected. The subject of the root-cause
+sentence is the object that holds the bad value or the bad state, and the other object involved is named in the same
+sentence with its relation. Which object that is depends on the kind of relation (RELATIONS: a blocked input, a
+retry call path, a job driving a failing component, an object carrying the bad value, one change on several
+workloads, or the workload itself). Changed values are written old -> new. Callers with symptoms are listed as
+affected, never as causes. There is no fault-category line and no probabilities. A second, independent cause gets its
+own block.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 from clients.jev_diag.timeutil import parse_time, seconds_between
-from clients.jev_diag.v2 import paths
+from clients.jev_diag.v2 import checks, paths
 from clients.jev_diag.v2.classifier import CARRIER_KINDS, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot
 from clients.jev_diag.v2.derive import TELEMETRY_RE
@@ -127,6 +131,34 @@ def feedback_path(snapshot: ClusterSnapshot, d: Diagnosis) -> dict | None:
     return None
 
 
+RUN_TO_COMPLETION = ("Job", "CronJob", "Pod")
+BROKERS = {"kafka": "Kafka", "redpanda": "Redpanda", "pulsar": "Pulsar", "nats": "NATS", "rabbitmq": "RabbitMQ"}
+
+
+def driven_target(snapshot: ClusterSnapshot, d: Diagnosis) -> str | None:
+    """A Job (or other run-to-completion workload) concluded as the cause that calls a component failing on its
+    own: the failing component is the broken thing and leads the report, the Job is named as its driver."""
+    comp = snapshot.components.get(d.component) or {}
+    if comp.get("kind") not in RUN_TO_COMPLETION or d.fault_object:
+        return None
+    failing = [
+        c
+        for c in comp.get("_calls") or []
+        if c in snapshot.components and "symptoms" in (snapshot.components[c].get("evidence_kinds") or [])
+    ]
+    return failing[0] if len(failing) == 1 else None
+
+
+def broker_technology(snapshot: ClusterSnapshot) -> str | None:
+    """The message broker the application runs, from its workloads' names and images."""
+    for comp in snapshot.components.values():
+        text = " ".join([comp.get("name") or "", *[str(c.get("image") or "") for c in comp.get("containers") or []]])
+        for key, label in BROKERS.items():
+            if key in text.lower():
+                return label
+    return None
+
+
 def path_phrase(snapshot: ClusterSnapshot, path: dict) -> str:
     caller, callee = snapshot.components[path["caller"]], snapshot.components[path["callee"]]
     where = f" in namespace `{callee['namespace']}`" if caller["namespace"] == callee["namespace"] else ""
@@ -136,45 +168,157 @@ def path_phrase(snapshot: ClusterSnapshot, path: dict) -> str:
     )
 
 
-def subject(snapshot: ClusterSnapshot, d: Diagnosis) -> tuple[str, str | None]:
-    """(subject phrase, object named alongside it) by where the bad value lives."""
-    comp = snapshot.components.get(d.component)
-    fo = d.fault_object
-    app_namespaces = set(snapshot.app.get("namespaces") or [])
-    if comp is not None and d.blocked_input:
-        blocked = d.blocked_input
-        source = blocked.get("topic") or blocked.get("input")
-        env = re.match(r"env (\S+?)=(.+)", str(source or ""))
-        if env:
-            source = f"{env.group(2)}` (named by env `{env.group(1)}"
-        if source:
-            return f"the input `{source}` consumed by {describe(comp['kind'], comp['name'], comp['namespace'])}", None
+@dataclass
+class Cause:
+    """Where the fault lives, as the report states it: `subject` holds the bad value or state, `related` names the
+    other object with its relation, `fact` says what is wrong, `mechanism` holds the lines this relation adds, and
+    `broken` is the component whose state, effects and callers are reported."""
+
+    subject: str
+    fact: str | None = None
+    related: str | None = None
+    mechanism: list[str] = field(default_factory=list)
+    broken: dict | None = None
+    own_error: bool = True  # the concluded component's own error line belongs in the mechanism
+
+
+def blocked_input_cause(snapshot: ClusterSnapshot, d: Diagnosis, comp: dict) -> Cause | None:
+    """One input item keeps failing and blocks its consumer: the input, named by its value (a topic when its env
+    name or the broker says so), is the subject."""
+    b = d.blocked_input or {}
+    source = b.get("topic") or b.get("input")
+    if not comp or not source:
+        return None
+    env = re.match(r"env (\S+?)=(.+)", str(source))
+    value, via = (env.group(2), env.group(1)) if env else (str(source), None)
+    topic = bool(b.get("topic")) or bool(via and "topic" in via.lower())
+    noun = f"{broker_technology(snapshot) or ''} topic".strip() if topic else "input"
+    named = f" (named by env `{via}`)" if via else ""
+    return Cause(subject=f"the {noun} `{value}`{named} consumed by {_where(comp)}", broken=comp)
+
+
+def call_path_cause(snapshot: ClusterSnapshot, d: Diagnosis, comp: dict) -> Cause | None:
+    """A caller retries timed-out calls into a callee that caps its throughput: the call path is the subject."""
     path = None if d.blocked_input else feedback_path(snapshot, d)
-    if path:
-        return path_phrase(snapshot, path), None
-    if fo:
-        fo_phrase = describe(fo["kind"], fo["name"], fo.get("namespace"))
-        outside = not fo.get("namespace") or fo.get("namespace") not in app_namespaces
-        if comp is None:
-            return fo_phrase, None
-        acted = describe(comp["kind"], comp["name"], comp["namespace"])
-        if fo["kind"] in CARRIER_KINDS or fo["kind"] == "NetworkPolicy" or outside:
-            return f"{fo_phrase}, acting on {acted}", None
-        if fo["kind"] == "Service":
-            return f"{fo_phrase} (selecting {acted})", None
-        if fo["kind"] in CONFIG_KINDS:
-            users = users_of(snapshot, fo)
-            if len(users) > 1:
-                return f"{fo_phrase}, used by {', '.join(users)}", None
-            return component_phrase(comp, both_kinds=True), f"through its {fo['kind']} `{fo['name']}`"
-    if comp is None:
-        return f"`{d.component}`", None
-    has_change = "change" in (comp.get("evidence_kinds") or []) or bool(changed_values(comp))
-    group = same_change(snapshot, d.component) if has_change else []
-    if group:
-        names = ", ".join(f"`{snapshot.components[c]['name']}`" for c in [d.component, *group])
-        return f"{comp['kind']}s {names} in namespace `{comp['namespace']}` (the same change on {len(group) + 1})", None
-    return component_phrase(comp, both_kinds=not has_change), None
+    if path is None:
+        return None
+    names = {cid: c.get("name") or cid for cid, c in snapshot.components.items()}
+    return Cause(
+        subject=path_phrase(snapshot, path),
+        fact=paths.describe(path, names),
+        mechanism=[f'{names[path["caller"]]} logs "{quote(path["example"])}"'],
+        broken=comp,
+        own_error=d.component != path["caller"],
+    )
+
+
+def driver_cause(snapshot: ClusterSnapshot, d: Diagnosis, comp: dict) -> Cause | None:
+    """A run-to-completion workload calls one component that fails on its own: the failing component is the
+    subject and the workload its driver; the workload's command and decoded script explain how."""
+    target = None if d.blocked_input else driven_target(snapshot, d)
+    if target is None:
+        return None
+    broken = snapshot.components[target]
+    state = [x for x in broken.get("signals") or [] if STATE_WORDS.search(x)]
+    own = [x for x in comp.get("signals") or [] if not x.startswith(_POINTERS)]
+    mechanism = [
+        f"{describe(comp['kind'], comp['name'], None)} calls {broken['name']}"
+        + (f" ({own[0].rstrip('.')})" if own else "")
+    ]
+    scripts = [
+        " ".join(text.split())
+        for ct in comp.get("containers") or []
+        for arg in [*(ct.get("command") or []), *(ct.get("args") or [])]
+        for text in checks.decoded_payloads(str(arg))
+    ]
+    if scripts:
+        mechanism.append(f"the script it runs (decoded from base64): {scripts[0][: QUOTE_CHARS * 2]}")
+    return Cause(
+        subject=f"{component_phrase(broken, both_kinds=True)}, driven by {describe(comp['kind'], comp['name'], None)}, "
+        "which calls it",
+        fact=next((x for x in state if re.search(r"(?i)OOMKilled|limit|evicted", x)), state[0] if state else None),
+        mechanism=mechanism,
+        broken=broken,
+        own_error=False,
+    )
+
+
+def fault_object_cause(snapshot: ClusterSnapshot, d: Diagnosis, comp: dict) -> Cause | None:
+    """Another object carries the bad value: a policy, webhook or outside object acting on the workload, a Service
+    selecting it, or a ConfigMap/Secret (the object itself when shared, else the workload through it)."""
+    fo = d.fault_object
+    if not fo:
+        return None
+    phrase = describe(fo["kind"], fo["name"], fo.get("namespace"))
+    if not comp:
+        return Cause(subject=phrase)
+    outside = not fo.get("namespace") or fo.get("namespace") not in set(snapshot.app.get("namespaces") or [])
+    if fo["kind"] in CARRIER_KINDS or fo["kind"] == "NetworkPolicy" or outside:
+        return Cause(subject=f"{phrase}, acting on {_where(comp)}", broken=comp)
+    if fo["kind"] == "Service":
+        return Cause(subject=f"{phrase} (selecting {_where(comp)})", broken=comp)
+    if fo["kind"] in CONFIG_KINDS:
+        users = users_of(snapshot, fo)
+        if len(users) > 1:
+            return Cause(subject=f"{phrase}, used by {', '.join(users)}", broken=comp)
+        return Cause(
+            subject=component_phrase(comp, both_kinds=True),
+            related=f"through its {fo['kind']} `{fo['name']}`",
+            broken=comp,
+        )
+    return None
+
+
+def common_change_cause(snapshot: ClusterSnapshot, d: Diagnosis, comp: dict) -> Cause | None:
+    """The same pod template change applied to several workloads at once: one cause naming all of them."""
+    if not comp or not _has_change(comp):
+        return None
+    group = same_change(snapshot, d.component)
+    if not group:
+        return None
+    names = ", ".join(f"`{snapshot.components[c]['name']}`" for c in [d.component, *group])
+    return Cause(
+        subject=f"{comp['kind']}s {names} in namespace `{comp['namespace']}` (the same change on {len(group) + 1})",
+        broken=comp,
+    )
+
+
+def component_cause(snapshot: ClusterSnapshot, d: Diagnosis, comp: dict) -> Cause:
+    """The workload itself (with its Service of the same name when nothing of it was changed)."""
+    if not comp:
+        return Cause(subject=f"`{d.component}`")
+    return Cause(subject=component_phrase(comp, both_kinds=not _has_change(comp)), broken=comp)
+
+
+# The relation kinds a cause can have, most specific first; the first that applies names the cause.
+RELATIONS = (
+    blocked_input_cause,
+    call_path_cause,
+    driver_cause,
+    fault_object_cause,
+    common_change_cause,
+    component_cause,
+)
+
+
+def locate(snapshot: ClusterSnapshot, d: Diagnosis) -> Cause:
+    comp = snapshot.components.get(d.component) or {}
+    return next(c for c in (rule(snapshot, d, comp) for rule in RELATIONS) if c is not None)
+
+
+def _where(comp: dict) -> str:
+    return describe(comp["kind"], comp["name"], comp["namespace"])
+
+
+def _has_change(comp: dict) -> bool:
+    return "change" in (comp.get("evidence_kinds") or []) or bool(changed_values(comp))
+
+
+def blocked_mechanism(b: dict) -> str:
+    if b.get("source") == "broker":
+        return f"consumer group {b.get('group')} is stalled at offset {b.get('offset')} of topic {b.get('topic')}"
+    evidence = f": {b['evidence']}" if b.get("evidence") else ""
+    return f"one input item fails processing again and again and blocks the items behind it{evidence}"
 
 
 def build_report(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
@@ -185,61 +329,49 @@ def build_report(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
 
 
 def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
+    """Root cause, Mechanism, Details, Effect, Observed, Affected for one cause."""
     comp = snapshot.components.get(d.component) or {}
     fo = d.fault_object
-    subj, carrier = subject(snapshot, d)
-    fact = key_fact(d)
+    cause = locate(snapshot, d)
     changes = changed_values(comp)
-    path = None if d.blocked_input else feedback_path(snapshot, d)
-    names = {cid: c.get("name") or cid for cid, c in snapshot.components.items()}
-    what = (paths.describe(path, names) if path else None) or fact or (fo or {}).get("signal")
-    what = what or (changes[0] if changes else None)
-    if what is None:
-        what = next((s for s in comp.get("signals") or [] if not STATE_WORDS.search(s)), None)
-    first = f"Root cause: {subj}" + (f", {carrier}" if carrier else "")
-    lines = [first + (f": {what.rstrip('.')}." if what else ".")]
+    fact = cause.fact or key_fact(d) or (fo or {}).get("signal") or (changes[0] if changes else None)
+    if fact is None:
+        fact = next((s for s in comp.get("signals") or [] if not STATE_WORDS.search(s)), None)
+    head = f"Root cause: {cause.subject}" + (f", {cause.related}" if cause.related else "")
+    lines = [head + (f": {fact.rstrip('.')}." if fact else ".")]
 
-    error = own_error_line(comp) if comp else None
-    mechanism = None
-    if d.blocked_input and comp:
-        b = d.blocked_input
-        mechanism = (
-            f"one input item fails processing again and again and blocks the items behind it: {b.get('evidence')}"
-            if b.get("source") != "broker"
-            else f"consumer group {b.get('group')} is stalled at offset {b.get('offset')} of topic {b.get('topic')}"
-        )
-    elif fo and fo.get("signal") and fo["signal"] != what:
-        mechanism = fo["signal"]
-    parts = [m.rstrip(".") for m in (mechanism,) if m]
-    if path:
-        parts.append(f'{names[path["caller"]]} logs "{quote(path["example"])}"')
-        error = None if d.component == path["caller"] else error
-    if error and (not what or error not in what):
+    lead = blocked_mechanism(d.blocked_input) if d.blocked_input and comp else (fo or {}).get("signal")
+    parts = [m.rstrip(".") for m in [lead, *cause.mechanism] if m and m != fact]
+    error = own_error_line(comp) if comp and cause.own_error else None
+    if error and (not fact or error not in fact):
         parts.append(f'the component logs "{error}"')
     if not parts and comp:
         # no error line: the component's own signal that says why, never a repeat of the root-cause line
-        own = [x for x in comp.get("signals") or [] if x != what and not x.startswith(_POINTERS)]
+        own = [x for x in comp.get("signals") or [] if x != fact and not x.startswith(_POINTERS)]
         plain = [x for x in own if not STATE_WORDS.search(x)]  # state lines belong to the Effect line
         pick = next((x for x in own if _CAUSAL.search(x)), plain[0] if plain else None)
         if pick:
             parts.append(pick.rstrip("."))
     if parts:
-        lines.append("Mechanism: " + "; ".join(parts) + ".")
+        lines.append("Mechanism: " + "; ".join(dict.fromkeys(parts)) + ".")
 
-    details = [c for c in changes if c != what]
+    details = [c for c in changes if c != fact]
     for step in (d.investigation or {}).get("steps") or []:
         if step.get("component") == d.component:
-            details += [x for x in step.get("spec_checks") or [] if x != what]
+            details += [x for x in step.get("spec_checks") or [] if x != fact]
     details = list(dict.fromkeys(x.rstrip(".") for x in details if x))[:MAX_DETAILS]
     if details:
         lines.append("Details: " + "; ".join(details) + ".")
 
-    if comp:
+    broken = cause.broken or {}
+    if broken:
         shown = "\n".join(lines)
-        state = [s for s in comp.get("signals") or [] if STATE_WORDS.search(s) and s.rstrip(".") not in shown][:2]
-        effects = [s.rstrip(".") for s in state]
+        effects = [
+            s.rstrip(".") for s in broken.get("signals") or [] if STATE_WORDS.search(s) and s.rstrip(".") not in shown
+        ]
+        effects = effects[:2]
         classes: dict[str, int] = {}
-        for by_class in (comp.get("referenced_by_errors_from") or {}).values():
+        for by_class in (broken.get("referenced_by_errors_from") or {}).values():
             for klass, n in by_class.items():
                 classes[klass] = classes.get(klass, 0) + n
         if classes:
@@ -249,14 +381,14 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
             lines.append(f"Effect: {'; '.join(effects)}.")
         # the cause's other own facts, so every part involved (containers, jobs, accounts) is named
         shown = "\n".join(lines)
-        observed = [x.rstrip(".") for x in comp.get("signals") or [] if not x.startswith(_POINTERS)]
+        observed = [x.rstrip(".") for x in broken.get("signals") or [] if not x.startswith(_POINTERS)]
         observed = [x for x in dict.fromkeys(observed) if x not in shown][:MAX_OBSERVED]
         if observed:
             lines.append("Observed: " + "; ".join(observed) + ".")
 
     affected: list[str] = []
     for src, by_class in sorted(
-        (comp.get("referenced_by_errors_from") or {}).items(), key=lambda kv: -sum(kv[1].values())
+        (broken.get("referenced_by_errors_from") or {}).items(), key=lambda kv: -sum(kv[1].values())
     )[:MAX_AFFECTED]:
         other = snapshot.components.get(src) or {}
         name = describe(other.get("kind", "component"), other.get("name", src), other.get("namespace"))
