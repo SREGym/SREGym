@@ -6,8 +6,9 @@ Both uses are keyed by backend roles (derive.ROLE_SYNONYMS), not by any particul
   its log end grows, and that has an active consumer, is stalled at that offset. The group, topic, and offset
   come from the broker; the consumer is mapped to a component by its pod IP.
 * A protocol health command inside a backend that looks healthy while a client's errors name it (PING,
-  pg_isready, a mongo ping). The output is mapped to a meaning in code, and the client's credential settings are
-  read from its env var names (values are never read).
+  pg_isready, mysqladmin ping, a MongoDB listDatabases, which fails without a login when the server requires one).
+  The output is mapped to a meaning in code, and the client's credential settings are read from its env var names
+  (values are never read).
 
 A command runs only when the target container has room for it: its memory limit minus its current usage must
 cover the tool's footprint. A second process in a container near its memory limit gets the container OOM-killed,
@@ -35,6 +36,7 @@ DEFAULT_BROKER_INTERVAL = 15
 # pg_isready 6.3Mi of which 0.9Mi anonymous; the rest is file-backed (binary, libraries), which the kernel reclaims
 # under cgroup pressure instead of OOM-killing. 3Mi leaves ~3x margin over the anonymous part.
 NATIVE_TOOL_BYTES = 3 * 1024**2
+LEGACY_SHELL_TOOL_BYTES = 128 * 1024**2  # legacy mongo shell (SpiderMonkey JavaScript engine)
 SHELL_TOOL_BYTES = 256 * 1024**2  # mongosh (Node.js)
 JVM_TOOL_BYTES = 768 * 1024**2  # Kafka command-line tools start a JVM
 
@@ -231,7 +233,12 @@ def broker_progress(
 
 # --------------------------------------------------------------------------- backend health probe
 
-# (command, memory the command needs in the target container beyond its current usage)
+# A read-only command that needs authentication when the server requires it; prints the server's error text.
+_MONGO_EVAL = (
+    "try { var r = db.adminCommand({listDatabases: 1, nameOnly: true}); print(r.ok ? 'listDatabases ok' : r.errmsg) }"
+    " catch (e) { print(e.message) }"
+)
+# (command, memory the command needs in the target container beyond its current usage); "{port}" is replaced
 _BACKEND_COMMANDS: dict[str, tuple[tuple[list[str], int], ...]] = {
     "redis": (
         (["valkey-cli", "-p", "{port}", "ping"], NATIVE_TOOL_BYTES),
@@ -239,25 +246,25 @@ _BACKEND_COMMANDS: dict[str, tuple[tuple[list[str], int], ...]] = {
     ),
     "postgresql": ((["pg_isready", "-h", "127.0.0.1", "-p", "{port}"], NATIVE_TOOL_BYTES),),
     "mongodb": (
-        (["mongo", "--quiet", "--port", "{port}", "--eval", "db.runCommand({ping:1}).ok"], 32 * 1024**2),
-        (["mongosh", "--quiet", "--port", "{port}", "--eval", "db.runCommand({ping:1}).ok"], SHELL_TOOL_BYTES),
+        (["mongo", "--quiet", "--port", "{port}", "--eval", _MONGO_EVAL], LEGACY_SHELL_TOOL_BYTES),
+        (["mongosh", "--quiet", "--port", "{port}", "--eval", _MONGO_EVAL], SHELL_TOOL_BYTES),
     ),
     "mysql": ((["mysqladmin", "-h", "127.0.0.1", "-P", "{port}", "ping"], NATIVE_TOOL_BYTES),),
 }
 _MEANINGS = (
     (
         re.compile(
-            r"(?i)NOAUTH|authentication required|requires authentication|Unauthorized|auth(?:entication)? failed"
+            r"(?i)NOAUTH|authentication required|requires authentication|Unauthorized|not authorized on|"
+            r"auth(?:entication)? failed"
         ),
         "the server requires authentication for this command",
     ),
     (re.compile(r"(?i)WRONGPASS|invalid password|access denied"), "the server rejected the credentials"),
-    (re.compile(r"\bPONG\b"), "the server answers without authentication"),
+    (re.compile(r"\bPONG\b|\blistDatabases ok\b"), "the server answers without authentication"),
     (re.compile(r"accepting connections"), "the server accepts connections"),
     (re.compile(r"rejecting connections"), "the server is rejecting connections"),
     (re.compile(r"\bLOADING\b"), "the server is still loading its dataset"),
     (re.compile(r"mysqld is alive"), "the server answers a ping"),
-    (re.compile(r"(?m)^\s*1\s*$"), "the server answers a ping"),
     (
         re.compile(r"(?i)no response|connection refused|could not connect|connect: "),
         "the server does not answer on its own port",
@@ -291,7 +298,7 @@ def backend_probe(snapshot: ClusterSnapshot, cid: str, client_cid: str | None = 
         if not ok:
             logger.info("skipping %s in %s/%s: %s", template[0], comp["namespace"], pod, why)
             continue
-        command = [part.format(port=port) for part in template]
+        command = [part.replace("{port}", str(port)) for part in template]
         rc, text = run_in_pod(comp["namespace"], pod, container, command)
         if _missing_binary(rc, text) and "NOAUTH" not in text:
             continue
