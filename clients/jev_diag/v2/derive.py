@@ -599,6 +599,7 @@ SYMPTOM_MARKERS = (
     "unschedulable",
     "more time(s) in the last",
     "rejects logins for account",
+    "rolling restart",
 )
 CHANGE_MARKERS = ("spec modified", "was modified", "was written", "was created", "created ", "pod template changed")
 POINTED_MARKERS = ("errors logged by", "server ")
