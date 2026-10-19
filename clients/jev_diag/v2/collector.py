@@ -356,6 +356,8 @@ def summarize_workload(obj: dict) -> dict:
                 env_values.append(str(e["value"]))
                 env_hosts |= checks.env_host_candidates(str(e["value"]))
                 call_settings.update(paths.setting_pairs({e.get("name") or "": str(e["value"])}))
+        for text in [*(c.get("command") or []), *(c.get("args") or [])]:
+            env_hosts |= checks.command_host_candidates(str(text))
         env_from = []
         for ref in c.get("envFrom", []) or []:
             if ref.get("configMapRef"):

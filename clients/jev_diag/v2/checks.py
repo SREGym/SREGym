@@ -12,6 +12,7 @@ cause, and none depends on when the application was deployed or on what a partic
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 
@@ -165,6 +166,28 @@ def env_host_candidates(value: str) -> set[str]:
         if not found and _BARE_HOST_RE.match(part):
             out.add(part.lower())
     return out
+
+
+_B64_RE = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+_HOST_TOKEN_RE = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
+
+
+def decoded_payloads(text: str) -> list[str]:
+    """Text payloads a command carries base64-encoded."""
+    out = []
+    for blob in _B64_RE.findall(text or ""):
+        try:
+            out.append(base64.b64decode(blob + "=" * (-len(blob) % 4)).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+    return out
+
+
+def command_host_candidates(text: str) -> set[str]:
+    """Host names a container command or argument could address, also inside base64 payloads it decodes. Only
+    names that match one of the application's Services are kept later (resolve_env_hosts)."""
+    texts = [text or "", *decoded_payloads(text)]
+    return {tok for t in texts for tok in _HOST_TOKEN_RE.findall(t.lower())}
 
 
 def service_host_index(components: dict[str, dict]) -> dict[str, tuple[str, str]]:
