@@ -500,3 +500,20 @@ def test_failures_the_cause_does_not_explain_can_add_a_second_independent_cause(
     client = _Answers(triage, origin, picks={"fault_start": "both"})
     d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_two_faults(link=True))
     assert d.second is None and [s["component"] for s in d.investigation["steps"]] == ["deployment/a"]
+
+
+def test_report_states_only_what_the_facts_show_for_a_job_that_never_completes():
+    from clients.jev_diag.v2.report import build_report
+
+    comp = {
+        **_comp("archiver", "t"),
+        "kind": "CronJob",
+        "signals": [
+            "4 jobs of this cronjob are active without completing (they pile up)",
+            "pod a-1: container main completed but container side keeps running, so this job pod never completes",
+        ],
+    }
+    text = build_report(_snap({"cronjob/archiver": comp}), _diag("cronjob/archiver", "container side command: nc -lk"))
+    assert "Mechanism: pod a-1: container main completed but container side keeps running" in text
+    assert "Running and Ready" not in text and text.count("nc -lk") == 1
+    assert "Effect: 4 jobs of this cronjob are active without completing (they pile up)." in text

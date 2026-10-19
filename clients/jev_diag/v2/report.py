@@ -25,8 +25,11 @@ SAME_CHANGE_SECONDS = 10  # one change applied to several workloads lands within
 # Signals that state the component's own condition (used for the Effect line).
 STATE_WORDS = re.compile(
     r"(?i)desired replicas are ready|CrashLoopBackOff|OOMKilled|ready endpoints|Pending|Unschedulable|"
-    r"ImagePullBackOff|ErrImagePull|not ready|restarted|terminat|evicted|at its limit|failed to start"
+    r"ImagePullBackOff|ErrImagePull|not ready|restarted|terminat|evicted|at its limit|failed to start|"
+    r"complet|still active|pile up"
 )
+_CAUSAL = re.compile(r"(?i)\bso\b|because|which (?:is|are|blocks|prevents)")
+_POINTERS = ("errors logged by", "server ")
 _CONTAINER = re.compile(r"\bcontainer \S+ ")
 _TIMESTAMP = re.compile(r"^\[?\S*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s\]]*\]?\s*")
 _JSON_MSG = re.compile(r'"msg"\s*:\s*"(?P<msg>[^"]+)"')
@@ -209,8 +212,13 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
         error = None if d.component == path["caller"] else error
     if error and (not what or error not in what):
         parts.append(f'the component logs "{error}"')
-    if not parts and what:
-        parts.append(what.rstrip("."))
+    if not parts and comp:
+        # no error line: the component's own signal that says why, never a repeat of the root-cause line
+        own = [x for x in comp.get("signals") or [] if x != what and not x.startswith(_POINTERS)]
+        plain = [x for x in own if not STATE_WORDS.search(x)]  # state lines belong to the Effect line
+        pick = next((x for x in own if _CAUSAL.search(x)), plain[0] if plain else None)
+        if pick:
+            parts.append(pick.rstrip("."))
     if parts:
         lines.append("Mechanism: " + "; ".join(parts) + ".")
 
@@ -223,16 +231,22 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
         lines.append("Details: " + "; ".join(details) + ".")
 
     if comp:
-        state = [s for s in comp.get("signals") or [] if STATE_WORDS.search(s)][:2]
-        effect = "; ".join(s.rstrip(".") for s in state) if state else "its pods are Running and Ready"
+        shown = "\n".join(lines)
+        state = [s for s in comp.get("signals") or [] if STATE_WORDS.search(s) and s.rstrip(".") not in shown][:2]
+        pods = comp.get("pods") or []
+        all_ready = bool(pods) and all(
+            str(p.get("ready", "0/1")).split("/")[0] == str(p.get("ready", "0/1")).split("/")[-1] for p in pods
+        )
+        effects = [s.rstrip(".") for s in state] or (["its pods are Running and Ready"] if all_ready else [])
         classes: dict[str, int] = {}
         for by_class in (comp.get("referenced_by_errors_from") or {}).values():
             for klass, n in by_class.items():
                 classes[klass] = classes.get(klass, 0) + n
         if classes:
             seen = ", ".join(f"{k} ({n} lines)" for k, n in sorted(classes.items(), key=lambda kv: -kv[1])[:3])
-            effect += f"; its callers see {seen}"
-        lines.append(f"Effect: {effect}.")
+            effects.append(f"its callers see {seen}")
+        if effects:
+            lines.append(f"Effect: {'; '.join(effects)}.")
 
     affected: list[str] = []
     for src, by_class in sorted(
