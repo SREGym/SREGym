@@ -55,6 +55,7 @@ BLOCKED_QUESTION = "blocked_input"
 INPUT_QUESTION = "input_source"
 PAIR_QUESTION = "faulty_side"
 TIEBREAK_QUESTION = "fault_start"
+LOCATION_QUESTION = "fault_location"
 NONE_OPTION = "none"
 BOTH_OPTION = "both"
 
@@ -73,6 +74,8 @@ CHAIN_NEXT_PROBABILITY = 0.9
 MIN_BLOCKED_PROBABILITY = 0.5
 MIN_PAIR_PROBABILITY = 0.5
 MIN_BOTH_PROBABILITY = 0.5  # two independent causes are reported only on this much support
+MIN_PATH_PROBABILITY = 0.5  # the call path is reported as the cause only on this much support
+DECISIVE_TRIAGE_PROBABILITY = 0.9  # a first triage answer this sure is not asked again
 MAX_NEXT_OPTIONS = 12
 MAX_EVIDENCE = 32
 DETAIL_TOKEN_BUDGET = 22000
@@ -383,7 +386,29 @@ def build_investigation_questions(
             "`candidate.detail.input_candidates` names that source?",
             criteria=options,
         )
+    loops = component_loops(snapshot, cid)
+    if loops:
+        options = {"component": "The fault is in `candidate`'s own state or settings."}
+        for i, path in enumerate(loops):
+            options[f"P{i + 1}"] = (
+                f"The fault is the interaction on the call path from `{path['caller']}` to `{path['callee']}` "
+                "(`call_paths` in `candidate`): each side's settings may look valid alone, but the caller's timeouts "
+                "and retries together with the callee's capacity limits keep the calls failing."
+            )
+        questions[LOCATION_QUESTION] = Choice(
+            instructions={"question": "Is the fault in `candidate` itself, or in the interaction on a call path?"},
+            criteria=options,
+        )
     return questions
+
+
+def component_loops(snapshot: ClusterSnapshot, cid: str) -> list[dict]:
+    """Timing-out call paths with a retry/capacity loop that `cid` is one end of."""
+    return [
+        p
+        for p in snapshot.cluster.get("call_paths") or []
+        if p.get("feedback_loop") and cid in (p["caller"], p["callee"])
+    ]
 
 
 def build_cluster_questions(findings: list[dict]) -> dict[str, Choice]:
@@ -686,6 +711,15 @@ class IterativeDiagnoser(JevDiagnoser):
             ChoiceResult.from_answer(response.choices[INPUT_QUESTION]) if INPUT_QUESTION in response.choices else None
         )
         key_text = next((e["text"] for e in evidence if key and e["id"] == key.choice), None)
+        location = (
+            ChoiceResult.from_answer(response.choices[LOCATION_QUESTION])
+            if LOCATION_QUESTION in response.choices
+            else None
+        )
+        call_path = None
+        if location and location.choice.startswith("P"):
+            if location.probabilities.get(location.choice, 0.0) >= MIN_PATH_PROBABILITY:
+                call_path = component_loops(snapshot, cid)[int(location.choice[1:]) - 1]
         blocked = None
         if blocked_p is not None and blocked_p >= MIN_BLOCKED_PROBABILITY:
             repeated = (detail.get("logs") or {}).get("repeated_failures") or []
@@ -712,6 +746,7 @@ class IterativeDiagnoser(JevDiagnoser):
             "category": category,
             "key_evidence": key,
             "blocked_input": blocked,
+            "call_path": call_path,
             "probe": detail.get("probe"),
             "evidence": evidence,
             "detail_tokens": estimate_tokens(fitted),
@@ -1120,6 +1155,7 @@ class IterativeDiagnoser(JevDiagnoser):
             "category": category,
             "key": key,
             "evidence": evidence,
+            "call_path": (chosen_result or {}).get("call_path"),
             "origin_p": chosen_result["origin_p"] if chosen_result else None,
             "fault_object": cluster_pick or self.fault_object(snapshot, concluded, category, kind),
             "blocked": blocked,
@@ -1141,6 +1177,7 @@ class IterativeDiagnoser(JevDiagnoser):
             fault_kind_result=kind,
             fault_object=info["fault_object"],
             blocked_input=info["blocked"],
+            call_path=info.get("call_path"),
             trims={},
         )
 

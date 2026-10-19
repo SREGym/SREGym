@@ -467,7 +467,8 @@ def test_a_caller_retrying_into_a_capped_callee_is_reported_as_the_call_path():
     assert found[0]["feedback_loop"] and comps["deployment/b"]["call_paths"]
     snap = _snap(comps)
     snap.cluster["call_paths"] = found
-    text = report.build_report(snap, _diag("deployment/b"))
+    assert report.build_report(snap, _diag("deployment/b")).startswith("Root cause: Deployment `b`")  # model's pick
+    text = report.build_report(snap, _diag("deployment/b", call_path=found[0]))  # the model chose the path
     assert text.startswith("Root cause: the call path from Deployment `a` to Deployment `b` in namespace `shop`")
     assert "B_BACKEND_QPS_LIMIT=20" in text and "DeadlineExceeded" in text
     callee["signals"] = ["pod b-1: restarted 3 times"]  # a callee failing on its own is not a call-path fault
