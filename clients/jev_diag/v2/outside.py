@@ -74,7 +74,7 @@ def collect_outside(
 ) -> list[dict]:
     """Outside objects as findings ({kind, name, namespace, signals, components}); change records are appended to
     `changes`. `pod_priority` maps a PriorityClass name to the components whose pods use it."""
-    apps_created = [c.get("created") for c in components.values()]
+    apps_created = [c.get("created") for c in components.values() if not c.get("related")]
     services = _service_index(components)
     ready = {
         f"{c['namespace']}/{s.get('name')}": s.get("ready_endpoints")
