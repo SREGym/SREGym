@@ -9,6 +9,12 @@ from __future__ import annotations
 from clients.jev_diag.classifier import CATEGORY_GLOSS
 from clients.jev_diag.v2.explain import PARTIAL, Explanation
 
+WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset", "cronjob", "job", "replicaset", "pod"}
+# Patterns whose root cause is one component: its observed impact is the component itself (callers that fail as a
+# result are evidence, not scope), and a generic mechanism gives way to the concrete key fact.
+COMPONENT_LEVEL = {PARTIAL, "key-fact", "own-setting", "change", "dependency"}
+GENERIC_MECHANISM = {PARTIAL, "dependency"}
+
 
 def describe_object(object_id: str) -> str:
     """'kind/namespace/name' -> "Kind `name` in namespace `namespace`"; cluster-scoped 'kind/name' -> "Kind `name`"."""
@@ -41,7 +47,10 @@ def build_report(
     for n, cause in enumerate(causes, start=1):
         prefix = f"Cause {n}: " if len(causes) > 1 else ""
         lines.append(f"{prefix}Root cause: {describe_object(cause.origin)}.")
-        if cause.pattern == PARTIAL:
+        if cause.pattern in GENERIC_MECHANISM and key_fact:
+            lines.append(f"Mechanism: {key_fact}.")
+            key_fact = None  # already the headline
+        elif cause.pattern == PARTIAL:
             lines.append("Mechanism: not established from the collected evidence.")
         else:
             lines.append(f"Mechanism: {cause.mechanism}")
@@ -49,8 +58,13 @@ def build_report(
             lines.append("Concrete details: " + "; ".join(cause.values) + ".")
         if cause.contributing:
             lines.append("Contributing: " + ", ".join(describe_object(c) for c in cause.contributing) + ".")
-        if cause.impact:
-            lines.append("Observed impact: " + ", ".join(describe_object(c) for c in cause.impact) + ".")
+        scope, knock_on = cause.impact, []
+        if cause.pattern in COMPONENT_LEVEL and cause.origin.split("/", 1)[0] in WORKLOAD_KINDS:
+            scope = [c for c in cause.impact if c == cause.origin]
+            knock_on = [c for c in cause.impact if c != cause.origin]
+        if scope:
+            lines.append("Observed impact: " + ", ".join(describe_object(c) for c in scope) + ".")
+        observed = observed + [f"{describe_object(c)} fails as a result (observed symptoms)" for c in knock_on]
     if key_fact and all(key_fact not in v for c in causes for v in c.values):
         lines.append(f"Key evidence: {key_fact}.")
     if fault_type:
