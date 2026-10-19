@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import traceback
 from collections.abc import Callable
 from typing import Any
 
@@ -603,12 +604,17 @@ class IterativeDiagnoser(JevDiagnoser):
         # Asked twice, the second time with the options in reverse order; the two answers are averaged, and when
         # their picks differ both are examined before an origin is concluded (see _diagnose).
         questions = build_component_questions(snapshot)
-        answers = [
-            self._ask("triage", state, questions),
-            self._ask("triage:reversed", state, reversed_options(questions)),
-        ]
+        answers = [self._ask("triage", state, questions)]
+        first = answers[0].choices[COMPONENT_QUESTION]
+        if (first.probabilities or {}).get(first.choice, 0.0) < DECISIVE_TRIAGE_PROBABILITY:
+            answers.append(self._ask("triage:reversed", state, reversed_options(questions)))
         picks = [a.choices[COMPONENT_QUESTION].choice for a in answers]
         self.triage_picks = list(dict.fromkeys(picks))
+        if len(self.triage_picks) == 2:
+            from clients.jev_diag.v2.report import same_change
+
+            if self.triage_picks[1] in same_change(snapshot, self.triage_picks[0]):
+                self.triage_picks = self.triage_picks[:1]  # the same change on both: the asks agree
         component = averaged([ChoiceResult.from_answer(a.choices[COMPONENT_QUESTION]) for a in answers])
         kind = (
             averaged([ChoiceResult.from_answer(a.choices[FAULT_KIND_QUESTION]) for a in answers])
@@ -928,16 +934,51 @@ class IterativeDiagnoser(JevDiagnoser):
         """The decision tree; when the decision model cannot be reached (credit, outage), a report from code alone."""
         if not snapshot.components:
             raise ValueError("No workloads found in the application namespaces; nothing to classify.")
+        self._progress: dict = {}
         try:
             return self._diagnose(snapshot)
         except Exception as exc:  # noqa: BLE001 - a diagnosis without the model beats submitting nothing
-            logger.error("decision model unavailable, reporting from code alone: %s", exc)
-            self._trace("decide", "fallback_without_model", error=f"{type(exc).__name__}: {exc}")
-            return code_only_diagnosis(snapshot, f"{type(exc).__name__}: {exc}")
+            reason = f"{type(exc).__name__}: {exc}"
+            logger.error("decision model unavailable, reporting from what is known: %s", reason)
+            self._trace("decide", "fallback_without_model", error=reason, traceback=traceback.format_exc())
+            try:
+                return self._from_progress(snapshot, reason)
+            except Exception:  # noqa: BLE001
+                return code_only_diagnosis(snapshot, reason)
+
+    def _from_progress(self, snapshot: ClusterSnapshot, reason: str) -> Diagnosis:
+        """The conclusion the work done so far supports when a later model request fails: the strongest confirmed
+        origin, else the fallback over triage and the examined components; without a triage, code alone."""
+        p = self._progress
+        component, kind = p.get("component"), p.get("kind")
+        if component is None:
+            return code_only_diagnosis(snapshot, reason)
+        investigated, confirmed = p["investigated"], p["confirmed"]
+        if confirmed:
+            concluded, why = max(confirmed, key=confirmed.get), "confirmed origin"
+        else:
+            concluded, why = self.fallback(snapshot, component, investigated)
+        info = self._characterize(snapshot, concluded, investigated, kind, None, why)
+        final = ChoiceResult(
+            choice=concluded, confidence=component.confidence, probabilities=dict(component.probabilities)
+        )
+        diagnosis = self._diagnosis(snapshot, concluded, final, info, kind)
+        diagnosis.investigation = {
+            "steps": p["steps"],
+            "concluded": concluded,
+            "fallback": f"{why}; decision model failed later: {reason}",
+        }
+        diagnosis.text = build_report(snapshot, diagnosis)
+        return diagnosis
 
     def _diagnose(self, snapshot: ClusterSnapshot) -> Diagnosis:
         component, kind, visible = self.triage(snapshot)
         queue = self.initial_queue(snapshot, component, kind)
+        if OTHER_OPTION in getattr(self, "triage_picks", []) and snapshot.cluster.get("findings"):
+            # one of the two asks put the fault on a cluster-level object: that is checked right after the top pick
+            if OTHER_OPTION in queue:
+                queue.remove(OTHER_OPTION)
+            queue.insert(1 if queue else 0, OTHER_OPTION)
         self._trace(
             "decide",
             "component",
@@ -959,6 +1000,14 @@ class IterativeDiagnoser(JevDiagnoser):
         waiting_on: dict[str, tuple[str, str, list[tuple[str, str]]]] = {}
         checked_other_side: set[str] = set()
         pair_decided = False
+        awaiting: set[str] = set()  # candidates a confirmed origin's conclusion waits for
+        self._progress = {
+            "component": component,
+            "kind": kind,
+            "investigated": investigated,
+            "confirmed": confirmed,
+            "steps": steps,
+        }
         while queue and len(steps) < self.max_steps:
             cid = queue.pop(0)
             if cid == OTHER_OPTION:
@@ -1043,8 +1092,14 @@ class IterativeDiagnoser(JevDiagnoser):
                     if c in queue:
                         queue.remove(c)
                     queue.insert(0, c)
+                awaiting = set(higher[:2])
                 self._trace("decide", "defer_conclusion", component=cid, origin_p=result["origin_p"], first=higher[:2])
                 continue
+            if confirmed and cid in awaiting:
+                awaiting.discard(cid)
+                if not awaiting:  # what the conclusion waited for is examined and is not an origin
+                    concluded = max(confirmed, key=confirmed.get)
+                    break
             nxt = result["next"]
             is_victim = result["victim_p"] >= MIN_VICTIM_PROBABILITY
             usable = nxt != NONE_OPTION and nxt in snapshot.components and nxt not in investigated

@@ -427,6 +427,11 @@ def test_when_the_two_triage_asks_disagree_both_picks_are_examined_and_the_stron
     assert d.component == "deployment/b"
     examined = [s["component"] for s in d.investigation["steps"] if s.get("component")]
     assert set(examined[:2]) == {"deployment/a", "deployment/b"}
+    # only one pick is an origin: it is concluded once both picks are examined, with no walk to other candidates
+    client = _Answers(triage, {"deployment/a": 0.95, "deployment/b": 0.1})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_snap(comps))
+    assert d.component == "deployment/a" and d.investigation["fallback"] is None
+    assert [s["component"] for s in d.investigation["steps"]] == ["deployment/a", "deployment/b"]
 
 
 def test_telemetry_lines_come_from_the_team_tools_and_skip_empty_results(monkeypatch):
