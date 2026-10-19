@@ -29,6 +29,8 @@ ONSET_TOLERANCE_SECONDS = 10  # the onset estimate is coarse; a change this soon
 MAX_FIELD_PATHS = 10
 MAX_TEMPLATE_CHANGES = 12
 MAX_RECENT_CHANGES = 10
+RESTART_ANNOTATION = "kubectl.kubernetes.io/restartedAt"  # written by a rollout restart; no setting changes
+DEPLOY_TOLERANCE_SECONDS = 5  # a change this close to the application's creation still counts as after it
 
 _IGNORED_SUBRESOURCES = {"status", "scale"}
 
@@ -302,6 +304,11 @@ def template_diff(old: dict, new: dict) -> list[str]:
     return changes[:MAX_TEMPLATE_CHANGES]
 
 
+def restart_only(diffs: list[str]) -> bool:
+    """Whether a pod template diff is only a rollout restart (the restart annotation), with no setting changed."""
+    return bool(diffs) and all(RESTART_ANNOTATION in d for d in diffs)
+
+
 def attach_template_changes(components: dict[str, dict], revisions: dict) -> None:
     """For workloads with revision history, the differences between the previous and the current pod template."""
     for comp in components.values():
@@ -315,6 +322,7 @@ def attach_template_changes(components: dict[str, dict], revisions: dict) -> Non
                 "revision": current["revision"],
                 "changed_at": current["created"],
                 "changes": diff,
+                "restart_only": restart_only(diff),
             }
 
 
@@ -331,14 +339,24 @@ def object_change(
     affects: list[str] | None = None,
     targets_created: list[str | None] | None = None,
     extra: dict | None = None,
+    revised_at: str | None = None,
 ) -> dict | None:
-    """A change record for one object, or None when the object shows no separate recent write."""
+    """A change record for one object, or None when the object shows no separate recent write.
+
+    `revised_at` is when the workload's current pod template revision was created: a revision diff is a change
+    even when the object's write history (managedFields) records no separate spec write, e.g. a field removed.
+    """
     created = meta.get("creationTimestamp")
     modified = modified_after_creation(meta)
     late = created_after(created, targets_created or [])
-    if modified is None and late is None:
+    if modified is None and late is None and not revised_at:
         return None
-    at = last_spec_write(meta) if modified is not None else created
+    if modified is not None:
+        at = last_spec_write(meta)
+    elif late is not None:
+        at = created
+    else:
+        at = revised_at
     age = seconds_ago(at)
     if age is None or age > CHANGE_HORIZON_SECONDS:
         return None
@@ -358,6 +376,8 @@ def object_change(
             record["fields"] = list(dict.fromkeys(fields))[:MAX_FIELD_PATHS]
     if late is not None:
         record["created_after_targets_s"] = late
+    if modified is None and late is None:
+        record["revision_changed"] = True
     if extra:
         record.update(extra)
     return record
@@ -429,6 +449,10 @@ def describe_change(change: dict, component_id: str | None = None) -> str:
     template = ""
     if change.get("template_changes"):
         template = f"; pod template changes: {'; '.join(change['template_changes'][:3])}"
+    if change.get("restart_only"):
+        return f"rolling restart {ago}s ago (only the restart annotation changed; no setting changed){rel}"
+    if change["object"] == component_id and change.get("revision_changed"):
+        return f"pod template changed {ago}s ago{template}{rel}"
     if change["object"] == component_id:
         if change.get("modified_after_creation_s") is not None:
             return (
@@ -444,6 +468,13 @@ def describe_change(change: dict, component_id: str | None = None) -> str:
     return f"{what} was created {ago}s ago, {change['created_after_targets_s']}s after the workloads {_acts_on(change['kind'])}{rel}"
 
 
+def application_created(components: dict[str, dict]) -> datetime | None:
+    """When the application was deployed: the earliest creation time among its workloads."""
+    times = [parse_time(c.get("created")) for c in components.values()]
+    times = [t for t in times if t]
+    return min(times) if times else None
+
+
 def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datetime | None = None) -> list[dict]:
     """Order recorded changes by their relation to the first active symptom and attach them as signals.
 
@@ -455,9 +486,19 @@ def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datet
     cluster["symptom_onset"] = onset.isoformat(timespec="seconds") if onset else None
     cluster["symptom_onset_source"] = source
     ranked = []
+    deployed = application_created(components)
     for raw in cluster.get("_changes") or []:
         change = dict(raw)
         at = parse_time(change.get("at"))
+        # one fault is injected after the application is deployed: an earlier write (left by an earlier problem
+        # or by cluster setup) cannot be it
+        if (
+            deployed
+            and at
+            and seconds_between(deployed, at) is not None
+            and seconds_between(deployed, at) > DEPLOY_TOLERANCE_SECONDS
+        ):
+            continue
         change["seconds_ago"] = seconds_ago(at)
         change["seconds_before_symptoms"] = seconds_between(onset, at) if onset else None
         affected = [components[c] for c in change.get("affects") or [] if c in components]
@@ -483,7 +524,14 @@ def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datet
         for c in ranked[:MAX_RECENT_CHANGES]
     ]
     flag = "nearest_change_before_symptoms" if onset else "most_recent_change"
-    first = next((c for c in ranked if c.get("role") != "observability" and (not onset or order(c)[0] == 0)), None)
+    first = next(
+        (
+            c
+            for c in ranked
+            if c.get("role") != "observability" and not c.get("restart_only") and (not onset or order(c)[0] == 0)
+        ),
+        None,
+    )
     for change in ranked:
         for cid in change.get("affects") or []:
             comp = components.get(cid)

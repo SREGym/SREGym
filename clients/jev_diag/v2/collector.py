@@ -1989,7 +1989,15 @@ def collect_snapshot(
             comp.get("_meta") or {},
             affects=[cid],
             targets_created=[components[o].get("created") for o in comp.get("_calls") or [] if o in components],
-            extra={"template_changes": comp["template_changes"]["changes"]} if comp.get("template_changes") else None,
+            extra=(
+                {
+                    "template_changes": comp["template_changes"]["changes"],
+                    "restart_only": comp["template_changes"].get("restart_only", False),
+                }
+                if comp.get("template_changes")
+                else None
+            ),
+            revised_at=(comp.get("template_changes") or {}).get("changed_at"),
         )
         if change:
             changes.append(change)
