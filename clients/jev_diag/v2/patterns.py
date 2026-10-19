@@ -23,6 +23,9 @@ SETTING_RE = re.compile(r"(?i)retr|attempt|timeout|deadline|backoff|qps|rate|lim
 MAX_INPUTS = 4
 POD_PREFIX_RE = re.compile(r"^pod [\w.-]+: ")
 CONNECT_CLASS = "connectivity or timeout"
+ARRIVAL_AFTER_S = 15  # created at least this long after the bulk of the application
+ARRIVAL_BEFORE_ONSET_S = 600  # and at most this long before the first symptom
+HOST_RE = r"(?<![\w-]){name}(?=[:./]|$)"  # a component name in host position: "cache:6379", "http://cart/"
 # The team's checks phrase findings about an object that acts on a workload from outside as "<kind> <name> ..."
 # or "selected by <Kind> <name>" on the workload; such a finding is that object's evidence, not the workload's own.
 OUTSIDE_RE = re.compile(
@@ -175,7 +178,37 @@ def acts_on_explanations(snapshot: Any) -> list[Explanation]:
     return out
 
 
-def dependency_explanations(snapshot: Any) -> list[Explanation]:
+def _broken_itself(comp: dict | None) -> bool:
+    """Shows trouble of its own (symptoms, own failure logs, a change or a wrong setting), not only other
+    components' errors naming it."""
+    kinds = set((comp or {}).get("evidence_kinds") or [])
+    return not _healthy(comp) and bool(kinds - {"pointed_at", "error_logs_only"})
+
+
+def config_links(components: dict[str, dict], details: dict[str, dict]) -> dict[str, set[str]]:
+    """caller -> components its own configuration addresses (env values and args in host position), from the
+    detail read so far: CACHE_ADDR=cache:6379 links the caller to cache even when its errors only
+    say "store"."""
+    names: dict[str, set[str]] = {}
+    for cid, comp in components.items():
+        for name in {comp.get("name"), *((svc or {}).get("name") for svc in comp.get("services") or [])}:
+            if name:
+                names.setdefault(str(name).lower(), set()).add(cid)
+    links: dict[str, set[str]] = {}
+    for cid, detail in details.items():
+        workload = (detail or {}).get("workload") or {}
+        values: list[str] = []
+        for c in (workload.get("init_containers") or []) + (workload.get("containers") or []):
+            values += [str(e.get("value", "")) for e in c.get("env") or [] if e.get("value") is not None]
+            values += [str(a) for a in c.get("args") or []]
+        text = " ".join(values).lower()
+        for name, cids in names.items():
+            if re.search(HOST_RE.format(name=re.escape(name)), text):
+                links.setdefault(cid, set()).update(c for c in cids if c != cid)
+    return links
+
+
+def dependency_explanations(snapshot: Any, details: dict[str, dict] | None = None) -> list[Explanation]:
     """For each component that other components' still-occurring errors name: it fails or rejects them."""
     components = snapshot.components
     callers: dict[str, list[str]] = {}
@@ -184,6 +217,11 @@ def dependency_explanations(snapshot: Any) -> list[Explanation]:
             if target in components and target != cid:
                 callers.setdefault(target, []).append(cid)
     out: list[Explanation] = []
+    for src, targets in config_links(components, details or {}).items():
+        for target in targets:
+            if target in components and target not in callers and not _healthy(components[src]):
+                if _broken_itself(components[target]):
+                    out.append(_configured_dependency(components, target, src))
     for target, srcs in sorted(callers.items()):
         tcomp = components[target]
         names = ", ".join(sorted(srcs))
@@ -210,6 +248,81 @@ def dependency_explanations(snapshot: Any) -> list[Explanation]:
             )
         )
     return out
+
+
+def _configured_dependency(components: dict[str, dict], target: str, src: str) -> Explanation:
+    """`target` is broken itself and `src`, which fails, is configured to call it."""
+    tcomp = components[target]
+    return Explanation(
+        key=f"dependency:{target}",
+        pattern="dependency",
+        origin=object_id(tcomp),
+        mechanism=f"{target} is broken, so {src}, which is configured to call it, fails.",
+        values=[s for s in tcomp.get("signals") or [] if not s.startswith(POINTED_MARKERS)][:3],
+        impact=sorted({object_id(tcomp), object_id(components[src])}),
+        predictions=[
+            Prediction(f"{src} is configured to call {target}", SUPPORTS, group=f"linked:{target}"),
+            Prediction(f"{target} shows failures of its own", SUPPORTS, group=f"symptoms:{target}"),
+        ],
+    )
+
+
+def arrival_explanations(snapshot: Any) -> list[Explanation]:
+    """Components created after the rest of the application was running and shortly before the first symptom (a
+    job, consumer or load source that arrived): candidates even when nothing visible links them to the failures."""
+    components = snapshot.components
+    created = {cid: parse_time(c.get("created")) for cid, c in components.items()}
+    times = sorted(t for t in created.values() if t)
+    onset = parse_time(snapshot.cluster.get("symptom_onset"))
+    if not times or onset is None:
+        return []
+    bulk = times[len(times) // 2]
+    out: list[Explanation] = []
+    for cid, comp in components.items():
+        after, before = seconds_between(created[cid], bulk), seconds_between(onset, created[cid])
+        if after is None or before is None or comp.get("role") == "observability":
+            continue
+        if after >= ARRIVAL_AFTER_S and -ONSET_TOLERANCE_S <= before <= ARRIVAL_BEFORE_ONSET_S:
+            oid = object_id(comp)
+            out.append(
+                Explanation(
+                    key=f"arrival:{cid}",
+                    pattern="change",
+                    origin=oid,
+                    mechanism=(
+                        f"{oid} appeared {after}s after the rest of the application and {before}s before the first "
+                        "symptom; what it does to the failing components is not visible in the collected evidence."
+                    ),
+                    values=(comp.get("signals") or [])[:2],
+                    impact=impact_of(components, cid),
+                    predictions=[
+                        Prediction(f"{oid} appeared just before the symptoms", SUPPORTS, group=f"timing:{cid}")
+                    ],
+                )
+            )
+    return out
+
+
+def victim_check(explanations: list[Explanation], components: dict[str, dict], details: dict[str, dict]) -> None:
+    """v1's victim rule, enforced in code: "X is the origin" (dependency or partial) is contradicted when X, failing,
+    calls a component that is broken itself (named by X's errors or addressed by X's configuration). Hidden-state
+    and stale-read explanations, where the client is the origin, are left alone."""
+    by_object = {object_id(c): cid for cid, c in components.items()}
+    links = config_links(components, details)
+    for e in explanations:
+        cid = by_object.get(e.origin)
+        if e.pattern not in ("dependency", PARTIAL) or cid is None or _healthy(components[cid]):
+            continue
+        callees = set(components[cid].get("errors_point_to") or []) | links.get(cid, set())
+        broken = sorted(y for y in callees if y != cid and _broken_itself(components.get(y)))
+        if broken:
+            e.predictions.append(
+                Prediction(
+                    f"{cid} only fails because {', '.join(broken)}, which it calls, is broken",
+                    CONTRADICTS,
+                    group=f"victim:{cid}",
+                )
+            )
 
 
 def _caller_classes(comp: dict) -> dict[str, set[str]]:
@@ -456,7 +569,8 @@ def build_explanations(snapshot: Any, details: dict[str, dict] | None = None) ->
     builders = [
         change_explanations(snapshot),
         acts_on_explanations(snapshot),
-        dependency_explanations(snapshot),
+        dependency_explanations(snapshot, details),
+        arrival_explanations(snapshot),
         amplify_explanations(snapshot, details),
         hidden_state_explanations(snapshot, details),
         stale_read_explanations(snapshot),
@@ -477,4 +591,6 @@ def build_explanations(snapshot: Any, details: dict[str, dict] | None = None) ->
             if e.pattern == "acts-on":
                 acts_on[e.origin] = e
             seen.setdefault(e.key, e)
-    return list(seen.values())
+    out = list(seen.values())
+    victim_check(out, snapshot.components, details)
+    return out
