@@ -145,6 +145,8 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
     changed_env: set[tuple[str, str]] = set()
     tc = detail.get("template_changes") or {}
     for change in tc.get("changes") or []:
+        if "pod-template-hash" in change or "restartedAt" in change:
+            continue  # bookkeeping of every rollout, not a setting
         items.append(f"pod template changed in revision {tc.get('revision')}: {change}")
         m = re.match(r"container (\S+) env (\S+) ", change)
         if m:
@@ -201,7 +203,7 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
         items.append(f"RBAC bindings for {rbac.get('service_account')}: {rbac.get('bindings') or 'none'}")
     log_items: list[str] = []
     event_items: list[str] = []
-    dep_items: list[str] = list(detail.get("telemetry") or [])
+    dep_items: list[str] = []
     logs = detail.get("logs") or {}
     if logs.get("error_lines"):
         log_items.append(
@@ -234,6 +236,7 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
             dep_items.append(f"dependency {cid} looks healthy on its own ({info.get('pods_ready')} pods ready)")
     for src, classes in (detail.get("called_by_with_errors") or {}).items():
         dep_items.append(f"still-occurring errors from {src} name this component: {classes}")
+    dep_items += list(detail.get("telemetry") or [])  # metrics after the dependency facts they support
     return [
         {"id": f"E{i + 1}", "text": text}
         for i, text in enumerate(cap_evidence(items, log_items, event_items, dep_items, other_env))
@@ -580,12 +583,14 @@ class IterativeDiagnoser(JevDiagnoser):
         fetch_detail: Callable[[ClusterSnapshot, str], dict],
         max_steps: int = DEFAULT_MAX_STEPS,
         probe: Callable[[ClusterSnapshot, str, str | None], dict | None] | None = None,
+        detail_token_budget: int = DETAIL_TOKEN_BUDGET,
         **kwargs: Any,
     ) -> None:
         super().__init__(client, **kwargs)
         self.fetch_detail = fetch_detail
         self.max_steps = max_steps
         self.probe = probe
+        self.detail_token_budget = detail_token_budget
 
     # ------------------------------------------------------------------ nodes
 
@@ -714,13 +719,13 @@ class IterativeDiagnoser(JevDiagnoser):
             "cluster_findings": snapshot.cluster.get("findings") or [],
             "components": {},
         }
-        fitted, trims = fit_state_to_budget(state, DETAIL_TOKEN_BUDGET)
+        fitted, trims = fit_state_to_budget(state, self.detail_token_budget)
         fitted.pop("components", None)
         self._trace(
             "jev",
             "budget_fit",
             label=f"investigate:{cid}",
-            budget=DETAIL_TOKEN_BUDGET,
+            budget=self.detail_token_budget,
             tokens_before=estimate_tokens(state),
             tokens_after=estimate_tokens(fitted),
             applied=trims,
@@ -830,7 +835,7 @@ class IterativeDiagnoser(JevDiagnoser):
             "affected_components": affected,
             "cluster_dns": snapshot.cluster.get("cluster_dns"),
         }
-        fitted, _ = fit_state_to_budget({**state, "components": {}}, DETAIL_TOKEN_BUDGET)
+        fitted, _ = fit_state_to_budget({**state, "components": {}}, self.detail_token_budget)
         fitted.pop("components", None)
         response = self._ask("cluster_objects", fitted, build_cluster_questions(fitted.get("findings") or []))
         result = ChoiceResult.from_answer(response.choices[CLUSTER_OBJECT_QUESTION])
