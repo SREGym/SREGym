@@ -31,6 +31,7 @@ from typing import Any
 
 from clients.jev_diag.timeutil import now, parse_time
 from clients.jev_diag.v2 import changes as change_log
+from clients.jev_diag.v2 import paths
 
 OBSERVABILITY_RE = re.compile(
     r"(grafana|jaeger|prometheus|otel|opentelemetry|opensearch|elasticsearch|kibana|loki|fluent|promtail|"
@@ -810,6 +811,7 @@ def post_process(snapshot) -> None:
     tag_roles(components)
     classify_logs(components)
     server_login_rejections(components, collected_at)
+    snapshot.cluster["call_paths"] = paths.call_paths(components)
     ranked = change_log.rank_changes(components, snapshot.cluster, collected_at)
     snapshot.cluster["findings"] = cluster_findings(snapshot.cluster, ranked)
     for cid, comp in components.items():

@@ -54,7 +54,9 @@ CLUSTER_OBJECT_QUESTION = "cluster_object"
 BLOCKED_QUESTION = "blocked_input"
 INPUT_QUESTION = "input_source"
 PAIR_QUESTION = "faulty_side"
+TIEBREAK_QUESTION = "fault_start"
 NONE_OPTION = "none"
+BOTH_OPTION = "both"
 
 DEFAULT_MAX_STEPS = 18
 MIN_ORIGIN_PROBABILITY = 0.6  # confirm and stop
@@ -70,6 +72,7 @@ CHAIN_VICTIM_PROBABILITY = 0.9  # a victim this certain, naming its dependency t
 CHAIN_NEXT_PROBABILITY = 0.9
 MIN_BLOCKED_PROBABILITY = 0.5
 MIN_PAIR_PROBABILITY = 0.5
+MIN_BOTH_PROBABILITY = 0.5  # two independent causes are reported only on this much support
 MAX_NEXT_OPTIONS = 12
 MAX_EVIDENCE = 32
 DETAIL_TOKEN_BUDGET = 22000
@@ -145,6 +148,7 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
     for sig in comp.get("signals") or []:
         if "is terminating" not in sig:
             items.append(sig)
+    items += comp.get("call_paths") or []
     items += detail.get("spec_checks") or []
     items += detail.get("service_checks") or []
     if detail.get("probe_text"):
@@ -429,6 +433,89 @@ def build_pair_questions(a: str, b: str, reason: str) -> dict[str, Choice]:
     }
 
 
+def build_tiebreak_questions(a: str, b: str, linked: bool) -> dict[str, Choice]:
+    criteria = {
+        a: f'The fault started at `sides["{a}"]`; the other side\'s abnormal signals follow from it or are unrelated.',
+        b: f'The fault started at `sides["{b}"]`; the other side\'s abnormal signals follow from it or are unrelated.',
+    }
+    if not linked:
+        criteria[BOTH_OPTION] = (
+            "Two independent faults: each side has its own abnormal configuration, change, or state, and neither "
+            "side's signals can follow from the other."
+        )
+    return {
+        TIEBREAK_QUESTION: Choice(
+            instructions={
+                "question": "Both `sides` were judged origins of the fault. Where did the fault start?",
+                "how_to_decide": [
+                    "A side whose failures are calls to the other side, or that uses what the other side changed, "
+                    "is not where the fault started.",
+                    "Prefer the side whose own configuration, change, or state explains its signals and the "
+                    "application's symptoms.",
+                    "`links` lists every connection code found between the two sides.",
+                ],
+            },
+            criteria=criteria,
+        )
+    }
+
+
+def link_facts(snapshot: ClusterSnapshot, a: str, b: str) -> list[str]:
+    """Connections code can see between two components: error lines, call paths, the same change, shared objects."""
+    from clients.jev_diag.v2.report import same_change
+
+    ca, cb = snapshot.components[a], snapshot.components[b]
+    out = []
+    for x, y, cx in ((a, b, ca), (b, a, cb)):
+        if y in (cx.get("errors_point_to") or []):
+            out.append(f"{x}'s still-occurring error lines name {y}")
+    if b in same_change(snapshot, a):
+        out.append("the same pod template change was applied to both")
+    shared = set(ca.get("config_objects") or {}) & set(cb.get("config_objects") or {})
+    out += [f"both use {obj}" for obj in sorted(shared)]
+    for path in snapshot.cluster.get("call_paths") or []:
+        if {path["caller"], path["callee"]} == {a, b}:
+            out.append(f"calls from {path['caller']} to {path['callee']} time out")
+    return out
+
+
+def explained_by(snapshot: ClusterSnapshot, cid: str | None, fault_object: dict | None) -> set[str]:
+    """Components whose failures one cause accounts for: the cause, the same change on other workloads, the users of
+    its fault object, and every component whose errors name an explained one (callers, transitively)."""
+    from clients.jev_diag.v2.report import same_change
+
+    out = set((fault_object or {}).get("components") or [])
+    if cid in snapshot.components:
+        out |= {cid, *same_change(snapshot, cid)}
+    grew = True
+    while grew:
+        grew = False
+        for other, comp in snapshot.components.items():
+            if other not in out and set(comp.get("errors_point_to") or []) & out:
+                out.add(other)
+                grew = True
+    return out
+
+
+def unexplained_frontier(
+    snapshot: ClusterSnapshot, explained: set[str], investigated: dict, triage: ChoiceResult
+) -> list[str]:
+    """Failing components the concluded cause does not account for and that carry evidence of their own (a change,
+    a configuration defect, or own failure logs), most plausible first. Components already judged victims or
+    unrelated are left out."""
+    out = []
+    for cid, comp in snapshot.components.items():
+        kinds = set(comp.get("evidence_kinds") or [])
+        if cid in explained or comp.get("role") == "observability":
+            continue
+        if not kinds & {"symptoms", "own_failure_logs"} or not kinds & {"change", "configuration", "own_failure_logs"}:
+            continue
+        if cid in investigated and investigated[cid]["origin_p"] < MIN_ORIGIN_PROBABILITY:
+            continue
+        out.append(cid)
+    return sorted(out, key=lambda c: -triage.probabilities.get(c, 0.0))
+
+
 class IterativeDiagnoser(JevDiagnoser):
     """Decision-tree diagnosis on top of the one-shot triage."""
 
@@ -683,26 +770,50 @@ class IterativeDiagnoser(JevDiagnoser):
             chosen = findings[int(result.choice[1:]) - 1]
         return {"result": result, "object": chosen}
 
+    @staticmethod
+    def side(snapshot: ClusterSnapshot, cid: str, investigated: dict) -> dict:
+        r = investigated[cid]
+        comp = snapshot.components[cid]
+        key = next(
+            (e["text"] for e in r["evidence"] if r["key_evidence"] and e["id"] == r["key_evidence"].choice), None
+        )
+        return {
+            "component": cid,
+            "kind": comp["kind"],
+            "origin_probability": r["origin_p"],
+            "cause_category": r["category"].choice,
+            "key_evidence": key,
+            "code_checks": r["spec_checks"],
+            "signals": (comp.get("signals") or [])[:12],
+            "config_objects": comp.get("config_objects"),
+        }
+
+    def tiebreak(self, snapshot: ClusterSnapshot, a: str, b: str, investigated: dict, reason: str) -> list[str]:
+        """Two confirmed origins: the one where the fault started, or both when they are independent faults. Without
+        a clear answer, the higher origin probability."""
+        links = link_facts(snapshot, a, b)
+        state = {
+            "application": snapshot.app,
+            "why_asked": reason,
+            "links": links or ["none found"],
+            "sides": {a: self.side(snapshot, a, investigated), b: self.side(snapshot, b, investigated)},
+        }
+        response = self._ask(f"tiebreak:{a}|{b}", state, build_tiebreak_questions(a, b, bool(links)))
+        answer = ChoiceResult.from_answer(response.choices[TIEBREAK_QUESTION])
+        p = answer.probabilities.get(answer.choice, 0.0)
+        higher = max((a, b), key=lambda c: investigated[c]["origin_p"])
+        if answer.choice == BOTH_OPTION and p >= MIN_BOTH_PROBABILITY:
+            picks = [higher, a if higher == b else b]
+        elif answer.choice in (a, b) and p >= MIN_PAIR_PROBABILITY:
+            picks = [answer.choice]
+        else:
+            picks = [higher]
+        self._trace("decide", "tiebreak", sides=[a, b], reason=reason, links=links, ranked=answer.ranked(), picks=picks)
+        return picks
+
     def pair_node(self, snapshot: ClusterSnapshot, a: str, b: str, investigated: dict, reason: str) -> str:
         """Ask which of two confirmed origins holds the faulty setting; fall back to the higher origin probability."""
-
-        def side(cid: str) -> dict:
-            r = investigated[cid]
-            comp = snapshot.components[cid]
-            key = next(
-                (e["text"] for e in r["evidence"] if r["key_evidence"] and e["id"] == r["key_evidence"].choice), None
-            )
-            return {
-                "component": cid,
-                "kind": comp["kind"],
-                "origin_probability": r["origin_p"],
-                "cause_category": r["category"].choice,
-                "key_evidence": key,
-                "code_checks": r["spec_checks"],
-                "signals": (comp.get("signals") or [])[:12],
-                "config_objects": comp.get("config_objects"),
-            }
-
+        side = lambda cid: self.side(snapshot, cid, investigated)  # noqa: E731
         state = {"application": snapshot.app, "connection": reason, "sides": {a: side(a), b: side(b)}}
         response = self._ask(f"pair:{a}|{b}", state, build_pair_questions(a, b, reason))
         answer = ChoiceResult.from_answer(response.choices[PAIR_QUESTION])
@@ -783,6 +894,7 @@ class IterativeDiagnoser(JevDiagnoser):
         # other side -> (component waiting to be concluded, reason, further candidates to examine after this one)
         waiting_on: dict[str, tuple[str, str, list[tuple[str, str]]]] = {}
         checked_other_side: set[str] = set()
+        pair_decided = False
         while queue and len(steps) < self.max_steps:
             cid = queue.pop(0)
             if cid == OTHER_OPTION:
@@ -805,27 +917,7 @@ class IterativeDiagnoser(JevDiagnoser):
             remaining = [c for c in snapshot.components if c != cid and c not in investigated]
             result = self.investigate(snapshot, cid, component, investigated, remaining)
             investigated[cid] = result
-            step = {
-                "step": len(steps) + 1,
-                "node": "investigate",
-                "component": cid,
-                "verdict": result["verdict"],
-                "origin_p": result["origin_p"],
-                "victim_p": result["victim_p"],
-                "next": result["next"],
-                "next_p": result["next_p"],
-                "category": result["category"].choice,
-                "spec_checks": result["spec_checks"],
-                "blocked_input": result["blocked_input"],
-                "key_evidence": next(
-                    (
-                        e["text"]
-                        for e in result["evidence"]
-                        if result["key_evidence"] and e["id"] == result["key_evidence"].choice
-                    ),
-                    None,
-                ),
-            }
+            step = self._step(len(steps) + 1, cid, result)
             steps.append(step)
             self._trace("decide", "step", **step)
             if cid in waiting_on:
@@ -834,6 +926,7 @@ class IterativeDiagnoser(JevDiagnoser):
                 original, reason, rest = waiting_on.pop(cid)
                 if result["origin_p"] >= MIN_ORIGIN_PROBABILITY:
                     concluded = self.pair_node(snapshot, original, cid, investigated, reason)
+                    pair_decided = True
                     break
                 rest = [(c, r) for c, r in rest if c in snapshot.components and c not in investigated]
                 if rest:
@@ -913,13 +1006,92 @@ class IterativeDiagnoser(JevDiagnoser):
                         insert_at += 1
 
         fallback_reason = None
+        paired = False
         if concluded is None and waiting_on:
             # The budget ran out before the other side was examined: the confirmed origin stands.
             concluded = next(iter(waiting_on.values()))[0]
             fallback_reason = "confirmed origin; the other side was not examined within the budget"
+        elif not pair_decided and concluded in confirmed and len(confirmed) > 1:
+            # Several origins were confirmed (a split triage, or a higher-ranked candidate examined after the first):
+            # the two strongest are compared side by side instead of by their separate probabilities.
+            a, b = sorted(confirmed, key=confirmed.get, reverse=True)[:2]
+            reason = "both were confirmed as origins in separate examinations"
+            picks = self.tiebreak(snapshot, a, b, investigated, reason)
+            concluded, paired = picks[0], True
+            second = picks[1] if len(picks) > 1 else None
         if concluded is None:
             concluded, fallback_reason = self.fallback(snapshot, component, investigated)
+        if not paired:
+            second = None
 
+        info = self._characterize(snapshot, concluded, investigated, kind, cluster_pick, fallback_reason)
+        if second is None and concluded in investigated and len(steps) < self.max_steps:
+            explained = explained_by(snapshot, concluded, info["fault_object"])
+            frontier = unexplained_frontier(snapshot, explained, investigated, component)
+            if frontier:
+                # Failing components the concluded cause does not account for: the most plausible one is examined,
+                # and when it is an origin too, the two are compared (one of them, or two independent faults).
+                cand = frontier[0]
+                self._trace("decide", "unexplained", concluded=concluded, explained=sorted(explained), first=cand)
+                if cand not in investigated:
+                    remaining = [c for c in snapshot.components if c != cand and c not in investigated]
+                    investigated[cand] = self.investigate(snapshot, cand, component, investigated, remaining)
+                    steps.append(self._step(len(steps) + 1, cand, investigated[cand]))
+                    self._trace("decide", "step", **steps[-1])
+                if investigated[cand]["origin_p"] >= MIN_ORIGIN_PROBABILITY:
+                    reason = f"{cand} has failures of its own that {concluded} does not account for"
+                    picks = self.tiebreak(snapshot, concluded, cand, investigated, reason)
+                    if picks[0] != concluded:
+                        concluded = picks[0]
+                        info = self._characterize(snapshot, concluded, investigated, kind, None, None)
+                    second = picks[1] if len(picks) > 1 else None
+
+        probabilities = dict(component.probabilities)
+        final = ChoiceResult(
+            choice=concluded,
+            confidence=round(info["origin_p"], 4) if info["origin_p"] is not None else component.confidence,
+            probabilities=probabilities,
+        )
+        diagnosis = self._diagnosis(snapshot, concluded, final, info, kind)
+        diagnosis.fault_visible = None if visible is None else round(float(visible), 4)
+        diagnosis.investigation = {
+            "steps": steps,
+            "concluded": concluded,
+            "fallback": fallback_reason,
+            "triage_top": component.ranked()[:5],
+            "second": second,
+        }
+        if second:
+            info2 = self._characterize(snapshot, second, investigated, kind, None, None)
+            p2 = info2["origin_p"] or 0.0
+            diagnosis.second = self._diagnosis(
+                snapshot, second, ChoiceResult(choice=second, confidence=round(p2, 4), probabilities={}), info2, kind
+            )
+            diagnosis.second.investigation = {"steps": steps, "concluded": second}
+        diagnosis.text = build_report(snapshot, diagnosis)
+        self._trace(
+            "decide",
+            "diagnosis_text",
+            component=concluded,
+            second=second,
+            text=diagnosis.text,
+            chars=len(diagnosis.text),
+            steps=len(steps),
+            fallback=fallback_reason,
+            fault_object=info["fault_object"],
+        )
+        return diagnosis
+
+    def _characterize(
+        self,
+        snapshot: ClusterSnapshot,
+        concluded: str,
+        investigated: dict,
+        kind: ChoiceResult | None,
+        cluster_pick: dict | None,
+        fallback_reason: str | None,
+    ) -> dict:
+        """Category, key evidence, fault object and blocked input of a concluded cause."""
         chosen_result = investigated.get(concluded)
         category = chosen_result["category"] if chosen_result else None
         key = chosen_result["key_evidence"] if chosen_result else None
@@ -933,8 +1105,6 @@ class IterativeDiagnoser(JevDiagnoser):
             # The dependency was chosen because a victim fails against it, not because of its own evidence, so
             # its category and key evidence are judged again from the victim's failure.
             category, key, evidence = self.chain_characterization(snapshot, chain_victim, concluded, investigated)
-        origin_p = chosen_result["origin_p"] if chosen_result else None
-        fault_object = cluster_pick or self.fault_object(snapshot, concluded, category, kind)
         blocked = None
         if concluded in snapshot.components:
             blocked = snapshot.components[concluded].get("blocked_input")
@@ -946,45 +1116,57 @@ class IterativeDiagnoser(JevDiagnoser):
                 and category.choice in ("data_or_traffic", "code_bug")
             ):
                 blocked = chosen_result["blocked_input"]
-        probabilities = dict(component.probabilities)
-        final = ChoiceResult(
-            choice=concluded,
-            confidence=round(origin_p, 4) if origin_p is not None else component.confidence,
-            probabilities=probabilities,
-        )
-        diagnosis = Diagnosis(
-            component=concluded,
+        return {
+            "category": category,
+            "key": key,
+            "evidence": evidence,
+            "origin_p": chosen_result["origin_p"] if chosen_result else None,
+            "fault_object": cluster_pick or self.fault_object(snapshot, concluded, category, kind),
+            "blocked": blocked,
+        }
+
+    def _diagnosis(
+        self, snapshot: ClusterSnapshot, cid: str, final: ChoiceResult, info: dict, kind: ChoiceResult | None
+    ) -> Diagnosis:
+        return Diagnosis(
+            component=cid,
             component_result=final,
-            fault_visible=None if visible is None else round(float(visible), 4),
-            category_result=category,
-            evidence_result=key,
-            evidence=evidence,
+            fault_visible=None,
+            category_result=info["category"],
+            evidence_result=info["key"],
+            evidence=info["evidence"],
             model=str(self.requests[-1].get("model") or ""),
             input_tokens=_sum(self.requests, "input_tokens"),
             output_tokens=_sum(self.requests, "output_tokens"),
             fault_kind_result=kind,
-            fault_object=fault_object,
-            blocked_input=blocked,
+            fault_object=info["fault_object"],
+            blocked_input=info["blocked"],
             trims={},
-            investigation={
-                "steps": steps,
-                "concluded": concluded,
-                "fallback": fallback_reason,
-                "triage_top": component.ranked()[:5],
-            },
         )
-        diagnosis.text = build_report(snapshot, diagnosis)
-        self._trace(
-            "decide",
-            "diagnosis_text",
-            component=concluded,
-            text=diagnosis.text,
-            chars=len(diagnosis.text),
-            steps=len(steps),
-            fallback=fallback_reason,
-            fault_object=fault_object,
-        )
-        return diagnosis
+
+    @staticmethod
+    def _step(n: int, cid: str, result: dict) -> dict:
+        return {
+            "step": n,
+            "node": "investigate",
+            "component": cid,
+            "verdict": result["verdict"],
+            "origin_p": result["origin_p"],
+            "victim_p": result["victim_p"],
+            "next": result["next"],
+            "next_p": result["next_p"],
+            "category": result["category"].choice,
+            "spec_checks": result["spec_checks"],
+            "blocked_input": result["blocked_input"],
+            "key_evidence": next(
+                (
+                    e["text"]
+                    for e in result["evidence"]
+                    if result["key_evidence"] and e["id"] == result["key_evidence"].choice
+                ),
+                None,
+            ),
+        }
 
     @staticmethod
     def _chain_victim(snapshot: ClusterSnapshot, dep: str, investigated: dict) -> str | None:

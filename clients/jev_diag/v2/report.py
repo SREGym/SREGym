@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 
 from clients.jev_diag.timeutil import parse_time, seconds_between
+from clients.jev_diag.v2 import paths
 from clients.jev_diag.v2.classifier import CARRIER_KINDS, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot
 from clients.jev_diag.v2.derive import TELEMETRY_RE
@@ -110,6 +111,27 @@ def users_of(snapshot: ClusterSnapshot, fo: dict) -> list[str]:
     return [c for c in fo.get("components") or [] if c in snapshot.components]
 
 
+def feedback_path(snapshot: ClusterSnapshot, d: Diagnosis) -> dict | None:
+    """The retry/capacity loop the concluded component is one end of, when the fault object is not a config
+    object (a ConfigMap holding the settings is the subject itself)."""
+    fo = d.fault_object
+    if fo and fo["kind"] in CONFIG_KINDS:
+        return None
+    for path in snapshot.cluster.get("call_paths") or []:
+        if path.get("feedback_loop") and d.component in (path["caller"], path["callee"]):
+            return path
+    return None
+
+
+def path_phrase(snapshot: ClusterSnapshot, path: dict) -> str:
+    caller, callee = snapshot.components[path["caller"]], snapshot.components[path["callee"]]
+    where = f" in namespace `{callee['namespace']}`" if caller["namespace"] == callee["namespace"] else ""
+    return (
+        f"the call path from {describe(caller['kind'], caller['name'], None if where else caller['namespace'])} to "
+        f"{describe(callee['kind'], callee['name'], None if where else callee['namespace'])}{where}"
+    )
+
+
 def subject(snapshot: ClusterSnapshot, d: Diagnosis) -> tuple[str, str | None]:
     """(subject phrase, object named alongside it) by where the bad value lives."""
     comp = snapshot.components.get(d.component)
@@ -120,6 +142,9 @@ def subject(snapshot: ClusterSnapshot, d: Diagnosis) -> tuple[str, str | None]:
         source = blocked.get("topic") or blocked.get("input")
         if source:
             return f"the input `{source}` consumed by {describe(comp['kind'], comp['name'], comp['namespace'])}", None
+    path = None if d.blocked_input else feedback_path(snapshot, d)
+    if path:
+        return path_phrase(snapshot, path), None
     if fo:
         fo_phrase = describe(fo["kind"], fo["name"], fo.get("namespace"))
         outside = not fo.get("namespace") or fo.get("namespace") not in app_namespaces
@@ -146,12 +171,22 @@ def subject(snapshot: ClusterSnapshot, d: Diagnosis) -> tuple[str, str | None]:
 
 
 def build_report(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
+    text = cause_block(snapshot, d)
+    if d.second is not None:
+        text += "\n\nA second, independent root cause:\n" + cause_block(snapshot, d.second)
+    return text
+
+
+def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     comp = snapshot.components.get(d.component) or {}
     fo = d.fault_object
     subj, carrier = subject(snapshot, d)
     fact = key_fact(d)
     changes = changed_values(comp)
-    what = fact or (fo or {}).get("signal") or (changes[0] if changes else None)
+    path = None if d.blocked_input else feedback_path(snapshot, d)
+    names = {cid: c.get("name") or cid for cid, c in snapshot.components.items()}
+    what = (paths.describe(path, names) if path else None) or fact or (fo or {}).get("signal")
+    what = what or (changes[0] if changes else None)
     if what is None:
         what = next((s for s in comp.get("signals") or [] if not STATE_WORDS.search(s)), None)
     first = f"Root cause: {subj}" + (f", {carrier}" if carrier else "")
@@ -169,6 +204,9 @@ def build_report(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     elif fo and fo.get("signal") and fo["signal"] != what:
         mechanism = fo["signal"]
     parts = [m.rstrip(".") for m in (mechanism,) if m]
+    if path:
+        parts.append(f'{names[path["caller"]]} logs "{quote(path["example"])}"')
+        error = None if d.component == path["caller"] else error
     if error and (not what or error not in what):
         parts.append(f'the component logs "{error}"')
     if not parts and what:

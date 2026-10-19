@@ -218,6 +218,7 @@ class Diagnosis:
     trims: dict[str, list[str]] = field(default_factory=dict)
     investigation: dict | None = None  # decision-tree mode: steps, conclusion, fallback
     text: str = ""
+    second: Diagnosis | None = None  # a second, independent cause, when the investigation found one
 
     def to_dict(self) -> dict:
         return asdict(self)
