@@ -38,6 +38,13 @@ class SessionDependencies:
         if creation.acknowledged and self.creations.get(key) is creation:
             del self.creations[key]
 
+    @staticmethod
+    def _acknowledged(driver, result) -> bool:
+        # File upload reports `ok` for the metadata POST and `correct` for a
+        # separate completion POST. Downloads query that metadata, so retrying
+        # an already acknowledged create must not depend on completion again.
+        return result.ok and (driver.name == "session_file_upload" or result.correct is True)
+
     async def request(self, driver, session, arguments):
         plan = arguments.get("plan")
         if plan is None:
@@ -51,7 +58,7 @@ class SessionDependencies:
             self.creations[key] = creation
             try:
                 result = await driver.request(session, **arguments)
-                creation.acknowledged = result.ok and result.correct is True
+                creation.acknowledged = self._acknowledged(driver, result)
                 return result
             finally:
                 creation.completed.set()
@@ -64,7 +71,7 @@ class SessionDependencies:
             async with creation.retry_lock:
                 if not creation.acknowledged:
                     result = await creation.driver.request(session, **creation.arguments)
-                    creation.acknowledged = result.ok and result.correct is True
+                    creation.acknowledged = self._acknowledged(creation.driver, result)
                     self._discard_acknowledged(key, creation)
                     if not creation.acknowledged:
                         result.latency_ms = (arguments["loop_time"]() - started) * 1000

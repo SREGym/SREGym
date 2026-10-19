@@ -130,3 +130,19 @@ def test_file_dependency_and_non_session_requests():
         original.request.assert_awaited_once_with(None, plan=None)
 
     asyncio.run(scenario())
+
+
+def test_file_metadata_ack_does_not_require_a_successful_completion_response():
+    async def scenario():
+        state = dependencies.SessionDependencies()
+        upload = driver("session_file_upload", return_value=Result(status=201, ok=True, correct=False))
+        download = driver("session_file_download", return_value=Result())
+        original = await state.request(upload, None, arguments())
+        assert original.correct is False  # The failed completion stays failed.
+        assert (await state.request(download, None, arguments())).correct is True
+        upload.request.assert_awaited_once()
+        download.request.return_value = Result(status=404, ok=False, correct=False)
+        assert (await state.request(download, None, arguments())).status == 404
+        upload.request.assert_awaited_once()  # Acknowledged metadata loss is not hidden.
+
+    asyncio.run(scenario())
