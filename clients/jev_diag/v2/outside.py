@@ -5,6 +5,9 @@ through its own configuration.
 * PriorityClasses used by the application's pods, or set as the cluster default.
 * DaemonSets and CronJobs in kube-system (they run on every node or on a schedule and touch every workload).
 * Namespaces named in the application's own addresses (`name.other-ns.svc`), read like the application's own.
+* Any other object, of any kind and anywhere in the cluster, that an operator tool (kubectl, a client library) wrote
+  after the application was deployed: the cluster's change log, read from each object's write history. Writes by
+  controllers, package installs, and the benchmark's own infrastructure are left out.
 
 Each object is listed with the components it acts on. Only an abnormal signal (a missing backend, no ready
 endpoints) or a write made after the application was deployed makes it a cluster finding; its routes or settings
@@ -17,11 +20,50 @@ import re
 from datetime import datetime
 
 from clients.jev_diag.v2 import changes as change_log
-from clients.jev_diag.v2.collector import kubectl_items
+from clients.jev_diag.v2.collector import kubectl_items, run_kubectl
 from clients.jev_diag.v2.derive import OBSERVABILITY_RE
 
 # Namespaces of the cluster and of the benchmark's own infrastructure; never read as part of the application.
 INFRA_NAMESPACES = {"kube-system", "kube-public", "kube-node-lease", "local-path-storage", "chaos-mesh", "khaos"}
+# The benchmark's own tooling (fault injection, the agent's MCP server); the change log never reads it.
+HARNESS_NAMESPACES = {"chaos-mesh", "khaos", "sregym"}
+HARNESS_GROUPS = ("chaos-mesh.org",)
+_HARNESS_NAME = re.compile(r"(?i)(?:^|[-.])mcp(?:$|[-.])")
+# Tools people and scripts use to change a cluster. Controllers and package installs (helm) write under their own
+# names and are not changes someone made to the running system.
+_OPERATOR_MANAGER = re.compile(r"^(?:kubectl(?:-[a-z-]+)?|OpenAPI-Generator)$")
+# Resources controllers rewrite constantly, and those the application's own namespaces are already read for.
+_CHURN_RESOURCES = {
+    "events",
+    "events.events.k8s.io",
+    "pods",
+    "endpoints",
+    "endpointslices.discovery.k8s.io",
+    "leases.coordination.k8s.io",
+    "replicasets.apps",
+    "controllerrevisions.apps",
+    "componentstatuses",
+    "podtemplates",
+}
+_READ_IN_APP = {
+    "deployments.apps",
+    "statefulsets.apps",
+    "daemonsets.apps",
+    "cronjobs.batch",
+    "jobs.batch",
+    "services",
+    "configmaps",
+    "secrets",
+    "networkpolicies.networking.k8s.io",
+    "persistentvolumeclaims",
+    "resourcequotas",
+    "limitranges",
+    "roles.rbac.authorization.k8s.io",
+    "rolebindings.rbac.authorization.k8s.io",
+    "serviceaccounts",
+    "horizontalpodautoscalers.autoscaling",
+    "ingresses.networking.k8s.io",
+}
 _SVC_HOST = re.compile(
     r"(?i)(?<![\w.-])(?P<svc>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.(?P<ns>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc\b"
 )
@@ -126,6 +168,60 @@ def collect_outside(
             meta = obj.get("metadata") or {}
             if _change(changes, kind, meta.get("name"), "kube-system", meta, set(), apps_created, deployed):
                 out.append(_finding(kind, meta.get("name"), "kube-system", [f"kube-system {kind} written"], set()))
+    return out
+
+
+def change_radar(
+    namespaces: list[str],
+    components: dict[str, dict],
+    errors: list[str],
+    changes: list[dict],
+    deployed: datetime | None,
+) -> list[dict]:
+    """Objects anywhere in the cluster that an operator tool wrote after the application was deployed, as findings
+    with change records appended to `changes`. Only the operator's own writes count (a controller updating the same
+    object later does not make it a change), and objects another collection already dates are skipped. A Node acts
+    on the components with pods on it; an object in an application namespace acts on that namespace's components."""
+    if deployed is None:
+        return []
+    try:
+        resources = run_kubectl(["api-resources", "--verbs=list", "-o", "name"]).split()
+    except Exception as exc:  # noqa: BLE001 - no discovery: no change log
+        errors.append(f"api-resources: {exc}")
+        return []
+    apps_created = [c.get("created") for c in components.values() if not c.get("related")]
+    known = {c["object"] for c in changes}
+    on_node: dict[str, set[str]] = {}
+    for cid, comp in components.items():
+        for pod in comp.get("pods") or []:
+            on_node.setdefault(pod.get("node") or "", set()).add(cid)
+    out: list[dict] = []
+    for resource in resources:
+        if resource in _CHURN_RESOURCES or resource.endswith(HARNESS_GROUPS):
+            continue
+        for obj in kubectl_items(resource, None, errors):
+            meta = obj.get("metadata") or {}
+            ns, name = meta.get("namespace"), meta.get("name") or ""
+            if ns in HARNESS_NAMESPACES or _HARNESS_NAME.search(name) or OBSERVABILITY_RE.search(name):
+                continue
+            if ns in namespaces and resource in _READ_IN_APP:
+                continue
+            writes = [w for w in change_log.spec_writes(meta) if _OPERATOR_MANAGER.match(w.get("manager") or "")]
+            if not writes:
+                continue
+            kind = obj.get("kind") or resource
+            if (f"{kind.lower()}/{ns}/{name}" if ns else f"{kind.lower()}/{name}") in known:
+                continue  # read and dated by its own collection
+            affects = (
+                on_node.get(name, set())
+                if kind == "Node"
+                else {c for c, comp in components.items() if comp["namespace"] == ns}
+            )
+            if _change(changes, kind, name, ns, {**meta, "managedFields": writes}, affects, apps_created, deployed):
+                managers = ", ".join(dict.fromkeys(w["manager"] for w in writes))
+                out.append(
+                    _finding(kind, name, ns, [f"written by {managers} after the application was deployed"], affects)
+                )
     return out
 
 
