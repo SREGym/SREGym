@@ -13,7 +13,12 @@ from typing import Any
 
 from typesafe_sdk import Choice
 
-from clients.jev_diag.classifier import EVIDENCE_QUESTION, MAX_EVIDENCE_ITEMS, build_characterization_questions
+from clients.jev_diag.classifier import (
+    CATEGORY_QUESTION,
+    EVIDENCE_QUESTION,
+    MAX_EVIDENCE_ITEMS,
+    build_characterization_questions,
+)
 from clients.jev_diag.v2.explain import Explanation
 
 NONE = "none_of_these"
@@ -109,22 +114,43 @@ def pick(
     return Pick(probabilities=totals, picks=picks)
 
 
-def pick_fact(
+@dataclass
+class Characterization:
+    """v1's characterization of one component: the fact that reveals the mechanism and the fault category."""
+
+    fact: str | None = None
+    fact_probability: float = 0.0
+    category: str | None = None
+    category_probability: float = 0.0
+
+
+def characterize(
     ask: Callable[[str, dict, dict], Any], state: dict, facts: list[str], *, rng: random.Random, asks: int = 2
-) -> tuple[str | None, float]:
-    """v1's key-evidence question ("which single item most directly reveals the mechanism?") over `facts`, asked
-    `asks` times in shuffled order with neutral ids; returns the averaged leader and its probability."""
+) -> Characterization:
+    """v1's characterization request (fault category + "which single item most directly reveals the mechanism?"),
+    asked `asks` times with the facts in shuffled order under neutral ids; probabilities are averaged."""
     facts = list(dict.fromkeys(facts))[:MAX_EVIDENCE_ITEMS]
-    totals = dict.fromkeys(facts, 0.0)
-    for n in range(asks if facts else 0):
+    fact_totals = dict.fromkeys(facts, 0.0)
+    category_totals: dict[str, float] = {}
+    for n in range(asks):
         order = facts[:]
         rng.shuffle(order)
         items = [{"id": f"f{i + 1}", "text": text} for i, text in enumerate(order)]
         by_id = {item["id"]: item["text"] for item in items}
-        questions = {EVIDENCE_QUESTION: build_characterization_questions(items)[EVIDENCE_QUESTION]}
-        answer = ask(f"fact:{n + 1}", {**state, "evidence": items}, questions).choices[EVIDENCE_QUESTION]
-        for label, prob in (answer.probabilities or {}).items():
-            if label in by_id:
-                totals[by_id[label]] += float(prob) / asks
-    best = max(totals, key=totals.get) if totals else None
-    return best, round(totals.get(best, 0.0), 4) if best else 0.0
+        response = ask(f"characterize:{n + 1}", {**state, "evidence": items}, build_characterization_questions(items))
+        choices = response.choices
+        if EVIDENCE_QUESTION in choices:
+            for label, prob in (choices[EVIDENCE_QUESTION].probabilities or {}).items():
+                if label in by_id:
+                    fact_totals[by_id[label]] += float(prob) / asks
+        if CATEGORY_QUESTION in choices:
+            for label, prob in (choices[CATEGORY_QUESTION].probabilities or {}).items():
+                category_totals[label] = category_totals.get(label, 0.0) + float(prob) / asks
+    out = Characterization()
+    if fact_totals:
+        out.fact = max(fact_totals, key=fact_totals.get)
+        out.fact_probability = round(fact_totals[out.fact], 4)
+    if category_totals:
+        out.category = max(category_totals, key=category_totals.get)
+        out.category_probability = round(category_totals[out.category], 4)
+    return out

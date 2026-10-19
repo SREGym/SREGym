@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from typesafe_sdk import ChoiceAnswer
 
-from clients.jev_diag.classifier import EVIDENCE_QUESTION
+from clients.jev_diag.classifier import CATEGORY_QUESTION, EVIDENCE_QUESTION
 from clients.jev_diag.v2.agent import V2Diagnoser
 from clients.jev_diag.v2.decide import QUESTION
 
@@ -35,21 +35,20 @@ def snapshot():
 class Client:
     """Answers each pick with the option whose text contains `prefer` (or none of these)."""
 
-    def __init__(self, prefer, fact=None):
-        self.prefer, self.fact = prefer, fact
+    def __init__(self, prefer, fact=None, category=None):
+        self.prefer, self.fact, self.category = prefer, fact, category
 
     def system_one(self, state, questions, **_):
-        name = QUESTION if QUESTION in questions else EVIDENCE_QUESTION
-        q, want = questions[name], (self.prefer if name == QUESTION else self.fact or "")
-        label = next((lbl for lbl, text in q.criteria.items() if want and want in text), None)
-        probs = {lbl: (0.9 if lbl == label else 0.1 / max(len(q.criteria) - 1, 1)) for lbl in q.criteria}
-        choice = label or max(probs, key=probs.get)
-        answer = ChoiceAnswer(choice=choice, confidence=0.8, probabilities=probs)
+        answers = {}
+        for name, q in questions.items():
+            want = {QUESTION: self.prefer, EVIDENCE_QUESTION: self.fact}.get(name) or ""
+            label = next((lbl for lbl, text in q.criteria.items() if want and want in str(text)), None)
+            if name == CATEGORY_QUESTION and self.category in q.criteria:
+                label = self.category
+            probs = {lbl: (0.9 if lbl == label else 0.1 / max(len(q.criteria) - 1, 1)) for lbl in q.criteria}
+            answers[name] = ChoiceAnswer(choice=label or max(probs, key=probs.get), confidence=0.8, probabilities=probs)
         return SimpleNamespace(
-            model="fake",
-            usage=SimpleNamespace(input_tokens=100, output_tokens=0),
-            answers={name: answer},
-            choices={name: answer},
+            model="fake", usage=SimpleNamespace(input_tokens=100, output_tokens=0), answers=answers, choices=answers
         )
 
 
@@ -97,3 +96,24 @@ def test_a_mechanism_unknown_answer_reads_the_component_and_reports_the_fact_the
     diag = V2Diagnoser(client=client, fetch_detail=lambda s, cid: read.append(cid) or detail).diagnose(snap)
     assert "Mechanism: container sidecar command: nc -lk -p 5000." in diag.text
     assert read == ["deployment/edge-proxy"] and diag.investigation["key_fact"].startswith("container sidecar")
+
+
+def test_every_answer_gets_v1s_key_evidence_and_fault_type_and_the_linked_outside_object():
+    snap = snapshot()
+    snap.cluster["findings"] = [
+        {
+            "kind": "NetworkPolicy",
+            "name": "deny",
+            "namespace": "shop",
+            "signal": "denies ingress",
+            "components": ["deployment/edge-proxy"],
+        }
+    ]
+    detail = {"workload": {"containers": [{"name": "envoy", "command": ["envoy", "-c", "/etc/envoy.yaml"]}]}}
+    client = Client("The fault is in this component", fact="container envoy command", category="config_value")
+    diag = V2Diagnoser(client=client, fetch_detail=lambda s, cid: detail).diagnose(snap)
+    assert "Mechanism: container envoy command: envoy -c /etc/envoy.yaml." in diag.text
+    assert (
+        "Fault type: config value" in diag.text
+        and "Fault object: networkpolicy `deny` in namespace `shop`" in diag.text
+    )
