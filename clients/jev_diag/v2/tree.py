@@ -740,8 +740,17 @@ class IterativeDiagnoser(JevDiagnoser):
     # ------------------------------------------------------------------ loop
 
     def diagnose(self, snapshot: ClusterSnapshot) -> Diagnosis:
+        """The decision tree; when the decision model cannot be reached (credit, outage), a report from code alone."""
         if not snapshot.components:
             raise ValueError("No workloads found in the application namespaces; nothing to classify.")
+        try:
+            return self._diagnose(snapshot)
+        except Exception as exc:  # noqa: BLE001 - a diagnosis without the model beats submitting nothing
+            logger.error("decision model unavailable, reporting from code alone: %s", exc)
+            self._trace("decide", "fallback_without_model", error=f"{type(exc).__name__}: {exc}")
+            return code_only_diagnosis(snapshot, f"{type(exc).__name__}: {exc}")
+
+    def _diagnose(self, snapshot: ClusterSnapshot) -> Diagnosis:
         component, kind, visible = self.triage(snapshot)
         queue = self.initial_queue(snapshot, component, kind)
         self._trace(
@@ -1124,3 +1133,38 @@ class IterativeDiagnoser(JevDiagnoser):
 def _sum(requests: list[dict], key: str) -> int | None:
     known = [r["usage"].get(key) for r in requests if isinstance(r["usage"].get(key), int)]
     return sum(known) if known else None
+
+
+def code_only_diagnosis(snapshot: ClusterSnapshot, reason: str) -> Diagnosis:
+    """The component code ranks first without the model: the one flagged with the change nearest the symptoms,
+    else the unhealthy component with the most non-symptom evidence, telemetry components last."""
+
+    def rank(item: tuple[str, dict]) -> tuple:
+        cid, comp = item
+        kinds = set(comp.get("evidence_kinds") or [])
+        return (
+            comp.get("role") == "observability",
+            not (comp.get("nearest_change_before_symptoms") or comp.get("most_recent_change")),
+            "change" not in kinds,
+            "configuration" not in kinds,
+            comp.get("healthy", True),
+            -len(comp.get("signals") or []),
+            cid,
+        )
+
+    cid = sorted(snapshot.components.items(), key=rank)[0][0]
+    result = ChoiceResult(choice=cid, confidence=0.0, probabilities={cid: 0.0})
+    diagnosis = Diagnosis(
+        component=cid,
+        component_result=result,
+        fault_visible=None,
+        category_result=None,
+        evidence_result=None,
+        evidence=[],
+        model="",
+        input_tokens=None,
+        output_tokens=None,
+        investigation={"steps": [], "concluded": cid, "fallback": f"decision model unavailable: {reason}"},
+    )
+    diagnosis.text = build_report(snapshot, diagnosis)
+    return diagnosis
