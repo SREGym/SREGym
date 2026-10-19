@@ -23,6 +23,12 @@ SETTING_RE = re.compile(r"(?i)retr|attempt|timeout|deadline|backoff|qps|rate|lim
 MAX_INPUTS = 4
 POD_PREFIX_RE = re.compile(r"^pod [\w.-]+: ")
 CONNECT_CLASS = "connectivity or timeout"
+# The team's checks phrase findings about an object that acts on a workload from outside as "<kind> <name> ..."
+# or "selected by <Kind> <name>" on the workload; such a finding is that object's evidence, not the workload's own.
+OUTSIDE_RE = re.compile(
+    r"(?i)^(?:selected by |coredns rule |(?:service account|service|networkpolicy|resourcequota|limitrange|"
+    r"mutatingwebhookconfiguration|validatingwebhookconfiguration|clusterrole|role) [\w./-]+ )"
+)
 TIMEOUT_RE = re.compile(r"(?i)time ?out|timed out|deadline")
 # The team's check for an object rewritten after a reader started that the reader only reads at startup.
 STALE_RE = re.compile(r"^(\w+) ([\w.-]+) was rewritten .*still use the previous values")
@@ -60,6 +66,16 @@ def findings_about(components: dict[str, dict], kind: str, name: str, limit: int
             if needle in low and " was modified " not in low and " was created " not in low and sig not in out:
                 out.append(sig)
     return out[:limit]
+
+
+def named_by(components: dict[str, dict], kind: str, name: str) -> list[str]:
+    """Components with a check finding that starts by naming the object ("service frontend selector ...")."""
+    head = f"{kind.lower()} {name} ".lower()
+    return [
+        cid
+        for cid, comp in components.items()
+        if any(sig.lower().startswith(head) for sig in comp.get("signals") or [])
+    ]
 
 
 def timing(onset: Any, at: Any, what: str) -> Prediction:
@@ -141,6 +157,10 @@ def acts_on_explanations(snapshot: Any) -> list[Explanation]:
         kind, name, ns = (f.get("kind") or "object").lower(), f.get("name"), f.get("namespace")
         origin = f"{kind}/{ns}/{name}" if ns else f"{kind}/{name}"
         targets = [c for c in f.get("components") or [] if c in components]
+        targets += [c for c in named_by(components, kind, name) if c not in targets]
+        linked = [
+            Prediction(f"the checks link {kind} {name} to {', '.join(targets)}", SUPPORTS, group=f"linked:{origin}")
+        ]
         out.append(
             Explanation(
                 key=f"acts-on:{origin}:{f.get('signal', '')[:60]}",
@@ -149,7 +169,7 @@ def acts_on_explanations(snapshot: Any) -> list[Explanation]:
                 mechanism=f"{kind} {name} acts on {', '.join(targets) or 'the application'}: {f.get('signal')}.",
                 values=([str(f.get("signal"))] if f.get("signal") else []) + findings_about(components, kind, name),
                 impact=sorted({i for c in targets for i in impact_of(components, c)}),
-                predictions=[own_symptoms(components[c], c) for c in targets],
+                predictions=[own_symptoms(components[c], c) for c in targets] + (linked if targets else []),
             )
         )
     return out
@@ -378,8 +398,10 @@ def own_settings(comp: dict) -> list[str]:
     without alerts, symptoms, changes or other components' errors."""
     out: list[str] = []
     for s in comp.get("signals") or []:
-        if s.startswith(("firing alert", *POINTED_MARKERS, *OWN_LOG_MARKERS)) or any(
-            m in s for m in (*CHANGE_MARKERS, *SYMPTOM_MARKERS)
+        if (
+            s.startswith(("firing alert", *POINTED_MARKERS, *OWN_LOG_MARKERS))
+            or any(m in s for m in (*CHANGE_MARKERS, *SYMPTOM_MARKERS))
+            or OUTSIDE_RE.match(s)
         ):
             continue
         s = POD_PREFIX_RE.sub("", s)  # the same finding on every replica counts once
@@ -449,6 +471,8 @@ def build_explanations(snapshot: Any, details: dict[str, dict] | None = None) ->
                 first = acts_on[e.origin]
                 first.values += [v for v in e.values if v not in first.values]
                 first.impact = sorted(set(first.impact) | set(e.impact))
+                groups = {p.group for p in first.predictions}
+                first.predictions += [p for p in e.predictions if p.group not in groups]
                 continue
             if e.pattern == "acts-on":
                 acts_on[e.origin] = e

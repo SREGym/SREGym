@@ -173,3 +173,18 @@ def test_a_reader_still_using_values_from_before_a_rewrite_is_the_origin_and_the
     (e,) = [e for e in build_explanations(snapshot({"deployment/catalog": reader})) if e.key.startswith("stale-read")]
     assert e.origin == "deployment/shop/catalog" and e.contributing == ["secret/shop/db-conn"]
     assert e.specific_groups() == 1  # the rejected logins, beyond its own symptoms
+
+
+def test_a_finding_that_names_an_outside_object_is_that_objects_evidence_not_the_workloads_own():
+    wrong = "service frontend selector {'app': 'front'} does not match this workload's pod labels {'app': 'frontend'}"
+    web = comp(
+        "Deployment",
+        "frontend",
+        healthy=False,
+        signals=[wrong, "service frontend selects this component but has 0 ready endpoints"],
+    )
+    svc = {"kind": "Service", "name": "frontend", "namespace": "shop", "signal": "selector matches no workload"}
+    keys = {e.key: e for e in build_explanations(snapshot({"deployment/frontend": web}, findings=[svc]))}
+    assert "own-setting:deployment/frontend" not in keys
+    (e,) = [e for e in keys.values() if e.pattern == "acts-on" and e.origin == "service/shop/frontend"]
+    assert e.impact == ["deployment/shop/frontend"] and e.specific_groups() == 1  # linked by the check
