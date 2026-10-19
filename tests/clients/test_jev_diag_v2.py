@@ -178,6 +178,33 @@ def test_a_change_made_before_the_application_existed_is_dropped():
     assert ranked == [] and cluster["recent_changes"] == [] and comps["deployment/frontend"]["signals"] == []
 
 
+def test_a_write_made_before_the_deploy_sets_no_changed_flag_and_no_finding(monkeypatch):
+    from clients.jev_diag.timeutil import set_now
+    from clients.jev_diag.v2 import changes, outside
+
+    def written(name: str, ns: str, at: str) -> dict:
+        created = {"manager": "a", "time": "2026-10-19T07:00:00Z", "fieldsV1": {"f:spec": {}}}
+        later = {"manager": "b", "time": at, "fieldsV1": {"f:spec": {"f:x": {}}}}
+        meta = {"name": name, "namespace": ns, "creationTimestamp": "2026-10-19T07:00:00Z"}
+        return {"metadata": {**meta, "managedFields": [created, later]}, "spec": {"podSelector": {}}}
+
+    before, after = "2026-10-19T07:30:00Z", "2026-10-19T07:55:00Z"  # the application is deployed at 07:50
+    deployed = changes.parse_time("2026-10-19T07:50:00Z")
+    items = {"daemonsets": [written("proxy", "kube-system", before), written("agent", "kube-system", after)]}
+    monkeypatch.setattr(outside, "kubectl_items", lambda resource, ns, errors, **k: items.get(resource, []))
+    comps = {"deployment/a": _comp("a", "2026-10-19T07:50:00Z", template_labels={}, network_policies=[])}
+    set_now(changes.parse_time("2026-10-19T08:00:00Z"))
+    try:
+        recorded: list[dict] = []
+        found = outside.collect_outside([NS], comps, {}, [], recorded, deployed)
+        policies = [written("early", NS, before), written("late", NS, after)]
+        early, late = v2_collector.attach_network_policies(policies, comps, [], deployed)
+    finally:
+        set_now(None)
+    assert [f["name"] for f in found] == ["agent"] and len(recorded) == 2  # ranking drops the early record
+    assert not early.get("changed") and late["changed"]
+
+
 def test_probe_description_carries_timing_with_defaults_for_unset_fields():
     from clients.jev_diag.v2.checks import describe_probe
 

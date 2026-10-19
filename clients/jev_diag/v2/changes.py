@@ -493,6 +493,14 @@ def application_created(components: dict[str, dict]) -> datetime | None:
     return min(times) if times else None
 
 
+def before_deploy(change: dict, deployed: datetime | None) -> bool:
+    """Whether a change was made before the application was deployed. One fault is injected after the application
+    is deployed, so such a write (left by an earlier problem or by cluster setup) cannot be it."""
+    at = parse_time(change.get("at"))
+    gap = seconds_between(deployed, at) if deployed and at else None
+    return gap is not None and gap > DEPLOY_TOLERANCE_SECONDS
+
+
 def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datetime | None = None) -> list[dict]:
     """Order recorded changes by their relation to the first active symptom and attach them as signals.
 
@@ -507,16 +515,9 @@ def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datet
     deployed = application_created(components)
     for raw in cluster.get("_changes") or []:
         change = dict(raw)
-        at = parse_time(change.get("at"))
-        # one fault is injected after the application is deployed: an earlier write (left by an earlier problem
-        # or by cluster setup) cannot be it
-        if (
-            deployed
-            and at
-            and seconds_between(deployed, at) is not None
-            and seconds_between(deployed, at) > DEPLOY_TOLERANCE_SECONDS
-        ):
+        if before_deploy(change, deployed):
             continue
+        at = parse_time(change.get("at"))
         change["seconds_ago"] = seconds_ago(at)
         change["seconds_before_symptoms"] = seconds_between(onset, at) if onset else None
         affected = [components[c] for c in change.get("affects") or [] if c in components]
