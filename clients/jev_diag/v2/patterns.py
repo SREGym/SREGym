@@ -10,7 +10,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from clients.jev_diag.derive import CHANGE_MARKERS, OWN_LOG_MARKERS, POINTED_MARKERS, SYMPTOM_MARKERS
+from clients.jev_diag.derive import (
+    CHANGE_MARKERS,
+    OBSERVABILITY_RE,
+    OWN_LOG_MARKERS,
+    POINTED_MARKERS,
+    ROLE_SYNONYMS,
+    SYMPTOM_MARKERS,
+    TELEMETRY_RE,
+)
 from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2.explain import CONTRADICTS, PARTIAL, SUPPORTS, UNKNOWN, Explanation, Prediction
 
@@ -26,6 +34,10 @@ CONNECT_CLASS = "connectivity or timeout"
 ARRIVAL_AFTER_S = 15  # created at least this long after the bulk of the application
 ARRIVAL_BEFORE_ONSET_S = 600  # and at most this long before the first symptom
 HOST_RE = r"(?<![\w-]){name}(?=[:./]|$)"  # a component name in host position: "cache:6379", "http://cart/"
+# Data-store and broker words (the team's synonym groups, observability tools left out): a client's error names
+# the protocol.
+STORE_WORDS = [g for g in ROLE_SYNONYMS if not any(OBSERVABILITY_RE.search(w) for w in g)]
+STORE_KINDS = {"deployment", "statefulset", "daemonset"}  # long-running servers; a job named after a store is not one
 # The team's checks phrase findings about an object that acts on a workload from outside as "<kind> <name> ..."
 # or "selected by <Kind> <name>" on the workload; such a finding is that object's evidence, not the workload's own.
 OUTSIDE_RE = re.compile(
@@ -208,6 +220,52 @@ def config_links(components: dict[str, dict], details: dict[str, dict]) -> dict[
     return links
 
 
+def _store_words(name: Any) -> set[str]:
+    """The data-store or broker words a component is known by: its name parts' synonym groups."""
+    parts = {t for t in re.split(r"[-_./]", str(name or "").lower()) if t}
+    return set().union(*(g for g in STORE_WORDS if g & parts)) if parts else set()
+
+
+def error_links(components: dict[str, dict], details: dict[str, dict]) -> dict[str, set[str]]:
+    """caller -> data stores or brokers broken themselves that the caller's own error lines name by protocol or
+    implementation ("Failed to create mongodb index", "Wasn't able to connect to redis"), even when the address in
+    the line is cut off. Telemetry-export errors are left out; a store the caller is itself named after is skipped."""
+    stores = {
+        cid: words
+        for cid, c in components.items()
+        if _broken_itself(c)
+        and c.get("role") != "observability"
+        and str(c.get("kind", "")).lower() in STORE_KINDS
+        and (words := _store_words(c.get("name")))
+    }
+    links: dict[str, set[str]] = {}
+    for cid, comp in components.items():
+        own_name = str(comp.get("name") or "").lower()
+        lines = [f.get("line", "") for f in (comp.get("log_findings") or []) + (comp.get("log_signals") or [])]
+        lines += [s.get("line", "") for s in ((details.get(cid) or {}).get("logs") or {}).get("error_samples") or []]
+        text = " ".join(
+            line.split(":", 1)[1] if line.lower().startswith(own_name + ":") else line
+            for line in lines
+            if line and not TELEMETRY_RE.search(line)
+        ).lower()
+        if not text:
+            continue
+        own = _store_words(own_name)
+        for target, words in stores.items():
+            words = words - own
+            if target != cid and any(re.search(rf"(?<![a-z0-9]){re.escape(w)}(?![a-z0-9])", text) for w in words):
+                links.setdefault(cid, set()).add(target)
+    return links
+
+
+def call_links(components: dict[str, dict], details: dict[str, dict]) -> dict[str, set[str]]:
+    """caller -> callees found by configuration addresses or by the caller's own error lines."""
+    links = config_links(components, details)
+    for cid, targets in error_links(components, details).items():
+        links.setdefault(cid, set()).update(targets)
+    return links
+
+
 def dependency_explanations(snapshot: Any, details: dict[str, dict] | None = None) -> list[Explanation]:
     """For each component that other components' still-occurring errors name: it fails or rejects them."""
     components = snapshot.components
@@ -217,7 +275,7 @@ def dependency_explanations(snapshot: Any, details: dict[str, dict] | None = Non
             if target in components and target != cid:
                 callers.setdefault(target, []).append(cid)
     out: list[Explanation] = []
-    for src, targets in config_links(components, details or {}).items():
+    for src, targets in call_links(components, details or {}).items():
         for target in targets:
             if target in components and target not in callers and not _healthy(components[src]):
                 if _broken_itself(components[target]):
@@ -257,11 +315,15 @@ def _configured_dependency(components: dict[str, dict], target: str, src: str) -
         key=f"dependency:{target}",
         pattern="dependency",
         origin=object_id(tcomp),
-        mechanism=f"{target} is broken, so {src}, which is configured to call it, fails.",
+        mechanism=f"{target} is broken, so {src}, which calls it, fails.",
         values=[s for s in tcomp.get("signals") or [] if not s.startswith(POINTED_MARKERS)][:3],
         impact=sorted({object_id(tcomp), object_id(components[src])}),
         predictions=[
-            Prediction(f"{src} is configured to call {target}", SUPPORTS, group=f"linked:{target}"),
+            Prediction(
+                f"{src} calls {target} (its configuration or its own errors name it)",
+                SUPPORTS,
+                group=f"linked:{target}",
+            ),
             Prediction(f"{target} shows failures of its own", SUPPORTS, group=f"symptoms:{target}"),
         ],
     )
@@ -308,7 +370,7 @@ def victim_check(explanations: list[Explanation], components: dict[str, dict], d
     calls a component that is broken itself (named by X's errors or addressed by X's configuration). Hidden-state
     and stale-read explanations, where the client is the origin, are left alone."""
     by_object = {object_id(c): cid for cid, c in components.items()}
-    links = config_links(components, details)
+    links = call_links(components, details)
     for e in explanations:
         cid = by_object.get(e.origin)
         if e.pattern not in ("dependency", PARTIAL) or cid is None or _healthy(components[cid]):

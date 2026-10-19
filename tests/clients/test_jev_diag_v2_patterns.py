@@ -218,3 +218,34 @@ def test_a_component_that_appeared_after_the_application_and_just_before_the_sym
     components["job/flood"] = comp("Job", "flood", healthy=False, created="2026-10-18T09:59:40+00:00")
     keys = {e.key for e in build_explanations(snapshot(components))}
     assert "arrival:job/flood" in keys and not any(k.startswith("arrival:deployment/") for k in keys)
+
+
+def test_a_caller_whose_own_errors_name_a_crashing_component_is_its_victim():
+    err = {"line": "url-store: <error> Failed to create mongodb index: connection refused calling 'url-store-mong…"}
+    noise = {"line": "url-store: [OTLP Exporter] Export() failed: DNS resolution failed for otel-collector:4317"}
+    components = {
+        "deployment/url-store": comp(
+            "Deployment",
+            "url-store",
+            healthy=False,
+            evidence_kinds=["pointed_at"],
+            log_findings=[err, noise],
+            referenced_by_errors_from={"deployment/text": {}},
+        ),
+        "deployment/text": comp("Deployment", "text", healthy=False, errors_point_to=["deployment/url-store"]),
+        "deployment/url-store-mongodb": comp(
+            "Deployment",
+            "url-store-mongodb",
+            healthy=False,
+            evidence_kinds=["symptoms"],
+            signals=["container mongo was OOMKilled"],
+        ),
+        "deployment/otel-collector": comp(
+            "Deployment", "otel-collector", healthy=False, role="observability", evidence_kinds=["symptoms"]
+        ),
+    }
+    keys = {e.key: e for e in build_explanations(snapshot(components))}
+    assert keys["dependency:deployment/url-store"].contradicted()  # the caller is the victim
+    db = keys["dependency:deployment/url-store-mongodb"]
+    assert not db.contradicted() and db.specific_groups() == 1
+    assert "dependency:deployment/otel-collector" not in keys  # exporter noise links nothing
