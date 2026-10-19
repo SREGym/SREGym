@@ -641,6 +641,26 @@ def shared_rwo_claims(components: dict[str, dict], access_modes: dict[tuple[str,
             )
 
 
+def violates_limit_range(comp: dict, limits: list[dict]) -> bool:
+    """Whether any of the workload's containers sets a limit above a LimitRange's Container max or a request below its
+    min (such a pod is rejected when it is next created)."""
+    for item in limits or []:
+        if item.get("type") != "Container":
+            continue
+        for c in comp.get("containers") or []:
+            for res, cap in (item.get("max") or {}).items():
+                parse = parse_cpu_millis if res == "cpu" else parse_memory_bytes
+                value = parse((c.get("limits") or {}).get(res))
+                if value is not None and (parse(cap) or 0) and value > parse(cap):
+                    return True
+            for res, floor in (item.get("min") or {}).items():
+                parse = parse_cpu_millis if res == "cpu" else parse_memory_bytes
+                value = parse((c.get("requests") or {}).get(res))
+                if value is not None and parse(floor) is not None and value < parse(floor):
+                    return True
+    return False
+
+
 def host_port_clashes(components: dict[str, dict], daemonsets: list[dict]) -> None:
     """Workloads that request a host port another workload also binds. A node offers each host port once, so pods of
     the two cannot run on the same node; against a DaemonSet, which runs on every node, they cannot run anywhere it

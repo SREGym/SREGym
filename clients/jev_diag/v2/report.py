@@ -1,17 +1,19 @@
 """The submitted diagnosis, built by code from the investigation's choices and the collected facts. No model
 writes text.
 
-Lines, in this order: Root cause, Mechanism, Fault type, Details, Effect, Observed, Affected. The subject of the root-cause
-sentence is the object that holds the bad value or the bad state, and the other object involved is named in the same
-sentence with its relation. Which object that is depends on the kind of relation (RELATIONS: a blocked input, a
-retry call path, a job driving a failing component, an object carrying the bad value, one change on several
-workloads, or the workload itself). Changed values are written old -> new. Callers with symptoms are listed as
-affected, never as causes. The fault type is the investigation's cause category in v1's words, stated only when
-the decision is at least MIN_CATEGORY_CONFIDENCE sure of it; there are no probabilities. A second, independent cause gets its own block.
+Lines, in this order: Root cause, Mechanism, Fault type, Scope (of a policy cause), Details, Effect, Observed,
+Affected. The subject of the root-cause sentence is the object that holds the bad value or the bad state, and the
+other object involved is named in the same sentence with its relation. Which object that is depends on the kind of
+relation (RELATIONS: a blocked input, a retry call path, a job driving a failing component, an object carrying the
+bad value, one change on several workloads, or the workload itself). Changed values are written old -> new. Callers
+with symptoms are listed as affected, never as causes. The fault type is the investigation's cause category in v1's
+words, stated only when the decision is at least MIN_CATEGORY_CONFIDENCE sure of it; there are no probabilities. A
+second, independent cause gets its own block.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -354,6 +356,47 @@ def blocked_mechanism(b: dict) -> str:
     return f"one input item fails processing again and again and blocks the items behind it{evidence}"
 
 
+def scope(snapshot: ClusterSnapshot, d: Diagnosis) -> str | None:
+    """How far a policy cause reaches beyond the workload it broke: the requests an admission webhook intercepts, or
+    the other workloads a namespace policy applies to (for a LimitRange, those whose settings it already rejects)."""
+    fo = d.fault_object or {}
+    kind, ns = fo.get("kind") or "", fo.get("namespace")
+    if kind.endswith("WebhookConfiguration"):
+        parts = []
+        for wh in snapshot.cluster.get("admission_webhooks") or []:
+            if wh.get("configuration") != fo.get("name"):
+                continue
+            where = (
+                f"namespaces matching {json.dumps(wh['namespace_selector'])}"
+                if wh.get("namespace_selector")
+                else "every namespace"
+            )
+            objects = f" and objects matching {json.dumps(wh['object_selector'])}" if wh.get("object_selector") else ""
+            parts.append(f"{'; '.join(wh.get('rules') or []) or 'its rules'} in {where}{objects}")
+        return f"it intercepts {', '.join(dict.fromkeys(parts))}" if parts else None
+    if kind not in ("LimitRange", "ResourceQuota"):
+        return None
+    others = [c for cid, c in snapshot.components.items() if c["namespace"] == ns and cid != d.component]
+    if kind == "LimitRange":
+        limits = next(
+            (
+                c.get("limits") or []
+                for c in snapshot.cluster.get("namespace_constraints") or []
+                if c.get("kind") == kind and c.get("name") == fo.get("name") and c.get("namespace") == ns
+            ),
+            [],
+        )
+        others = [c for c in others if checks.violates_limit_range(c, limits)]
+        if others:
+            names = ", ".join(f"`{c['name']}`" for c in others[:MAX_AFFECTED])
+            more = f" and {len(others) - MAX_AFFECTED} more" if len(others) > MAX_AFFECTED else ""
+            return (
+                f"it applies to every pod created in namespace `{ns}`; {names}{more} also "
+                f"{'violates' if len(others) == 1 else 'violate'} it, so their pods are rejected when next created"
+            )
+    return f"it applies to every pod created in namespace `{ns}`"
+
+
 def build_report(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     text = cause_block(snapshot, d)
     if d.second is not None:
@@ -398,6 +441,9 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     if sure and category in CATEGORY_GLOSS and category != OTHER_OPTION:
         lines.append(f"Fault type: {category.replace('_', ' ')} ({CATEGORY_GLOSS[category]}).")
 
+    reach = scope(snapshot, d)
+    if reach:
+        lines.append(f"Scope: {reach}.")
     settings = CATEGORY_SETTINGS.get(category or "")
     details = [e["text"] for e in d.evidence if settings and settings.search(e["text"]) and e["text"] != fact]
     details = details[:MAX_SETTINGS] + [c for c in changes if c != fact]
