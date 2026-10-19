@@ -486,8 +486,9 @@ def describe_change(change: dict, component_id: str | None = None) -> str:
 
 
 def application_created(components: dict[str, dict]) -> datetime | None:
-    """When the application was deployed: the earliest creation time among its workloads."""
-    times = [parse_time(c.get("created")) for c in components.values()]
+    """When the application was deployed: the earliest creation time among its own workloads (a related
+    namespace's workloads may be older)."""
+    times = [parse_time(c.get("created")) for c in components.values() if not c.get("related")]
     times = [t for t in times if t]
     return min(times) if times else None
 

@@ -384,6 +384,56 @@ def test_every_backend_probe_command_renders_and_reports_an_auth_requirement(mon
     assert result["meaning"] == "the server requires authentication for this command"
 
 
+def _fake_cluster(monkeypatch, items: dict, related: list[str]) -> None:
+    """kubectl reads served from `items` ({(resource, namespace): [objects]}); every other read fails."""
+    import copy
+
+    from clients.jev_diag.v2 import outside
+
+    def read(resource, namespace, errors, **kwargs):
+        return copy.deepcopy(items.get((resource, namespace), []))
+
+    def no_cluster(*args, **kwargs):
+        raise RuntimeError("no cluster")
+
+    monkeypatch.setattr(v2_collector, "kubectl_items", read)
+    monkeypatch.setattr(outside, "kubectl_items", read)
+    monkeypatch.setattr(outside, "related_namespaces", lambda namespaces, errors: related)
+    monkeypatch.setattr(v2_collector, "run_kubectl", no_cluster)
+
+
+def test_a_related_namespace_never_replaces_or_dates_the_application(monkeypatch):
+    from clients.jev_diag.v2 import changes
+
+    def dep(name: str, ns: str, created: str) -> dict:
+        obj = deployment(name)
+        obj["metadata"].update(namespace=ns, creationTimestamp=created)
+        return obj
+
+    pending = {
+        "metadata": {
+            "name": "frontend-x-1",
+            "namespace": "data",
+            "labels": {"app": "frontend"},
+            "ownerReferences": [{"kind": "ReplicaSet", "name": "frontend-x"}],
+        },
+        "spec": {"containers": [{"name": "frontend"}]},
+        "status": {"phase": "Pending"},
+    }
+    old = "2026-10-19T06:00:00Z"
+    items = {
+        ("deployments", NS): [dep("frontend", NS, "2026-10-19T07:50:00Z")],
+        ("deployments", "data"): [dep("frontend", "data", old), dep("db", "data", old)],
+        ("pods", "data"): [pending],
+    }
+    _fake_cluster(monkeypatch, items, ["data"])
+    snap = v2_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
+    front = snap.components["deployment/frontend"]
+    assert front["namespace"] == NS and not front.get("related") and not front.get("pods")  # the Pending pod is not its
+    assert snap.components["deployment/db"]["related"]
+    assert changes.application_created(snap.components) == changes.parse_time("2026-10-19T07:50:00Z")
+
+
 def test_namespaces_the_app_addresses_are_read_too(monkeypatch):
     from clients.jev_diag.v2 import outside
 
