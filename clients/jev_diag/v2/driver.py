@@ -114,6 +114,12 @@ def run(
 
 def collect(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standalone: bool, host: ModuleType):
     """Wait for the fault to surface, then read the cluster into a snapshot (v2's collection)."""
+    baseline = wait(args, app_info, trace, standalone, host)
+    return read_cluster(args, app_info, trace, standalone, baseline)
+
+
+def wait(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standalone: bool, host: ModuleType):
+    """Sleep until the fault has had time to surface; returns the trend baseline sample (or None)."""
     delay = 0.0 if standalone else max(0.0, args.start_delay)
     interval = (
         args.trend_interval if args.trend_interval is not None else (0.0 if standalone else host.DEFAULT_TREND_INTERVAL)
@@ -130,7 +136,13 @@ def collect(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, stan
         with trace.timed("collect", "trend_baseline", interval=interval):
             baseline = trend.collect_sample(list(app_info.get("namespaces") or [app_info.get("namespace")]))
         time.sleep(interval)
+    return baseline
 
+
+def read_cluster(
+    args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standalone: bool, baseline: dict | None
+):
+    """Read the cluster once into v2's snapshot (no waiting)."""
     with trace.timed("collect", "snapshot", include_logs=not args.no_logs, log_tail=args.log_tail):
         snapshot = collect_snapshot(
             app_info,
