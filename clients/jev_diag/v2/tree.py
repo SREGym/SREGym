@@ -191,39 +191,69 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
             items.append(f"RBAC {role.get('kind')} {role.get('name')}: {sig}")
     if rbac.get("bindings") is not None:
         items.append(f"RBAC bindings for {rbac.get('service_account')}: {rbac.get('bindings') or 'none'}")
+    log_items: list[str] = []
+    event_items: list[str] = []
+    dep_items: list[str] = []
     logs = detail.get("logs") or {}
     if logs.get("error_lines"):
-        items.append(
+        log_items.append(
             f"{logs.get('error_lines_still_occurring') or 0} error log lines still occurring, "
             f"{logs.get('error_lines_stopped') or 0} from errors that stopped"
         )
     for s in logs.get("error_samples", [])[:8]:
         state = s.get("state") or "undated"
         when = f", last seen {s['last_seen_seconds_ago']}s ago" if s.get("last_seen_seconds_ago") is not None else ""
-        items.append(f"log x{s.get('count')} ({state}{when}): {s.get('line')}")
+        log_items.append(f"log x{s.get('count')} ({state}{when}): {s.get('line')}")
     for r in logs.get("repeated_failures") or []:
-        items.append(
+        log_items.append(
             f"repeated failure x{r['count']} over {r['span_seconds']}s with unchanged tokens "
             f"{', '.join(r['constant_tokens'])}: {r['line']}"
         )
     for key, lines in (logs.get("previous_container_logs") or {}).items():
         for ln in lines[-3:]:
-            items.append(f"previous log {key}: {ln}")
+            log_items.append(f"previous log {key}: {ln}")
     for ev in (detail.get("events") or [])[:6]:
         if ev.get("type") == "Warning":
-            items.append(f"event {ev.get('reason')} x{ev.get('count')} on {ev.get('object')}: {ev.get('message')}")
+            event_items.append(
+                f"event {ev.get('reason')} x{ev.get('count')} on {ev.get('object')}: {ev.get('message')}"
+            )
     for dep in detail.get("failing_targets") or []:
-        items.append(f"this component's still-occurring error lines refer to its dependency {dep}")
+        dep_items.append(f"this component's still-occurring error lines refer to its dependency {dep}")
     for cid, info in (detail.get("calls") or {}).items():
         if info.get("own_signals"):
-            items.append(f"dependency {cid} is abnormal on its own: {info['own_signals'][0]}")
+            dep_items.append(f"dependency {cid} is abnormal on its own: {info['own_signals'][0]}")
         elif info.get("looks_healthy_on_its_own"):
-            items.append(f"dependency {cid} looks healthy on its own ({info.get('pods_ready')} pods ready)")
+            dep_items.append(f"dependency {cid} looks healthy on its own ({info.get('pods_ready')} pods ready)")
     for src, classes in (detail.get("called_by_with_errors") or {}).items():
-        items.append(f"still-occurring errors from {src} name this component: {classes}")
-    items += other_env
-    unique = list(dict.fromkeys(i for i in items if i))[:MAX_EVIDENCE]
-    return [{"id": f"E{i + 1}", "text": text} for i, text in enumerate(unique)]
+        dep_items.append(f"still-occurring errors from {src} name this component: {classes}")
+    return [
+        {"id": f"E{i + 1}", "text": text}
+        for i, text in enumerate(cap_evidence(items, log_items, event_items, dep_items, other_env))
+    ]
+
+
+# Slots kept for each kind of evidence, so a long settings list never crowds out every log line or event.
+EVIDENCE_RESERVE = {"logs": 4, "events": 3, "dependencies": 3}
+
+
+def cap_evidence(head: list[str], logs: list[str], events: list[str], deps: list[str], tail: list[str]) -> list[str]:
+    """At most MAX_EVIDENCE unique items: the settings and checks first, each other kind keeping a few slots."""
+    groups = {"logs": _unique(logs), "events": _unique(events), "dependencies": _unique(deps)}
+    reserved = {k: min(n, len(groups[k])) for k, n in EVIDENCE_RESERVE.items()}
+    head = [i for i in _unique(head) if not any(i in g for g in groups.values())]
+    out = head[: MAX_EVIDENCE - sum(reserved.values())]
+    for kind in ("logs", "events", "dependencies"):
+        out += [i for i in groups[kind][: reserved[kind]] if i not in out]
+    for extra in [*head, *(i for k in groups for i in groups[k]), *_unique(tail)]:
+        if len(out) >= MAX_EVIDENCE:
+            break
+        if extra not in out:
+            out.append(extra)
+    return out[:MAX_EVIDENCE]
+
+
+def _unique(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(i for i in items if i))
 
 
 def linked_components(snapshot: ClusterSnapshot, cid: str, detail: dict) -> list[str]:

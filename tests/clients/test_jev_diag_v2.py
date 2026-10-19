@@ -151,3 +151,18 @@ def test_probe_description_carries_timing_with_defaults_for_unset_fields():
     assert text.startswith("httpGet HTTP :8080/health")
     assert "periodSeconds=1" in text and "failureThreshold=1" in text
     assert "initialDelaySeconds=0 (default)" in text and "timeoutSeconds=1 (default)" in text
+
+
+def test_evidence_cap_keeps_some_logs_events_and_dependencies():
+    from clients.jev_diag.v2.tree import MAX_EVIDENCE, cap_evidence
+
+    head = [f"setting {i}" for i in range(40)]
+    logs = [f"log {i}" for i in range(10)]
+    events = [f"event {i}" for i in range(5)]
+    deps = ["dependency x looks healthy on its own"]
+    out = cap_evidence(head, logs, events, deps, ["env A=1"])
+    assert len(out) == MAX_EVIDENCE and out[0] == "setting 0"
+    assert sum(i.startswith("log ") for i in out) == 4 and sum(i.startswith("event ") for i in out) == 3
+    assert deps[0] in out
+    short = cap_evidence(["s"], ["l"], [], [], ["env A=1"])
+    assert short == ["s", "l", "env A=1"]
