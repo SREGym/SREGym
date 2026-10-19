@@ -15,7 +15,8 @@ from typing import Any
 
 from clients.jev_diag.classifier import ChoiceResult, Diagnosis, JevDiagnoser, _sum_usage
 from clients.jev_diag.collector import ClusterSnapshot, fit_state_to_budget
-from clients.jev_diag.v2.decide import NONE, TOP_K, pick, shortlist
+from clients.jev_diag.tree import detail_evidence
+from clients.jev_diag.v2.decide import NONE, TOP_K, pick, pick_fact, shortlist
 from clients.jev_diag.v2.explain import PARTIAL, Explanation
 from clients.jev_diag.v2.patterns import build_explanations
 from clients.jev_diag.v2.report import build_report
@@ -24,6 +25,7 @@ logger = logging.getLogger("all.jev_diag v2.agent")
 
 STATE_BUDGET = 20000  # tokens of focused evidence per decision request
 MAX_SIGNALS = 8
+KEY_FACT_REQUESTS = 2  # beyond max_requests: the key-fact question after a mechanism-unknown answer
 
 
 class V2Diagnoser(JevDiagnoser):
@@ -143,6 +145,9 @@ class V2Diagnoser(JevDiagnoser):
             if route == "accept" or not self._look_closer(snapshot, candidates, route):
                 break
         winner = self._winner(result, candidates, explanations)
+        key_fact = self._key_fact(snapshot, winner) if winner.pattern == PARTIAL else None
+        if key_fact is not None:
+            winner = key_fact
         uncertain = route != "accept"
         text = build_report([winner], observed=self._observed(snapshot, winner), uncertain=uncertain)
         probs = result.probabilities if result else {}
@@ -165,9 +170,39 @@ class V2Diagnoser(JevDiagnoser):
                 "explanations": len(explanations),
                 "winner": winner.key,
                 "pattern": winner.pattern,
+                "key_fact": key_fact.values[0] if key_fact else None,
                 "uncertain": uncertain,
             },
             text=text,
+        )
+
+    def _key_fact(self, snapshot: ClusterSnapshot, winner: Explanation) -> Explanation | None:
+        """v1's key-evidence step for a component no pattern explains: read its detail, list its facts with the
+        team's detail_evidence, and let the model pick the one that reveals the mechanism (2 extra requests)."""
+        cid = self._component_of(snapshot, winner)
+        comp = snapshot.components.get(cid)
+        if comp is None or self.fetch_detail is None or len(self.requests) + 2 > self.max_requests + KEY_FACT_REQUESTS:
+            return None
+        if cid not in self.details:
+            try:
+                self.details[cid] = self.fetch_detail(snapshot, cid)
+            except Exception as exc:  # noqa: BLE001 - a failed read is recorded, never fatal
+                self.details[cid] = {"error": f"{type(exc).__name__}: {exc}"}
+            self._trace("collect", "detail", component=cid, route="key-fact")
+        facts = [item["text"] for item in detail_evidence(comp, self.details[cid] or {})]
+        state = {"application": snapshot.app, "component": self._component_view(snapshot, cid)}
+        fact, prob = pick_fact(self._ask, state, facts, rng=self.rng)
+        if fact is None:
+            return None
+        self._trace("decide", "key-fact", component=cid, fact=fact, probability=prob)
+        return Explanation(
+            key=f"key-fact:{cid}",
+            pattern="key-fact",
+            origin=winner.origin,
+            mechanism=f"{fact}.",
+            values=[fact],
+            contributing=winner.contributing,
+            impact=winner.impact,
         )
 
     @staticmethod
