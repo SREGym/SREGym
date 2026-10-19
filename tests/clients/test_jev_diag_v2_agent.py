@@ -42,7 +42,8 @@ class Client:
         answers = {}
         for name, q in questions.items():
             want = {QUESTION: self.prefer, EVIDENCE_QUESTION: self.fact}.get(name) or ""
-            label = next((lbl for lbl, text in q.criteria.items() if want and want in str(text)), None)
+            texts = {item["id"]: item["text"] for item in state.get("evidence") or [] if isinstance(item, dict)}
+            label = next((lbl for lbl, text in q.criteria.items() if want and want in texts.get(lbl, str(text))), None)
             if name == CATEGORY_QUESTION and self.category in q.criteria:
                 label = self.category
             probs = {lbl: (0.9 if lbl == label else 0.1 / max(len(q.criteria) - 1, 1)) for lbl in q.criteria}
@@ -83,7 +84,7 @@ def test_none_of_these_keeps_reading_components_not_read_yet():
     snap.components["deployment/consumer"]["log_error_lines"] = 4
     read = []
     V2Diagnoser(client=Client("None of these"), fetch_detail=lambda s, cid: read.append(cid) or {}).diagnose(snap)
-    assert sorted(read) == ["deployment/cart", "deployment/edge-proxy", "deployment/consumer"]
+    assert sorted(read) == ["deployment/cart", "deployment/consumer", "deployment/edge-proxy"]
     assert len(read) == len(set(read)) and read[0] == "deployment/edge-proxy"  # most signals first, no rereads
 
 
