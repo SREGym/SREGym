@@ -142,6 +142,7 @@ def workload_detail(kind: str, name: str, ns: str) -> dict:
             "affinity": trim(json.dumps(ps.get("affinity")), 300) if ps.get("affinity") else None,
             "tolerations": ps.get("tolerations"),
             "restart_policy": ps.get("restartPolicy"),
+            "termination_grace_seconds": ps.get("terminationGracePeriodSeconds"),
             "init_containers": [_container_detail(c) for c in ps.get("initContainers") or []],
             "containers": [_container_detail(c) for c in ps.get("containers") or []],
             "volumes": [

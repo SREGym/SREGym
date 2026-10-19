@@ -142,3 +142,12 @@ def test_a_change_made_before_the_application_existed_is_dropped():
     finally:
         set_now(None)
     assert ranked == [] and cluster["recent_changes"] == [] and comps["deployment/frontend"]["signals"] == []
+
+
+def test_probe_description_carries_timing_with_defaults_for_unset_fields():
+    from clients.jev_diag.v2.checks import describe_probe
+
+    text = describe_probe({"httpGet": {"path": "/health", "port": 8080}, "periodSeconds": 1, "failureThreshold": 1})
+    assert text.startswith("httpGet HTTP :8080/health")
+    assert "periodSeconds=1" in text and "failureThreshold=1" in text
+    assert "initialDelaySeconds=0 (default)" in text and "timeoutSeconds=1 (default)" in text
