@@ -1,0 +1,2380 @@
+"""Deterministic Kubernetes state collection for the Jev diagnosis agent.
+
+Everything in this module is ordinary code: kubectl reads, label matching, and
+anomaly signals computed from the returned JSON. No model is involved. The
+result is a compact, JSON-serialisable snapshot keyed by component id
+("deployment/frontend") so a Jev question can point at
+`components["deployment/frontend"]`.
+
+Design rules (see docs.typesafe.ai/model-jaggedness): keep arithmetic and
+counting in code, send the model only the fields a judgment needs, and keep
+the state under the model's context budget.
+"""
+
+from __future__ import annotations
+
+import ast
+import copy
+import json
+import logging
+import re
+import statistics
+from collections import Counter
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+# One kubectl runner for both pipelines: recording, replay and tracing are set up once by the driver.
+from clients.jev_diag.collector import (  # noqa: F401 - re-exported for the v2 modules
+    RawRecorder,
+    kubectl_items,
+    recording_paused,
+    run_kubectl,
+    run_kubectl_capture,
+    set_kubectl_observer,
+    set_kubectl_recorder,
+    set_kubectl_replay,
+)
+from clients.jev_diag.timeutil import now, parse_time
+from clients.jev_diag.v2 import changes as change_log
+from clients.jev_diag.v2 import checks
+from clients.jev_diag.v2.checks import parse_cpu_millis, parse_memory_bytes  # noqa: F401 - re-exported
+
+logger = logging.getLogger("all.jev_diag.v2.collector")
+
+WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job")
+KUBECTL_TIMEOUT = 45
+LOG_TIMEOUT = 25
+DEFAULT_LOG_TAIL = 200
+MAX_LOG_PODS_PER_COMPONENT = 2
+MAX_LOG_SIGNALS = 8
+MAX_PREVIOUS_LOG_LINES = 15
+MAX_EVENTS_PER_COMPONENT = 6
+# Error lines logged this soon after a pod started are warm-up noise (dependencies not up yet), not evidence.
+WARMUP_SECONDS = 120
+MAX_MESSAGE_CHARS = 240
+# An error signature is "stopped" when it has been silent longer than this floor and longer than CADENCE_FACTOR
+# times its own median gap; a signature seen once is stopped after SINGLE_OCCURRENCE_WINDOW seconds.
+ONGOING_FLOOR_SECONDS = 15
+CADENCE_FACTOR = 3
+SINGLE_OCCURRENCE_WINDOW = 60
+INIT_CONTAINER_STUCK_SECONDS = 60
+# Private fields hold raw data used during collection; they never reach the model's state, and the heavy or
+# sensitive ones are not written to the saved snapshot either.
+PRIVATE_NOT_SAVED = ("_meta", "_template", "_env_values", "_spec", "_labels", "_owner", "_started", "_config_modes")
+
+# Normal states that carry no signal on their own.
+_BENIGN_WAITING_REASONS = {"ContainerCreating", "PodInitializing"}
+_PRESSURE_CONDITIONS = {"MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"}
+
+_ERROR_LINE_RE = re.compile(
+    r"(?i)(\berror\b|\berr\b|\bfail(?:ed|ure|ing)?\b|exception|panic|fatal|traceback|refused|timed?\s?out|"
+    r"\btimeout\b|unavailable|denied|unauthorized|forbidden|not found|no such host|could not resolve|"
+    r"\bEOF\b|\bOOM\b|out of memory|killed|crash|unhealthy|\b5\d\d\b|deadline exceeded|reset by peer|"
+    r"broken pipe|unreachable|no route to host|throttl)"
+)
+_BENIGN_LINE_RE = re.compile(r"(?i)\b(errors?[:=]\s*0|0 errors|failed[:=]\s*0|no errors?)\b")
+# Explicit failure outcomes can be logged at INFO. Require protocol/status context or an unsuccessful action,
+# rather than bare numbers or words like "malformed", "authentication", or "rate limit" in startup settings.
+_FAILURE_OUTCOME_RE = re.compile(
+    r"(?i)(\b(?:NOAUTH|WRONGPASS|UNAUTHENTICATED|PERMISSION_DENIED|RESOURCE_EXHAUSTED|DATA_LOSS)\b|"
+    r"\bHTTP(?:/\d(?:\.\d)?)?\s+[45]\d\d\b|"
+    r'\b(?:status(?:_code)?|http_status|response_code)\b["\x27]?\s*[:=]?\s*["\x27]?[45]\d\d\b|'
+    r"\bauth(?:entication|orization)?\s+(?:failed|rejected|denied)\b|\bauthentication required[.!]?\s*$|"
+    r"\b(?:access denied|invalid credentials)\b|\brate[ _-]limit(?:ing)?\s+(?:exceeded|reached)\b|"
+    r"\btoo many requests\b|"
+    r"\b(?:consumer|partition|processing|worker)\b(?:\s+\w+){0,4}\s+(?:paused|stalled|blocked|stuck)"
+    r"\s+(?:at|on)\s+(?:offset|record|message|input)\b|"
+    r"\b(?:skipp(?:ing|ed)|reject(?:ing|ed)|dropp(?:ing|ed))\s+(?:an?\s+)?"
+    r"(?:malformed|corrupt(?:ed)?|invalid|unparseable)\s+(?:record|message|payload|input|data|json|document)s?\b)"
+)
+# The severity a line declares about itself, in common log formats: JSON or logfmt level fields, MongoDB's "s"
+# field, .NET console prefixes, klog/glog prefixes, bracketed levels (<error>, [warn]), and bare level tokens
+# (ERROR, WRN). The first declared level wins. Quiet levels suppress keyword-only matches; explicit failure
+# outcomes at INFO/NOTICE still count. TRACE/DEBUG remain excluded.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_STRUCTURED_LEVEL_RE = re.compile(
+    r'(?i)"(?:level|severity|lvl|loglevel|log_level)"\s*:\s*"(?P<json>[a-z]+)"|\blevel=(?P<logfmt>[a-z]+)\b'
+)
+_MONGO_SEVERITY_RE = re.compile(r'"s"\s*:\s*"(?P<sev>[FEWID])\d?"')
+_DOTNET_LEVEL_RE = re.compile(r"^(?P<level>trce|dbug|info|warn|fail|crit):")
+_KLOG_LEVEL_RE = re.compile(r"^(?P<level>[IWEF])\d{4} \d{2}:\d{2}:\d{2}")
+_BRACKET_LEVEL_RE = re.compile(
+    r"(?i)[<\[](?P<level>trace|debug|info|notice|warn|warning|error|err|crit|critical|fatal|alert|emerg)[>\]]"
+)
+_TOKEN_LEVEL_RE = re.compile(
+    r"(?<![\w-])(?P<level>TRACE|DEBUG|INFO|NOTICE|WARN|WARNING|ERROR|ERR|FATAL|CRITICAL|PANIC|TRC|DBG|INF|WRN|FTL|CRT)"
+    r"(?![\w-])"
+)
+_QUIET_LEVELS = {"trace", "debug", "info", "notice", "trc", "dbg", "inf", "trce", "dbug", "i", "d"}
+_TIMESTAMP_RE = re.compile(r"^\[?\S*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s\]]*\]?\s*")
+_RFC3339_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
+_PREFIX_RE = re.compile(r"^\[pod/[^/\]]+/([^\]]+)\]\s?")
+_HEX_RE = re.compile(r"\b[0-9a-fA-F]{8,}\b")
+_UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+_ADDR_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+_NUM_RE = re.compile(r"\d{3,}")
+_WS_RE = re.compile(r"\s+")
+
+
+@dataclass
+class ClusterSnapshot:
+    """Everything the collector learned, before any budget trimming."""
+
+    app: dict
+    components: dict[str, dict]
+    cluster: dict
+    errors: list[str] = field(default_factory=list)
+    collected_at: str = field(default_factory=lambda: now().isoformat(timespec="seconds"))
+
+    def to_state(self, *, include_private: bool = False) -> dict:
+        """The JSON object handed to Jev as `state` (before budget fitting).
+
+        Keys starting with "_" hold raw data used during collection and are left out. With include_private
+        (used for the saved snapshot) the light private keys are kept so a replay can re-derive signals.
+        """
+        return {
+            "application": self.app,
+            "cluster": _public(self.cluster, include_private),
+            "components": {cid: _public(c, include_private) for cid, c in self.components.items()},
+        }
+
+
+def _public(obj, include_private: bool):
+    if isinstance(obj, dict):
+        return {
+            k: _public(v, include_private)
+            for k, v in obj.items()
+            if not k.startswith("_") or (include_private and k not in PRIVATE_NOT_SAVED)
+        }
+    if isinstance(obj, list):
+        return [_public(v, include_private) for v in obj]
+    return obj
+
+
+# --------------------------------------------------------------------------- helpers
+
+
+def trim(text: str | None, limit: int = MAX_MESSAGE_CHARS) -> str:
+    text = _WS_RE.sub(" ", (text or "").strip())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def selector_matches(selector: dict | None, labels: dict | None) -> bool:
+    """True when every selector key/value is present in labels. Empty selector matches nothing here."""
+    if not selector:
+        return False
+    labels = labels or {}
+    return all(labels.get(k) == v for k, v in selector.items())
+
+
+def compact(obj):
+    """Recursively drop None values and empty lists/dicts so the model only sees fields that carry information."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            v = compact(v)
+            if v is None or v == [] or v == {}:
+                continue
+            out[k] = v
+        return out
+    if isinstance(obj, list):
+        return [compact(v) for v in obj]
+    return obj
+
+
+def last_update_time(meta: dict) -> str | None:
+    """Most recent spec write to an object, from managedFields (status and scale writes excluded)."""
+    return change_log.last_spec_write(meta)
+
+
+def strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text) if "\x1b" in text else text
+
+
+def _probe_summary(probe: dict | None) -> dict | None:
+    if not probe:
+        return None
+    if "httpGet" in probe:
+        g = probe["httpGet"]
+        return {"http": f"{g.get('path', '/')}:{g.get('port')}"}
+    if "tcpSocket" in probe:
+        return {"tcp": probe["tcpSocket"].get("port")}
+    if "grpc" in probe:
+        return {"grpc": probe["grpc"].get("port")}
+    if "exec" in probe:
+        return {"exec": " ".join(probe["exec"].get("command") or [])[:80]}
+    return {"other": True}
+
+
+def _probe_port(probe: dict | None):
+    if not probe:
+        return None
+    for key in ("httpGet", "tcpSocket", "grpc"):
+        if key in probe:
+            return probe[key].get("port")
+    return None
+
+
+def component_id(kind: str, name: str) -> str:
+    return f"{kind.lower()}/{name}"
+
+
+def _env_value_text(entry: dict) -> str:
+    if "value" in entry:
+        return repr(trim(str(entry.get("value")), 60))
+    vf = entry.get("valueFrom") or {}
+    for key, label in (("secretKeyRef", "Secret"), ("configMapKeyRef", "ConfigMap"), ("fieldRef", "field")):
+        if vf.get(key):
+            ref = vf[key]
+            return f"from {label} {ref.get('name') or ref.get('fieldPath')}" + (
+                f".{ref['key']}" if ref.get("key") else ""
+            )
+    return "from valueFrom"
+
+
+def _strip_hash_suffix(name: str, segments: int) -> str:
+    parts = name.split("-")
+    return "-".join(parts[:-segments]) if len(parts) > segments else name
+
+
+# --------------------------------------------------------------------------- workloads
+
+
+def summarize_workload(obj: dict) -> dict:
+    """Compact, model-facing description of a Deployment/StatefulSet/DaemonSet/CronJob/Job."""
+    kind = obj.get("kind", "")
+    meta = obj.get("metadata", {})
+    spec = obj.get("spec", {})
+    status = obj.get("status", {})
+    if kind == "CronJob":
+        template = (spec.get("jobTemplate") or {}).get("spec", {}).get("template", {})
+    else:
+        template = spec.get("template", {})
+    pod_spec = template.get("spec", {})
+    signals: list[str] = []
+    spec_flags: list[str] = []
+    extra: dict = {}
+
+    if kind == "DaemonSet":
+        replicas = {
+            "desired": status.get("desiredNumberScheduled", 0),
+            "ready": status.get("numberReady", 0),
+            "available": status.get("numberAvailable", 0),
+        }
+    elif kind == "CronJob":
+        active = len(status.get("active") or [])
+        replicas = {"desired": 0, "ready": 0}
+        extra["cronjob"] = {
+            "schedule": spec.get("schedule"),
+            "suspend": bool(spec.get("suspend")),
+            "concurrency_policy": spec.get("concurrencyPolicy"),
+            "active_jobs": active,
+            "last_schedule": status.get("lastScheduleTime"),
+            "last_successful": status.get("lastSuccessfulTime"),
+        }
+        extra["jobs"] = []
+        if spec.get("suspend"):
+            signals.append("cronjob is suspended")
+        last_sched, last_ok = parse_time(status.get("lastScheduleTime")), parse_time(status.get("lastSuccessfulTime"))
+        if active and (last_ok is None or (last_sched and last_ok < last_sched)):
+            signals.append(
+                f"{active} job(s) still active and no successful completion since the last schedule "
+                f"at {status.get('lastScheduleTime')} (last success: {status.get('lastSuccessfulTime') or 'never'})"
+            )
+    elif kind == "Job":
+        replicas = {
+            "desired": spec.get("completions", 1) or 1,
+            "ready": status.get("succeeded", 0) or 0,
+        }
+        extra["job"] = {
+            "active": status.get("active", 0),
+            "succeeded": status.get("succeeded", 0),
+            "failed": status.get("failed", 0),
+            "start_time": status.get("startTime"),
+            "completion_time": status.get("completionTime"),
+        }
+        for cond in status.get("conditions") or []:
+            if cond.get("type") == "Failed" and cond.get("status") == "True":
+                signals.append(f"job failed ({cond.get('reason')}): {trim(cond.get('message'), 160)}")
+        if status.get("active") and not status.get("completionTime"):
+            signals.append(f"job has {status.get('active')} active pod(s) and has not completed")
+    else:
+        replicas = {
+            "desired": spec.get("replicas", 1),
+            "ready": status.get("readyReplicas", 0),
+            "available": status.get("availableReplicas", status.get("currentReplicas", 0)),
+            "updated": status.get("updatedReplicas", 0),
+        }
+
+    strategy = spec.get("strategy") or spec.get("updateStrategy")
+    if strategy:
+        rolling = strategy.get("rollingUpdate") or {}
+        extra["strategy"] = compact({"type": strategy.get("type"), **rolling})
+        desired = replicas.get("desired") or 0
+        max_unavail, max_surge = rolling.get("maxUnavailable"), rolling.get("maxSurge")
+
+        def _as_count(v, total):
+            if v is None:
+                return None
+            if isinstance(v, str) and v.endswith("%"):
+                return total * int(v[:-1]) / 100
+            return float(v)
+
+        mu, ms = _as_count(max_unavail, desired), _as_count(max_surge, desired)
+        if mu is not None and desired and mu >= desired:
+            surge = f" and maxSurge={max_surge}" if max_surge is not None else ""
+            tail = "; no replacement pod is started before the old ones stop" if ms == 0 else ""
+            signals.append(
+                f"rolling update allows maxUnavailable={max_unavail}{surge} for {desired} replicas: all pods may go "
+                f"down at once{tail}"
+            )
+        if mu is not None and ms is not None and mu == 0 and ms == 0:
+            signals.append("rolling update has maxUnavailable=0 and maxSurge=0: a rollout can never progress")
+    for key in ("minReadySeconds", "progressDeadlineSeconds"):
+        if spec.get(key) is not None:
+            extra.setdefault("rollout", {})[key] = spec[key]
+
+    config_refs: dict[str, set] = {"secrets": set(), "configmaps": set()}
+    containers = []
+    env_hosts: set[str] = set()
+    env_values: list[str] = []
+    for c in (pod_spec.get("initContainers") or []) + pod_spec.get("containers", []):
+        resources = c.get("resources", {}) or {}
+        env_names = [e.get("name") for e in c.get("env", []) if e.get("name")]
+        dupes = sorted({n for n in env_names if env_names.count(n) > 1})
+        for n in dupes:
+            values = [_env_value_text(e) for e in c.get("env", []) if e.get("name") == n]
+            signals.append(
+                f"container {c.get('name')} defines env var {n} {len(values)} times: {', then '.join(values)}; the "
+                f"last value ({values[-1]}) is the one the container sees"
+            )
+        for e in c.get("env", []) or []:
+            if "value" in e and e.get("value") not in (None, ""):
+                env_values.append(str(e["value"]))
+                env_hosts |= checks.env_host_candidates(str(e["value"]))
+        env_from = []
+        for ref in c.get("envFrom", []) or []:
+            if ref.get("configMapRef"):
+                env_from.append({"configMap": ref["configMapRef"].get("name"), "prefix": ref.get("prefix")})
+                config_refs["configmaps"].add(ref["configMapRef"].get("name"))
+            if ref.get("secretRef"):
+                env_from.append({"secret": ref["secretRef"].get("name"), "prefix": ref.get("prefix")})
+                config_refs["secrets"].add(ref["secretRef"].get("name"))
+        for e in c.get("env", []) or []:
+            vf = e.get("valueFrom") or {}
+            if vf.get("secretKeyRef"):
+                config_refs["secrets"].add(vf["secretKeyRef"].get("name"))
+            if vf.get("configMapKeyRef"):
+                config_refs["configmaps"].add(vf["configMapKeyRef"].get("name"))
+        ports = [p.get("containerPort") for p in c.get("ports", []) if p.get("containerPort")]
+        probes = {}
+        for probe_key, label in (
+            ("readinessProbe", "readiness"),
+            ("livenessProbe", "liveness"),
+            ("startupProbe", "startup"),
+        ):
+            probe = c.get(probe_key)
+            if probe:
+                probes[label] = _probe_summary(probe)
+                port = _probe_port(probe)
+                # Numeric probe ports need not be declared in `ports`; only a named port that
+                # matches no declared port name is a definite misconfiguration.
+                port_names = {p.get("name") for p in c.get("ports", []) if p.get("name")}
+                if isinstance(port, str) and port not in port_names:
+                    signals.append(
+                        f"{label} probe of container {c.get('name')} references port name {port!r}, "
+                        f"which is not among its declared port names {sorted(port_names)}"
+                    )
+        mounts = [m.get("mountPath") for m in c.get("volumeMounts") or [] if m.get("mountPath")]
+        for path in sorted({m for m in mounts if mounts.count(m) > 1}):
+            signals.append(f"container {c.get('name')} mounts more than one volume at {path}")
+        containers.append(
+            compact(
+                {
+                    "name": c.get("name"),
+                    "init": c in (pod_spec.get("initContainers") or []),
+                    "image": c.get("image"),
+                    "limits": resources.get("limits") or {},
+                    "requests": resources.get("requests") or {},
+                    "ports": ports,
+                    "env_names": env_names,
+                    "env_from": env_from,
+                    "probes": probes,
+                    "mounts": mounts,
+                    "command": c.get("command"),
+                    "args": c.get("args"),
+                }
+            )
+        )
+    if pod_spec.get("restartPolicy") and pod_spec["restartPolicy"] != "Always":
+        extra["restart_policy"] = pod_spec["restartPolicy"]
+    for alias in pod_spec.get("hostAliases", []) or []:
+        spec_flags.append(f"pod spec sets hostAliases: {alias.get('ip')} -> {', '.join(alias.get('hostnames', []))}")
+    if pod_spec.get("nodeSelector"):
+        spec_flags.append(f"nodeSelector set: {pod_spec['nodeSelector']}")
+    if pod_spec.get("dnsPolicy") and pod_spec["dnsPolicy"] != "ClusterFirst":
+        spec_flags.append(f"dnsPolicy is {pod_spec['dnsPolicy']}")
+    if pod_spec.get("dnsConfig"):
+        spec_flags.append(f"custom dnsConfig: {json.dumps(pod_spec['dnsConfig'])[:160]}")
+    if pod_spec.get("hostNetwork"):
+        spec_flags.append("hostNetwork enabled")
+    for cond in status.get("conditions", []) or []:
+        if cond.get("type") == "Progressing" and cond.get("status") == "False":
+            spec_flags.append(f"Progressing=False ({cond.get('reason')}): {trim(cond.get('message'), 160)}")
+        if cond.get("type") == "Available" and cond.get("status") == "False":
+            spec_flags.append(f"Available=False ({cond.get('reason')})")
+
+    volumes = []
+    for v in pod_spec.get("volumes", []) or []:
+        if "persistentVolumeClaim" in v:
+            volumes.append({"name": v.get("name"), "pvc": v["persistentVolumeClaim"].get("claimName")})
+        elif "configMap" in v:
+            volumes.append({"name": v.get("name"), "configMap": v["configMap"].get("name")})
+            config_refs["configmaps"].add(v["configMap"].get("name"))
+        elif "secret" in v:
+            volumes.append({"name": v.get("name"), "secret": v["secret"].get("secretName")})
+            config_refs["secrets"].add(v["secret"].get("secretName"))
+    for tmpl in spec.get("volumeClaimTemplates", []) or []:
+        volumes.append({"pvc_template": tmpl.get("metadata", {}).get("name")})
+    pvc_names = [v.get("pvc") for v in volumes if v.get("pvc")]
+    for name in sorted({n for n in pvc_names if pvc_names.count(n) > 1}):
+        signals.append(f"PVC {name} is mounted through more than one volume of this pod")
+    anti_affinity = ((pod_spec.get("affinity") or {}).get("podAntiAffinity") or {}).get(
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    )
+
+    return {
+        "kind": kind,
+        "name": meta.get("name"),
+        "namespace": meta.get("namespace"),
+        "created": meta.get("creationTimestamp"),
+        "modified": last_update_time(meta),
+        "service_account": pod_spec.get("serviceAccountName") or "default",
+        "replicas": replicas,
+        "anti_affinity_required": bool(anti_affinity) or None,
+        "_meta": meta,
+        "_template": template if kind in ("CronJob", "Job") else None,
+        "_env_hosts": sorted(env_hosts),
+        "_env_values": env_values[:80],
+        "_config_modes": checks.config_ref_modes(pod_spec),
+        **extra,
+        "selector": (spec.get("selector") or {}).get("matchLabels") or {},
+        "template_labels": template.get("metadata", {}).get("labels") or {},
+        "containers": containers,
+        "volumes": volumes,
+        "config_refs": {k: sorted(x for x in v if x) for k, v in config_refs.items()},
+        "spec_flags": spec_flags,
+        "pods": [],
+        "services": [],
+        "network_policies": [],
+        "warning_events": [],
+        "log_signals": [],
+        "previous_container_logs": {},
+        "resource_usage": [],
+        "alerts": [],
+        "signals": signals,
+    }
+
+
+def replica_signals(comp: dict) -> list[str]:
+    if comp.get("kind") in ("CronJob", "Job"):
+        return []
+    r = comp["replicas"]
+    desired, ready = r.get("desired", 0) or 0, r.get("ready", 0) or 0
+    if desired == 0:
+        return ["scaled to zero replicas (desired=0)"]
+    if ready < desired:
+        return [f"only {ready} of {desired} desired replicas are ready"]
+    return []
+
+
+# --------------------------------------------------------------------------- pods
+
+
+def summarize_pod(pod: dict) -> dict:
+    """Compact pod record plus the signals code can read off it."""
+    meta, spec, status = pod.get("metadata", {}), pod.get("spec", {}), pod.get("status", {})
+    statuses = (status.get("initContainerStatuses") or []) + (status.get("containerStatuses") or [])
+    total = len(spec.get("containers", []))
+    ready = sum(1 for s in status.get("containerStatuses") or [] if s.get("ready"))
+    restarts = sum(s.get("restartCount", 0) for s in statuses)
+
+    signals: list[str] = []
+    container_states: list[str] = []
+    phase = status.get("phase")
+    if meta.get("deletionTimestamp"):
+        signals.append("pod is terminating")
+    if phase not in ("Running", "Succeeded"):
+        reason = status.get("reason")
+        signals.append(f"pod phase {phase}" + (f" ({reason})" if reason else ""))
+
+    app_containers = {c.get("name") for c in spec.get("containers", [])}
+    # Restarts whose last crash ended inside the warm-up window, on a pod whose containers are all
+    # ready now and have been running for a while, are deploy-time churn rather than fault evidence.
+    pod_start = parse_time(status.get("startTime"))
+    current = now()
+    settled = bool(pod_start) and phase == "Running" and bool(status.get("containerStatuses"))
+    for s in status.get("containerStatuses") or []:
+        last_fin = parse_time(((s.get("lastState") or {}).get("terminated") or {}).get("finishedAt"))
+        run_since = parse_time(((s.get("state") or {}).get("running") or {}).get("startedAt"))
+        if not s.get("ready"):
+            settled = False
+        elif s.get("restartCount", 0) > 0:
+            if (
+                last_fin is None
+                or pod_start is None
+                or last_fin > pod_start + timedelta(seconds=WARMUP_SECONDS)
+                or run_since is None
+                or (current - run_since).total_seconds() < 60
+            ):
+                settled = False
+    startup_notes: list[str] = []
+    for s in statuses:
+        cname = s.get("name")
+        state = s.get("state") or {}
+        if "waiting" in state:
+            reason = state["waiting"].get("reason") or "Waiting"
+            msg = trim(state["waiting"].get("message"), 160)
+            container_states.append(f"{cname}: waiting {reason}" + (f": {msg}" if msg else ""))
+            if reason not in _BENIGN_WAITING_REASONS:
+                signals.append(f"container {cname} waiting in {reason}")
+        elif "terminated" in state:
+            t = state["terminated"]
+            container_states.append(f"{cname}: terminated {t.get('reason')} exit={t.get('exitCode')}")
+            if t.get("exitCode") not in (0, None):
+                signals.append(f"container {cname} terminated {t.get('reason')} exit={t.get('exitCode')}")
+        elif phase == "Running" and cname in app_containers and not s.get("ready"):
+            signals.append(f"container {cname} is running but not ready")
+        last = (s.get("lastState") or {}).get("terminated")
+        if last:
+            container_states.append(f"{cname}: last terminated {last.get('reason')} exit={last.get('exitCode')}")
+            if last.get("reason") == "OOMKilled":
+                signals.append(f"container {cname} was OOMKilled")
+        if s.get("restartCount", 0) > 0:
+            note = f"container {cname} restarted {s['restartCount']} times"
+            if settled:
+                startup_notes.append(note + " during warm-up, then settled (ready since)")
+            else:
+                signals.append(note)
+
+    for s in status.get("initContainerStatuses") or []:
+        started = parse_time(((s.get("state") or {}).get("running") or {}).get("startedAt"))
+        if phase == "Pending" and started and (current - started).total_seconds() >= INIT_CONTAINER_STUCK_SECONDS:
+            signals.append(
+                f"init container {s.get('name')} has been running for {int((current - started).total_seconds())}s; "
+                "the pod's main containers cannot start until it exits"
+            )
+
+    finished = [s.get("name") for s in statuses if (s.get("state") or {}).get("terminated", {}).get("exitCode") == 0]
+    still_running = [s.get("name") for s in statuses if "running" in (s.get("state") or {})]
+    if phase == "Running" and finished and still_running and spec.get("restartPolicy") in ("Never", "OnFailure"):
+        signals.append(
+            f"container {', '.join(finished)} completed but container {', '.join(still_running)} keeps running, "
+            "so this job pod never completes"
+        )
+
+    ready_since = next(
+        (
+            c.get("lastTransitionTime")
+            for c in status.get("conditions") or []
+            if c.get("type") == "Ready" and c.get("status") == "True"
+        ),
+        None,
+    )
+    not_ready_since = next(
+        (
+            c.get("lastTransitionTime")
+            for c in status.get("conditions") or []
+            if c.get("type") == "Ready" and c.get("status") != "True"
+        ),
+        None,
+    )
+    crashes = [
+        ((s.get("lastState") or {}).get("terminated") or {}).get("finishedAt")
+        for s in status.get("containerStatuses") or []
+        if s.get("restartCount", 0) > 0
+    ]
+    last_crash_at = max((c for c in crashes if c), default=None) if not settled else None
+    conditions = []
+    for cond in status.get("conditions") or []:
+        if cond.get("status") != "True" and cond.get("type") in ("Ready", "PodScheduled", "ContainersReady"):
+            text = f"{cond['type']}=False ({cond.get('reason')})"
+            if cond.get("message"):
+                text += f": {trim(cond['message'], 160)}"
+            conditions.append(text)
+            if cond.get("type") == "PodScheduled":
+                signals.append(f"pod unschedulable: {trim(cond.get('message'), 160)}")
+
+    return {
+        "name": meta.get("name"),
+        "labels": meta.get("labels") or {},
+        "owner": [(o.get("kind"), o.get("name")) for o in meta.get("ownerReferences") or []],
+        "phase": phase,
+        "ready": f"{ready}/{total}",
+        "restarts": restarts,
+        "created": meta.get("creationTimestamp"),
+        "started": status.get("startTime"),
+        "ready_since": ready_since,
+        "not_ready_since": not_ready_since,
+        "last_crash_at": last_crash_at,
+        "node": spec.get("nodeName"),
+        "ip": status.get("podIP"),
+        "container_states": container_states,
+        "conditions": conditions,
+        "startup_notes": startup_notes,
+        "settled": settled,
+        "signals": signals,
+        "_labels": meta.get("labels") or {},
+        "_owner": [(o.get("kind"), o.get("name")) for o in meta.get("ownerReferences") or []],
+        "_spec": checks.container_spec_summary(spec),
+        "_started": {
+            s.get("name"): ((s.get("state") or {}).get("running") or {}).get("startedAt")
+            for s in status.get("containerStatuses") or []
+        },
+    }
+
+
+def component_for_pod(
+    pod_summary: dict, components: dict[str, dict], job_owner: dict[str, str] | None = None
+) -> str | None:
+    """Owner chain first (StatefulSet/DaemonSet/Job direct, ReplicaSet -> Deployment, Job -> CronJob), then selector."""
+    job_owner = job_owner or {}
+    for kind, name in pod_summary.get("owner", []):
+        if kind in ("StatefulSet", "DaemonSet", "Job") and component_id(kind, name) in components:
+            return component_id(kind, name)
+        if kind == "Job" and f"{pod_summary.get('_namespace')}/{name}" in job_owner:
+            return job_owner[f"{pod_summary.get('_namespace')}/{name}"]
+        if kind == "ReplicaSet":
+            dep = component_id("Deployment", _strip_hash_suffix(name, 1))
+            if dep in components:
+                return dep
+    for cid, comp in components.items():
+        if comp["namespace"] == pod_summary.get("_namespace") and selector_matches(
+            comp["selector"], pod_summary["labels"]
+        ):
+            return cid
+    return None
+
+
+def component_for_object(
+    kind: str, name: str, namespace: str, components: dict[str, dict], job_owner: dict[str, str] | None = None
+) -> str | None:
+    """Best-effort mapping for event targets that may already be gone."""
+    if kind == "Job" and job_owner and f"{namespace}/{name}" in job_owner:
+        return job_owner[f"{namespace}/{name}"]
+    if kind in WORKLOAD_KINDS:
+        cid = component_id(kind, name)
+        if cid in components:
+            return cid
+        if kind == "Job":
+            cron = component_id("CronJob", _strip_hash_suffix(name, 1))
+            return cron if cron in components else None
+        return None
+    candidates: list[str] = []
+    if kind == "ReplicaSet":
+        candidates.append(component_id("Deployment", _strip_hash_suffix(name, 1)))
+    elif kind == "Pod":
+        candidates += [
+            component_id("Deployment", _strip_hash_suffix(name, 2)),
+            component_id("StatefulSet", _strip_hash_suffix(name, 1)),
+            component_id("DaemonSet", _strip_hash_suffix(name, 1)),
+            component_id("Job", _strip_hash_suffix(name, 1)),
+            component_id("CronJob", _strip_hash_suffix(name, 2)),
+        ]
+    for cid in candidates:
+        if cid in components and components[cid]["namespace"] == namespace:
+            return cid
+    return None
+
+
+# --------------------------------------------------------------------------- events
+
+
+def _event_time(ev: dict) -> str:
+    return (
+        ev.get("lastTimestamp")
+        or (ev.get("series") or {}).get("lastObservedTime")
+        or ev.get("eventTime")
+        or ev.get("firstTimestamp")
+        or ""
+    )
+
+
+def summarize_event(ev: dict) -> dict:
+    obj = ev.get("involvedObject") or {}
+    count = ev.get("count") or (ev.get("series") or {}).get("count") or 1
+    return {
+        "reason": ev.get("reason"),
+        "count": count,
+        "object": f"{(obj.get('kind') or '?').lower()}/{obj.get('name')}",
+        "first_seen": ev.get("firstTimestamp") or ev.get("eventTime"),
+        "last_seen": _event_time(ev),
+        "message": trim(ev.get("message")),
+    }
+
+
+def attach_warning_events(
+    events: list[dict],
+    components: dict[str, dict],
+    unassigned: list[dict],
+    job_owner: dict[str, str] | None = None,
+    pod_index: dict[str, dict] | None = None,
+) -> None:
+    """Attach Warning events to components. Events from a settled pod's warm-up window are kept as history."""
+    pod_index = pod_index or {}
+    warnings = [e for e in events if e.get("type") == "Warning"]
+    warnings.sort(key=_event_time, reverse=True)
+    for ev in warnings:
+        obj = ev.get("involvedObject") or {}
+        cid = component_for_object(
+            obj.get("kind", ""), obj.get("name", ""), obj.get("namespace", ""), components, job_owner
+        )
+        record = summarize_event(ev)
+        if cid is None:
+            if len(unassigned) < 10:
+                unassigned.append(record)
+            continue
+        pod = pod_index.get(obj.get("name", "")) if obj.get("kind") == "Pod" else None
+        if pod and pod.get("settled"):
+            start, seen = parse_time(pod.get("started")), parse_time(record.get("last_seen"))
+            if start and seen and seen <= start + timedelta(seconds=WARMUP_SECONDS):
+                history = components[cid].setdefault("startup_events", [])
+                if len(history) < 3:
+                    history.append(record)
+                continue
+        bucket = components[cid]["warning_events"]
+        if len(bucket) < MAX_EVENTS_PER_COMPONENT:
+            bucket.append(record)
+    for comp in components.values():
+        if comp["warning_events"]:
+            reasons: Counter[str] = Counter()
+            for ev in comp["warning_events"]:
+                reasons[ev["reason"]] += int(ev.get("count") or 1)
+            summary = ", ".join(f"{r} x{n}" for r, n in reasons.most_common(4))
+            comp["signals"].append(f"warning events: {summary}")
+
+
+# --------------------------------------------------------------------------- services / netpol
+
+
+def attach_services(
+    services: list[dict],
+    endpoints: list[dict],
+    components: dict[str, dict],
+    changes: list[dict] | None = None,
+) -> list[dict]:
+    """Map services to the workloads they select and flag empty endpoints, dangling selectors, and policies.
+
+    A Service that selects pods of several workloads keeps its selector and each workload's container ports, so
+    the fan-out can be checked in code. When `changes` is given, a Service modified after creation, or created
+    after the workloads it selects, is recorded there.
+    """
+    ready_by_name: dict[tuple[str, str], tuple[int, int]] = {}
+    nodes_by_name: dict[tuple[str, str], list[str]] = {}
+    for ep in endpoints:
+        meta = ep.get("metadata", {})
+        ready = sum(len(s.get("addresses") or []) for s in ep.get("subsets") or [])
+        not_ready = sum(len(s.get("notReadyAddresses") or []) for s in ep.get("subsets") or [])
+        ready_by_name[(meta.get("namespace"), meta.get("name"))] = (ready, not_ready)
+        nodes_by_name[(meta.get("namespace"), meta.get("name"))] = sorted(
+            {a.get("nodeName") for s in ep.get("subsets") or [] for a in s.get("addresses") or [] if a.get("nodeName")}
+        )
+
+    dangling: list[dict] = []
+    for svc in services:
+        meta, spec = svc.get("metadata", {}), svc.get("spec", {})
+        if spec.get("type") == "ExternalName" or not spec.get("selector"):
+            continue
+        ns, name = meta.get("namespace"), meta.get("name")
+        ready, not_ready = ready_by_name.get((ns, name), (0, 0))
+        record = {
+            "name": name,
+            "type": spec.get("type"),
+            "ports": [
+                f"{p.get('port')}->{p.get('targetPort')}/{p.get('protocol', 'TCP')}" for p in spec.get("ports", [])
+            ],
+            "selector": spec["selector"],
+            "ready_endpoints": ready,
+            "not_ready_endpoints": not_ready,
+        }
+        policies = []
+        if spec.get("internalTrafficPolicy") and spec["internalTrafficPolicy"] != "Cluster":
+            record["internal_traffic_policy"] = spec["internalTrafficPolicy"]
+            record["endpoint_nodes"] = nodes_by_name.get((ns, name), [])
+            policies.append(
+                f"service {name} has internalTrafficPolicy={spec['internalTrafficPolicy']}: only endpoints on the "
+                "client's own node receive traffic"
+            )
+        if spec.get("externalTrafficPolicy") and spec["externalTrafficPolicy"] != "Cluster":
+            record["external_traffic_policy"] = spec["externalTrafficPolicy"]
+        if spec.get("sessionAffinity") and spec["sessionAffinity"] != "None":
+            record["session_affinity"] = spec["sessionAffinity"]
+        if spec.get("publishNotReadyAddresses"):
+            record["publish_not_ready_addresses"] = True
+        owners = [
+            cid
+            for cid, comp in components.items()
+            if comp["namespace"] == ns and selector_matches(spec["selector"], comp["template_labels"])
+        ]
+        if len(owners) > 1:
+            record["selects_multiple_workloads"] = owners
+            record["workload_ports"] = {
+                cid: sorted({p for c in components[cid]["containers"] for p in c.get("ports") or []}) for cid in owners
+            }
+        if changes is not None:
+            change = change_log.object_change(
+                f"service/{ns}/{name}",
+                "Service",
+                name,
+                ns,
+                meta,
+                affects=owners,
+                targets_created=[components[c].get("created") for c in owners],
+            )
+            if change:
+                changes.append(change)
+        for cid in owners:
+            components[cid]["services"].append(record)
+            if ready == 0:
+                components[cid]["signals"].append(f"service {name} selects this component but has 0 ready endpoints")
+            # A DaemonSet is node-local by design, so a Local traffic policy is idiomatic there.
+            if components[cid]["kind"] != "DaemonSet":
+                components[cid]["signals"].extend(policies)
+        if not owners:
+            record["matches_no_workload"] = True
+            dangling.append(record)
+            # A service named after a workload whose selector no longer matches it is a classic mis-wiring.
+            for comp in components.values():
+                if comp["namespace"] == ns and comp["name"] == name:
+                    comp["services"].append(record)
+                    comp["signals"].append(
+                        f"service {name} selector {spec['selector']} does not match this workload's pod labels "
+                        f"{comp['template_labels']}"
+                    )
+                    comp["signals"].extend(policies)
+    return dangling
+
+
+def summarize_network_policy(policy: dict) -> dict:
+    meta, spec = policy.get("metadata", {}), policy.get("spec", {})
+    types = spec.get("policyTypes") or (["Ingress"] if "ingress" in spec or "egress" not in spec else []) or []
+    ingress, egress = spec.get("ingress"), spec.get("egress")
+    effects = []
+    if "Ingress" in types:
+        effects.append("denies all ingress" if not ingress else f"restricts ingress to {len(ingress)} rule(s)")
+    if "Egress" in types:
+        effects.append("denies all egress" if not egress else f"restricts egress to {len(egress)} rule(s)")
+    return {
+        "name": meta.get("name"),
+        "namespace": meta.get("namespace"),
+        "pod_selector": (spec.get("podSelector") or {}).get("matchLabels") or {},
+        "selects_all_pods": not (spec.get("podSelector") or {}).get("matchLabels")
+        and not (spec.get("podSelector") or {}).get("matchExpressions"),
+        "policy_types": types,
+        "effect": "; ".join(effects) or "no effect",
+        "ingress_rules": ingress if ingress else [],
+        "egress_rules": egress if egress else [],
+    }
+
+
+def attach_network_policies(
+    policies: list[dict], components: dict[str, dict], changes: list[dict] | None = None
+) -> list[dict]:
+    summaries = []
+    for raw in policies:
+        pol = summarize_network_policy(raw)
+        pol["created"] = raw.get("metadata", {}).get("creationTimestamp")
+        pol["_meta"] = raw.get("metadata", {})
+        summaries.append(pol)
+    for pol in summaries:
+        selected = []
+        for cid, comp in components.items():
+            if comp["namespace"] != pol["namespace"]:
+                continue
+            if pol["selects_all_pods"] or selector_matches(pol["pod_selector"], comp["template_labels"]):
+                selected.append(cid)
+                comp["network_policies"].append({k: v for k, v in pol.items() if k not in ("namespace", "_meta")})
+                comp["signals"].append(f"selected by NetworkPolicy {pol['name']} ({pol['effect']})")
+        pol["components"] = selected
+        if changes is not None:
+            change = change_log.object_change(
+                f"networkpolicy/{pol['namespace']}/{pol['name']}",
+                "NetworkPolicy",
+                pol["name"],
+                pol["namespace"],
+                pol.pop("_meta"),
+                affects=selected,
+                targets_created=[components[c].get("created") for c in selected],
+            )
+            if change:
+                pol["changed"] = True
+                changes.append(change)
+        else:
+            pol.pop("_meta", None)
+    return summaries
+
+
+# --------------------------------------------------------------------------- hpa / pvc / nodes
+
+
+def attach_hpas(hpas: list[dict], components: dict[str, dict]) -> None:
+    for hpa in hpas:
+        spec, status, meta = hpa.get("spec", {}), hpa.get("status", {}), hpa.get("metadata", {})
+        ref = spec.get("scaleTargetRef") or {}
+        cid = component_id(ref.get("kind", ""), ref.get("name", ""))
+        if cid not in components or components[cid]["namespace"] != meta.get("namespace"):
+            continue
+        bad = [
+            f"{c.get('type')}=False ({c.get('reason')}): {trim(c.get('message'), 120)}"
+            for c in status.get("conditions") or []
+            if c.get("status") == "False" and c.get("type") in ("AbleToScale", "ScalingActive")
+        ]
+        components[cid]["hpa"] = {
+            "name": meta.get("name"),
+            "min": spec.get("minReplicas"),
+            "max": spec.get("maxReplicas"),
+            "current": status.get("currentReplicas"),
+            "desired": status.get("desiredReplicas"),
+            "problems": bad,
+        }
+        if bad:
+            components[cid]["signals"].append(f"HPA {meta.get('name')} unhealthy: {bad[0]}")
+        if spec.get("maxReplicas") and status.get("desiredReplicas") == spec.get("maxReplicas"):
+            components[cid]["signals"].append(f"HPA {meta.get('name')} is pinned at maxReplicas={spec['maxReplicas']}")
+
+
+def attach_pvcs(pvcs: list[dict], components: dict[str, dict]) -> dict[tuple[str, str], list[str]]:
+    """Mark claims that are not Bound; return each claim's access modes for the shared-claim check."""
+    phase_by_name = {
+        (p.get("metadata", {}).get("namespace"), p.get("metadata", {}).get("name")): p.get("status", {}).get("phase")
+        for p in pvcs
+    }
+    modes = {
+        (p.get("metadata", {}).get("namespace"), p.get("metadata", {}).get("name")): (p.get("spec") or {}).get(
+            "accessModes"
+        )
+        or []
+        for p in pvcs
+    }
+    for comp in components.values():
+        for vol in comp["volumes"]:
+            name = vol.get("pvc")
+            if not name:
+                continue
+            phase = phase_by_name.get((comp["namespace"], name))
+            vol["phase"] = phase
+            if modes.get((comp["namespace"], name)):
+                vol["access_modes"] = modes[(comp["namespace"], name)]
+            if phase and phase != "Bound":
+                comp["signals"].append(f"PVC {name} is {phase}")
+    return modes
+
+
+def summarize_nodes(nodes: list[dict]) -> list[dict]:
+    out = []
+    for node in nodes:
+        meta, spec, status = node.get("metadata", {}), node.get("spec", {}), node.get("status", {})
+        problems = []
+        for cond in status.get("conditions") or []:
+            ctype, cstatus = cond.get("type"), cond.get("status")
+            if (ctype == "Ready" and cstatus != "True") or (ctype in _PRESSURE_CONDITIONS and cstatus == "True"):
+                problems.append(f"{ctype}={cstatus} ({cond.get('reason')})")
+        if spec.get("unschedulable"):
+            problems.append("cordoned (unschedulable)")
+        taints = [
+            f"{t.get('key')}={t.get('value')}:{t.get('effect')}"
+            for t in spec.get("taints") or []
+            if "node-role.kubernetes.io/control-plane" not in (t.get("key") or "")
+        ]
+        out.append({"name": meta.get("name"), "problems": problems, "taints": taints})
+    return out
+
+
+# --------------------------------------------------------------------------- logs
+
+
+def log_line_time(line: str) -> datetime | None:
+    """Timestamp kubectl prepends with --timestamps (after the [pod/…/container] prefix)."""
+    text = _PREFIX_RE.sub("", line, count=1)
+    m = _RFC3339_RE.match(text.lstrip())
+    return parse_time(m.group(1)) if m else None
+
+
+def normalize_log_line(line: str) -> tuple[str, str]:
+    """Return (dedupe_key, display_text) for a raw `kubectl logs --prefix` line."""
+    text = strip_ansi(line).rstrip()
+    container = None
+    m = _PREFIX_RE.match(text)
+    if m:
+        container = m.group(1)
+        text = text[m.end() :]
+    text = _TIMESTAMP_RE.sub("", text).strip()
+    display = trim(f"{container}: {text}" if container else text)
+    key = _UUID_RE.sub("<id>", text)
+    key = _HEX_RE.sub("<hex>", key)
+    key = _ADDR_RE.sub("<addr>", key)
+    key = _NUM_RE.sub("<n>", key)
+    key = _WS_RE.sub(" ", key).lower()
+    return (f"{container}|{key}" if container else key), display
+
+
+def declared_level(line: str) -> str | None:
+    """The severity a log line declares about itself, if it follows a common log format (lowercased)."""
+    text = _TIMESTAMP_RE.sub("", _PREFIX_RE.sub("", strip_ansi(line), count=1).lstrip(), count=1).lstrip()
+    m = _STRUCTURED_LEVEL_RE.search(text)
+    if m:
+        return (m.group("json") or m.group("logfmt")).lower()
+    m = _MONGO_SEVERITY_RE.search(text)
+    if m:
+        return m.group("sev").lower()
+    m = _DOTNET_LEVEL_RE.match(text) or _KLOG_LEVEL_RE.match(text)
+    if m:
+        return m.group("level").lower()
+    hits = [h for h in (_BRACKET_LEVEL_RE.search(text), _TOKEN_LEVEL_RE.search(text)) if h]
+    if hits:
+        return min(hits, key=lambda h: h.start()).group("level").lower()
+    return None
+
+
+def is_error_line(line: str) -> bool:
+    text = strip_ansi(line)
+    if not text.strip() or _BENIGN_LINE_RE.search(text):
+        return False
+    level = declared_level(text)
+    if level in {"trace", "debug", "trc", "dbg", "trce", "dbug", "d"}:
+        return False
+    return bool(_FAILURE_OUTCOME_RE.search(text) or (level not in _QUIET_LEVELS and _ERROR_LINE_RE.search(text)))
+
+
+def signature_recency(times: list[datetime], at: datetime) -> dict:
+    """First and last sighting of an error signature, its median gap, and whether it is still occurring.
+
+    A signature is "stopped" once it has been silent longer than ONGOING_FLOOR_SECONDS and longer than
+    CADENCE_FACTOR times its own median gap (a signature seen once: longer than SINGLE_OCCURRENCE_WINDOW). The
+    judgment uses only the signature's own rhythm and the collection time.
+    """
+    if not times:
+        return {}
+    times = sorted(times)
+    silent = max(0, int((at - times[-1]).total_seconds()))
+    out: dict = {
+        "first_seen_seconds_ago": max(0, int((at - times[0]).total_seconds())),
+        "last_seen_seconds_ago": silent,
+    }
+    gaps = [(b - a).total_seconds() for a, b in zip(times, times[1:], strict=False) if b > a]
+    if gaps:
+        gap = statistics.median(gaps)
+        out["median_gap_seconds"] = round(gap, 1)
+        stopped = silent > max(ONGOING_FLOOR_SECONDS, CADENCE_FACTOR * gap)
+    else:
+        stopped = silent > SINGLE_OCCURRENCE_WINDOW
+    out["state"] = "stopped" if stopped else "ongoing"
+    return out
+
+
+def extract_log_signals(
+    raw_logs: Iterable[str],
+    limit: int = MAX_LOG_SIGNALS,
+    *,
+    at: datetime | None = None,
+    ongoing_containers: set[str] | None = None,
+) -> list[dict]:
+    """Error-looking lines, deduplicated with counts and recency; still-occurring signatures first.
+
+    Signatures from a container in `ongoing_containers` (a crash-looping container whose errors recur at every
+    restart) count as ongoing however long ago they were last seen.
+    """
+    counts: Counter[str] = Counter()
+    examples: dict[str, str] = {}
+    stamps: dict[str, list[datetime]] = {}
+    container_of: dict[str, str] = {}
+    for line in raw_logs:
+        if not is_error_line(line):
+            continue
+        key, display = normalize_log_line(line)
+        counts[key] += 1
+        examples.setdefault(key, display)
+        prefix = _PREFIX_RE.match(line)
+        if prefix:
+            container_of[key] = prefix.group(1)
+        ts = log_line_time(line)
+        if ts:
+            stamps.setdefault(key, []).append(ts)
+    at = at or now()
+    out = []
+    for key, n in counts.items():
+        item = {"count": n, "line": examples[key], **signature_recency(stamps.get(key, []), at)}
+        if ongoing_containers and container_of.get(key) in ongoing_containers and item.get("state") == "stopped":
+            item["state"] = "ongoing"
+            item["crash_loop"] = True
+        out.append(item)
+    out.sort(key=lambda i: (i.get("state") == "stopped", -i["count"]))
+    return out[:limit]
+
+
+def warmup_cutoff(pod: dict) -> datetime | None:
+    """Lines before this moment are startup noise: the pod's first Ready transition, capped at WARMUP_SECONDS.
+
+    A pod that is not Ready now is actively failing, so none of its lines are noise.
+    """
+    ready = pod.get("ready", "0/0").split("/")
+    if len(ready) != 2 or ready[0] != ready[1] or ready[1] == "0":
+        return None
+    start, ready_since = parse_time(pod.get("started")), parse_time(pod.get("ready_since"))
+    if ready_since is not None:
+        cutoff = ready_since
+        if start is not None:
+            cutoff = min(cutoff, start + timedelta(seconds=WARMUP_SECONDS))
+        return cutoff
+    return start + timedelta(seconds=WARMUP_SECONDS) if start else None
+
+
+def split_warmup_lines(lines: list[str], cutoff: datetime | None) -> tuple[list[str], int]:
+    """Drop lines logged before `cutoff`. Returns (kept, dropped_error_lines)."""
+    if cutoff is None:
+        return lines, 0
+    kept, dropped = [], 0
+    for line in lines:
+        ts = log_line_time(line)
+        if ts is not None and ts < cutoff:
+            if is_error_line(line):
+                dropped += 1
+            continue
+        kept.append(line)
+    return kept, dropped
+
+
+def _fetch_pod_logs(pod: str, namespace: str, tail: int) -> list[str]:
+    out = run_kubectl(
+        ["logs", pod, "-n", namespace, "--all-containers=true", "--prefix=true", "--timestamps=true", f"--tail={tail}"],
+        timeout=LOG_TIMEOUT,
+    )
+    return [strip_ansi(line) for line in out.splitlines()]
+
+
+def _fetch_previous_logs(pod: str, container: str, namespace: str) -> list[str]:
+    out = run_kubectl(
+        ["logs", pod, "-n", namespace, "-c", container, "--previous", f"--tail={MAX_PREVIOUS_LOG_LINES * 3}"],
+        timeout=LOG_TIMEOUT,
+    )
+    lines = [trim(_TIMESTAMP_RE.sub("", strip_ansi(ln))) for ln in out.splitlines() if ln.strip()]
+    return lines[-MAX_PREVIOUS_LOG_LINES:]
+
+
+def attach_logs(
+    components: dict[str, dict], pods_by_component: dict[str, list[dict]], errors: list[str], tail: int
+) -> None:
+    """Fetch recent logs for up to two pods per component; keep error-looking lines logged after warm-up.
+
+    Each signature carries its recency (see signature_recency). `log_error_lines` counts only signatures that
+    are still occurring; stopped ones are counted in `stopped_error_lines`.
+    """
+    jobs: list[tuple[str, Callable[[], object], str, datetime | None]] = []
+    crash_looping: dict[str, set[str]] = {}
+    for cid, pods in pods_by_component.items():
+        for pod in pods:
+            for state in pod.get("container_states") or []:
+                if "CrashLoopBackOff" in state or ("last terminated" in state and not pod.get("settled")):
+                    crash_looping.setdefault(cid, set()).add(state.split(":", 1)[0])
+    for cid, pods in pods_by_component.items():
+        ns = components[cid]["namespace"]
+        loggable = [p for p in pods if p["phase"] == "Running"]
+        loggable.sort(key=lambda p: (-p["restarts"], p["name"]))
+        for pod in loggable[:MAX_LOG_PODS_PER_COMPONENT]:
+            jobs.append((cid, lambda p=pod["name"], n=ns: _fetch_pod_logs(p, n, tail), "current", warmup_cutoff(pod)))
+            for state in pod["container_states"]:
+                # a crash during warm-up followed by steady running is start-up history, not evidence
+                if "last terminated" in state and not pod.get("settled"):
+                    cname = state.split(":", 1)[0]
+                    jobs.append(
+                        (
+                            cid,
+                            lambda p=pod["name"], c=cname, n=ns: (c, _fetch_previous_logs(p, c, n)),
+                            "previous",
+                            None,
+                        )
+                    )
+    raw_by_component: dict[str, list[str]] = {cid: [] for cid in components}
+    dropped_by_component: Counter[str] = Counter()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [(cid, kind, cutoff, pool.submit(fn)) for cid, fn, kind, cutoff in jobs]
+        for cid, kind, cutoff, fut in futures:
+            try:
+                result = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"logs for {cid}: {exc}")
+                continue
+            if kind == "current":
+                kept, dropped = split_warmup_lines(result, cutoff)  # type: ignore[arg-type]
+                raw_by_component[cid].extend(kept)
+                dropped_by_component[cid] += dropped
+            else:
+                cname, lines = result  # type: ignore[misc]
+                if lines:
+                    components[cid]["previous_container_logs"][cname] = lines
+    for cid, lines in raw_by_component.items():
+        signals = extract_log_signals(lines, ongoing_containers=crash_looping.get(cid))
+        components[cid]["log_signals"] = signals
+        ongoing = sum(s["count"] for s in signals if s.get("state") != "stopped")
+        stopped = sum(s["count"] for s in signals if s.get("state") == "stopped")
+        if ongoing:
+            # Kept apart from `signals`: error-like log lines are weak evidence, since most components of a
+            # microservice application log errors whenever any dependency misbehaves.
+            components[cid]["log_error_lines"] = ongoing
+        if stopped:
+            components[cid]["stopped_error_lines"] = stopped
+        if dropped_by_component[cid]:
+            components[cid]["warmup_log_errors_ignored"] = dropped_by_component[cid]
+
+
+# --------------------------------------------------------------------------- resource usage
+
+
+def attach_resource_usage(top_output: str, components: dict[str, dict], pod_to_component: dict[str, str]) -> None:
+    """Parse `kubectl top pods --containers` and compare usage with declared limits in code."""
+    for line in top_output.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        pod, container, cpu, mem = parts[0], parts[1], parts[2], parts[3]
+        cid = pod_to_component.get(pod)
+        if cid is None:
+            continue
+        comp = components[cid]
+        limits = next((c.get("limits") or {} for c in comp["containers"] if c.get("name") == container), {})
+        record = {
+            "pod": pod,
+            "container": container,
+            "cpu": cpu,
+            "memory": mem,
+            "cpu_limit": limits.get("cpu"),
+            "memory_limit": limits.get("memory"),
+        }
+        comp["resource_usage"].append(record)
+        cpu_used, cpu_lim = parse_cpu_millis(cpu), parse_cpu_millis(limits.get("cpu"))
+        if cpu_used is not None and cpu_lim:
+            if cpu_used >= 0.9 * cpu_lim:
+                comp["signals"].append(
+                    f"container {container} cpu usage {cpu} is at its limit {limits.get('cpu')} (throttling likely)"
+                )
+        mem_used, mem_lim = parse_memory_bytes(mem), parse_memory_bytes(limits.get("memory"))
+        if mem_used is not None and mem_lim and mem_used >= 0.9 * mem_lim:
+            comp["signals"].append(f"container {container} memory usage {mem} is near its limit {limits.get('memory')}")
+
+
+# --------------------------------------------------------------------------- alerts
+
+
+_ALERT_LABEL_KEYS = (
+    "namespace",
+    "service_name",
+    "service",
+    "deployment",
+    "k8s_deployment_name",
+    "app",
+    "pod",
+    "container",
+    "job",
+    "severity",
+)
+
+
+def parse_alerts(raw: str) -> list[dict]:
+    """Parse the Prometheus MCP `get_alerts` text (a Python literal list) into compact records."""
+    if not raw or raw.strip().startswith("No firing alerts") or raw.strip().startswith("[prom_mcp] Error"):
+        return []
+    try:
+        alerts = ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        try:
+            alerts = json.loads(raw)
+        except ValueError:
+            return []
+    out = []
+    for a in alerts if isinstance(alerts, list) else []:
+        labels = a.get("labels") or {}
+        ann = a.get("annotations") or {}
+        out.append(
+            {
+                "alertname": labels.get("alertname"),
+                "labels": {k: labels[k] for k in _ALERT_LABEL_KEYS if k in labels},
+                "summary": trim(ann.get("summary") or ann.get("description") or ann.get("message"), 200),
+                "active_since": a.get("activeAt"),
+            }
+        )
+    return out
+
+
+def attach_alerts(alerts: list[dict], components: dict[str, dict]) -> None:
+    for alert in alerts:
+        labels = alert["labels"]
+        targets = {labels.get(k) for k in ("service_name", "service", "deployment", "k8s_deployment_name", "app")} - {
+            None
+        }
+        for comp in components.values():
+            if labels.get("namespace") and labels["namespace"] != comp["namespace"]:
+                continue
+            pod = labels.get("pod") or ""
+            if comp["name"] in targets or (pod and pod.startswith(comp["name"] + "-")):
+                comp["alerts"].append(alert["alertname"])
+                comp["signals"].append(f"firing alert {alert['alertname']}")
+
+
+def fetch_alerts_via_mcp(timeout: float = 20.0) -> str:
+    """Call the Prometheus MCP `get_alerts` tool. Returns the raw text ("" on any failure)."""
+    import asyncio
+    import os
+
+    from fastmcp import Client
+    from fastmcp.client import SSETransport
+
+    url = f"http://{os.getenv('API_HOSTNAME', 'localhost')}:{os.getenv('MCP_SERVER_PORT', '9954')}/prometheus/sse"
+
+    async def _call() -> str:
+        async with Client(SSETransport(url=url, sse_read_timeout=timeout)) as client:
+            result = await client.call_tool("get_alerts", arguments={}, timeout=timeout)
+            return "\n".join(getattr(part, "text", "") for part in result)
+
+    return asyncio.run(asyncio.wait_for(_call(), timeout=timeout + 5))
+
+
+# --------------------------------------------------------------------------- namespace constraints
+
+
+def summarize_namespace_constraints(limit_ranges: list[dict], quotas: list[dict]) -> list[dict]:
+    """LimitRanges and ResourceQuotas, with quota pressure computed in code."""
+    out = []
+    for lr in limit_ranges:
+        meta = lr.get("metadata", {})
+        out.append(
+            {
+                "kind": "LimitRange",
+                "namespace": meta.get("namespace"),
+                "name": meta.get("name"),
+                "created": meta.get("creationTimestamp"),
+                "_meta": meta,
+                "limits": (lr.get("spec") or {}).get("limits"),
+                "signals": [],
+            }
+        )
+    for q in quotas:
+        meta, status = q.get("metadata", {}), q.get("status", {})
+        hard, used = status.get("hard") or {}, status.get("used") or {}
+        signals = []
+        for res, hard_v in hard.items():
+            used_v = used.get(res)
+            parse = (
+                parse_cpu_millis
+                if "cpu" in res
+                else parse_memory_bytes
+                if "memory" in res or "storage" in res
+                else None
+            )
+            if parse is None:
+                try:
+                    h, u = float(hard_v), float(used_v)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                h, u = parse(hard_v), parse(used_v)
+            if h and u is not None and u >= 0.9 * h:
+                signals.append(f"quota {res}: used {used_v} of hard limit {hard_v}")
+        out.append(
+            {
+                "kind": "ResourceQuota",
+                "namespace": meta.get("namespace"),
+                "name": meta.get("name"),
+                "created": meta.get("creationTimestamp"),
+                "_meta": meta,
+                "hard": hard,
+                "used": used,
+                "signals": signals,
+            }
+        )
+    return out
+
+
+def attach_namespace_constraints(constraints: list[dict], components: dict[str, dict]) -> None:
+    """Quota pressure and LimitRange defaults are namespace-wide; note them on the affected components."""
+    for c in constraints:
+        ns_components = [comp for comp in components.values() if comp["namespace"] == c["namespace"]]
+        if c["kind"] == "ResourceQuota" and c["signals"]:
+            for comp in ns_components:
+                if not comp["healthy_hint"]:
+                    comp["spec_flags"].append(
+                        f"namespace ResourceQuota {c['name']} is near its limit: {c['signals'][0]}"
+                    )
+        if c["kind"] == "LimitRange":
+            for comp in ns_components:
+                if any(not (ct.get("limits") or {}).get("memory") for ct in comp["containers"] if not ct.get("init")):
+                    comp["spec_flags"].append(
+                        f"LimitRange {c['name']} applies to this namespace and this workload sets no memory limit "
+                        f"(defaults/max: {json.dumps(c['limits'])[:200]})"
+                    )
+
+
+# --------------------------------------------------------------------------- admission webhooks
+
+
+def summarize_webhooks(configs: list[dict], errors: list[str]) -> list[dict]:
+    """Mutating/validating webhooks and whether their backend Service has endpoints (checked in code)."""
+    out = []
+    endpoint_cache: dict[tuple[str, str], int | None] = {}
+    for cfg in configs:
+        kind = cfg.get("kind", "")
+        for wh in cfg.get("webhooks") or []:
+            svc = ((wh.get("clientConfig") or {}).get("service")) or {}
+            key = (svc.get("namespace"), svc.get("name"))
+            ready = None
+            if svc.get("name"):
+                if key not in endpoint_cache:
+                    try:
+                        ep = json.loads(
+                            run_kubectl(["get", "endpoints", svc["name"], "-n", svc["namespace"], "-o", "json"])
+                        )
+                        endpoint_cache[key] = sum(len(sub.get("addresses") or []) for sub in ep.get("subsets") or [])
+                    except Exception as exc:  # noqa: BLE001 - missing service is itself a finding
+                        endpoint_cache[key] = 0
+                        errors.append(f"webhook backend {key}: {exc}")
+                ready = endpoint_cache[key]
+            rules = [
+                f"{'/'.join(r.get('operations') or [])} {','.join(r.get('resources') or [])}"
+                for r in wh.get("rules") or []
+            ]
+            record = {
+                "kind": kind,
+                "configuration": cfg.get("metadata", {}).get("name"),
+                "created": cfg.get("metadata", {}).get("creationTimestamp"),
+                "_rules": wh.get("rules") or [],
+                "_meta": cfg.get("metadata", {}),
+                "webhook": wh.get("name"),
+                "failure_policy": wh.get("failurePolicy"),
+                "timeout_seconds": wh.get("timeoutSeconds"),
+                "rules": rules,
+                "namespace_selector": (wh.get("namespaceSelector") or {}) or None,
+                "object_selector": (wh.get("objectSelector") or {}) or None,
+                "backend": {"namespace": svc.get("namespace"), "service": svc.get("name"), "port": svc.get("port")}
+                if svc
+                else {"url": (wh.get("clientConfig") or {}).get("url")},
+                "backend_ready_endpoints": ready,
+                "signals": [],
+            }
+            if svc.get("name") and ready == 0:
+                record["signals"].append(
+                    f"{kind} {wh.get('name')} (failurePolicy={wh.get('failurePolicy')}) backend service "
+                    f"{svc.get('namespace')}/{svc.get('name')} has 0 ready endpoints; matching admission requests "
+                    f"({'; '.join(rules)}) {'fail' if wh.get('failurePolicy') == 'Fail' else 'are skipped'}"
+                )
+            elif kind == "MutatingWebhookConfiguration":
+                record["signals"].append(
+                    f"mutating webhook {wh.get('name')} rewrites objects matching {'; '.join(rules) or 'its rules'}"
+                )
+            out.append(record)
+    return out[:12]
+
+
+def attach_webhooks(webhooks: list[dict], components: dict[str, dict]) -> None:
+    for wh in webhooks:
+        backend = wh.get("backend") or {}
+        for comp in components.values():
+            if comp["namespace"] != backend.get("namespace"):
+                continue
+            if any(svc.get("name") == backend.get("service") for svc in comp["services"]):
+                comp["spec_flags"].append(
+                    f"serves admission webhook {wh['webhook']} ({wh['kind']}, failurePolicy={wh['failure_policy']})"
+                )
+                if wh.get("backend_ready_endpoints") == 0:
+                    comp["signals"].append(f"admission webhook backend for {wh['webhook']} has no ready endpoints")
+
+
+# --------------------------------------------------------------------------- cluster DNS
+
+
+def _corefile_rules(corefile: str) -> list[str]:
+    """template, rewrite, and hosts blocks of a Corefile, one string per block."""
+    lines = corefile.splitlines()
+    blocks, i = [], 0
+    while i < len(lines):
+        head = lines[i].strip()
+        if head.startswith(("template", "rewrite", "hosts")):
+            block, depth, j = [head], head.count("{") - head.count("}"), i + 1
+            while depth > 0 and j < len(lines):
+                block.append(lines[j].strip())
+                depth += lines[j].count("{") - lines[j].count("}")
+                j += 1
+            blocks.append(" ⏎ ".join(b for b in block if b))
+            i = j
+            continue
+        i += 1
+    return blocks
+
+
+def summarize_cluster_dns(errors: list[str]) -> dict:
+    """Cluster DNS (CoreDNS) configuration: a classic single point of failure outside the app namespaces."""
+    out: dict = {}
+    try:
+        cm = json.loads(
+            run_kubectl(["get", "configmap", "coredns", "-n", "kube-system", "-o", "json", "--show-managed-fields"])
+        )
+    except Exception as exc:  # noqa: BLE001 - not every cluster runs CoreDNS
+        errors.append(f"coredns configmap: {exc}")
+        return out
+    meta = cm.get("metadata", {})
+    corefile = (cm.get("data") or {}).get("Corefile", "")
+    out = {
+        "configmap": "kube-system/coredns",
+        "modified": last_update_time(meta),
+        "corefile_lines": len(corefile.splitlines()),
+        "plugins": sorted(
+            {
+                ln.strip().split()[0]
+                for ln in corefile.splitlines()
+                if ln.strip() and not ln.strip().startswith(("}", ".", "#")) and "{" not in ln
+            }
+        ),
+        "rules": [trim(block, 300) for block in _corefile_rules(corefile)][:6],
+        "_meta": meta,
+    }
+    try:
+        pods = json.loads(
+            run_kubectl(["get", "pods", "-n", "kube-system", "-l", "k8s-app=kube-dns", "-o", "json"])
+        ).get("items", [])
+        not_ready = [
+            p["metadata"]["name"]
+            for p in pods
+            if not all(c.get("ready") for c in p.get("status", {}).get("containerStatuses") or [])
+        ]
+        out["pods"] = len(pods)
+        if not_ready:
+            out.setdefault("signals", []).append(f"CoreDNS pods not ready: {', '.join(not_ready)}")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"coredns pods: {exc}")
+    return out
+
+
+# --------------------------------------------------------------------------- config objects
+
+
+def summarize_config_objects(secrets: list[dict], configmaps: list[dict]) -> dict[tuple[str, str, str], dict]:
+    """Metadata and key names only. Values are never read into the state."""
+    out = {}
+    for kind, items in (("Secret", secrets), ("ConfigMap", configmaps)):
+        for obj in items:
+            meta = obj.get("metadata", {})
+            out[(kind, meta.get("namespace"), meta.get("name"))] = {
+                "type": obj.get("type"),
+                "keys": sorted((obj.get("data") or {}).keys()) + sorted((obj.get("stringData") or {}).keys()),
+                "created": meta.get("creationTimestamp"),
+                "last_update": last_update_time(meta),
+                "_meta": meta,
+            }
+    return out
+
+
+def _stale_readers(comp: dict, kind: str, name: str, obj: dict) -> str | None:
+    """What a rewrite of a ConfigMap or Secret means for this workload's running containers, by read mode."""
+    updated = parse_time(obj.get("last_update"))
+    if updated is None:
+        return None
+    starts = [
+        t
+        for pod in comp.get("pods") or []
+        for t in (parse_time(v) for v in ((pod.get("_started") or {}).values() or [pod.get("started")]))
+        if t
+    ]
+    older = [t for t in starts if t < updated]
+    if not older:
+        return None
+    modes = (comp.get("_config_modes") or {}).get(f"{kind}/{name}") or []
+    fixed = [m for m in modes if m.startswith(("env ", "envFrom", "subPath "))]
+    files = [m for m in modes if m.startswith("volume ")]
+    head = (
+        f"{kind} {name} was rewritten at {obj.get('last_update')}, after {len(older)} of {len(starts)} running "
+        "containers of this workload started"
+    )
+    if fixed:
+        return (
+            f"{head}; it is read through {', '.join(fixed)}, which are fixed when the container starts, so those "
+            "containers still use the previous values"
+        )
+    if files:
+        return (
+            f"{head}; it is mounted as files ({', '.join(files)}), which the kubelet updates in place, so the "
+            "running process sees the new content only if it re-reads the files"
+        )
+    return head
+
+
+def attach_config_objects(
+    objects: dict[tuple[str, str, str], dict], components: dict[str, dict], changes: list[dict] | None = None
+) -> None:
+    """Missing references, staleness by read mode, env shadowing, and recent writes, computed in code.
+
+    How a workload reads an object decides what a rewrite means for its running pods: env values (valueFrom,
+    envFrom) and subPath mounts are fixed when the container starts, so a container started before the rewrite
+    still uses the previous values; a volume mount is updated in place, and the process sees the new content
+    only if it re-reads the files.
+    """
+    consumers: dict[tuple[str, str, str], list[str]] = {}
+    for cid, comp in components.items():
+        ns = comp["namespace"]
+        refs = comp.get("config_refs") or {}
+        details = {}
+        for kind, key in (("Secret", "secrets"), ("ConfigMap", "configmaps")):
+            for name in refs.get(key, []):
+                obj = objects.get((kind, ns, name))
+                if obj is None:
+                    comp["signals"].append(f"referenced {kind} {name} does not exist in namespace {ns}")
+                    continue
+                consumers.setdefault((kind, ns, name), []).append(cid)
+                details[f"{kind.lower()}/{name}"] = {"keys": obj["keys"][:20], "last_update": obj["last_update"]}
+                stale = _stale_readers(comp, kind, name, obj)
+                if stale:
+                    comp["signals"].append(stale)
+        if details:
+            comp["config_objects"] = details
+        for ct in comp.get("containers", []):
+            env_names = set(ct.get("env_names") or [])
+            for ref in ct.get("env_from") or []:
+                kind = "ConfigMap" if ref.get("configMap") else "Secret"
+                obj = objects.get((kind, ns, ref.get("configMap") or ref.get("secret")))
+                if not obj:
+                    continue
+                prefix = ref.get("prefix") or ""
+                shadowed = sorted(env_names & {prefix + k for k in obj["keys"]})
+                for var in shadowed:
+                    comp["signals"].append(
+                        f"container {ct.get('name')}: env var {var} is set explicitly and also provided by "
+                        f"{kind} {ref.get('configMap') or ref.get('secret')} via envFrom; the explicit value shadows it"
+                    )
+    if changes is not None:
+        for (kind, ns, name), cids in consumers.items():
+            change = change_log.object_change(
+                f"{kind.lower()}/{ns}/{name}",
+                kind,
+                name,
+                ns,
+                objects[(kind, ns, name)].get("_meta") or {},
+                affects=cids,
+                targets_created=[components[c].get("created") for c in cids],
+            )
+            if change:
+                changes.append(change)
+
+
+# --------------------------------------------------------------------------- orchestration
+
+
+_RBAC_DENIED_RE = re.compile(
+    r"(?i)(is forbidden|\bforbidden\b|\b403\b|cannot (?:get|list|watch|create|update|patch|delete) resource|"
+    r"\bRBAC\b|not allowed to|PermissionDenied)"
+)
+_DENIED_OPERATION_RE = re.compile(
+    r'(?i)cannot (?P<verb>get|list|watch|create|update|patch|delete|deletecollection) (?:resource )?"?'
+    r"(?P<resource>[a-z][a-z0-9./-]*)"
+)
+MAX_RBAC_RULES = 8
+
+
+def _rule_lines(rules: list[dict]) -> list[str]:
+    out = []
+    for rule in rules or []:
+        resources = ",".join(rule.get("resources") or rule.get("nonResourceURLs") or ["*"])
+        verbs = ",".join(rule.get("verbs") or [])
+        groups = ",".join(g or "core" for g in rule.get("apiGroups") or [])
+        out.append(f"{resources} [{groups}]: {verbs}" if groups else f"{resources}: {verbs}")
+    return out[:MAX_RBAC_RULES]
+
+
+def _grants(rules: list[dict], verb: str, resource: str) -> bool:
+    resource = resource.split("/")[0].split(".")[0].lower()
+    for rule in rules or []:
+        res = [r.lower() for r in rule.get("resources") or []]
+        verbs = [v.lower() for v in rule.get("verbs") or []]
+        if ("*" in res or resource in res) and ("*" in verbs or verb.lower() in verbs):
+            return True
+    return False
+
+
+def summarize_rbac(
+    namespaces: list[str], components: dict[str, dict], errors: list[str], changes: list[dict] | None = None
+) -> list[dict]:
+    """Roles and ClusterRoles reachable from the ServiceAccounts the application's workloads run as.
+
+    Only roles bound to a workload's ServiceAccount are fetched. A role gets a signal when a workload bound to
+    it logs authorization denials; when the denied verb and resource can be read from those logs, the role's
+    rules are checked for them in code. A role modified after creation, or created after the workloads bound to
+    it, is recorded in `changes`.
+    """
+    sa_to_components: dict[tuple[str, str], list[str]] = {}
+    for cid, comp in components.items():
+        key = (comp["namespace"], comp.get("service_account") or "default")
+        sa_to_components.setdefault(key, []).append(cid)
+    bindings: list[tuple[str, dict]] = [
+        ("ClusterRoleBinding", b) for b in kubectl_items("clusterrolebindings", None, errors, cluster_scoped=True)
+    ]
+    for ns in namespaces:
+        bindings += [("RoleBinding", b) for b in kubectl_items("rolebindings", ns, errors)]
+    entries: dict[tuple[str, str | None, str], dict] = {}
+    for bkind, b in bindings:
+        bmeta = b.get("metadata", {})
+        bound: list[str] = []
+        for subj in b.get("subjects") or []:
+            if subj.get("kind") != "ServiceAccount":
+                continue
+            key = (subj.get("namespace") or bmeta.get("namespace"), subj.get("name"))
+            bound += sa_to_components.get(key, [])
+        if not bound:
+            continue
+        ref = b.get("roleRef") or {}
+        rkind, rname = ref.get("kind"), ref.get("name")
+        if rkind not in ("Role", "ClusterRole") or not rname:
+            continue
+        rns = bmeta.get("namespace") if rkind == "Role" else None
+        ekey = (rkind, rns, rname)
+        if ekey not in entries:
+            args = ["get", rkind.lower(), rname, "-o", "json", "--show-managed-fields"] + (["-n", rns] if rns else [])
+            try:
+                role = json.loads(run_kubectl(args))
+            except Exception as exc:  # noqa: BLE001 - a missing role is itself a finding
+                role = {}
+                errors.append(f"rbac {rkind}/{rname}: {str(exc)[:160]}")
+            rmeta = role.get("metadata", {})
+            entries[ekey] = {
+                "kind": rkind,
+                "name": rname,
+                "namespace": rns,
+                "bindings": [],
+                "service_accounts": [],
+                "components": [],
+                "rules": _rule_lines(role.get("rules") or []) if role else ["(role not found)"],
+                "_rules": role.get("rules") or [],
+                "created": rmeta.get("creationTimestamp"),
+                "modified": last_update_time(rmeta),
+                "modified_after_creation_s": change_log.modified_after_creation(rmeta),
+                "_meta": rmeta,
+                "signals": [],
+            }
+        entry = entries[ekey]
+        entry["bindings"].append(f"{bkind}/{bmeta.get('name')}")
+        for subj in b.get("subjects") or []:
+            if subj.get("kind") == "ServiceAccount":
+                entry["service_accounts"].append(
+                    f"{subj.get('namespace') or bmeta.get('namespace')}/{subj.get('name')}"
+                )
+        entry["components"] = sorted(set(entry["components"]) | set(bound))
+    for entry in entries.values():
+        for cid in entry["components"]:
+            comp = components.get(cid) or {}
+            denied = [
+                s
+                for s in comp.get("log_signals") or []
+                if s.get("state") != "stopped" and _RBAC_DENIED_RE.search(s.get("line") or "")
+            ]
+            if not denied:
+                continue
+            count = sum(int(s.get("count") or 1) for s in denied)
+            entry["signals"].append(f"bound workload {cid} logs authorization denials ({count} lines)")
+            comp.setdefault("signals", []).append(
+                f"service account {comp.get('namespace')}/{comp.get('service_account') or 'default'} is bound to "
+                f"{entry['kind']}/{entry['name']} granting: {'; '.join(entry['rules'][:4]) or 'nothing'}"
+            )
+            for s in denied:
+                m = _DENIED_OPERATION_RE.search(s.get("line") or "")
+                if not m:
+                    continue
+                verb, resource = m.group("verb").lower(), m.group("resource").lower()
+                if _grants(entry["_rules"], verb, resource):
+                    entry["signals"].append(
+                        f"the denied operation '{verb} {resource}' is granted by this role, so another rule set denies it"
+                    )
+                else:
+                    entry["signals"].append(
+                        f"the denied operation '{verb} {resource}' is not granted by this role (rules: "
+                        f"{'; '.join(entry['rules'][:4]) or 'none'})"
+                    )
+                break
+    out = []
+    for entry in entries.values():
+        entry.pop("_rules", None)
+        meta = entry.pop("_meta", {})
+        if changes is not None:
+            change = change_log.object_change(
+                f"{entry['kind'].lower()}/{entry['namespace'] + '/' if entry.get('namespace') else ''}{entry['name']}",
+                entry["kind"],
+                entry["name"],
+                entry.get("namespace"),
+                meta,
+                affects=entry["components"],
+                targets_created=[components[c].get("created") for c in entry["components"] if c in components],
+            )
+            if change:
+                entry["changed"] = True
+                changes.append(change)
+        entry["signals"] = list(dict.fromkeys(entry["signals"]))
+        entry["bindings"] = sorted(set(entry["bindings"]))
+        entry["service_accounts"] = sorted(set(entry["service_accounts"]))
+        out.append(entry)
+    return out
+
+
+def coredns_service_overrides(cluster_dns: dict, components: dict[str, dict]) -> list[str]:
+    """CoreDNS rules (template, rewrite, hosts) that name one of the application's Services, by its cluster name."""
+    affected: list[str] = []
+    for cid, comp in components.items():
+        ns = comp["namespace"]
+        for svc in comp.get("services") or []:
+            names = (f"{svc['name']}.{ns}.svc.cluster.local", f"{svc['name']}.{ns}.svc", f"{svc['name']}.{ns}")
+            for rule in cluster_dns.get("rules") or []:
+                low = rule.lower()
+                if not any(re.search(rf"(?<![a-z0-9-]){re.escape(n)}(?![a-z0-9-])", low) for n in names):
+                    continue
+                comp["signals"].append(
+                    f"CoreDNS rule in kube-system/coredns overrides name resolution for this component's Service "
+                    f"{svc['name']}: {trim(rule, 200)}"
+                )
+                cluster_dns.setdefault("signals", []).append(
+                    f"rule overrides name resolution for Service {ns}/{svc['name']} ({cid}): {trim(rule, 160)}"
+                )
+                affected.append(cid)
+                break
+    return sorted(set(affected))
+
+
+def collect_snapshot(
+    app_info: dict,
+    *,
+    log_tail: int = DEFAULT_LOG_TAIL,
+    alerts_fetcher: Callable[[], str] | None = fetch_alerts_via_mcp,
+    include_logs: bool = True,
+    trend_baseline: dict | None = None,
+) -> ClusterSnapshot:
+    """Read the cluster once and return the untrimmed snapshot. Never raises for a single failed read.
+
+    With `trend_baseline` (an earlier trend.collect_sample), growth since that sample is attached as signals.
+    """
+    from clients.jev_diag.v2 import trend
+
+    errors: list[str] = []
+    namespaces = list(app_info.get("namespaces") or [app_info.get("namespace")])
+    namespaces = [ns for ns in namespaces if ns]
+    components: dict[str, dict] = {}
+    pods_by_component: dict[str, list[dict]] = {}
+    pod_to_component: dict[str, str] = {}
+    pod_index: dict[str, dict] = {}
+    unassigned_events: list[dict] = []
+    unassigned_pods: list[dict] = []
+    dangling_services: list[dict] = []
+    all_policies: list[dict] = []
+    changes: list[dict] = []
+    raw_pods: dict[str, list[dict]] = {}
+    raw_events: dict[str, list[dict]] = {}
+    deletable: list[tuple[str, dict]] = []  # objects checked for a stuck finalizer
+    replicasets: list[dict] = []
+    controllerrevisions: list[dict] = []
+
+    job_owner: dict[str, str] = {}  # "ns/job-name" -> CronJob component id
+    for ns in namespaces:
+        for resource in ("deployments", "statefulsets", "daemonsets", "cronjobs"):
+            for obj in kubectl_items(resource, ns, errors):
+                comp = summarize_workload(obj)
+                components[component_id(comp["kind"], comp["name"])] = comp
+                deletable.append((comp["kind"], obj))
+        for obj in kubectl_items("jobs", ns, errors):
+            deletable.append(("Job", obj))
+            owners = [(o.get("kind"), o.get("name")) for o in obj.get("metadata", {}).get("ownerReferences") or []]
+            cron = next((component_id("CronJob", n) for k, n in owners if k == "CronJob"), None)
+            job_name = obj.get("metadata", {}).get("name")
+            if cron and cron in components:
+                status = obj.get("status", {})
+                job_owner[f"{ns}/{job_name}"] = cron
+                components[cron]["jobs"].append(
+                    compact(
+                        {
+                            "name": job_name,
+                            "active": status.get("active"),
+                            "succeeded": status.get("succeeded"),
+                            "failed": status.get("failed"),
+                            "start_time": status.get("startTime"),
+                            "completion_time": status.get("completionTime"),
+                        }
+                    )
+                )
+                continue
+            comp = summarize_workload(obj)
+            components[component_id("Job", job_name)] = comp
+        replicasets += kubectl_items("replicasets", ns, errors, managed_fields=False)
+        controllerrevisions += kubectl_items("controllerrevisions", ns, errors, managed_fields=False)
+    for comp in components.values():
+        if comp["kind"] == "CronJob":
+            stuck = [j for j in comp["jobs"] if j.get("active") and not j.get("completion_time")]
+            if len(stuck) > 1:
+                comp["signals"].append(
+                    f"{len(stuck)} jobs of this cronjob are active without completing (they pile up)"
+                )
+            comp["jobs"] = sorted(comp["jobs"], key=lambda j: j.get("start_time") or "", reverse=True)[:5]
+    revisions = change_log.revision_templates(replicasets, controllerrevisions)
+    change_log.attach_template_changes(components, revisions)
+
+    for ns in namespaces:
+        raw_pods[ns] = kubectl_items("pods", ns, errors, managed_fields=False)
+        for pod in raw_pods[ns]:
+            summary = summarize_pod(pod)
+            summary["_namespace"] = ns
+            cid = component_for_pod(summary, components, job_owner)
+            summary.pop("_namespace")
+            summary.pop("owner")
+            if cid is None:
+                if summary["signals"] and len(unassigned_pods) < 10:
+                    unassigned_pods.append({k: v for k, v in summary.items() if k != "labels"})
+                continue
+            summary.pop("labels")
+            pods_by_component.setdefault(cid, []).append(summary)
+            pod_to_component[summary["name"]] = cid
+            pod_index[summary["name"]] = summary
+
+    current = now()
+    for comp in components.values():
+        mod = parse_time(comp.get("modified"))
+        if mod:
+            comp["modified_seconds_ago"] = max(0, int((current - mod).total_seconds()))
+    for cid, comp in components.items():
+        comp["signals"].extend(replica_signals(comp))
+        pods = pods_by_component.get(cid, [])
+        comp["pods"] = pods
+        for pod in pods:
+            comp["signals"].extend(f"pod {pod['name']}: {s}" for s in pod["signals"])
+            if pod.get("startup_notes"):
+                comp.setdefault("startup_history", []).extend(f"pod {pod['name']}: {n}" for n in pod["startup_notes"])
+        if comp["replicas"].get("desired", 0) and not pods:
+            comp["signals"].append("no pods exist for this workload")
+
+    constraints: list[dict] = []
+    config_objects: dict = {}
+    claim_modes: dict[tuple[str, str], list[str]] = {}
+    for ns in namespaces:
+        raw_events[ns] = kubectl_items("events", ns, errors, managed_fields=False)
+        attach_warning_events(raw_events[ns], components, unassigned_events, job_owner, pod_index)
+        services = kubectl_items("services", ns, errors)
+        deletable += [("Service", svc) for svc in services]
+        dangling_services += attach_services(
+            services, kubectl_items("endpoints", ns, errors, managed_fields=False), components, changes
+        )
+        all_policies += attach_network_policies(kubectl_items("networkpolicies", ns, errors), components, changes)
+        attach_hpas(kubectl_items("horizontalpodautoscalers", ns, errors, managed_fields=False), components)
+        claims = kubectl_items("persistentvolumeclaims", ns, errors)
+        deletable += [("PersistentVolumeClaim", pvc) for pvc in claims]
+        claim_modes.update(attach_pvcs(claims, components))
+        constraints += summarize_namespace_constraints(
+            kubectl_items("limitranges", ns, errors), kubectl_items("resourcequotas", ns, errors)
+        )
+        secrets, configmaps = kubectl_items("secrets", ns, errors), kubectl_items("configmaps", ns, errors)
+        deletable += [("Secret", o) for o in secrets] + [("ConfigMap", o) for o in configmaps]
+        config_objects.update(summarize_config_objects(secrets, configmaps))
+    checks.resolve_env_hosts(components)
+    checks.local_traffic_policy_gaps(components)
+    checks.shared_rwo_claims(components, claim_modes)
+    for comp in components.values():
+        comp["healthy_hint"] = not comp["signals"]
+    attach_namespace_constraints(constraints, components)
+    attach_config_objects(config_objects, components, changes)
+    for cid, comp in components.items():
+        change = change_log.object_change(
+            cid,
+            comp["kind"],
+            comp["name"],
+            comp["namespace"],
+            comp.get("_meta") or {},
+            affects=[cid],
+            targets_created=[components[o].get("created") for o in comp.get("_calls") or [] if o in components],
+            extra={"template_changes": comp["template_changes"]["changes"]} if comp.get("template_changes") else None,
+        )
+        if change:
+            changes.append(change)
+    for c in constraints:
+        in_namespace = [comp.get("created") for comp in components.values() if comp["namespace"] == c["namespace"]]
+        change = change_log.object_change(
+            f"{c['kind'].lower()}/{c['namespace']}/{c['name']}",
+            c["kind"],
+            c["name"],
+            c["namespace"],
+            c.pop("_meta", None) or {},
+            targets_created=in_namespace,
+        )
+        if change:
+            c["changed"] = True
+            changes.append(change)
+
+    namespace_labels: dict[str, dict] = {}
+    for ns_obj in kubectl_items("namespaces", None, errors, cluster_scoped=True, managed_fields=False):
+        meta = ns_obj.get("metadata") or {}
+        if meta.get("name") in namespaces:
+            namespace_labels[meta["name"]] = meta.get("labels") or {}
+    webhooks = summarize_webhooks(
+        kubectl_items("mutatingwebhookconfigurations", None, errors, cluster_scoped=True)
+        + kubectl_items("validatingwebhookconfigurations", None, errors, cluster_scoped=True),
+        errors,
+    )
+    attach_webhooks(webhooks, components)
+    checks.admission_changes(components, revisions, webhooks, namespace_labels, constraints)
+    recorded: set[str] = set()
+    for wh in webhooks:
+        meta = wh.pop("_meta", None) or {}
+        name = wh["configuration"]
+        if name in recorded:
+            continue
+        recorded.add(name)
+        matched = [
+            ns
+            for ns in namespaces
+            if checks.label_selector_matches(
+                wh.get("namespace_selector"), namespace_labels.get(ns) or {"kubernetes.io/metadata.name": ns}
+            )
+        ]
+        change = change_log.object_change(
+            f"{wh['kind'].lower()}/{name}",
+            wh["kind"],
+            name,
+            None,
+            meta,
+            affects=sorted({c for w in webhooks if w["configuration"] == name for c in w.get("components") or []}),
+            targets_created=[comp.get("created") for comp in components.values() if comp["namespace"] in matched],
+        )
+        if change:
+            changes.append(change)
+            for w in webhooks:
+                if w["configuration"] == name:
+                    w["changed"] = True
+    cluster_dns = summarize_cluster_dns(errors)
+    dns_affected = coredns_service_overrides(cluster_dns, components)
+    if dns_affected:
+        cluster_dns["components"] = dns_affected
+    dns_meta = cluster_dns.pop("_meta", None)
+    if dns_meta:
+        change = change_log.object_change(
+            "configmap/kube-system/coredns", "ConfigMap", "coredns", "kube-system", dns_meta, affects=dns_affected
+        )
+        if change:
+            cluster_dns["changed"] = True
+            changes.append(change)
+    for ns in namespaces:
+        try:
+            top = run_kubectl(["top", "pods", "-n", ns, "--containers", "--no-headers"], timeout=KUBECTL_TIMEOUT)
+            attach_resource_usage(top, components, pod_to_component)
+        except Exception as exc:  # noqa: BLE001 - metrics-server is optional
+            errors.append(f"kubectl top {ns}: {exc}")
+
+    if include_logs:
+        attach_logs(components, pods_by_component, errors, log_tail)
+
+    alerts: list[dict] = []
+    if alerts_fetcher is not None:
+        try:
+            alerts = parse_alerts(alerts_fetcher())
+        except Exception as exc:  # noqa: BLE001 - alerts are optional evidence
+            errors.append(f"alerts: {exc}")
+        attach_alerts(alerts, components)
+
+    rbac = summarize_rbac(namespaces, components, errors, changes)
+    stuck = checks.stuck_terminating(deletable)
+    checks.link_stuck_objects(stuck, components, rbac)
+    nodes = summarize_nodes(kubectl_items("nodes", None, errors, managed_fields=False))
+    trend_summary = None
+    if trend_baseline is not None:
+        trend_summary = trend.apply_trend(components, trend_baseline, trend.sample_from_objects(raw_pods, raw_events))
+
+    for cid in list(components):
+        comp = components[cid]
+        comp["signals"] = list(dict.fromkeys(comp["signals"]))
+        comp["healthy"] = not comp["signals"] and not comp.get("log_error_lines")
+        for key in ("selector", "template_labels", "healthy_hint"):
+            comp.pop(key, None)
+        for pod in comp["pods"]:
+            for key in ("signals", "startup_notes", "settled", "_spec", "_labels", "_owner", "_started"):
+                pod.pop(key, None)
+        for svc in comp["services"]:
+            if not svc.get("matches_no_workload") and not svc.get("selects_multiple_workloads"):
+                svc.pop("selector", None)
+        components[cid] = compact(comp)
+        components[cid]["healthy"] = comp["healthy"]
+
+    cluster = {
+        "namespaces": namespaces,
+        "nodes": compact(nodes),
+        "firing_alerts": alerts,
+        "network_policies": [
+            {k: v for k, v in p.items() if k not in ("ingress_rules", "egress_rules")} for p in all_policies
+        ],
+        "services_matching_no_workload": dangling_services,
+        "cluster_dns": compact(cluster_dns),
+        "namespace_constraints": compact(constraints),
+        "admission_webhooks": compact([{k: v for k, v in wh.items() if k != "_rules"} for wh in webhooks]),
+        "rbac": compact(rbac),
+        "stuck_terminating": stuck,
+        "trend": trend_summary,
+        "warning_events_not_attributed": unassigned_events,
+        "unhealthy_pods_not_attributed": unassigned_pods,
+        "_changes": changes,
+    }
+    app = {
+        "name": app_info.get("app_name"),
+        "description": trim(app_info.get("descriptions"), 600),
+        "namespaces": namespaces,
+    }
+    snapshot = ClusterSnapshot(app=app, components=components, cluster=compact(cluster), errors=errors)
+    snapshot.cluster.setdefault("_changes", [])
+    from clients.jev_diag.v2.derive import post_process
+
+    post_process(snapshot)
+    for comp in components.values():
+        for key in ("_meta", "_template"):
+            comp.pop(key, None)
+    logger.info(
+        "Collected %d components (%d with structural signals, %d with only log errors), %d alerts, %d changes, "
+        "%d collection errors",
+        len(components),
+        sum(1 for c in components.values() if c.get("signals")),
+        sum(1 for c in components.values() if not c.get("signals") and c.get("log_error_lines")),
+        len(alerts),
+        len(changes),
+        len(errors),
+    )
+    return snapshot
+
+
+# --------------------------------------------------------------------------- budget
+
+
+# Measured on a real run: 32.4k chars of compact JSON state billed as ~14.5k Jev input tokens,
+# i.e. about 2.2 chars per token. Use 2.0 so the estimate errs high.
+CHARS_PER_TOKEN = 2.0
+
+
+def estimate_tokens(obj: object) -> int:
+    """Conservative token estimate for JSON state (about 2 characters per token for compact JSON)."""
+    return int(len(json.dumps(obj, separators=(",", ":"), default=str)) / CHARS_PER_TOKEN) + 1
+
+
+def _cap(comp: dict, key: str, n: int) -> None:
+    if isinstance(comp.get(key), list) and len(comp[key]) > n:
+        comp[key] = comp[key][:n]
+
+
+def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
+    """Ordered, increasingly aggressive reductions. Each mutates the state in place."""
+
+    def for_components(fn: Callable[[dict], None], *, healthy_only: bool = False) -> Callable[[dict], None]:
+        def apply(state: dict) -> None:
+            components = list(state.get("components", {}).values())
+            if "component" in state:
+                components.append(state["component"])
+            for comp in components:
+                if healthy_only and not comp.get("healthy"):
+                    continue
+                fn(comp)
+
+        return apply
+
+    def drop_keys(*keys: str) -> Callable[[dict], None]:
+        def fn(comp: dict) -> None:
+            for k in keys:
+                comp.pop(k, None)
+
+        return fn
+
+    def drop_container_keys(*keys: str) -> Callable[[dict], None]:
+        def fn(comp: dict) -> None:
+            for c in comp.get("containers", []):
+                for k in keys:
+                    c.pop(k, None)
+
+        return fn
+
+    def cap_previous_logs(n: int) -> Callable[[dict], None]:
+        def fn(comp: dict) -> None:
+            comp["previous_container_logs"] = {k: v[-n:] for k, v in comp.get("previous_container_logs", {}).items()}
+
+        return fn
+
+    def cap_cluster(key: str, n: int) -> Callable[[dict], None]:
+        def apply(state: dict) -> None:
+            if len(state.get("cluster", {}).get(key, [])) > n:
+                state["cluster"][key] = state["cluster"][key][:n]
+
+        return apply
+
+    def drop_stopped_logs(keep: int) -> Callable[[dict], None]:
+        def fn(comp: dict) -> None:
+            stopped = [s for s in comp.get("log_signals") or [] if s.get("state") == "stopped"]
+            if len(stopped) > keep:
+                drop = {id(s) for s in stopped[keep:]}
+                comp["log_signals"] = [s for s in comp["log_signals"] if id(s) not in drop]
+
+        return fn
+
+    return [
+        ("all: stopped log signatures to 2", for_components(drop_stopped_logs(2))),
+        (
+            "healthy: drop container command/args/env_from",
+            for_components(drop_container_keys("command", "args", "env_from"), healthy_only=True),
+        ),
+        (
+            "healthy: drop calls_services/clients/template_changes",
+            for_components(drop_keys("calls_services", "clients", "template_changes"), healthy_only=True),
+        ),
+        ("all: previous logs to 8 lines", for_components(cap_previous_logs(8))),
+        ("all: log_signals to 4", for_components(lambda c: _cap(c, "log_signals", 4))),
+        ("all: warning_events to 3", for_components(lambda c: _cap(c, "warning_events", 3))),
+        (
+            "healthy: drop pods/services/resource_usage/volumes/config",
+            for_components(
+                drop_keys(
+                    "pods",
+                    "services",
+                    "resource_usage",
+                    "volumes",
+                    "config_refs",
+                    "config_objects",
+                    "jobs",
+                    "startup_history",
+                    "startup_events",
+                    "log_findings",
+                    "errors_point_to",
+                ),
+                healthy_only=True,
+            ),
+        ),
+        ("healthy: drop env_names/ports", for_components(drop_container_keys("env_names", "ports"), healthy_only=True)),
+        (
+            "cluster: alerts to 15, unattributed events to 5",
+            lambda s: (cap_cluster("firing_alerts", 15)(s), cap_cluster("warning_events_not_attributed", 5)(s)),
+        ),
+        ("all: drop container command/args", for_components(drop_container_keys("command", "args"))),
+        (
+            "all: log_signals to 2, events to 2",
+            for_components(lambda c: (_cap(c, "log_signals", 2), _cap(c, "warning_events", 2))),
+        ),
+        ("healthy: drop log_signals", for_components(lambda c: c.pop("log_signals", None), healthy_only=True)),
+        ("all: drop env_names", for_components(drop_container_keys("env_names"))),
+        ("all: pods to 3", for_components(lambda c: _cap(c, "pods", 3))),
+        ("all: previous logs to 3 lines", for_components(cap_previous_logs(3))),
+        ("healthy: drop containers", for_components(drop_keys("containers"), healthy_only=True)),
+        ("cluster: drop network policy rule bodies", lambda s: s.get("cluster", {}).pop("network_policies", None)),
+        (
+            "all: drop previous logs and resource_usage",
+            for_components(drop_keys("previous_container_logs", "resource_usage")),
+        ),
+        (
+            "all: pods to 1, drop container_states",
+            for_components(
+                lambda c: (_cap(c, "pods", 1), [p.pop("container_states", None) for p in c.get("pods", [])])
+            ),
+        ),
+        ("all: drop stopped log signatures", for_components(drop_stopped_logs(0))),
+        ("all: drop log_signals", for_components(lambda c: c.pop("log_signals", None))),
+    ]
+
+
+def _detail_trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
+    """Trim the investigation's own bulk before touching checks, changes, signals, or evidence."""
+
+    def logs(state: dict) -> None:
+        logs = state["candidate"]["detail"].get("logs", {})
+        for key in ("tail", "telemetry_error_samples", "previous_container_logs"):
+            logs.pop(key, None)
+        _cap(logs, "error_samples", 6)
+
+    def config(state: dict) -> None:
+        for cm in state["candidate"]["detail"].get("configmaps", {}).values():
+            cm.pop("data", None)  # names, keys, timestamps, and selected evidence remain
+
+    def env(state: dict) -> None:
+        workload = state["candidate"]["detail"].get("workload", {})
+        for c in (workload.get("containers") or []) + (workload.get("init_containers") or []):
+            _cap(c, "env", 8)  # selected changed/duplicate/address values also survive as evidence
+
+    return [("detail: reduce log samples", logs), ("detail: drop ConfigMap bodies", config), ("detail: env to 8", env)]
+
+
+def _shrink_remaining(state: dict, max_tokens: int) -> bool:
+    """Last resort for any state shape: halve the largest bulk fields, then diagnostic facts if necessary.
+
+    Keep list prefixes and stable evidence/finding ids so callers can still resolve the selected option.
+    This runs only when the normal trim steps could not meet the budget.
+    """
+    keep = {
+        "signals",
+        "spec_checks",
+        "service_checks",
+        "template_changes",
+        "admission_changes",
+        "evidence",
+        "findings",
+        "cluster_findings",
+        "probe",
+        "probe_text",
+        "repeated_failures",
+        "failing_targets",
+        "input_candidates",
+        "id",
+        "kind",
+        "name",
+        "namespace",
+        "component",
+    }
+    keep_keys = keep | {"candidate", "detail", "logs"}
+    choices = []
+
+    def visit(parent: dict | list, key: str | int, value: object, protected: bool = False) -> None:
+        protected = protected or key in keep
+        priority = 1 if protected else 0
+        if isinstance(value, str) and len(value) > 240:
+            choices.append((priority, -estimate_tokens(value), parent, key, value))
+        elif isinstance(value, list):
+            if len(value) > 1:
+                choices.append((priority, -estimate_tokens(value), parent, key, value))
+            for i, item in enumerate(value):
+                visit(value, i, item, protected)
+        elif isinstance(value, dict):
+            # Removing schema fields is more destructive than shortening their values.
+            if len(value) > 1 and any(k not in keep_keys for k in value):
+                choices.append((2 + priority, -estimate_tokens(value), parent, key, value))
+            for k, item in value.items():
+                visit(value, k, item, protected)
+
+    changed = False
+    while estimate_tokens(state) > max_tokens:
+        choices.clear()
+        for key, value in state.items():
+            visit(state, key, value)
+        if not choices:
+            break
+        _, _, parent, key, value = min(choices, key=lambda c: c[:2])
+        n = len(value) // 2
+        if isinstance(value, str):
+            parent[key] = value[:n] + "…"
+        elif isinstance(value, list):
+            parent[key] = value[:n]
+        else:
+            removable = [k for k in value if k not in keep_keys]
+            drop = set(removable[len(removable) // 2 :])
+            parent[key] = {k: v for k, v in value.items() if k not in drop}
+        changed = True
+    return changed
+
+
+def fit_state_to_budget(state: dict, max_tokens: int) -> tuple[dict, list[str]]:
+    """Deep-copy `state` and apply trim steps in order until the estimate fits. Returns (state, applied)."""
+    fitted = copy.deepcopy(state)
+    applied: list[str] = []
+    steps = _detail_trim_steps() if "detail" in state.get("candidate", {}) else _trim_steps()
+    for label, step in steps:
+        if estimate_tokens(fitted) <= max_tokens:
+            break
+        step(fitted)
+        applied.append(label)
+    if _shrink_remaining(fitted, max_tokens):
+        applied.append("remaining: halve largest fields, diagnostic facts last")
+    return fitted, applied
