@@ -13,7 +13,7 @@
   "slack-spine-app-v3": "ghcr.io/sregym/slack-spine:20261014-app-v3@sha256:5fdcb15bb9346ecd918205becc341e680ba4fb906e3ef13df6bd0ce8af6cfc2c",
   "slack-spine-builder": "ghcr.io/sregym/slack-spine:20261014-builder@sha256:2b61c612cc97ebc110a82c431c390fd611f5f9c4f6074f0fcbba28fbf76bc05d",
   "slack-spine-go": "ghcr.io/sregym/slack-spine:20261014-go@sha256:fa919c288be42d74db65632db877e7222717bc1c8492410244dc6e4ca80cbed4",
-  "slack-spine-loadgen": "ghcr.io/sregym/slack-spine:20261019-session-writes-v2-loadgen@sha256:7d2265b029254c10787ac347ab51ff04ad032b2227a59e0ccbba31ceaaf5ed56",
+  "slack-spine-loadgen": "ghcr.io/sregym/slack-spine:20261019-session-writes-v3-loadgen@sha256:43b28a0c05ac1fa16fcd6afa72b68521ce36ead7cbd3796b6639ee7033420ecd",
   "slack-spine-minio": "ghcr.io/sregym/slack-spine:20261014-minio@sha256:b266dae12b61e9dfac10cf78dfa8abe4d3905fce4451daeb27117adf13afa410",
   "slack-spine-pgbouncer": "ghcr.io/sregym/slack-spine:20261014-pgbouncer@sha256:fe2beb2cd9731690b7630134eed47412900c9b7c519bdffbbd008072e74cb86c",
   "slack-spine-python": "ghcr.io/sregym/slack-spine:20261014-python@sha256:5951f314f564b3258416884f553a0d3a4cd52cd328cd73d6472b9b7d3b159d80",
