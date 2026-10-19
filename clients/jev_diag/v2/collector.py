@@ -890,7 +890,10 @@ def summarize_network_policy(policy: dict) -> dict:
 
 
 def attach_network_policies(
-    policies: list[dict], components: dict[str, dict], changes: list[dict] | None = None
+    policies: list[dict],
+    components: dict[str, dict],
+    changes: list[dict] | None = None,
+    deployed: datetime | None = None,
 ) -> list[dict]:
     summaries = []
     for raw in policies:
@@ -919,8 +922,9 @@ def attach_network_policies(
                 targets_created=[components[c].get("created") for c in selected],
             )
             if change:
-                pol["changed"] = True
                 changes.append(change)
+                if not change_log.before_deploy(change, deployed):
+                    pol["changed"] = True
         else:
             pol.pop("_meta", None)
     return summaries
@@ -1712,7 +1716,11 @@ def _grants(rules: list[dict], verb: str, resource: str) -> bool:
 
 
 def summarize_rbac(
-    namespaces: list[str], components: dict[str, dict], errors: list[str], changes: list[dict] | None = None
+    namespaces: list[str],
+    components: dict[str, dict],
+    errors: list[str],
+    changes: list[dict] | None = None,
+    deployed: datetime | None = None,
 ) -> list[dict]:
     """Roles and ClusterRoles reachable from the ServiceAccounts the application's workloads run as.
 
@@ -1824,8 +1832,9 @@ def summarize_rbac(
                 targets_created=[components[c].get("created") for c in entry["components"] if c in components],
             )
             if change:
-                entry["changed"] = True
                 changes.append(change)
+                if not change_log.before_deploy(change, deployed):
+                    entry["changed"] = True
         entry["signals"] = list(dict.fromkeys(entry["signals"]))
         entry["bindings"] = sorted(set(entry["bindings"]))
         entry["service_accounts"] = sorted(set(entry["service_accounts"]))
@@ -1939,7 +1948,8 @@ def collect_snapshot(
                 )
             comp["jobs"] = sorted(comp["jobs"], key=lambda j: j.get("start_time") or "", reverse=True)[:5]
     revisions = change_log.revision_templates(replicasets, controllerrevisions)
-    change_log.attach_template_changes(components, revisions, change_log.application_created(components))
+    deployed = change_log.application_created(components)
+    change_log.attach_template_changes(components, revisions, deployed)
 
     for ns in namespaces:
         raw_pods[ns] = kubectl_items("pods", ns, errors, managed_fields=False)
@@ -1985,7 +1995,9 @@ def collect_snapshot(
         dangling_services += attach_services(
             services, kubectl_items("endpoints", ns, errors, managed_fields=False), components, changes
         )
-        all_policies += attach_network_policies(kubectl_items("networkpolicies", ns, errors), components, changes)
+        all_policies += attach_network_policies(
+            kubectl_items("networkpolicies", ns, errors), components, changes, deployed
+        )
         attach_hpas(kubectl_items("horizontalpodautoscalers", ns, errors, managed_fields=False), components)
         claims = kubectl_items("persistentvolumeclaims", ns, errors)
         deletable += [("PersistentVolumeClaim", pvc) for pvc in claims]
@@ -2035,8 +2047,9 @@ def collect_snapshot(
             targets_created=in_namespace,
         )
         if change:
-            c["changed"] = True
             changes.append(change)
+            if not change_log.before_deploy(change, deployed):
+                c["changed"] = True
 
     namespace_labels: dict[str, dict] = {}
     for ns_obj in kubectl_items("namespaces", None, errors, cluster_scoped=True, managed_fields=False):
@@ -2076,7 +2089,7 @@ def collect_snapshot(
         if change:
             changes.append(change)
             for w in webhooks:
-                if w["configuration"] == name:
+                if w["configuration"] == name and not change_log.before_deploy(change, deployed):
                     w["changed"] = True
     pod_priority: dict[str, set[str]] = {}
     for ns, pods in raw_pods.items():
@@ -2085,7 +2098,7 @@ def collect_snapshot(
             cid = pod_to_component.get((pod.get("metadata") or {}).get("name"))
             if pc and _in_namespace(cid, components, ns):
                 pod_priority.setdefault(pc, set()).add(cid)
-    outside_objects = outside.collect_outside(namespaces, components, pod_priority, errors, changes)
+    outside_objects = outside.collect_outside(namespaces, components, pod_priority, errors, changes, deployed)
     cluster_dns = summarize_cluster_dns(errors)
     dns_affected = coredns_service_overrides(cluster_dns, components)
     if dns_affected:
@@ -2096,8 +2109,9 @@ def collect_snapshot(
             "configmap/kube-system/coredns", "ConfigMap", "coredns", "kube-system", dns_meta, affects=dns_affected
         )
         if change:
-            cluster_dns["changed"] = True
             changes.append(change)
+            if not change_log.before_deploy(change, deployed):
+                cluster_dns["changed"] = True
     for ns in namespaces:
         try:
             top = run_kubectl(["top", "pods", "-n", ns, "--containers", "--no-headers"], timeout=KUBECTL_TIMEOUT)
@@ -2117,7 +2131,7 @@ def collect_snapshot(
             errors.append(f"alerts: {exc}")
         attach_alerts(alerts, components)
 
-    rbac = summarize_rbac(namespaces, components, errors, changes)
+    rbac = summarize_rbac(namespaces, components, errors, changes, deployed)
     stuck = checks.stuck_terminating(deletable)
     checks.link_stuck_objects(stuck, components, rbac)
     nodes = summarize_nodes(kubectl_items("nodes", None, errors, managed_fields=False))

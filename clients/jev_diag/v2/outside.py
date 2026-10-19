@@ -13,6 +13,7 @@ after the application was deployed (earlier writes are dropped when changes are 
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from clients.jev_diag.v2 import changes as change_log
 from clients.jev_diag.v2.collector import kubectl_items
@@ -71,9 +72,11 @@ def collect_outside(
     pod_priority: dict[str, set[str]],
     errors: list[str],
     changes: list[dict],
+    deployed: datetime | None = None,
 ) -> list[dict]:
     """Outside objects as findings ({kind, name, namespace, signals, components}); change records are appended to
-    `changes`. `pod_priority` maps a PriorityClass name to the components whose pods use it."""
+    `changes`. `pod_priority` maps a PriorityClass name to the components whose pods use it. A kube-system object
+    is a finding only when it was written after the application was `deployed`."""
     apps_created = [c.get("created") for c in components.values() if not c.get("related")]
     services = _service_index(components)
     ready = {
@@ -99,7 +102,7 @@ def collect_outside(
         if not linked and ns not in namespaces:
             continue
         out.append(_finding("Ingress", name, ns, signals, linked))
-        _change(changes, "Ingress", name, ns, meta, linked, apps_created)
+        _change(changes, "Ingress", name, ns, meta, linked, apps_created, deployed)
 
     for pc in kubectl_items("priorityclasses", None, errors, cluster_scoped=True):
         meta = pc.get("metadata") or {}
@@ -114,12 +117,12 @@ def collect_outside(
             f"preemptionPolicy {pc.get('preemptionPolicy') or 'PreemptLowerPriority'}"
         )
         out.append(_finding("PriorityClass", name, None, [signal], users))
-        _change(changes, "PriorityClass", name, None, meta, users, apps_created)
+        _change(changes, "PriorityClass", name, None, meta, users, apps_created, deployed)
 
     for resource, kind in (("daemonsets", "DaemonSet"), ("cronjobs", "CronJob")):
         for obj in kubectl_items(resource, "kube-system", errors):
             meta = obj.get("metadata") or {}
-            if _change(changes, kind, meta.get("name"), "kube-system", meta, set(), apps_created):
+            if _change(changes, kind, meta.get("name"), "kube-system", meta, set(), apps_created, deployed):
                 out.append(_finding(kind, meta.get("name"), "kube-system", [f"kube-system {kind} written"], set()))
     return out
 
@@ -129,12 +132,20 @@ def _finding(kind: str, name: str, ns: str | None, signals: list[str], comps: se
 
 
 def _change(
-    changes: list[dict], kind: str, name: str, ns: str | None, meta: dict, affects: set[str], apps_created: list
+    changes: list[dict],
+    kind: str,
+    name: str,
+    ns: str | None,
+    meta: dict,
+    affects: set[str],
+    apps_created: list,
+    deployed: datetime | None,
 ) -> bool:
+    """Record the object's change, if any; True when it was made after the application was deployed."""
     obj_id = f"{kind.lower()}/{ns}/{name}" if ns else f"{kind.lower()}/{name}"
     change = change_log.object_change(
         obj_id, kind, name, ns, meta, affects=sorted(affects), targets_created=apps_created
     )
     if change:
         changes.append(change)
-    return change is not None
+    return change is not None and not change_log.before_deploy(change, deployed)
