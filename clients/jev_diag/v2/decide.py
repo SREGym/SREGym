@@ -13,6 +13,7 @@ from typing import Any
 
 from typesafe_sdk import Choice
 
+from clients.jev_diag.classifier import EVIDENCE_QUESTION, MAX_EVIDENCE_ITEMS, build_characterization_questions
 from clients.jev_diag.v2.explain import Explanation
 
 NONE = "none_of_these"
@@ -106,3 +107,24 @@ def pick(
                 totals[labels[label]] += float(p) / asks
         picks.append(labels.get(answer.choice, NONE))
     return Pick(probabilities=totals, picks=picks)
+
+
+def pick_fact(
+    ask: Callable[[str, dict, dict], Any], state: dict, facts: list[str], *, rng: random.Random, asks: int = 2
+) -> tuple[str | None, float]:
+    """v1's key-evidence question ("which single item most directly reveals the mechanism?") over `facts`, asked
+    `asks` times in shuffled order with neutral ids; returns the averaged leader and its probability."""
+    facts = list(dict.fromkeys(facts))[:MAX_EVIDENCE_ITEMS]
+    totals = dict.fromkeys(facts, 0.0)
+    for n in range(asks if facts else 0):
+        order = facts[:]
+        rng.shuffle(order)
+        items = [{"id": f"f{i + 1}", "text": text} for i, text in enumerate(order)]
+        by_id = {item["id"]: item["text"] for item in items}
+        questions = {EVIDENCE_QUESTION: build_characterization_questions(items)[EVIDENCE_QUESTION]}
+        answer = ask(f"fact:{n + 1}", {**state, "evidence": items}, questions).choices[EVIDENCE_QUESTION]
+        for label, prob in (answer.probabilities or {}).items():
+            if label in by_id:
+                totals[by_id[label]] += float(prob) / asks
+    best = max(totals, key=totals.get) if totals else None
+    return best, round(totals.get(best, 0.0), 4) if best else 0.0
