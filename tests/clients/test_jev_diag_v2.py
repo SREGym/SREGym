@@ -266,6 +266,7 @@ def _snap(comps: dict):
 
 
 def test_report_leads_with_the_changed_workload_and_states_the_fault_type():
+    from clients.jev_diag.v2.classifier import ChoiceResult
     from clients.jev_diag.v2.report import build_report
 
     comp = {
@@ -276,8 +277,14 @@ def test_report_leads_with_the_changed_workload_and_states_the_fault_type():
     }
     text = build_report(_snap({"deployment/frontend": comp}), _diag("deployment/frontend", "env CART_ADDR removed"))
     assert text.startswith("Root cause: Deployment `frontend` in namespace `shop`: env CART_ADDR removed.")
-    assert "\nFault type: config value (a wrong, missing, or shadowed value in this component's own configuration).\n" in text
+    assert (
+        "\nFault type: config value (a wrong, missing, or shadowed value in this component's own configuration).\n"
+        in text
+    )
     assert "Effect: only 0 of 1 desired replicas are ready." in text
+    unsure = _diag("deployment/frontend", "env CART_ADDR removed")
+    unsure.category_result = ChoiceResult(choice="code_bug", confidence=0.33, probabilities={"code_bug": 0.33})
+    assert "Fault type" not in build_report(_snap({"deployment/frontend": comp}), unsure)
 
 
 def test_report_names_the_owning_component_through_its_configmap_and_an_outside_object_first():

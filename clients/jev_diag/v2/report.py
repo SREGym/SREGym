@@ -6,8 +6,8 @@ sentence is the object that holds the bad value or the bad state, and the other 
 sentence with its relation. Which object that is depends on the kind of relation (RELATIONS: a blocked input, a
 retry call path, a job driving a failing component, an object carrying the bad value, one change on several
 workloads, or the workload itself). Changed values are written old -> new. Callers with symptoms are listed as
-affected, never as causes. The fault type is the investigation's cause category in v1's words; there are no
-probabilities. A second, independent cause gets its own block.
+affected, never as causes. The fault type is the investigation's cause category in v1's words, stated only when
+the decision is at least MIN_CATEGORY_CONFIDENCE sure of it; there are no probabilities. A second, independent cause gets its own block.
 """
 
 from __future__ import annotations
@@ -27,6 +27,18 @@ MAX_AFFECTED = 3
 MAX_OBSERVED = 5
 QUOTE_CHARS = 160
 CONFIG_KINDS = ("ConfigMap", "Secret")
+# The evidence items that hold the concrete settings behind a fault type; the report states them, so a cause is
+# given with its values (a probe's timings, the limits, the placement rules), not only its kind.
+CATEGORY_SETTINGS = {
+    "health_probe_config": re.compile(r" probe: "),
+    "resource_limits": re.compile(r" resources \{|at its limit|OOMKilled"),
+    "scheduling_constraint": re.compile(r"^workload (?:node_selector|affinity|tolerations)|hostPort|taint"),
+    "dns_resolution": re.compile(r"^workload (?:dns_policy|dns_config|host_aliases)"),
+    "rollout_or_replica_config": re.compile(r"^workload strategy|rolling update|replicas"),
+    "image_or_binary": re.compile(r" image \S+ "),
+}
+MAX_SETTINGS = 2
+MIN_CATEGORY_CONFIDENCE = 0.5  # a fault type the decision is less sure of is not stated
 SAME_CHANGE_SECONDS = 10  # one change applied to several workloads lands within this window
 # Signals that state the component's own condition (used for the Effect line).
 STATE_WORDS = re.compile(
@@ -382,10 +394,13 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     if parts:
         lines.append("Mechanism: " + "; ".join(dict.fromkeys(parts)) + ".")
     category = d.category_result.choice if d.category_result else None
-    if category in CATEGORY_GLOSS and category != OTHER_OPTION:
+    sure = d.category_result is not None and d.category_result.confidence >= MIN_CATEGORY_CONFIDENCE
+    if sure and category in CATEGORY_GLOSS and category != OTHER_OPTION:
         lines.append(f"Fault type: {category.replace('_', ' ')} ({CATEGORY_GLOSS[category]}).")
 
-    details = [c for c in changes if c != fact]
+    settings = CATEGORY_SETTINGS.get(category or "")
+    details = [e["text"] for e in d.evidence if settings and settings.search(e["text"]) and e["text"] != fact]
+    details = details[:MAX_SETTINGS] + [c for c in changes if c != fact]
     for step in (d.investigation or {}).get("steps") or []:
         if step.get("component") == d.component:
             details += [x for x in step.get("spec_checks") or [] if x != fact]
