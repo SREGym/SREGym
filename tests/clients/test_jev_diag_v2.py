@@ -166,3 +166,13 @@ def test_evidence_cap_keeps_some_logs_events_and_dependencies():
     assert deps[0] in out
     short = cap_evidence(["s"], ["l"], [], [], ["env A=1"])
     assert short == ["s", "l", "env A=1"]
+
+
+def test_a_line_naming_several_components_points_at_the_one_it_called():
+    from clients.jev_diag.v2.derive import _called
+
+    aliases = {"shipping": "s", "quote": "q", "email": "e", "cart": "c", "valkey-cart": "v"}
+    line = "shipping quote failure: failed POST to email service"
+    assert _called(line, aliases, {"s", "q", "e"}) == {"e"}
+    assert _called("failed to connect to valkey-cart:6379 for cart", aliases, {"c", "v"}) == {"v"}
+    assert _called("cart and email unavailable", aliases, {"c", "e"}) == set()  # no called position: keep all
