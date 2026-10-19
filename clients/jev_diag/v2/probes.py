@@ -316,3 +316,83 @@ def describe_probe_result(cid: str, result: dict) -> str:
     if result.get("client"):
         text += f"; client {result['client']} {result['client_credentials']}"
     return text
+
+
+# --------------------------------------------------------------------------- reachability from a client
+
+# POSIX sh with the tools a minimal image usually has (getent or nslookup; nc, else bash's /dev/tcp). It prints one
+# "resolve ..." line and one "connect ..." line; "unknown" when no tool is there.
+_REACH_SCRIPT = (
+    'h="$1"; p="$2"; '
+    "if command -v getent >/dev/null 2>&1; then a=$(getent hosts \"$h\" | awk '{print $1; exit}'); "
+    'if [ -n "$a" ]; then echo "resolve $a"; else echo "resolve none"; fi; '
+    "elif command -v nslookup >/dev/null 2>&1; then "
+    'if nslookup "$h" >/dev/null 2>&1; then echo "resolve ok"; else echo "resolve none"; fi; '
+    'else echo "resolve unknown"; fi; '
+    'if command -v nc >/dev/null 2>&1; then o=$(nc -z -w 3 "$h" "$p" 2>&1) && echo "connect ok" || echo "connect fail $o"; '
+    "elif command -v bash >/dev/null 2>&1; then "
+    'o=$(timeout 4 bash -c "</dev/tcp/$h/$p" 2>&1) && echo "connect ok" || echo "connect fail $o"; '
+    'else echo "connect unknown"; fi'
+)
+
+
+def dependency_address(dep: dict) -> tuple[str, int] | None:
+    """The address a client uses for a dependency: its first Service's name and port, else its own name and first
+    container port (a client addresses a Service by name, so this shows whether that name answers)."""
+    for svc in dep.get("services") or []:
+        for spec in svc.get("ports") or []:
+            front = spec.split("->")[0]
+            if svc.get("name") and front.isdigit():
+                return svc["name"], int(front)
+    ports = [p for c in dep.get("containers") or [] if not c.get("init") for p in c.get("ports") or []]
+    return (dep["name"], ports[0]) if ports else None
+
+
+def reach_meaning(resolved: str, connected: str) -> str | None:
+    """What a resolve/connect pair says about the path from the client to the dependency."""
+    if resolved == "none":
+        return "the name does not resolve: no Service or DNS record answers it"
+    if connected == "ok":
+        return "the name resolves and the port accepts connections: the failure lies above the connection"
+    if re.search(r"(?i)refused", connected):
+        return "the name resolves but the connection is refused: nothing listens behind that port"
+    if re.search(r"(?i)timed? ?out|timeout", connected) or connected.startswith("fail"):
+        return "the name resolves but the connection does not complete: traffic is dropped or the server hangs"
+    return None
+
+
+def reachability(snapshot: ClusterSnapshot, cid: str, dep_cid: str) -> dict | None:
+    """Resolve and connect to a dependency from inside the client's pod; None when no shell or tool can run."""
+    comp, dep = snapshot.components.get(cid) or {}, snapshot.components.get(dep_cid) or {}
+    address = dependency_address(dep)
+    pod, container = _pick_pod(comp)
+    if not address or not pod:
+        return None
+    ok, why = headroom_ok(comp, pod, container, NATIVE_TOOL_BYTES)
+    if not ok:
+        logger.info("skipping reachability from %s: %s", pod, why)
+        return None
+    host, port = address
+    rc, text = run_in_pod(comp["namespace"], pod, container, ["sh", "-c", _REACH_SCRIPT, "reach", host, str(port)])
+    if _missing_binary(rc, text) and "resolve" not in text:
+        return None
+    lines = {ln.split(" ", 1)[0]: (ln.split(" ", 1) + [""])[1].strip() for ln in text.splitlines() if " " in ln}
+    resolved, connected = lines.get("resolve", "unknown"), lines.get("connect", "unknown")
+    meaning = reach_meaning(resolved, connected.removeprefix("fail").strip() or connected)
+    if meaning is None:
+        return None
+    return {
+        "client": cid,
+        "dependency": dep_cid,
+        "address": f"{host}:{port}",
+        "pod": pod,
+        "meaning": meaning,
+        "output": trim(f"resolve {resolved}; connect {connected}", 160),
+    }
+
+
+def describe_reachability(result: dict) -> str:
+    return (
+        f"from {result['client']}, {result['address']} ({result['dependency']}): {result['meaning']} "
+        f"({result['output']})"
+    )

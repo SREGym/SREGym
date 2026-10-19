@@ -6,16 +6,19 @@ env values and probes, the current events for its pods, recent logs with each
 error signature marked as still occurring or stopped, the content of the
 ConfigMaps it references, code-side spec checks (probe targets, env addresses,
 Service ports and traffic policy), RBAC bindings for its service account when
-its logs show denials, and the own state of the components it calls and of the
-components whose errors name it.
+its logs show denials, the own state of the components it calls and of the
+components whose errors name it, and, when its calls still fail, whether its
+dependencies resolve and accept connections from inside its pod.
 
-Everything here is deterministic kubectl reads plus code-side checks.
+Everything here is deterministic kubectl reads, code-side checks, and one
+read-only reachability command (probes.reachability).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -37,6 +40,7 @@ from clients.jev_diag.v2.collector import (
     trim,
 )
 from clients.jev_diag.v2.derive import (
+    DEPENDENCY_CLASSES,
     LOG_CLASSES,
     OBSERVABILITY_RE,
     ROLE_SYNONYMS,
@@ -611,6 +615,32 @@ def input_candidates(workload: dict) -> list[dict]:
     return out[:16]
 
 
+MAX_REACHABILITY = 2
+
+
+def reachability_lines(snapshot: ClusterSnapshot, cid: str, failing: list[str]) -> list[str]:
+    """From inside a component that still fails calling its dependencies, whether each of them answers: the ones its
+    errors name first, then those abnormal on their own (at most MAX_REACHABILITY; off with JEV_DIAG_V2_PROBES=0)."""
+    from clients.jev_diag.v2 import probes
+    from clients.jev_diag.v2.deps import own_signals
+
+    comp = snapshot.components[cid]
+    calling = any(set(f.get("classes") or []) & DEPENDENCY_CLASSES for f in comp.get("log_findings") or [])
+    if not calling or os.environ.get("JEV_DIAG_V2_PROBES", "1") == "0":
+        return []
+    broken = [d for d in sorted(comp.get("_deps") or {}) if own_signals(snapshot.components[d])]
+    lines = []
+    for dep in list(dict.fromkeys([*failing, *broken]))[:MAX_REACHABILITY]:
+        try:
+            result = probes.reachability(snapshot, cid, dep)
+        except Exception as exc:  # noqa: BLE001 - a probe never stops the investigation
+            logger.info("reachability %s -> %s: %s", cid, dep, exc)
+            continue
+        if result:
+            lines.append(probes.describe_reachability(result))
+    return lines
+
+
 def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
     """Everything the tree wants to know about one component before judging it."""
     comp = snapshot.components[cid]
@@ -645,9 +675,9 @@ def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
     candidates = input_candidates(detail["workload"])
     if candidates:
         detail["input_candidates"] = candidates
-    # dependency edges: env values naming other components, plus the error pointers computed earlier
+    # dependency edges: env values naming other components, the error pointers and the dependency graph (deps.py)
     aliases = _name_aliases(snapshot.components)
-    calls = set(comp.get("errors_point_to") or [])
+    calls = set(comp.get("errors_point_to") or []) | set(comp.get("_deps") or {})
     for c in detail["workload"].get("containers", []):
         for e in c.get("env", []):
             if e.get("value"):
@@ -657,6 +687,9 @@ def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
     }
     detail["called_by_with_errors"] = comp.get("referenced_by_errors_from") or {}
     detail["failing_targets"] = failing_targets(snapshot, cid, calls, detail["logs"].get("error_samples") or [])
+    reach = reachability_lines(snapshot, cid, detail["failing_targets"])
+    if reach:
+        detail["reachability"] = reach
     from clients.jev_diag.v2 import telemetry
 
     lines = telemetry.component_lines(snapshot, cid)

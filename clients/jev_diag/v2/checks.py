@@ -168,6 +168,20 @@ def env_host_candidates(value: str) -> set[str]:
     return out
 
 
+def env_addresses(value: str) -> set[str]:
+    """Hosts an env value addresses explicitly: URL hosts and host:port pairs (never a bare word)."""
+    out: set[str] = set()
+    for part in re.split(r"[,;\s]+", (value or "").strip()):
+        if "$(" in part:
+            continue
+        m = _URL_HOST_RE.match(part)
+        if m:
+            out.add(m.group("host").lower())
+        else:
+            out.update(h.group("host").lower() for h in _HOSTPORT_RE.finditer(part))
+    return out
+
+
 _B64_RE = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
 _HOST_TOKEN_RE = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
 

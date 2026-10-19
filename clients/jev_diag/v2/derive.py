@@ -20,6 +20,7 @@ particular fault:
 * Warning events about pods that no longer exist are history, not evidence.
 * Observability components are tagged so the model can apply the right prior.
 * Recorded changes are ranked against the first active symptom (changes.py).
+* What each component depends on (addresses, traced calls, data-store naming) and what follows from it (deps.py).
 """
 
 from __future__ import annotations
@@ -791,6 +792,9 @@ def post_process(snapshot) -> None:
     tag_roles(components)
     classify_logs(components)
     server_login_rejections(components, collected_at)
+    from clients.jev_diag.v2 import deps  # deps builds on this module's log classes
+
+    deps.apply(snapshot)
     ranked = change_log.rank_changes(components, snapshot.cluster, collected_at)
     snapshot.cluster["call_paths"] = paths.call_paths(components)  # after the change signals: a callee's own change
     snapshot.cluster["findings"] = cluster_findings(snapshot.cluster, ranked)
