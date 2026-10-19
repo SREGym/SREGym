@@ -623,8 +623,8 @@ SYMPTOM_MARKERS = (
     "unschedulable",
     "more time(s) in the last",
     "rejects logins for account",
-    "rolling restart",
 )
+RESTART_SIGNAL = "rolling restart"  # changes.describe_change for a restart-only revision
 CHANGE_MARKERS = ("spec modified", "was modified", "was written", "was created", "created ", "pod template changed")
 POINTED_MARKERS = ("errors logged by", "server ")
 OWN_LOG_MARKERS = ("logs report", "Kafka consumer group")
@@ -638,10 +638,13 @@ def classify_evidence(components: dict[str, dict]) -> None:
     pointed_at: other components' still-occurring errors name it, or a server rejects credentials it may present.
     own_failure_logs: its logs show authorization, data, memory, or filesystem failures, or its consumer stalls.
     symptoms: pod/replica/resource state only.
+    A rolling restart changes no setting and is no symptom: it adds no kind.
     """
     for comp in components.values():
         kinds: set[str] = set()
         for sig in comp.get("signals") or []:
+            if sig.startswith(RESTART_SIGNAL):
+                continue
             if any(m in sig for m in CHANGE_MARKERS):
                 kinds.add("change")
             elif sig.startswith(POINTED_MARKERS):

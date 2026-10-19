@@ -119,6 +119,12 @@ def test_revision_diff_without_a_spec_write_is_a_change_and_a_restart_is_not():
     assert comps["deployment/frontend"].get("most_recent_change") and not comps["daemonset/agent"].get(
         "most_recent_change"
     )
+    from clients.jev_diag.v2.derive import classify_evidence
+
+    classify_evidence(comps)  # a restart is neither a change nor a symptom nor a configuration
+    assert comps["daemonset/agent"]["evidence_kinds"] == [] and comps["deployment/frontend"]["evidence_kinds"] == [
+        "change"
+    ]
 
 
 def test_a_change_made_before_the_application_existed_is_dropped():
