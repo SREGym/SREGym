@@ -250,3 +250,47 @@ def test_the_change_log_keeps_operator_writes_after_deploy_and_leaves_out_the_re
     assert [(f["kind"], f["name"]) for f in found] == [("IPPool", "default")]
     assert found[0]["signals"] == ["written by kubectl-patch after the application was deployed"]
     assert [c["object"] for c in changes] == ["ippool/default"]
+
+
+def test_a_policy_cause_is_reported_with_its_scope():
+    from clients.jev_diag.v2.classifier import ChoiceResult, Diagnosis
+    from clients.jev_diag.v2.report import scope
+
+    def diagnosis(fault_object: dict) -> Diagnosis:
+        return Diagnosis(
+            component="deployment/frontend",
+            component_result=ChoiceResult(choice="deployment/frontend", confidence=1.0, probabilities={}),
+            fault_visible=None,
+            category_result=None,
+            evidence_result=None,
+            evidence=[],
+            model="m",
+            input_tokens=None,
+            output_tokens=None,
+            fault_object=fault_object,
+        )
+
+    comps = _app()
+    comps["deployment/orders"]["containers"][0]["limits"] = {"memory": "1Gi"}
+    cluster = {
+        "admission_webhooks": [
+            {"configuration": "policy", "rules": ["CREATE pods"], "namespace_selector": {"matchLabels": {"team": "a"}}}
+        ],
+        "namespace_constraints": [
+            {
+                "kind": "LimitRange",
+                "name": "mem",
+                "namespace": NS,
+                "limits": [{"type": "Container", "max": {"memory": "512Mi"}}],
+            }
+        ],
+    }
+    snap = ClusterSnapshot(app={"namespaces": [NS]}, components=comps, cluster=cluster)
+    webhook = scope(snap, diagnosis({"kind": "MutatingWebhookConfiguration", "name": "policy"}))
+    assert webhook == 'it intercepts CREATE pods in namespaces matching {"matchLabels": {"team": "a"}}'
+    limit = scope(snap, diagnosis({"kind": "LimitRange", "name": "mem", "namespace": NS}))
+    assert limit == (
+        f"it applies to every pod created in namespace `{NS}`; `orders` also violates it, so their pods are rejected "
+        "when next created"
+    )
+    assert scope(snap, diagnosis({"kind": "ConfigMap", "name": "x", "namespace": NS})) is None
