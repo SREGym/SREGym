@@ -260,26 +260,6 @@ def _mentions(text: str, aliases: dict[str, str], exclude: str) -> set[str]:
     return found
 
 
-# A name in the position of something being called: "to X", "connect to X", "calling X", "X:6379", "X.ns.svc",
-# "http://X/", "host=X", "upstream X". Used only to narrow a line that names several components.
-_CALLED_BEFORE = r"(?:\bto|\bat|\bcall(?:ing)?|\bdial(?:ing)?|\bconnect(?:ing)?(?:\s+to)?|\bhost|\bserver|\bupstream|\bdependency|//)"
-
-
-def _called(text: str, aliases: dict[str, str], candidates: set[str]) -> set[str]:
-    """Of `candidates`, those named in `text` in a called position (address, URL host, after "to"/"calling")."""
-    lowered = text.lower()
-    out = set()
-    for alias, cid in aliases.items():
-        if cid not in candidates or len(alias) < 3:
-            continue
-        name = re.escape(alias)
-        if re.search(rf"{_CALLED_BEFORE}[\s=:\"'\[(]*{name}(?![a-z0-9_-])", lowered) or re.search(
-            rf"(?<![a-z0-9_-]){name}(?::\d{{2,5}}|\.[a-z0-9-]+\.svc)", lowered
-        ):
-            out.add(cid)
-    return out
-
-
 def _login_rejection(text: str, role: str | None) -> str | None:
     """The rejected account, when `text` is a login rejection logged by a server of the component's own role."""
     if role is None:
@@ -324,9 +304,6 @@ def classify_logs(components: dict[str, dict]) -> None:
                 continue
             classes = [name for name, rx in LOG_CLASSES if rx.search(body)]
             targets = {t for t in _mentions(body, aliases, exclude=cid) if t not in observability}
-            if len(targets) > 1:  # a relayed chain names several components; keep the ones it says it called
-                called = _called(body, aliases, targets)
-                targets = called or targets
             if not classes and not targets:
                 continue
             findings.append({"classes": classes, "count": count, "targets": sorted(targets), "line": line[:200]})
