@@ -40,11 +40,11 @@ from clients.jev_diag.v2.classifier import (
     Diagnosis,
     JevDiagnoser,
     build_component_questions,
-    build_diagnosis_text,
     finding_linked,
     select_fault_object,
 )
 from clients.jev_diag.v2.collector import ClusterSnapshot, estimate_tokens, fit_state_to_budget
+from clients.jev_diag.v2.report import build_report
 
 logger = logging.getLogger("all.jev_diag.v2.tree")
 
@@ -945,7 +945,7 @@ class IterativeDiagnoser(JevDiagnoser):
                 "triage_top": component.ranked()[:5],
             },
         )
-        diagnosis.text = build_diagnosis_text(snapshot, diagnosis)
+        diagnosis.text = build_report(snapshot, diagnosis)
         self._trace(
             "decide",
             "diagnosis_text",
