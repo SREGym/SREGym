@@ -382,8 +382,8 @@ class _Answers:
     """A fake decision model: triage picks from a script; each investigated candidate gets its scripted origin
     probability; every other question takes its first option."""
 
-    def __init__(self, triage: list[dict[str, float]], origin: dict[str, float]):
-        self.triage, self.origin, self.model = list(triage), origin, "fake"
+    def __init__(self, triage: list[dict[str, float]], origin: dict[str, float], picks: dict | None = None):
+        self.triage, self.origin, self.picks, self.model = list(triage), origin, picks or {}, "fake"
 
     def system_one(self, state, questions, **kwargs):
         from typesafe_sdk import Choice, ChoiceAnswer, NoulAnswer
@@ -399,7 +399,8 @@ class _Answers:
                 probs = {"origin": p, "victim": 1 - p, "unrelated": 0.0, "undetermined": 0.0}
             elif isinstance(q, Choice):
                 opts = list(q.criteria)
-                probs = {o: (1.0 if i == 0 else 0.0) for i, o in enumerate(opts)}
+                pick = self.picks.get(name, opts[0])
+                probs = {o: (1.0 if o == pick else 0.0) for o in opts}
             else:
                 answers[name] = NoulAnswer(noul=0.1)
                 continue
@@ -446,3 +447,56 @@ def test_telemetry_lines_come_from_the_team_tools_and_skip_empty_results(monkeyp
     assert lines == ["cpu metrics: cpu 0.95 cores of a 1.0 limit (95%)", "observed calls: frontend -> cart 40% errors"]
     monkeypatch.setenv("JEV_DIAG_V2_TELEMETRY", "0")
     assert telemetry.component_lines(_snap({}), "deployment/cart") == []
+
+
+def test_a_caller_retrying_into_a_capped_callee_is_reported_as_the_call_path():
+    from clients.jev_diag.v2 import paths, report
+
+    line = "b-svc: request failed dependency=b code=DeadlineExceeded"
+    caller = {
+        **_comp("a", "t"),
+        "log_findings": [
+            {"classes": ["connectivity or timeout"], "count": 60, "targets": ["deployment/b"], "line": line}
+        ],
+        "_call_settings": {"B_RPC_TIMEOUT_MS": "750", "B_RPC_MAX_ATTEMPTS": "3", "C_RPC_TIMEOUT_MS": "500"},
+    }
+    callee = {**_comp("b", "t"), "_call_settings": {"B_BACKEND_QPS_LIMIT": "20"}}
+    comps = {"deployment/a": caller, "deployment/b": callee, "deployment/c": _comp("c", "t")}
+    found = paths.call_paths(comps)
+    assert found[0]["caller_settings"] == ["B_RPC_TIMEOUT_MS=750", "B_RPC_MAX_ATTEMPTS=3"]
+    assert found[0]["feedback_loop"] and comps["deployment/b"]["call_paths"]
+    snap = _snap(comps)
+    snap.cluster["call_paths"] = found
+    text = report.build_report(snap, _diag("deployment/b"))
+    assert text.startswith("Root cause: the call path from Deployment `a` to Deployment `b` in namespace `shop`")
+    assert "B_BACKEND_QPS_LIMIT=20" in text and "DeadlineExceeded" in text
+    callee["signals"] = ["pod b-1: restarted 3 times"]  # a callee failing on its own is not a call-path fault
+    assert paths.call_paths(comps) == []
+    cm = paths.setting_pairs({"rpc.yaml": "timeout: 50ms\nretries: 30\nname: x", "LOG_LEVEL": "info"})
+    assert cm == {"rpc.yaml:timeout": "50ms", "rpc.yaml:retries": "30"}
+
+
+def _two_faults(link: bool):
+    comps = {
+        "deployment/a": {**_comp("a", "t"), "signals": ["s"], "evidence_kinds": ["change", "symptoms"]},
+        "deployment/b": {**_comp("b", "t"), "signals": ["s"], "evidence_kinds": ["configuration", "symptoms"]},
+        "deployment/c": _comp("c", "t"),
+    }
+    if link:
+        comps["deployment/b"]["errors_point_to"] = ["deployment/a"]
+    return _snap(comps)
+
+
+def test_failures_the_cause_does_not_explain_can_add_a_second_independent_cause():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    triage = [{"deployment/a": 0.8, "deployment/b": 0.15, "deployment/c": 0.05, "other": 0.0}] * 2
+    origin = {"deployment/a": 0.95, "deployment/b": 0.9}
+    client = _Answers(triage, origin, picks={"fault_start": "both"})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_two_faults(link=False))
+    assert d.component == "deployment/a" and d.second.component == "deployment/b"
+    assert "A second, independent root cause:\nRoot cause: Deployment `b`" in d.text
+    # b's errors name a: a explains b, so b is never offered as a second cause
+    client = _Answers(triage, origin, picks={"fault_start": "both"})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_two_faults(link=True))
+    assert d.second is None and [s["component"] for s in d.investigation["steps"]] == ["deployment/a"]

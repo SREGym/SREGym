@@ -38,7 +38,7 @@ from clients.jev_diag.collector import (  # noqa: F401 - re-exported for the v2 
 )
 from clients.jev_diag.timeutil import now, parse_time
 from clients.jev_diag.v2 import changes as change_log
-from clients.jev_diag.v2 import checks
+from clients.jev_diag.v2 import checks, paths
 from clients.jev_diag.v2.checks import parse_cpu_millis, parse_memory_bytes  # noqa: F401 - re-exported
 
 logger = logging.getLogger("all.jev_diag.v2.collector")
@@ -340,6 +340,7 @@ def summarize_workload(obj: dict) -> dict:
     containers = []
     env_hosts: set[str] = set()
     env_values: list[str] = []
+    call_settings: dict[str, str] = {}
     for c in (pod_spec.get("initContainers") or []) + pod_spec.get("containers", []):
         resources = c.get("resources", {}) or {}
         env_names = [e.get("name") for e in c.get("env", []) if e.get("name")]
@@ -354,6 +355,7 @@ def summarize_workload(obj: dict) -> dict:
             if "value" in e and e.get("value") not in (None, ""):
                 env_values.append(str(e["value"]))
                 env_hosts |= checks.env_host_candidates(str(e["value"]))
+                call_settings.update(paths.setting_pairs({e.get("name") or "": str(e["value"])}))
         env_from = []
         for ref in c.get("envFrom", []) or []:
             if ref.get("configMapRef"):
@@ -458,6 +460,7 @@ def summarize_workload(obj: dict) -> dict:
         "_template": template if kind in ("CronJob", "Job") else None,
         "_env_hosts": sorted(env_hosts),
         "_env_values": env_values[:80],
+        "_call_settings": call_settings,
         "_config_modes": checks.config_ref_modes(pod_spec),
         **extra,
         "selector": (spec.get("selector") or {}).get("matchLabels") or {},
@@ -1569,6 +1572,7 @@ def summarize_config_objects(secrets: list[dict], configmaps: list[dict]) -> dic
                 "created": meta.get("creationTimestamp"),
                 "last_update": last_update_time(meta),
                 "_meta": meta,
+                "_settings": paths.setting_pairs(obj.get("data") or {}) if kind == "ConfigMap" else {},
             }
     return out
 
@@ -1629,6 +1633,8 @@ def attach_config_objects(
                     comp["signals"].append(f"referenced {kind} {name} does not exist in namespace {ns}")
                     continue
                 consumers.setdefault((kind, ns, name), []).append(cid)
+                for key, value in (obj.get("_settings") or {}).items():
+                    comp.setdefault("_call_settings", {})[f"{name}:{key}"] = value
                 details[f"{kind.lower()}/{name}"] = {"keys": obj["keys"][:20], "last_update": obj["last_update"]}
                 stale = _stale_readers(comp, kind, name, obj)
                 if stale:
