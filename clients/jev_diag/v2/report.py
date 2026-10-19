@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2.classifier import CARRIER_KINDS, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot
 from clients.jev_diag.v2.derive import TELEMETRY_RE
@@ -19,11 +20,13 @@ MAX_DETAILS = 4
 MAX_AFFECTED = 3
 QUOTE_CHARS = 160
 CONFIG_KINDS = ("ConfigMap", "Secret")
+SAME_CHANGE_SECONDS = 10  # one change applied to several workloads lands within this window
 # Signals that state the component's own condition (used for the Effect line).
 STATE_WORDS = re.compile(
     r"(?i)desired replicas are ready|CrashLoopBackOff|OOMKilled|ready endpoints|Pending|Unschedulable|"
     r"ImagePullBackOff|ErrImagePull|not ready|restarted|terminat|evicted|at its limit|failed to start"
 )
+_CONTAINER = re.compile(r"\bcontainer \S+ ")
 _TIMESTAMP = re.compile(r"^\[?\S*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s\]]*\]?\s*")
 _JSON_MSG = re.compile(r'"msg"\s*:\s*"(?P<msg>[^"]+)"')
 _JSON_ERR = re.compile(r'"(?:error|errmsg|reason)"\s*:\s*"(?P<err>[^"]+)"')
@@ -78,6 +81,31 @@ def changed_values(comp: dict) -> list[str]:
     return [c for c in tc.get("changes") or [] if "pod-template-hash" not in c and "restartedAt" not in c]
 
 
+def same_change(snapshot: ClusterSnapshot, cid: str) -> list[str]:
+    """Other workloads whose pod template changed the same way (names aside) within the same few seconds: one
+    change applied to several workloads, reported as one cause."""
+    comp = snapshot.components.get(cid) or {}
+    mine = _normalized(comp)
+    if not mine:
+        return []
+    at = parse_time((comp.get("template_changes") or {}).get("changed_at"))
+    out = []
+    for other_id, other in snapshot.components.items():
+        if other_id == cid or _normalized(other) != mine:
+            continue
+        other_at = parse_time((other.get("template_changes") or {}).get("changed_at"))
+        gap = seconds_between(other_at, at) if other_at and at else None
+        if gap is not None and abs(gap) <= SAME_CHANGE_SECONDS:
+            out.append(other_id)
+    return sorted(out)
+
+
+def _normalized(comp: dict) -> tuple[str, ...]:
+    """A workload's template changes with its own name and its container names taken out."""
+    name = comp.get("name") or ""
+    return tuple(sorted(_CONTAINER.sub("container <c> ", c).replace(name, "<name>") for c in changed_values(comp)))
+
+
 def users_of(snapshot: ClusterSnapshot, fo: dict) -> list[str]:
     return [c for c in fo.get("components") or [] if c in snapshot.components]
 
@@ -110,6 +138,10 @@ def subject(snapshot: ClusterSnapshot, d: Diagnosis) -> tuple[str, str | None]:
     if comp is None:
         return f"`{d.component}`", None
     has_change = "change" in (comp.get("evidence_kinds") or []) or bool(changed_values(comp))
+    group = same_change(snapshot, d.component) if has_change else []
+    if group:
+        names = ", ".join(f"`{snapshot.components[c]['name']}`" for c in [d.component, *group])
+        return f"{comp['kind']}s {names} in namespace `{comp['namespace']}` (the same change on {len(group) + 1})", None
     return component_phrase(comp, both_kinds=not has_change), None
 
 

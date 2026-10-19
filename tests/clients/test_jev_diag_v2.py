@@ -355,3 +355,24 @@ def test_a_revision_made_while_deploying_is_not_a_change():
     assert changes.object_change("d/x", "Deployment", "x", NS, meta, revised_at="2026-10-19T05:34:10Z") is None
     later = changes.object_change("d/x", "Deployment", "x", NS, meta, revised_at="2026-10-19T05:34:40Z")
     assert later is None or later.get("revision_changed")  # None only when outside the change horizon
+
+
+def test_one_change_on_several_workloads_is_reported_as_one_cause():
+    from clients.jev_diag.v2.report import build_report
+
+    def db(name: str) -> dict:
+        return {
+            **_comp(name, "t"),
+            "evidence_kinds": ["change", "symptoms"],
+            "template_changes": {
+                "changed_at": "2026-10-19T07:58:38Z",
+                "changes": [f"container hotel-reserv-{name}-c image: mongo:4.4.6 -> mongo:8.0.14-rc0"],
+            },
+        }
+
+    comps = {f"deployment/{n}": db(n) for n in ("mongodb-geo", "mongodb-rate")}
+    comps["deployment/rate"] = {**_comp("rate", "t"), "signals": ["container waiting in CrashLoopBackOff"]}
+    text = build_report(_snap(comps), _diag("deployment/mongodb-geo", "image: mongo:4.4.6 -> mongo:8.0.14-rc0"))
+    assert text.startswith(
+        "Root cause: Deployments `mongodb-geo`, `mongodb-rate` in namespace `shop` (the same change on 2)"
+    )
