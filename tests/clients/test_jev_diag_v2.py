@@ -869,3 +869,17 @@ def test_a_login_pair_is_decided_side_by_side_once_both_sides_are_examined():
     triage = [{"deployment/db": 0.7, "deployment/app": 0.3, "other": 0.0}] * 2
     client = _Answers(triage, {"deployment/db": 0.95, "deployment/app": 0.4}, picks=picks)
     assert IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap).component == "deployment/app"
+
+
+def test_choice_questions_fit_what_a_decision_model_accepts():
+    from typesafe_sdk import Choice
+
+    from clients.jev_diag.v2.classifier import fit_choices
+
+    one = {"key": Choice(instructions={"question": "q"}, criteria={"E1": "a"})}
+    assert list(fit_choices(one, None, [])["key"].criteria) == ["E1", "none"]
+    many = {
+        "pick": Choice(instructions={"question": "q"}, criteria={**{f"c{i}": "x" for i in range(30)}, "other": "o"})
+    }
+    kept = list(fit_choices(many, 26, ["c29", "c28"])["pick"].criteria)
+    assert len(kept) == 26 and "other" in kept and {"c29", "c28"} <= set(kept)

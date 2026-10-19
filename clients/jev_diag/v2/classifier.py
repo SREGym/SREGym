@@ -418,6 +418,32 @@ def make_client(model: str | None = None) -> SystemOneClient:
     )
 
 
+KEEP_OPTIONS = (OTHER_OPTION, "none", "both")
+
+
+def fit_choices(questions: dict, limit: int | None, priority: list[str]) -> dict:
+    """Every choice question as decision models accept it: at least two options (a one-option question gets
+    "none of these"), and at most `limit` when the model has one, keeping the `priority` options first and the
+    other/none/both options always."""
+    out = {}
+    for name, q in questions.items():
+        criteria = getattr(q, "criteria", None)
+        if not isinstance(q, Choice) or criteria is None:
+            out[name] = q
+            continue
+        criteria = dict(criteria)
+        if len(criteria) < 2:
+            criteria.setdefault("none", "None of these.")
+        if limit and len(criteria) > limit:
+            keep = [k for k in criteria if k in KEEP_OPTIONS]
+            rank = {k: i for i, k in enumerate(priority)}
+            rest = sorted((k for k in criteria if k not in KEEP_OPTIONS), key=lambda k: rank.get(k, len(rank)))
+            chosen = set(rest[: max(0, limit - len(keep))]) | set(keep)
+            criteria = {k: v for k, v in criteria.items() if k in chosen}
+        out[name] = q if criteria == dict(q.criteria) else Choice(instructions=q.instructions, criteria=criteria)
+    return out
+
+
 class JevDiagnoser:
     def __init__(
         self,
@@ -432,6 +458,8 @@ class JevDiagnoser:
         self.characterize = characterize
         self.trace = trace
         self.requests: list[dict] = []  # request/response artifacts for the logs dir
+        self.max_choice_options: int | None = None  # a decision model's limit on options per question, if any
+        self.option_priority: list[str] = []  # options kept first when a question must be cut to that limit
 
     def _trace(self, phase: str, event: str, **payload: Any) -> None:
         if self.trace is not None:
@@ -444,6 +472,7 @@ class JevDiagnoser:
         return self._client
 
     def _ask(self, label: str, state: dict, questions: dict) -> Any:
+        questions = fit_choices(questions, self.max_choice_options, self.option_priority)
         tokens = estimate_tokens(state)
         wire_questions = {k: _question_to_dict(q) for k, q in questions.items()}
         logger.info("Jev request %s: %d questions, ~%d state tokens", label, len(questions), tokens)

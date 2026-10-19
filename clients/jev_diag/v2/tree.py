@@ -609,6 +609,14 @@ class IterativeDiagnoser(JevDiagnoser):
         # Asked twice, the second time with the options in reverse order; the two answers are averaged, and when
         # their picks differ both are examined before an origin is concluded (see _diagnose).
         questions = build_component_questions(snapshot)
+        # if a model limits the options per question, the components showing problems are offered first
+        self.option_priority = sorted(
+            snapshot.components,
+            key=lambda c: (
+                not snapshot.components[c].get("evidence_kinds"),
+                -len(snapshot.components[c].get("signals") or []),
+            ),
+        )
         answers = [self._ask("triage", state, questions)]
         first = answers[0].choices[COMPONENT_QUESTION]
         if (first.probabilities or {}).get(first.choice, 0.0) < DECISIVE_TRIAGE_PROBABILITY:
