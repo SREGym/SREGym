@@ -118,24 +118,45 @@ def collect(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, stan
     return read_cluster(args, app_info, trace, standalone, baseline)
 
 
-def wait(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standalone: bool, host: ModuleType):
-    """Sleep until the fault has had time to surface; returns the trend baseline sample (or None)."""
-    delay = 0.0 if standalone else max(0.0, args.start_delay)
-    interval = (
-        args.trend_interval if args.trend_interval is not None else (0.0 if standalone else host.DEFAULT_TREND_INTERVAL)
-    )
-    interval = max(0.0, interval)
-    if delay - interval > 0:
-        logger.info("Waiting %.0fs before reading the cluster so the fault has time to surface", delay)
-        with trace.timed("setup", "start_delay", seconds=delay - interval):
-            time.sleep(delay - interval)
-    baseline = None
-    if interval > 0:
-        from clients.jev_diag.v2 import trend
+MIN_WAIT_SECONDS = 45  # never read the cluster sooner: a fault needs time to show in pods and logs
+POLL_SECONDS = 15
 
-        with trace.timed("collect", "trend_baseline", interval=interval):
-            baseline = trend.collect_sample(list(app_info.get("namespaces") or [app_info.get("namespace")]))
-        time.sleep(interval)
+
+def abnormal_pods(sample: dict) -> set[str]:
+    """Pods in a trend sample that are not running cleanly: not Running/Succeeded, or restarted at least once."""
+    return {
+        key
+        for key, pod in (sample.get("pods") or {}).items()
+        if pod.get("phase") not in ("Running", "Succeeded") or any(n > 0 for n in (pod.get("restarts") or {}).values())
+    }
+
+
+def wait(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standalone: bool, host: ModuleType):
+    """Wait until the fault has surfaced; returns the trend baseline sample (or None).
+
+    After MIN_WAIT_SECONDS, light samples (pods and events) are taken every POLL_SECONDS; the cluster is read as
+    soon as the same set of abnormal pods shows in two samples in a row, and at the latest after the configured
+    start delay (v1's fixed wait). Faults that show only in logs (pods stay healthy) wait the full delay.
+    """
+    from clients.jev_diag.v2 import trend
+
+    delay = 0.0 if standalone else max(0.0, args.start_delay)
+    if delay <= 0:
+        return None
+    namespaces = list(app_info.get("namespaces") or [app_info.get("namespace")])
+    started = time.monotonic()
+    with trace.timed("setup", "start_delay", seconds=delay, adaptive=True) as info:
+        time.sleep(min(MIN_WAIT_SECONDS, delay))
+        baseline = trend.collect_sample(namespaces)
+        previous = abnormal_pods(baseline)
+        while time.monotonic() - started + POLL_SECONDS <= delay:
+            time.sleep(POLL_SECONDS)
+            current = abnormal_pods(trend.collect_sample(namespaces))
+            if current and current == previous:
+                info["stable_abnormal_pods"] = len(current)
+                break
+            previous = current
+        info["waited_seconds"] = round(time.monotonic() - started, 1)
     return baseline
 
 

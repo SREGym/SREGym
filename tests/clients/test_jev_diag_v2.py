@@ -261,3 +261,31 @@ def test_without_the_decision_model_v2_still_reports_from_code():
     d = IterativeDiagnoser(Down(), fetch_detail=lambda s, c: {}).diagnose(snap)
     assert d.component == "deployment/frontend" and "decision model unavailable" in d.investigation["fallback"]
     assert d.text.startswith("Root cause: Deployment `frontend`") and "CART_ADDR removed" in d.text
+
+
+class _Trace:
+    from contextlib import contextmanager
+
+    @contextmanager
+    def timed(self, *a, **k):
+        yield {}
+
+
+def _run_wait(monkeypatch, samples):
+    from clients.jev_diag.v2 import trend
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(v2_driver.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+    monkeypatch.setattr(v2_driver.time, "monotonic", lambda: clock["t"])
+    seq = iter(samples)
+    monkeypatch.setattr(trend, "collect_sample", lambda ns: next(seq))
+    args = argparse.Namespace(start_delay=120.0)
+    v2_driver.wait(args, {"namespaces": [NS]}, _Trace(), False, None)
+    return clock["t"]
+
+
+def test_adaptive_wait_reads_early_once_the_same_pods_stay_abnormal(monkeypatch):
+    crash = {"pods": {"shop/a-1": {"phase": "Running", "restarts": {"a": 3}}}}
+    ok = {"pods": {"shop/a-1": {"phase": "Running", "restarts": {"a": 0}}}}
+    assert _run_wait(monkeypatch, [crash, crash]) == 60  # 45 s minimum, one poll
+    assert _run_wait(monkeypatch, [ok] * 10) == 120  # nothing abnormal in pods: v1's full wait
