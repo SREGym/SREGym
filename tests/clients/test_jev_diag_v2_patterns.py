@@ -188,3 +188,33 @@ def test_a_finding_that_names_an_outside_object_is_that_objects_evidence_not_the
     assert "own-setting:deployment/frontend" not in keys
     (e,) = [e for e in keys.values() if e.pattern == "acts-on" and e.origin == "service/shop/frontend"]
     assert e.impact == ["deployment/shop/frontend"] and e.specific_groups() == 1  # linked by the check
+
+
+def test_a_caller_that_fails_because_a_component_it_is_configured_to_call_is_broken_is_a_victim():
+    oom = "pod v-1: container cache was OOMKilled"
+    components = {
+        "deployment/frontend": comp("Deployment", "frontend", healthy=False, errors_point_to=["deployment/cart"]),
+        "deployment/cart": comp(
+            "Deployment",
+            "cart",
+            healthy=False,
+            evidence_kinds=["pointed_at", "symptoms"],
+            referenced_by_errors_from={"deployment/frontend": {}},
+        ),
+        "deployment/cache": comp("Deployment", "cache", healthy=False, evidence_kinds=["symptoms"], signals=[oom]),
+    }
+    details = {
+        "deployment/cart": {"workload": {"containers": [{"env": [{"name": "CACHE_ADDR", "value": "cache:6379"}]}]}}
+    }
+    keys = {e.key: e for e in build_explanations(snapshot(components), details)}
+    assert keys["dependency:deployment/cart"].contradicted() and keys["partial:deployment/cart"].contradicted()
+    cache = keys["dependency:deployment/cache"]
+    assert not cache.contradicted() and cache.specific_groups() == 1 and oom in cache.values
+
+
+def test_a_component_that_appeared_after_the_application_and_just_before_the_symptoms_is_a_candidate():
+    at = "2026-10-18T09:59:00+00:00"
+    components = {f"deployment/{n}": comp("Deployment", n, created=at) for n in ("a", "b", "c")}
+    components["job/flood"] = comp("Job", "flood", healthy=False, created="2026-10-18T09:59:40+00:00")
+    keys = {e.key for e in build_explanations(snapshot(components))}
+    assert "arrival:job/flood" in keys and not any(k.startswith("arrival:deployment/") for k in keys)
