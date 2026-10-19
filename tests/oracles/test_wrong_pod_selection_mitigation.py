@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from kubernetes.client.rest import ApiException
+
 from sregym.conductor.oracles.wrong_pod_selection_mitigation import (
     WrongPodSelectionMitigationOracle,
 )
@@ -47,7 +49,8 @@ class _DiscoveryV1:
         self.endpoints = endpoints
 
     def list_namespaced_endpoint_slice(self, namespace, label_selector):
-        return SimpleNamespace(items=[SimpleNamespace(endpoints=self.endpoints)])
+        port = SimpleNamespace(name="http", port=5000, protocol="TCP")
+        return SimpleNamespace(items=[SimpleNamespace(endpoints=self.endpoints, ports=[port])])
 
 
 class _CoreV1:
@@ -57,6 +60,9 @@ class _CoreV1:
         self.probe_logs = probe_logs
         self.created = []
         self.deleted = []
+
+    def read_namespaced_service(self, name, namespace):
+        return SimpleNamespace(spec=SimpleNamespace(ports=[SimpleNamespace(name="http", port=5000, protocol="TCP")]))
 
     def read_namespaced_pod(self, name, namespace):
         if name in self.pods:
@@ -219,3 +225,59 @@ def test_rejects_endpoint_from_inactive_frontend_replicaset():
 
     assert oracle.evaluate()["success"] is False
     assert core_v1.created == []
+
+
+def test_portless_worker_slice_is_not_a_route():
+    oracle, _ = _oracle(
+        [],
+        [_pod("frontend-abc", "frontend", "frontend-rs"), _pod("worker-abc", "search", "search-rs")],
+    )
+    oracle.discovery_v1.list_namespaced_endpoint_slice = lambda **kwargs: SimpleNamespace(
+        items=[
+            SimpleNamespace(
+                endpoints=[_endpoint("frontend-abc")],
+                ports=[SimpleNamespace(name="http", port=5000, protocol="TCP")],
+            ),
+            SimpleNamespace(endpoints=[_endpoint("worker-abc")], ports=None),
+        ]
+    )
+    assert oracle.evaluate()["success"] is True
+
+
+def test_portless_slices_do_not_fall_back_to_stale_endpoints():
+    oracle, core = _oracle([], [])
+    oracle.discovery_v1.list_namespaced_endpoint_slice = lambda **kwargs: SimpleNamespace(
+        items=[SimpleNamespace(endpoints=[_endpoint("frontend-abc")], ports=None)]
+    )
+    core.read_namespaced_endpoints = lambda *args: (_ for _ in ()).throw(AssertionError("unexpected fallback"))
+    assert oracle.evaluate()["reason"] == "no_ready_endpoints"
+
+
+def test_other_service_port_does_not_count_as_a_working_http_route():
+    oracle, _ = _oracle([], [])
+    oracle.discovery_v1.list_namespaced_endpoint_slice = lambda **kwargs: SimpleNamespace(
+        items=[
+            SimpleNamespace(
+                endpoints=[_endpoint("frontend-abc")],
+                ports=[SimpleNamespace(name="metrics", port=9090, protocol="TCP")],
+            )
+        ]
+    )
+    assert oracle.evaluate()["reason"] == "no_ready_endpoints"
+
+
+def test_legacy_endpoints_fallback_requires_a_usable_service_port():
+    oracle, core = _oracle([], [_pod("frontend-abc", "frontend", "frontend-rs")])
+
+    def unavailable(**kwargs):
+        raise ApiException(status=404)
+
+    oracle.discovery_v1.list_namespaced_endpoint_slice = unavailable
+    subset = SimpleNamespace(
+        addresses=[SimpleNamespace(target_ref=SimpleNamespace(kind="Pod", name="frontend-abc"))],
+        ports=[SimpleNamespace(name="http", port=5000, protocol="TCP")],
+    )
+    core.read_namespaced_endpoints = lambda *args: SimpleNamespace(subsets=[subset])
+    assert oracle.evaluate()["success"] is True
+    subset.ports = []
+    assert oracle.evaluate()["reason"] == "no_ready_endpoints"
