@@ -349,6 +349,9 @@ def object_change(
     created = meta.get("creationTimestamp")
     modified = modified_after_creation(meta)
     late = created_after(created, targets_created or [])
+    if revised_at:  # like any write, a revision this close to creation is part of deploying the object
+        apart = seconds_between(parse_time(revised_at), parse_time(created))
+        revised_at = revised_at if apart is not None and apart >= MIN_CHANGE_SECONDS else None
     if modified is None and late is None and not revised_at:
         return None
     if modified is not None:

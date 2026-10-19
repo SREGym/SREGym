@@ -346,3 +346,12 @@ def test_namespaces_the_app_addresses_are_read_too(monkeypatch):
         outside, "kubectl_items", lambda resource, ns, errors, **k: [dep] if resource == "deployments" else []
     )
     assert outside.related_namespaces([NS], []) == ["tidb-cluster"]
+
+
+def test_a_revision_made_while_deploying_is_not_a_change():
+    from clients.jev_diag.v2 import changes
+
+    meta = {"creationTimestamp": "2026-10-19T05:34:07Z"}
+    assert changes.object_change("d/x", "Deployment", "x", NS, meta, revised_at="2026-10-19T05:34:10Z") is None
+    later = changes.object_change("d/x", "Deployment", "x", NS, meta, revised_at="2026-10-19T05:34:40Z")
+    assert later is None or later.get("revision_changed")  # None only when outside the change horizon
