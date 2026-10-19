@@ -19,7 +19,7 @@ from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2 import checks, paths
 from clients.jev_diag.v2.classifier import CARRIER_KINDS, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot, is_error_line
-from clients.jev_diag.v2.derive import TELEMETRY_RE
+from clients.jev_diag.v2.derive import DEPENDENCY_CLASSES, TELEMETRY_RE
 
 MAX_DETAILS = 4
 MAX_AFFECTED = 3
@@ -116,6 +116,24 @@ def _normalized(comp: dict) -> tuple[str, ...]:
     """A workload's template changes with its own name and its container names taken out."""
     name = comp.get("name") or ""
     return tuple(sorted(_CONTAINER.sub("container <c> ", c).replace(name, "<name>") for c in changed_values(comp)))
+
+
+def failing_callers(snapshot: ClusterSnapshot, cid: str) -> dict[str, dict[str, int]]:
+    """Callers of `cid`, from the error lines that name it and from the addresses callers are configured with: a
+    caller that addresses `cid` counts only while it logs dependency errors (connection, timeout, DNS, login)."""
+    comp = snapshot.components.get(cid) or {}
+    out = {src: dict(classes) for src, classes in (comp.get("referenced_by_errors_from") or {}).items()}
+    for other_id, other in snapshot.components.items():
+        if other_id == cid or other_id in out or cid not in (other.get("_calls") or []):
+            continue
+        classes: dict[str, int] = {}
+        for f in other.get("log_findings") or []:
+            for klass in f.get("classes") or []:
+                if klass in DEPENDENCY_CLASSES:
+                    classes[klass] = classes.get(klass, 0) + int(f.get("count") or 1)
+        if classes:
+            out[other_id] = classes
+    return out
 
 
 def users_of(snapshot: ClusterSnapshot, fo: dict) -> list[str]:
@@ -372,6 +390,8 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
         lines.append("Details: " + "; ".join(details) + ".")
 
     broken = cause.broken or {}
+    broken_id = next((c for c, x in snapshot.components.items() if x is broken), d.component)
+    callers = failing_callers(snapshot, broken_id) if broken else {}
     if broken:
         shown = "\n".join(lines)
         effects = [
@@ -379,7 +399,7 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
         ]
         effects = effects[:2]
         classes: dict[str, int] = {}
-        for by_class in (broken.get("referenced_by_errors_from") or {}).values():
+        for by_class in callers.values():
             for klass, n in by_class.items():
                 classes[klass] = classes.get(klass, 0) + n
         if classes:
@@ -398,9 +418,7 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     for _, server in rejecting[:MAX_AFFECTED]:
         why = next((x for x in server.get("signals") or [] if "rejects logins" in x), "rejects its logins")
         affected.append(f"{describe(server['kind'], server['name'], server.get('namespace'))}: {why.rstrip('.')}")
-    for src, by_class in sorted(
-        (broken.get("referenced_by_errors_from") or {}).items(), key=lambda kv: -sum(kv[1].values())
-    )[:MAX_AFFECTED]:
+    for src, by_class in sorted(callers.items(), key=lambda kv: -sum(kv[1].values()))[:MAX_AFFECTED]:
         other = snapshot.components.get(src) or {}
         name = describe(other.get("kind", "component"), other.get("name", src), other.get("namespace"))
         klass = ", ".join(sorted(by_class))
