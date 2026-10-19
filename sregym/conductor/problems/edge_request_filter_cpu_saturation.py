@@ -1,5 +1,5 @@
 import copy
-import json
+import shlex
 import textwrap
 
 from sregym.conductor.oracles.edge_request_filter_mitigation import EdgeRequestFilterMitigationOracle
@@ -146,14 +146,13 @@ class EdgeRequestFilterCPUSaturation(Problem):
                     next;
                 }}
 
-                my $raw_request = join("", @headers);
-                $raw_request .= $body;
-                $raw_request =~ s/\\r?\\nConnection:.*?\\r?\\n/\\r\\n/ig;
-                $raw_request =~ s/\\r?\\nHost:.*?\\r?\\n/\\r\\n/ig;
+                my @forward_headers = grep {{ !/^(Host|Connection):/i }} @headers;
+                my $raw_request = join("", @forward_headers);
+                $raw_request =~ s/\\r?\\n\\r?\\n$//;
                 my $upstream_headers = "\\r\\nHost: "
                     . $upstream_host . ":" . $upstream_port
                     . "\\r\\nConnection: close\\r\\n\\r\\n";
-                $raw_request =~ s/\\r?\\n\\r?\\n$/$upstream_headers/;
+                $raw_request .= $upstream_headers . $body;
 
                 print $upstream $raw_request;
                 my $selector = IO::Select->new($upstream);
@@ -202,34 +201,69 @@ class EdgeRequestFilterCPUSaturation(Problem):
             namespace=self.namespace,
             body=body,
         )
-        self.kubectl.exec_command(
+        self.kubectl.exec_command_checked(
             f"kubectl rollout status deployment/{self.faulty_service} -n {self.namespace} --timeout=120s"
         )
 
+    def _traffic_python(self, script: str) -> str:
+        shell = 'PY=$(command -v python3 || command -v python); test -n "$PY"; exec "$PY" -c ' + shlex.quote(script)
+        output = self.kubectl.exec_command_checked(
+            shlex.join(
+                [
+                    "kubectl",
+                    "exec",
+                    f"deployment/{self.traffic_source}",
+                    "-n",
+                    self.namespace,
+                    "-c",
+                    self.traffic_source,
+                    "--",
+                    "/bin/sh",
+                    "-c",
+                    shell,
+                ]
+            ),
+            timeout=60,
+        )
+        if output.strip():
+            print(output.strip())
+        return output
+
     def _start_crafted_traffic(self):
+        service = getattr(self, "service_name", self.faulty_service)
+        port = getattr(self, "listen_port", 8080)
         driver = textwrap.dedent(
             f"""
             import time
             import urllib.request
 
             marker = "{self.process_marker}"
-            url = "http://frontend-proxy:8080/?waf={self.crafted_payload}"
+            url = "http://{service}:{port}/?waf={self.crafted_payload}"
             while True:
                 try:
                     urllib.request.urlopen(url, timeout=10).read()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print("Edge traffic request failed:", type(exc).__name__, str(exc), flush=True)
                 time.sleep({self.driver_interval_seconds})
             """
         ).strip()
-        launcher = f"exec({driver!r})"
-        shell = (
-            f"rm -f {self.driver_log} {self.driver_pid}; "
-            f"nohup /usr/local/bin/python3 -c {json.dumps(launcher)} "
-            f">{self.driver_log} 2>&1 & echo \\$! > {self.driver_pid}"
-        )
-        self.kubectl.exec_command(
-            f"kubectl exec deployment/{self.traffic_source} -n {self.namespace} -- /bin/sh -c {json.dumps(shell)}"
+        self._traffic_python(
+            textwrap.dedent(
+                f"""
+                import pathlib, subprocess, sys, time
+
+                with open({self.driver_log!r}, "w") as log:
+                    process = subprocess.Popen(
+                        [sys.executable, "-u", "-c", {driver!r}],
+                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                    )
+                pathlib.Path({self.driver_pid!r}).write_text(str(process.pid))
+                time.sleep(0.2)
+                if process.poll() is not None:
+                    raise RuntimeError("Edge traffic process exited: " + pathlib.Path({self.driver_log!r}).read_text())
+                print("Edge traffic process started:", process.pid)
+                """
+            )
         )
 
     def _stop_crafted_traffic(self):
@@ -261,30 +295,64 @@ class EdgeRequestFilterCPUSaturation(Problem):
                     pass
             """
         ).strip()
-        launcher = f"exec({cleanup!r})"
-        self.kubectl.exec_command(
-            f"kubectl exec deployment/{self.traffic_source} -n {self.namespace} "
-            f"-c {self.traffic_source} -- /usr/local/bin/python3 -c {json.dumps(launcher)}"
+        self._traffic_python(cleanup)
+
+    def _verify_fault_effect(self):
+        service = getattr(self, "service_name", self.faulty_service)
+        port = getattr(self, "listen_port", 8080)
+        path = getattr(self, "health_path", "/")
+        host = getattr(self, "probe_host_header", service)
+        self._traffic_python(
+            textwrap.dedent(
+                f"""
+                import os, pathlib, time, urllib.error, urllib.request
+
+                os.kill(int(pathlib.Path({self.driver_pid!r}).read_text()), 0)
+                request = urllib.request.Request("http://{service}:{port}{path}", headers={{"Host": {host!r}}})
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    os.kill(int(pathlib.Path({self.driver_pid!r}).read_text()), 0)
+                    try:
+                        with urllib.request.urlopen(request, timeout=3) as response:
+                            response.read()
+                    except TimeoutError:
+                        print("Edge traffic is active and the normal request times out")
+                        break
+                    except urllib.error.URLError as exc:
+                        if not isinstance(exc.reason, TimeoutError):
+                            raise
+                        print("Edge traffic is active and the normal request times out")
+                        break
+                    time.sleep(1)
+                else:
+                    raise RuntimeError("Crafted traffic did not disrupt the edge: " + pathlib.Path({self.driver_log!r}).read_text()[-1000:])
+                """
+            )
         )
 
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
         self._capture_baseline_template()
+        self._stop_crafted_traffic()
         self._patch_edge_proxy()
-        self._start_crafted_traffic()
         self.kubectl.wait_for_ready(self.namespace, max_wait=180)
+        self._start_crafted_traffic()
+        self._verify_fault_effect()
         print(
             f"Fault: EdgeRequestFilterCPUSaturation | Service: {self.faulty_service} | "
             f"Namespace: {self.namespace} | Regex: {self.bad_regex}\n"
         )
 
-    @mark_fault_injected
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         print("== Fault Recovery ==")
+        if self._baseline_template is None:
+            print("No edge template was changed by this problem; nothing to restore")
+            return
         self._stop_crafted_traffic()
         self._restore_baseline_template()
-        self.kubectl.exec_command(
+        self.kubectl.exec_command_checked(
             f"kubectl rollout status deployment/{self.faulty_service} -n {self.namespace} --timeout=120s"
         )
         self._baseline_template = None

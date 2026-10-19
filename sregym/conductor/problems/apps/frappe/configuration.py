@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import shlex
-import textwrap
 
 from kubernetes import client
 
@@ -255,6 +254,12 @@ class EdgeRequestFilterIA(EdgeRequestFilterCPUSaturation):
         self.driver_log = "/tmp/edge-traffic-replay.log"
         self.driver_pid = "/tmp/edge-traffic-replay.pid"
         self._baseline_template = None
+        self.app.configure(
+            {
+                "loadgen": {"target": f"http://{service_name}:{listen_port}"},
+                "erpnext": {"nginx": {"environment": {"frappeSiteNameHeader": site_host}}},
+            }
+        )
         configure_port(
             self,
             app_name,
@@ -314,74 +319,6 @@ class EdgeRequestFilterIA(EdgeRequestFilterCPUSaturation):
         self.kubectl.apps_v1_api.patch_namespaced_deployment(
             name=self.faulty_service, namespace=self.namespace, body=body
         )
-        self.kubectl.exec_command(
-            f"kubectl rollout status deployment/{self.faulty_service} -n {self.namespace} --timeout=300s"
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{self.faulty_service} -n {self.namespace} --timeout=300s", timeout=330
         )
-
-    def _python(self, script: str) -> str:
-        """Run ``script`` with whichever Python the traffic source image ships."""
-        launcher = f"exec({script!r})"
-        return f'PY=$(command -v python3 || command -v python); exec "$PY" -c {json.dumps(launcher)}'
-
-    def _start_crafted_traffic(self):
-        driver = textwrap.dedent(
-            f"""
-            import time
-            import urllib.request
-
-            marker = "{self.process_marker}"
-            url = "http://{self.service_name}:{self.listen_port}/?waf={self.crafted_payload}"
-            while True:
-                try:
-                    urllib.request.urlopen(url, timeout=10).read()
-                except Exception:
-                    pass
-                time.sleep({self.driver_interval_seconds})
-            """
-        ).strip()
-        launcher = f"exec({driver!r})"
-        shell = (
-            f"rm -f {self.driver_log} {self.driver_pid}; PY=$(command -v python3 || command -v python); "
-            f'nohup "$PY" -c {json.dumps(launcher)} >{self.driver_log} 2>&1 & echo $! > {self.driver_pid}'
-        )
-        self.kubectl.exec_command(
-            f"kubectl exec deployment/{self.traffic_source} -n {self.namespace} -c {self.traffic_source} "
-            f"-- /bin/sh -c {json.dumps(shell)}"
-        )
-
-    def _stop_crafted_traffic(self):
-        marker_split = max(1, len(self.process_marker) // 2)
-        cleanup = textwrap.dedent(
-            f"""
-            import os
-            import signal
-
-            marker = {self.process_marker[:marker_split]!r} + {self.process_marker[marker_split:]!r}
-            for entry in os.listdir("/proc"):
-                if not entry.isdigit() or int(entry) == os.getpid():
-                    continue
-                try:
-                    with open(f"/proc/{{entry}}/cmdline", "rb") as command_file:
-                        if marker.encode() in command_file.read():
-                            os.kill(int(entry), signal.SIGTERM)
-                except (FileNotFoundError, PermissionError, ProcessLookupError):
-                    pass
-            for path in ({self.driver_pid!r}, {self.driver_log!r}):
-                try:
-                    os.remove(path)
-                except FileNotFoundError:
-                    pass
-            """
-        ).strip()
-        self.kubectl.exec_command(
-            f"kubectl exec deployment/{self.traffic_source} -n {self.namespace} -c {self.traffic_source} "
-            f"-- /bin/sh -c {json.dumps(self._python(cleanup))}"
-        )
-
-    @mark_fault_injected
-    def inject_fault(self):
-        print("== Fault Injection ==")
-        self._capture_baseline_template()
-        self._patch_edge_proxy()
-        self._start_crafted_traffic()
-        print(f"Fault: EdgeRequestFilter | Deployment: {self.faulty_service} | Namespace: {self.namespace}\n")
