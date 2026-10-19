@@ -193,7 +193,7 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
         items.append(f"RBAC bindings for {rbac.get('service_account')}: {rbac.get('bindings') or 'none'}")
     log_items: list[str] = []
     event_items: list[str] = []
-    dep_items: list[str] = []
+    dep_items: list[str] = list(detail.get("telemetry") or [])
     logs = detail.get("logs") or {}
     if logs.get("error_lines"):
         log_items.append(
@@ -233,7 +233,7 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
 
 
 # Slots kept for each kind of evidence, so a long settings list never crowds out every log line or event.
-EVIDENCE_RESERVE = {"logs": 4, "events": 3, "dependencies": 3}
+EVIDENCE_RESERVE = {"logs": 4, "events": 3, "dependencies": 4}  # dependencies include telemetry facts
 
 
 def cap_evidence(head: list[str], logs: list[str], events: list[str], deps: list[str], tail: list[str]) -> list[str]:
