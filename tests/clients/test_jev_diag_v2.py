@@ -850,3 +850,22 @@ def test_a_crashed_containers_quote_is_its_last_error_line_not_a_startup_notice(
         == "FATAL: data files are incompatible with this version"
     )
     assert own_error_line({"previous_container_logs": {"c": ["starting server", "listening on 8080"]}}) is None
+
+
+def test_a_login_pair_is_decided_side_by_side_once_both_sides_are_examined():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    # a server that rejects the client's logins is confirmed; the client, examined as the other side, is not an
+    # origin on its own, yet the side-by-side question still decides which side holds the stale value
+    server = {
+        **_comp("db", "t"),
+        "signals": ["s"],
+        "evidence_kinds": ["symptoms"],
+        "login_candidates": ["deployment/app"],
+    }
+    app = {**_comp("app", "t"), "signals": ["s"], "evidence_kinds": ["change"]}
+    snap = _snap({"deployment/db": server, "deployment/app": app})
+    picks = {"fault_category": "credentials_or_auth", "faulty_side": "deployment/app"}
+    triage = [{"deployment/db": 0.7, "deployment/app": 0.3, "other": 0.0}] * 2
+    client = _Answers(triage, {"deployment/db": 0.95, "deployment/app": 0.4}, picks=picks)
+    assert IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap).component == "deployment/app"
