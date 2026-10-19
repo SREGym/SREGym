@@ -125,10 +125,7 @@ def feedback_path(snapshot: ClusterSnapshot, d: Diagnosis) -> dict | None:
     fo = d.fault_object
     if fo and fo["kind"] in CONFIG_KINDS:
         return None
-    for path in snapshot.cluster.get("call_paths") or []:
-        if path.get("feedback_loop") and d.component in (path["caller"], path["callee"]):
-            return path
-    return None
+    return d.call_path
 
 
 RUN_TO_COMPLETION = ("Job", "CronJob", "Pod")

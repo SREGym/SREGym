@@ -219,6 +219,7 @@ class Diagnosis:
     investigation: dict | None = None  # decision-tree mode: steps, conclusion, fallback
     text: str = ""
     second: Diagnosis | None = None  # a second, independent cause, when the investigation found one
+    call_path: dict | None = None  # the call path the investigation located the fault on, when it chose one
 
     def to_dict(self) -> dict:
         return asdict(self)
