@@ -6,8 +6,8 @@ assumed deployment time:
 * a spec write made after the object was created (managedFields; status and scale writes excluded);
 * an object created after the workloads it acts on already existed (a NetworkPolicy after the pods it selects,
   a webhook after the workloads it intercepts, a workload after the workloads it calls);
-* a pod template that differs from the previous revision (Deployment ReplicaSets, StatefulSet and DaemonSet
-  ControllerRevisions), diffed field by field.
+* a pod template that differs from the one current when the application was deployed (Deployment ReplicaSets,
+  StatefulSet and DaemonSet ControllerRevisions), diffed field by field.
 
 Changes are then ranked by when they happened relative to the first active symptom, which is estimated from the
 symptoms themselves: errors that are still occurring, readiness loss, crash loops, Pending pods, current warning
@@ -30,6 +30,7 @@ MAX_FIELD_PATHS = 10
 MAX_TEMPLATE_CHANGES = 12
 MAX_RECENT_CHANGES = 10
 RESTART_ANNOTATION = "kubectl.kubernetes.io/restartedAt"  # written by a rollout restart; no setting changes
+POD_TEMPLATE_HASH = "pod-template-hash"  # the label a Deployment puts on each ReplicaSet's template; never a setting
 DEPLOY_TOLERANCE_SECONDS = 5  # a change this close to the application's creation still counts as after it
 
 _IGNORED_SUBRESOURCES = {"status", "scale"}
@@ -202,7 +203,7 @@ def template_diff(old: dict, new: dict) -> list[str]:
     for key, label in (("annotations", "template annotation"), ("labels", "pod label")):
         a, b = old_meta.get(key) or {}, new_meta.get(key) or {}
         for k in sorted(set(a) | set(b)):
-            if a.get(k) == b.get(k):
+            if a.get(k) == b.get(k) or k == POD_TEMPLATE_HASH:
                 continue
             if k not in b:
                 changes.append(f"{label} {k} removed")
@@ -309,13 +310,26 @@ def restart_only(diffs: list[str]) -> bool:
     return bool(diffs) and all(RESTART_ANNOTATION in d for d in diffs)
 
 
-def attach_template_changes(components: dict[str, dict], revisions: dict) -> None:
-    """For workloads with revision history, the differences between the previous and the current pod template."""
+def deploy_revision(revs: list[dict], created: datetime | None, deployed: datetime | None) -> dict:
+    """The revision current when the workload was deployed: the newest one created by MIN_CHANGE_SECONDS after the
+    later of the application's deploy time and the workload's own creation (a write that close is part of deploying
+    it), else the oldest one kept."""
+    start = max((t for t in (created, deployed) if t), default=None)
+    if start is None:
+        return revs[0]
+    cutoff = start + timedelta(seconds=MIN_CHANGE_SECONDS)
+    deployed_revs = [r for r in revs if (at := parse_time(r.get("created"))) and at <= cutoff]
+    return deployed_revs[-1] if deployed_revs else revs[0]
+
+
+def attach_template_changes(components: dict[str, dict], revisions: dict, deployed: datetime | None = None) -> None:
+    """For workloads with revision history, how the current pod template differs from the one current when the
+    application was deployed. A setting changed and then restarted therefore still shows its old and new value."""
     for comp in components.values():
         revs = revisions.get((comp["namespace"], comp["kind"], comp["name"])) or []
         if len(revs) < 2:
             continue
-        previous, current = revs[-2], revs[-1]
+        previous, current = deploy_revision(revs, parse_time(comp.get("created")), deployed), revs[-1]
         diff = template_diff(previous["template"], current["template"])
         if diff:
             comp["template_changes"] = {

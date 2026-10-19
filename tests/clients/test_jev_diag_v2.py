@@ -129,6 +129,32 @@ def test_revision_diff_without_a_spec_write_is_a_change_and_a_restart_is_not():
     ]
 
 
+def test_template_changes_are_diffed_against_the_revision_current_at_deploy():
+    from clients.jev_diag.v2 import changes
+
+    def rev(n: int, at: str, value: str, restarted: str | None = None) -> dict:
+        meta = {"labels": {"app": "a", "pod-template-hash": f"h{n}"}}
+        if restarted:
+            meta["annotations"] = {changes.RESTART_ANNOTATION: restarted}
+        env = [{"name": "DB", "value": value}]
+        spec = {"containers": [{"name": "a", "image": "i", "env": env}]}
+        if n > 1:  # revision 2 is a patch made while deploying: part of the deployed template
+            spec["volumes"] = [{"name": "v", "configMap": {"name": "c"}}]
+        return {"revision": n, "created": at, "template": {"metadata": meta, "spec": spec}}
+
+    history = [rev(1, "2026-10-19T07:50:00Z", "old"), rev(2, "2026-10-19T07:50:04Z", "old")]
+    set_then_restart = [*history, rev(3, "2026-10-19T07:55:00Z", "new"), rev(4, "2026-10-19T07:56:00Z", "new", "x")]
+    comps = {"deployment/a": _comp("a", "2026-10-19T07:50:00Z"), "deployment/b": _comp("b", "2026-10-19T07:50:00Z")}
+    revisions = {
+        (NS, "Deployment", "a"): set_then_restart,
+        (NS, "Deployment", "b"): [*history, rev(3, "2026-10-19T07:56:00Z", "old", "x")],
+    }
+    changes.attach_template_changes(comps, revisions, changes.parse_time("2026-10-19T07:50:00Z"))
+    a, b = comps["deployment/a"]["template_changes"], comps["deployment/b"]["template_changes"]
+    assert "container a env DB: old -> new" in a["changes"] and not a["restart_only"] and len(a["changes"]) == 2
+    assert b["restart_only"] and len(b["changes"]) == 1  # no pod-template-hash line, no deploy-time volume
+
+
 def test_a_change_made_before_the_application_existed_is_dropped():
     from clients.jev_diag.timeutil import set_now
     from clients.jev_diag.v2 import changes
