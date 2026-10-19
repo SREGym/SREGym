@@ -159,6 +159,9 @@ class ServiceWrongPodSelectionIA(Problem):
 
     @mark_fault_injected(strict=True)
     def recover_fault(self):
+        if self.original_selector is None:
+            print("No Service route was changed by this problem; nothing to restore")
+            return
         selector = self.original_selector
         if not selector:
             deployment = self.kubectl.get_deployment(self.target_deployment, self.namespace)

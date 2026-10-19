@@ -36,3 +36,12 @@ def test_partial_selector_injection_can_restore_the_original_route(offline_port_
     problem._patch_route_label.side_effect = None
     problem.recover_fault()
     problem._set_route.assert_called_once_with({"app": "gunicorn"}, "http")
+
+
+def test_recovery_before_injection_does_not_require_an_application_deployment(offline_port_cluster):
+    problem = ServiceWrongPodSelectionIA()
+    problem._set_route = Mock(side_effect=AssertionError("No route was changed"))
+    problem._patch_route_label = Mock(side_effect=AssertionError("No label was changed"))
+    problem.recover_fault()
+    problem._set_route.assert_not_called()
+    problem._patch_route_label.assert_not_called()
