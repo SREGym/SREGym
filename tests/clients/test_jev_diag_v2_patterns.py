@@ -249,3 +249,31 @@ def test_a_caller_whose_own_errors_name_a_crashing_component_is_its_victim():
     db = keys["dependency:deployment/url-store-mongodb"]
     assert not db.contradicted() and db.specific_groups() == 1
     assert "dependency:deployment/otel-collector" not in keys  # exporter noise links nothing
+
+
+def test_store_links_ignore_stopped_errors_env_order_and_keep_every_caller():
+    cache = comp("Deployment", "cache", healthy=False, evidence_kinds=["symptoms"], signals=["container was OOMKilled"])
+    stopped = {"logs": {"error_samples": [{"line": "failed to connect to redis", "state": "stopped"}]}}
+    api = comp("Deployment", "api", healthy=False)
+    keys = {
+        e.key
+        for e in build_explanations(
+            snapshot(
+                {
+                    "deployment/api": api,
+                    "deployment/redis": comp("Deployment", "redis", healthy=False, evidence_kinds=["symptoms"]),
+                }
+            ),
+            {"deployment/api": stopped},
+        )
+    }
+    assert "dependency:deployment/redis" not in keys  # a stopped error links nothing
+    env = [{"name": "CACHE_HOST", "value": "cache"}, {"name": "PORT", "value": "6379"}]
+    details = {cid: {"workload": {"containers": [{"env": env}]}} for cid in ("deployment/a", "deployment/b")}
+    comps = {
+        "deployment/a": comp("Deployment", "a", healthy=False),
+        "deployment/b": comp("Deployment", "b", healthy=False),
+        "deployment/cache": cache,
+    }
+    (dep,) = [e for e in build_explanations(snapshot(comps), details) if e.key == "dependency:deployment/cache"]
+    assert dep.impact == ["deployment/shop/a", "deployment/shop/b", "deployment/shop/cache"]  # both callers kept
