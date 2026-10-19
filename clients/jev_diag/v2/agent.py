@@ -130,7 +130,10 @@ class V2Diagnoser(JevDiagnoser):
         result = None
         candidates: list[Explanation] = []
         route = "check"
-        while len(self.requests) + 2 <= self.max_requests and time.monotonic() - started < self.wall_budget_s:
+        # The first decision always runs; the time budget limits going back for more, not the first pick.
+        while len(self.requests) + 2 <= self.max_requests and (
+            not rounds or time.monotonic() - started < self.wall_budget_s
+        ):
             explanations = build_explanations(snapshot, self.details)  # new detail can add or fill in chains
             candidates = shortlist(explanations, TOP_K)
             result = pick(self._ask, self._state(snapshot, candidates), candidates, rng=self.rng)
@@ -275,7 +278,7 @@ class V2Diagnoser(JevDiagnoser):
         if result is not None and result.leader != NONE:
             return by_key[result.leader]
         partials = [e for e in shortlist(explanations, len(explanations)) if e.pattern == PARTIAL]
-        return partials[0] if partials else candidates[0]
+        return partials[0] if partials else (candidates or shortlist(explanations, 1))[0]
 
     @staticmethod
     def _component_of(snapshot: ClusterSnapshot, e: Explanation) -> str:
