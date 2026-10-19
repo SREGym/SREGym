@@ -239,3 +239,25 @@ def test_report_names_the_owning_component_through_its_configmap_and_an_outside_
     )
     assert text.startswith("Root cause: ConfigMap `coredns` in namespace `kube-system`, acting on Deployment `user`")
     assert "Affected (symptoms only, not causes): Deployment `api` in namespace `shop`: dns resolution failure" in text
+
+
+def test_without_the_decision_model_v2_still_reports_from_code():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    class Down:
+        model = "m"
+
+        def system_one(self, *a, **k):
+            raise RuntimeError("Decisions API HTTP 402: insufficient credits")
+
+    changed = {
+        **_comp("frontend", "t"),
+        "evidence_kinds": ["change", "symptoms"],
+        "healthy": False,
+        "nearest_change_before_symptoms": True,
+        "signals": ["pod template changed 75s ago; pod template changes: container frontend env CART_ADDR removed"],
+    }
+    snap = _snap({"deployment/frontend": changed, "deployment/cart": {**_comp("cart", "t"), "healthy": True}})
+    d = IterativeDiagnoser(Down(), fetch_detail=lambda s, c: {}).diagnose(snap)
+    assert d.component == "deployment/frontend" and "decision model unavailable" in d.investigation["fallback"]
+    assert d.text.startswith("Root cause: Deployment `frontend`") and "CART_ADDR removed" in d.text
