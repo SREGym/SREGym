@@ -517,3 +517,33 @@ def test_report_states_only_what_the_facts_show_for_a_job_that_never_completes()
     assert "Mechanism: pod a-1: container main completed but container side keeps running" in text
     assert "Running and Ready" not in text and text.count("nc -lk") == 1
     assert "Effect: 4 jobs of this cronjob are active without completing (they pile up)." in text
+
+
+def test_a_job_driving_a_failing_component_and_a_topic_input_are_named_as_the_broken_things():
+    import base64
+
+    from clients.jev_diag.v2 import checks
+    from clients.jev_diag.v2.report import build_report
+
+    script = base64.b64encode(b"import redis\nc = redis.Redis(host='store-b', port=6379)\nc.set('k', 'x' * 1000000)")
+    assert "store-b" in checks.command_host_candidates(f"exec(base64.b64decode('{script.decode()}'))")
+    job = {**_comp("filler", "t"), "kind": "Job", "signals": ["job has 1 active pod(s) and has not completed"]}
+    job["_calls"] = ["deployment/store-b"]
+    job["containers"] = [{"name": "f", "command": ["python3", "-c", f"exec(base64.b64decode('{script.decode()}'))"]}]
+    store = {
+        **_comp("store-b", "t"),
+        "evidence_kinds": ["symptoms"],
+        "services": [{"name": "store-b"}],
+        "signals": ["pod s-1: container store-b was OOMKilled", "only 0 of 1 desired replicas are ready"],
+    }
+    text = build_report(_snap({"job/filler": job, "deployment/store-b": store}), _diag("job/filler", "command"))
+    assert text.startswith(
+        "Root cause: Service `store-b` (Deployment `store-b`) in namespace `shop`, driven by Job `filler`, which calls "
+        "it: pod s-1: container store-b was OOMKilled."
+    )
+    assert "decoded from base64" in text and "x' * 1000000" in text
+    broker = {**_comp("queue-a", "t"), "containers": [{"image": "apache/kafka:3.7"}]}
+    consumer = {**_comp("reader", "t"), "signals": []}
+    d = _diag("deployment/reader", blocked_input={"source": "logs", "input": "env IN_TOPIC=events-x"})
+    text = build_report(_snap({"deployment/reader": consumer, "deployment/queue-a": broker}), d)
+    assert text.startswith("Root cause: the Kafka topic `events-x` (named by env `IN_TOPIC`) consumed by Deployment")
