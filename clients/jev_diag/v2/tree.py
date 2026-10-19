@@ -862,9 +862,11 @@ class IterativeDiagnoser(JevDiagnoser):
             "config_objects": comp.get("config_objects"),
         }
 
-    def tiebreak(self, snapshot: ClusterSnapshot, a: str, b: str, investigated: dict, reason: str) -> list[str]:
-        """Two confirmed origins: the one where the fault started, or both when they are independent faults. Without
-        a clear answer, the higher origin probability."""
+    def tiebreak(
+        self, snapshot: ClusterSnapshot, a: str, b: str, investigated: dict, reason: str, *, allow_both: bool = True
+    ) -> list[str]:
+        """Two origins: the one where the fault started, or (when allowed) both when they are independent faults.
+        Without a clear answer, the higher origin probability."""
         links = link_facts(snapshot, a, b, investigated)
         own_change = all("change" in (snapshot.components[c].get("evidence_kinds") or []) for c in (a, b))
         state = {
@@ -873,7 +875,8 @@ class IterativeDiagnoser(JevDiagnoser):
             "links": links or ["none found"],
             "sides": {a: self.side(snapshot, a, investigated), b: self.side(snapshot, b, investigated)},
         }
-        response = self._ask(f"tiebreak:{a}|{b}", state, build_tiebreak_questions(a, b, bool(links) or not own_change))
+        single = bool(links) or not own_change or not allow_both
+        response = self._ask(f"tiebreak:{a}|{b}", state, build_tiebreak_questions(a, b, single))
         answer = ChoiceResult.from_answer(response.choices[TIEBREAK_QUESTION])
         p = answer.probabilities.get(answer.choice, 0.0)
         higher = max((a, b), key=lambda c: investigated[c]["origin_p"])
@@ -1042,11 +1045,12 @@ class IterativeDiagnoser(JevDiagnoser):
                 # This was the other side of an earlier confirmed origin: settle between the two, or examine the
                 # next candidate when this one is not an origin.
                 original, reason, rest = waiting_on.pop(cid)
-                if result["origin_p"] >= MIN_ORIGIN_PROBABILITY:
+                rest = [(c, r) for c, r in rest if c in snapshot.components and c not in investigated]
+                if result["origin_p"] >= MIN_ORIGIN_PROBABILITY or (not rest and result["verdict"] != "unrelated"):
+                    # both sides are known now: which one holds the wrong or stale value is asked side by side
                     concluded = self.pair_node(snapshot, original, cid, investigated, reason)
                     pair_decided = True
                     break
-                rest = [(c, r) for c, r in rest if c in snapshot.components and c not in investigated]
                 if rest:
                     nxt_side, nxt_reason = rest[0]
                     waiting_on[nxt_side] = (original, nxt_reason, rest[1:])
