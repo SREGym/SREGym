@@ -623,6 +623,8 @@ def test_a_caller_retrying_into_a_capped_callee_is_reported_as_the_call_path():
     assert paths.call_paths(comps) == []
     cm = paths.setting_pairs({"rpc.yaml": "timeout: 50ms\nretries: 30\nname: x", "LOG_LEVEL": "info"})
     assert cm == {"rpc.yaml:timeout": "50ms", "rpc.yaml:retries": "30"}
+    shared = '{"a": {"timeout_ms": 100, "workers": 4}, "b": {"timeout_ms": 9000, "workers": 4}}'
+    assert paths.setting_pairs({"svc.json": shared}) == {"svc.json:workers": "4"}  # whose timeout_ms is unknown
 
 
 def _two_faults(link: bool):

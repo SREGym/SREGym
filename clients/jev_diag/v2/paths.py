@@ -30,7 +30,7 @@ _POINTER_PREFIXES = ("errors logged by", "server ")
 
 def setting_pairs(data: dict[str, str]) -> dict[str, str]:
     """Call and capacity settings in a ConfigMap's data: short keys with short values, and key/value pairs inside
-    file-like values."""
+    file-like values whose key has one value in the file."""
     out: dict[str, str] = {}
     for key, value in (data or {}).items():
         text = str(value)
@@ -38,9 +38,12 @@ def setting_pairs(data: dict[str, str]) -> dict[str, str]:
             if CALL_SETTING.search(key) or CAPACITY_SETTING.search(key):
                 out[key] = text
             continue
+        found: dict[str, set[str]] = {}
         for m in _INLINE.finditer(text):
             if CALL_SETTING.search(m.group("key")) or CAPACITY_SETTING.search(m.group("key")):
-                out.setdefault(f"{key}:{m.group('key')}", m.group("value"))
+                found.setdefault(m.group("key"), set()).add(m.group("value"))
+        # a key repeated with different values (one block per service in a shared file) is ambiguous: left out
+        out.update({f"{key}:{k}": next(iter(values)) for k, values in found.items() if len(values) == 1})
     return out
 
 
