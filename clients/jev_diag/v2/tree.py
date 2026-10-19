@@ -152,6 +152,8 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
     for key in ("dns_policy", "dns_config", "host_aliases", "host_network", "node_selector", "tolerations", "strategy"):
         if w.get(key) not in (None, "ClusterFirst", False, [], {}):
             items.append(f"workload {key}: {w[key]}")
+    if w.get("termination_grace_seconds") not in (None, 30):  # 30 s is the Kubernetes default
+        items.append(f"pod terminationGracePeriodSeconds: {w['termination_grace_seconds']} (default 30)")
     salient_env: list[str] = []
     other_env: list[str] = []
     for c in (w.get("init_containers") or []) + (w.get("containers") or []):

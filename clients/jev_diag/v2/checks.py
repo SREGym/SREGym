@@ -108,20 +108,35 @@ def rules_cover_pod_create(rules: list[dict] | None) -> bool:
 # --------------------------------------------------------------------------- probes
 
 
+# Kubernetes defaults for probe timing; an unset field takes these values.
+PROBE_TIMING_DEFAULTS = (
+    ("initialDelaySeconds", 0),
+    ("periodSeconds", 10),
+    ("timeoutSeconds", 1),
+    ("failureThreshold", 3),
+)
+
+
 def describe_probe(probe: dict | None) -> str:
-    """One-line description of a probe handler with every target field (scheme, path, port, command)."""
+    """One-line description of a probe: the handler with every target field (scheme, path, port, command) and its
+    timing (initial delay, period, timeout, failure threshold), unset fields shown with their default."""
     if not probe:
         return "none"
     if "httpGet" in probe:
         g = probe["httpGet"]
-        return f"httpGet {(g.get('scheme') or 'HTTP').upper()} :{g.get('port')}{g.get('path') or '/'}"
-    if "tcpSocket" in probe:
-        return f"tcpSocket :{probe['tcpSocket'].get('port')}"
-    if "grpc" in probe:
-        return f"grpc :{probe['grpc'].get('port')}"
-    if "exec" in probe:
-        return "exec " + " ".join(map(str, probe["exec"].get("command") or []))[:100]
-    return "other"
+        handler = f"httpGet {(g.get('scheme') or 'HTTP').upper()} :{g.get('port')}{g.get('path') or '/'}"
+    elif "tcpSocket" in probe:
+        handler = f"tcpSocket :{probe['tcpSocket'].get('port')}"
+    elif "grpc" in probe:
+        handler = f"grpc :{probe['grpc'].get('port')}"
+    elif "exec" in probe:
+        handler = "exec " + " ".join(map(str, probe["exec"].get("command") or []))[:100]
+    else:
+        handler = "other"
+    timing = ", ".join(
+        f"{k}={probe[k]}" if k in probe else f"{k}={default} (default)" for k, default in PROBE_TIMING_DEFAULTS
+    )
+    return f"{handler} ({timing})"
 
 
 # --------------------------------------------------------------------------- env addresses
