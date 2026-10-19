@@ -145,3 +145,108 @@ def test_reachability_says_where_the_path_from_a_client_breaks(monkeypatch):
 
     monkeypatch.setattr(probes, "run_in_pod", lambda *a: (127, "sh: not found"))
     assert probes.reachability(snap, "deployment/orders", "deployment/mongodb-orders") is None
+
+
+def test_containers_of_one_pod_that_listen_on_the_same_port_are_flagged():
+    from clients.jev_diag.v2.checks import command_ports, pod_port_collisions
+
+    assert command_ports({"command": ["sh", "-c", "exec nc -lk -p 5000"]}) == {5000}
+    assert command_ports({"args": ["--port=8080", "--listen-addr", "0.0.0.0:9090"]}) == {8080, 9090}
+    assert command_ports({"args": ["--timeout=30s", "--upstream", "10.0.0.1:80", "curl localhost:5000"]}) == set()
+    spec = {
+        "initContainers": [{"name": "init", "command": ["nc", "-l", "-p", "5000"]}],
+        "containers": [
+            {"name": "app", "ports": [{"containerPort": 5000}], "args": ["--port", "5000"]},
+            {"name": "sidecar", "command": ["sh", "-c", "exec nc -lk -p 5000"]},
+        ],
+    }
+    assert pod_port_collisions(spec) == [
+        "containers app and sidecar of one pod both listen on port 5000 (app declares it, sidecar binds it in its "
+        "command); a pod's containers share one network namespace, so only one of them can bind it"
+    ]
+    assert pod_port_collisions({"containers": [{"name": "app", "ports": [{"containerPort": 80}]}]}) == []
+
+
+def test_a_host_port_another_workload_binds_is_flagged():
+    from clients.jev_diag.v2.checks import host_port_clashes
+
+    comps = _app()
+    comps["deployment/frontend"]["containers"][0]["host_ports"] = [9100]
+    daemonset = {
+        "metadata": {"namespace": "observe", "name": "node-exporter"},
+        "spec": {"template": {"spec": {"containers": [{"name": "x", "ports": [{"hostPort": 9100}]}]}}},
+    }
+    host_port_clashes(comps, [daemonset])
+    assert comps["deployment/frontend"]["signals"] == [
+        "container frontend requests hostPort 9100, which DaemonSet observe/node-exporter also binds; a node offers "
+        "each host port once, so their pods cannot run on the same node"
+    ]
+    assert not comps["deployment/orders"]["signals"]
+
+
+def test_the_report_states_the_settings_behind_the_fault_type():
+    from clients.jev_diag.v2.classifier import ChoiceResult, Diagnosis
+    from clients.jev_diag.v2.report import build_report
+
+    probe = "container frontend liveness probe: httpGet /health:8080 (initialDelaySeconds=0, periodSeconds=1)"
+    comp = {**_server("frontend"), "signals": ["container frontend restarted 9 times"]}
+    d = Diagnosis(
+        component="deployment/frontend",
+        component_result=ChoiceResult(choice="deployment/frontend", confidence=1.0, probabilities={}),
+        fault_visible=None,
+        category_result=ChoiceResult(choice="health_probe_config", confidence=1.0, probabilities={}),
+        evidence_result=ChoiceResult(choice="E1", confidence=1.0, probabilities={}),
+        evidence=[{"id": "E1", "text": "container frontend restarted 9 times"}, {"id": "E2", "text": probe}],
+        model="m",
+        input_tokens=None,
+        output_tokens=None,
+        investigation={"steps": []},
+    )
+    text = build_report(
+        ClusterSnapshot(app={"namespaces": [NS]}, components={"deployment/frontend": comp}, cluster={}), d
+    )
+    assert f"Details: {probe}." in text
+
+
+def test_the_change_log_keeps_operator_writes_after_deploy_and_leaves_out_the_rest(monkeypatch):
+    from clients.jev_diag.timeutil import parse_time, set_now
+    from clients.jev_diag.v2 import outside
+
+    def obj(kind, name, ns=None, *writes):
+        return {
+            "kind": kind,
+            "metadata": {
+                "name": name,
+                "namespace": ns,
+                "creationTimestamp": "2026-10-19T07:00:00Z",
+                "managedFields": [{"manager": m, "operation": "Update", "time": t} for m, t in writes],
+            },
+        }
+
+    items = {
+        "ippools.crd.projectcalico.org": [
+            obj(
+                "IPPool", "default", None, ("calico", "2026-10-19T07:00:00Z"), ("kubectl-patch", "2026-10-19T08:05:00Z")
+            )
+        ],
+        "nodes": [obj("Node", "worker2", None, ("kubelet", "2026-10-19T08:06:00Z"))],
+        "clusterroles.rbac.authorization.k8s.io": [
+            obj("ClusterRole", "mcp-server", None, ("kubectl", "2026-10-19T08:04:00Z"))
+        ],
+        "configmaps": [
+            obj("ConfigMap", "app-config", NS, ("kubectl-edit", "2026-10-19T08:05:00Z")),
+            obj("ConfigMap", "dns", "kube-system", ("kubectl-client-side-apply", "2026-10-19T06:00:00Z")),
+        ],
+        "networkchaos.chaos-mesh.org": [obj("NetworkChaos", "x", NS, ("OpenAPI-Generator", "2026-10-19T08:05:00Z"))],
+    }
+    monkeypatch.setattr(outside, "run_kubectl", lambda args: " ".join(items))
+    monkeypatch.setattr(outside, "kubectl_items", lambda resource, ns, errors: items[resource])
+    set_now(parse_time("2026-10-19T08:10:00Z"))
+    try:
+        changes: list[dict] = []
+        found = outside.change_radar([NS], _app(), [], changes, parse_time("2026-10-19T08:00:00Z"))
+    finally:
+        set_now(None)
+    assert [(f["kind"], f["name"]) for f in found] == [("IPPool", "default")]
+    assert found[0]["signals"] == ["written by kubectl-patch after the application was deployed"]
+    assert [c["object"] for c in changes] == ["ippool/default"]

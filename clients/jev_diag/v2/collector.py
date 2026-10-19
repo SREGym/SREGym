@@ -375,6 +375,7 @@ def summarize_workload(obj: dict) -> dict:
             if vf.get("configMapKeyRef"):
                 config_refs["configmaps"].add(vf["configMapKeyRef"].get("name"))
         ports = [p.get("containerPort") for p in c.get("ports", []) if p.get("containerPort")]
+        host_ports = [p.get("hostPort") for p in c.get("ports", []) if p.get("hostPort")]
         probes = {}
         for probe_key, label in (
             ("readinessProbe", "readiness"),
@@ -405,6 +406,7 @@ def summarize_workload(obj: dict) -> dict:
                     "limits": resources.get("limits") or {},
                     "requests": resources.get("requests") or {},
                     "ports": ports,
+                    "host_ports": host_ports,
                     "env_names": env_names,
                     "env_from": env_from,
                     "probes": probes,
@@ -414,6 +416,7 @@ def summarize_workload(obj: dict) -> dict:
                 }
             )
         )
+    signals += checks.pod_port_collisions(pod_spec)
     if pod_spec.get("restartPolicy") and pod_spec["restartPolicy"] != "Always":
         extra["restart_policy"] = pod_spec["restartPolicy"]
     for alias in pod_spec.get("hostAliases", []) or []:
@@ -1435,13 +1438,21 @@ def attach_namespace_constraints(constraints: list[dict], components: dict[str, 
 # --------------------------------------------------------------------------- admission webhooks
 
 
+# API groups an application's own objects live in; a webhook whose rules cover none of them cannot touch it.
+APP_API_GROUPS = {"", "*", "apps", "batch", "autoscaling", "policy", "networking.k8s.io", "discovery.k8s.io"}
+
+
 def summarize_webhooks(configs: list[dict], errors: list[str]) -> list[dict]:
-    """Mutating/validating webhooks and whether their backend Service has endpoints (checked in code)."""
+    """Mutating/validating webhooks and whether their backend Service has endpoints (checked in code). Webhooks whose
+    rules cover only other API groups (a tool's own custom resources) cannot affect the application and are left
+    out; every other one is kept, however many there are, so the match against rewritten pods sees them all."""
     out = []
     endpoint_cache: dict[tuple[str, str], int | None] = {}
     for cfg in configs:
         kind = cfg.get("kind", "")
         for wh in cfg.get("webhooks") or []:
+            if not any(set(r.get("apiGroups") or []) & APP_API_GROUPS for r in wh.get("rules") or []):
+                continue
             svc = ((wh.get("clientConfig") or {}).get("service")) or {}
             key = (svc.get("namespace"), svc.get("name"))
             ready = None
@@ -1489,7 +1500,7 @@ def summarize_webhooks(configs: list[dict], errors: list[str]) -> list[dict]:
                     f"mutating webhook {wh.get('name')} rewrites objects matching {'; '.join(rules) or 'its rules'}"
                 )
             out.append(record)
-    return out[:12]
+    return out
 
 
 def attach_webhooks(webhooks: list[dict], components: dict[str, dict]) -> None:
@@ -2014,6 +2025,7 @@ def collect_snapshot(
     checks.resolve_env_hosts(components)
     checks.local_traffic_policy_gaps(components)
     checks.shared_rwo_claims(components, claim_modes)
+    checks.host_port_clashes(components, kubectl_items("daemonsets", None, errors, managed_fields=False))
     for comp in components.values():
         comp["healthy_hint"] = not comp["signals"]
     attach_namespace_constraints(constraints, components)
@@ -2115,6 +2127,7 @@ def collect_snapshot(
             changes.append(change)
             if not change_log.before_deploy(change, deployed):
                 cluster_dns["changed"] = True
+    outside_objects += outside.change_radar(namespaces, components, errors, changes, deployed)
     for ns in namespaces:
         try:
             top = run_kubectl(["top", "pods", "-n", ns, "--containers", "--no-headers"], timeout=KUBECTL_TIMEOUT)
@@ -2306,8 +2319,12 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
         ),
         ("healthy: drop env_names/ports", for_components(drop_container_keys("env_names", "ports"), healthy_only=True)),
         (
-            "cluster: alerts to 15, unattributed events to 5",
-            lambda s: (cap_cluster("firing_alerts", 15)(s), cap_cluster("warning_events_not_attributed", 5)(s)),
+            "cluster: alerts to 15, unattributed events to 5, webhooks to 12",
+            lambda s: (
+                cap_cluster("firing_alerts", 15)(s),
+                cap_cluster("warning_events_not_attributed", 5)(s),
+                cap_cluster("admission_webhooks", 12)(s),
+            ),
         ),
         ("all: drop container command/args", for_components(drop_container_keys("command", "args"))),
         (

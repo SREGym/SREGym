@@ -182,6 +182,40 @@ def env_addresses(value: str) -> set[str]:
     return out
 
 
+# A port a command line binds: `-p 5000`, `--port=5000`, `--listen 5000`, or a listen address `:5000` / `0.0.0.0:5000`.
+_BOUND_PORT_RE = re.compile(
+    r"(?:(?<![\w-])--?(?:p|port|listen|listen-port|bind)[= ]|(?:^|[\s=\"'])(?:0\.0\.0\.0|\[::\]|::)?:)(\d{2,5})\b"
+)
+
+
+def command_ports(container: dict) -> set[int]:
+    """Ports a container's command and args bind (including commands it decodes from base64)."""
+    text = " ".join(str(part) for part in [*(container.get("command") or []), *(container.get("args") or [])])
+    return {int(m) for t in [text, *decoded_payloads(text)] for m in _BOUND_PORT_RE.findall(t) if 0 < int(m) < 65536}
+
+
+def pod_port_collisions(pod_spec: dict) -> list[str]:
+    """Containers of one pod that listen on the same port. A pod's containers share one network namespace, so only one
+    of them can bind it; the others fail to start or keep restarting. Init containers run before the others and are
+    left out."""
+    listens: list[tuple[str, int, str]] = []
+    for c in pod_spec.get("containers") or []:
+        declared = {p.get("containerPort") for p in c.get("ports") or [] if p.get("containerPort")}
+        listens += [(c.get("name") or "?", port, "declares it") for port in sorted(declared)]
+        listens += [
+            (c.get("name") or "?", port, "binds it in its command") for port in sorted(command_ports(c) - declared)
+        ]
+    out = []
+    for i, (a, port, how_a) in enumerate(listens):
+        for b, other, how_b in listens[i + 1 :]:
+            if a != b and port == other:
+                out.append(
+                    f"containers {a} and {b} of one pod both listen on port {port} ({a} {how_a}, {b} {how_b}); "
+                    "a pod's containers share one network namespace, so only one of them can bind it"
+                )
+    return list(dict.fromkeys(out))
+
+
 _B64_RE = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
 _HOST_TOKEN_RE = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
 
@@ -605,6 +639,36 @@ def shared_rwo_claims(components: dict[str, dict], access_modes: dict[tuple[str,
                 f"PVC {claim} is {'/'.join(modes)} (attachable to one node at a time) but {desired} replicas of this "
                 f"Deployment mount it{spread}; replicas scheduled on another node cannot attach it"
             )
+
+
+def host_port_clashes(components: dict[str, dict], daemonsets: list[dict]) -> None:
+    """Workloads that request a host port another workload also binds. A node offers each host port once, so pods of
+    the two cannot run on the same node; against a DaemonSet, which runs on every node, they cannot run anywhere it
+    runs. `daemonsets` are those of every namespace."""
+    holders: dict[int, list[str]] = {}
+    for ds in daemonsets:
+        meta = ds.get("metadata") or {}
+        spec = ((ds.get("spec") or {}).get("template") or {}).get("spec") or {}
+        for c in spec.get("containers") or []:
+            for p in c.get("ports") or []:
+                if p.get("hostPort"):
+                    holders.setdefault(p["hostPort"], []).append(
+                        f"DaemonSet {meta.get('namespace')}/{meta.get('name')}"
+                    )
+    owners = {cid: f"{comp['kind']} {comp['namespace']}/{comp['name']}" for cid, comp in components.items()}
+    for cid, comp in components.items():
+        for c in comp.get("containers") or []:
+            for port in c.get("host_ports") or []:
+                holders.setdefault(port, []).append(owners[cid])
+    for cid, comp in components.items():
+        for c in comp.get("containers") or []:
+            for port in c.get("host_ports") or []:
+                others = [h for h in dict.fromkeys(holders.get(port) or []) if h != owners[cid]]
+                if others:
+                    comp["signals"].append(
+                        f"container {c.get('name')} requests hostPort {port}, which {', '.join(others)} also binds; a "
+                        "node offers each host port once, so their pods cannot run on the same node"
+                    )
 
 
 def json_short(value, limit: int = 120) -> str:
