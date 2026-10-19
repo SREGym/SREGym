@@ -8,7 +8,6 @@ Acknowledged writes are never recreated: losing those records must still fail.
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
 from dataclasses import dataclass, field
 
 CREATORS = {"session_post": "root_id", "session_file_upload": "file_id"}
@@ -32,14 +31,12 @@ class Creation:
 
 
 class SessionDependencies:
-    def __init__(self, max_owned: int):
-        # Match the planner's bounded history. An evicted write is never
-        # recreated, so eviction cannot hide loss of acknowledged data.
-        self.max_owned = max_owned
-        self.sessions: dict[tuple, OrderedDict[str, Creation]] = {}
+    def __init__(self):
+        self.creations: dict[tuple, Creation] = {}
 
-    def history(self, plan, creator: str) -> OrderedDict[str, Creation]:
-        return self.sessions.setdefault((plan.session_id, creator), OrderedDict())
+    def _discard_acknowledged(self, key: tuple, creation: Creation) -> None:
+        if creation.acknowledged and self.creations.get(key) is creation:
+            del self.creations[key]
 
     async def request(self, driver, session, arguments):
         plan = arguments.get("plan")
@@ -47,28 +44,28 @@ class SessionDependencies:
             return await driver.request(session, **arguments)
         creator = driver.name if driver.name in CREATORS else DEPENDENCIES[driver.name]
         identifier = getattr(plan, CREATORS[creator])
-        history = self.history(plan, creator)
+        key = (plan.session_id, creator, identifier)
 
         if driver.name == creator:
             creation = Creation(driver, dict(arguments))
-            history[identifier] = creation
-            while len(history) > self.max_owned:
-                history.popitem(last=False)
+            self.creations[key] = creation
             try:
                 result = await driver.request(session, **arguments)
                 creation.acknowledged = result.ok and result.correct is True
                 return result
             finally:
                 creation.completed.set()
+                self._discard_acknowledged(key, creation)
 
         started = arguments["loop_time"]()
-        creation = history.get(identifier)
+        creation = self.creations.get(key)
         if creation is not None:
             await creation.completed.wait()
             async with creation.retry_lock:
                 if not creation.acknowledged:
                     result = await creation.driver.request(session, **creation.arguments)
                     creation.acknowledged = result.ok and result.correct is True
+                    self._discard_acknowledged(key, creation)
                     if not creation.acknowledged:
                         result.latency_ms = (arguments["loop_time"]() - started) * 1000
                         return result
@@ -87,8 +84,8 @@ class SessionDriver:
         return await self.dependencies.request(self.driver, session, arguments)
 
 
-def register(drivers: dict, max_owned: int) -> None:
+def register(drivers: dict) -> None:
     """Replace only session drivers in the engine's supported driver registry."""
-    dependencies = SessionDependencies(max_owned)
+    dependencies = SessionDependencies()
     for name in CREATORS.keys() | DEPENDENCIES.keys():
         drivers[name] = SessionDriver(drivers[name], dependencies)

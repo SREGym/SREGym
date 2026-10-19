@@ -35,7 +35,7 @@ def arguments(identifier="one"):
 @pytest.mark.parametrize("operation", ["session_reaction", "session_edit", "session_delete", "session_reply"])
 def test_retry_only_unacknowledged_create_before_dependent_request(operation):
     async def scenario():
-        state = dependencies.SessionDependencies(64)
+        state = dependencies.SessionDependencies()
         create = driver("session_post", side_effect=[Result(status=503, ok=False, correct=False), Result()])
         dependent = driver(operation, return_value=Result())
         kwargs = arguments()
@@ -50,7 +50,7 @@ def test_retry_only_unacknowledged_create_before_dependent_request(operation):
 
 def test_loss_of_acknowledged_data_is_not_recreated_or_hidden():
     async def scenario():
-        state = dependencies.SessionDependencies(64)
+        state = dependencies.SessionDependencies()
         create = driver("session_post", return_value=Result())
         dependent = driver("session_edit", return_value=Result(status=404, ok=False, correct=False))
         await state.request(create, None, arguments())
@@ -63,7 +63,7 @@ def test_loss_of_acknowledged_data_is_not_recreated_or_hidden():
 
 def test_active_outage_is_still_a_failure():
     async def scenario():
-        state = dependencies.SessionDependencies(64)
+        state = dependencies.SessionDependencies()
         create = driver("session_post", return_value=Result(status=503, ok=False, correct=False))
         dependent = driver("session_edit", return_value=Result())
         await state.request(create, None, arguments())
@@ -76,7 +76,7 @@ def test_active_outage_is_still_a_failure():
 
 def test_pending_create_is_awaited_and_concurrent_dependents_retry_once():
     async def scenario():
-        state = dependencies.SessionDependencies(64)
+        state = dependencies.SessionDependencies()
         started, finish = asyncio.Event(), asyncio.Event()
 
         async def first(*args, **kwargs):
@@ -101,23 +101,25 @@ def test_pending_create_is_awaited_and_concurrent_dependents_retry_once():
     asyncio.run(scenario())
 
 
-def test_eviction_does_not_recreate_unknown_records():
+def test_long_outage_does_not_evict_a_failed_create_and_successes_do_not_accumulate():
     async def scenario():
-        state = dependencies.SessionDependencies(1)
-        create = driver("session_post", return_value=Result())
+        state = dependencies.SessionDependencies()
+        create = driver("session_post", side_effect=[Result(status=503, ok=False), *[Result() for _ in range(129)]])
         await state.request(create, None, arguments("old"))
-        await state.request(create, None, arguments("new"))
-        dependent = driver("session_delete", return_value=Result(status=404, ok=False, correct=False))
-        assert (await state.request(dependent, None, arguments("old"))).status == 404
-        assert create.request.await_count == 2
-        assert len(state.history(arguments()["plan"], "session_post")) == 1
+        for number in range(128):
+            await state.request(create, None, arguments(f"new-{number}"))
+        assert len(state.creations) == 1
+        dependent = driver("session_delete", return_value=Result())
+        assert (await state.request(dependent, None, arguments("old"))).ok
+        assert create.request.await_count == 130
+        assert not state.creations
 
     asyncio.run(scenario())
 
 
 def test_file_dependency_and_non_session_requests():
     async def scenario():
-        state = dependencies.SessionDependencies(64)
+        state = dependencies.SessionDependencies()
         upload = driver("session_file_upload", side_effect=[Result(status=503, ok=False), Result()])
         download = driver("session_file_download", return_value=Result())
         await state.request(upload, None, arguments())
