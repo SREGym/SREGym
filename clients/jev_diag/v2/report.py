@@ -12,8 +12,8 @@ from clients.jev_diag.v2.explain import PARTIAL, Explanation
 WORKLOAD_KINDS = {"deployment", "statefulset", "daemonset", "cronjob", "job", "replicaset", "pod"}
 # Patterns whose root cause is one component: its observed impact is the component itself (callers that fail as a
 # result are evidence, not scope), and a generic mechanism gives way to the concrete key fact.
-COMPONENT_LEVEL = {PARTIAL, "key-fact", "own-setting", "change", "dependency"}
-GENERIC_MECHANISM = {PARTIAL, "dependency"}
+COMPONENT_LEVEL = {PARTIAL, "key-fact", "own-setting", "change", "dependency", "arrival"}
+GENERIC_MECHANISM = {PARTIAL, "dependency", "arrival"}
 
 
 def describe_object(object_id: str) -> str:

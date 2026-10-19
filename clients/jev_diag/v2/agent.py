@@ -254,7 +254,7 @@ class V2Diagnoser(JevDiagnoser):
     ) -> Explanation | None:
         """An outside object (change or check finding) linked to the root-cause component, when the winner is that
         component itself: v1's "Fault object" line."""
-        if not cid or winner.pattern not in (PARTIAL, "key-fact", "own-setting", "change", "dependency"):
+        if not cid or winner.pattern not in (PARTIAL, "key-fact", "own-setting", "change", "dependency", "arrival"):
             return None
         comp = snapshot.components.get(cid) or {}
         me = f"{comp.get('kind', '').lower()}/{comp.get('namespace')}/{comp.get('name')}"
