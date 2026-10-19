@@ -339,6 +339,7 @@ def summarize_workload(obj: dict) -> dict:
     config_refs: dict[str, set] = {"secrets": set(), "configmaps": set()}
     containers = []
     env_hosts: set[str] = set()
+    env_addresses: set[str] = set()
     env_values: list[str] = []
     call_settings: dict[str, str] = {}
     for c in (pod_spec.get("initContainers") or []) + pod_spec.get("containers", []):
@@ -355,6 +356,7 @@ def summarize_workload(obj: dict) -> dict:
             if "value" in e and e.get("value") not in (None, ""):
                 env_values.append(str(e["value"]))
                 env_hosts |= checks.env_host_candidates(str(e["value"]))
+                env_addresses |= checks.env_addresses(str(e["value"]))
                 call_settings.update(paths.setting_pairs({e.get("name") or "": str(e["value"])}))
         for text in [*(c.get("command") or []), *(c.get("args") or [])]:
             env_hosts |= checks.command_host_candidates(str(text))
@@ -461,6 +463,7 @@ def summarize_workload(obj: dict) -> dict:
         "_meta": meta,
         "_template": template if kind in ("CronJob", "Job") else None,
         "_env_hosts": sorted(env_hosts),
+        "_env_addresses": sorted(env_addresses),
         "_env_values": env_values[:80],
         "_call_settings": call_settings,
         "_config_modes": checks.config_ref_modes(pod_spec),

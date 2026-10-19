@@ -15,6 +15,11 @@ examined too; a victim verdict moves the named dependency to the front of the
 queue; anything else moves on. A cluster node handles webhooks, quotas, DNS,
 roles, and stuck objects. A step budget caps cost; the fallback prefers an
 origin verdict, then the end of a strong victim chain, then triage.
+
+Before the conclusion stands, it is tested against what it depends on: when
+the concluded component still fails calling a dependency that is abnormal on
+its own, that dependency is examined, and if it is an origin too, the two are
+compared side by side for where the fault started.
 """
 
 from __future__ import annotations
@@ -45,6 +50,8 @@ from clients.jev_diag.v2.classifier import (
     select_fault_object,
 )
 from clients.jev_diag.v2.collector import ClusterSnapshot, estimate_tokens, fit_state_to_budget
+from clients.jev_diag.v2.deps import own_signals
+from clients.jev_diag.v2.derive import DEPENDENCY_CLASSES
 from clients.jev_diag.v2.report import build_report
 
 logger = logging.getLogger("all.jev_diag.v2.tree")
@@ -234,6 +241,7 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
             dep_items.append(f"dependency {cid} is abnormal on its own: {info['own_signals'][0]}")
         elif info.get("looks_healthy_on_its_own"):
             dep_items.append(f"dependency {cid} looks healthy on its own ({info.get('pods_ready')} pods ready)")
+    dep_items += [f"reachability {line}" for line in detail.get("reachability") or []]
     for src, classes in (detail.get("called_by_with_errors") or {}).items():
         dep_items.append(f"still-occurring errors from {src} name this component: {classes}")
     dep_items += list(detail.get("telemetry") or [])  # metrics after the dependency facts they support
@@ -318,7 +326,8 @@ def build_investigation_questions(
                     "still look healthy (a server whose password, ACL, or config changed fails its clients, not "
                     "itself). `candidate.detail.called_by_with_errors` lists components whose errors name this one. "
                     "`candidate.detail.probe`, when present, is the result of a health command run inside this "
-                    "component.",
+                    "component. `candidate.detail.reachability`, when present, says whether each dependency's name "
+                    "resolves and its port accepts connections from inside `candidate`'s pod.",
                     "Pending, terminating, not-ready, or restarting pods are symptoms, not a verdict by themselves.",
                     "`telemetry_export_error_lines` and `telemetry_error_samples` are failures to export traces, "
                     "metrics, or logs to the telemetry pipeline. They do not break application requests and are "
@@ -553,6 +562,25 @@ def explained_by(snapshot: ClusterSnapshot, cid: str | None, fault_object: dict 
                 out.add(other)
                 grew = True
     return out
+
+
+def explaining_dependency(snapshot: ClusterSnapshot, cid: str, investigated: dict) -> str | None:
+    """A dependency that may explain `cid`'s own failure: `cid`'s still-occurring errors are failed calls, and the
+    dependency (deps.py graph or named by those errors) is abnormal on its own and not examined yet. The one with
+    the most own signals is returned."""
+    comp = snapshot.components.get(cid) or {}
+    if not any(set(f.get("classes") or []) & DEPENDENCY_CLASSES for f in comp.get("log_findings") or []):
+        return None
+    deps = set(comp.get("_deps") or {}) | set(comp.get("errors_point_to") or [])
+    candidates = [
+        d
+        for d in sorted(deps)
+        if d in snapshot.components
+        and d not in investigated
+        and snapshot.components[d].get("role") != "observability"
+        and (own_signals(snapshot.components[d]) or not snapshot.components[d].get("pods"))
+    ]
+    return max(candidates, key=lambda d: len(own_signals(snapshot.components[d])), default=None)
 
 
 def unexplained_frontier(
@@ -1161,6 +1189,23 @@ class IterativeDiagnoser(JevDiagnoser):
             second = None
 
         info = self._characterize(snapshot, concluded, investigated, kind, cluster_pick, fallback_reason)
+        if not (paired or pair_decided) and concluded in investigated and len(steps) < self.max_steps:
+            dep = explaining_dependency(snapshot, concluded, investigated)
+            if dep:
+                # The conclusion still fails calling a broken dependency: is that dependency where the fault started?
+                self._trace("decide", "dependency_check", concluded=concluded, dependency=dep)
+                remaining = [c for c in snapshot.components if c != dep and c not in investigated]
+                investigated[dep] = self.investigate(snapshot, dep, component, investigated, remaining)
+                steps.append(self._step(len(steps) + 1, dep, investigated[dep]))
+                self._trace("decide", "step", **steps[-1])
+                if investigated[dep]["origin_p"] >= MIN_ORIGIN_PROBABILITY:
+                    reason = (
+                        f"{concluded} still fails calling {dep}, which was also judged an origin in its own examination"
+                    )
+                    picks = self.tiebreak(snapshot, concluded, dep, investigated, reason, allow_both=False)
+                    if picks[0] != concluded:
+                        concluded = picks[0]
+                        info = self._characterize(snapshot, concluded, investigated, kind, None, None)
         if not (paired or pair_decided) and concluded in investigated and len(steps) < self.max_steps:
             explained = explained_by(snapshot, concluded, info["fault_object"])
             frontier = unexplained_frontier(snapshot, explained, investigated, component)

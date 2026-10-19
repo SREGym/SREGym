@@ -32,6 +32,30 @@ def enabled() -> bool:
     return _available
 
 
+CALL_GRAPH_MINUTES = 15
+
+
+def observed_calls() -> list[dict]:
+    """The tracing backend's call graph over the last minutes: [{"parent", "child", "calls"}] by service name
+    (empty when telemetry is unavailable)."""
+    if not enabled():
+        return []
+    from clients.jev_agent import mcp
+
+    try:
+        text = mcp.call_mcp("jaeger", "get_dependency_graph", {"last_n_minutes": CALL_GRAPH_MINUTES})
+        data = mcp.parse_py_literal(text)
+    except Exception as exc:  # noqa: BLE001 - no call graph: the other dependency sources remain
+        logger.info("call graph: %s", exc)
+        return []
+    items = data.get("data") if isinstance(data, dict) else data
+    return [
+        {"parent": e.get("parent"), "child": e.get("child"), "calls": int(e.get("callCount") or 0)}
+        for e in items or []
+        if isinstance(e, dict) and e.get("parent") and e.get("child")
+    ]
+
+
 def component_lines(snapshot, cid: str) -> list[str]:
     """Metric and call-edge facts for one component (empty when telemetry is unavailable)."""
     if not enabled():

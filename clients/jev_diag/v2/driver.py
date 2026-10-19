@@ -183,17 +183,26 @@ def read_cluster(
             include_logs=not args.no_logs,
             trend_baseline=baseline,
         )
+    from clients.jev_diag.v2 import telemetry
+    from clients.jev_diag.v2.derive import post_process
+
+    rederive = False
+    if not standalone:
+        with trace.timed("collect", "observed_calls") as info:
+            snapshot.cluster["_observed_calls"] = telemetry.observed_calls()
+            info["edges"] = len(snapshot.cluster["_observed_calls"])
+        rederive = bool(snapshot.cluster["_observed_calls"])
     if args.exec_probes:
         from clients.jev_diag.v2 import probes
-        from clients.jev_diag.v2.derive import post_process
 
         with trace.timed("collect", "broker_progress") as info:
             skipped: dict = {}
             stalled = probes.broker_progress(snapshot, None, skipped=skipped)
             info["stalled"] = stalled
             info["skipped"] = skipped
-        if stalled:
-            post_process(snapshot)
+        rederive = rederive or bool(stalled)
+    if rederive:
+        post_process(snapshot)
     return snapshot
 
 
