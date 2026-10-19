@@ -19,6 +19,7 @@ from clients.jev_diag.v2.derive import TELEMETRY_RE
 
 MAX_DETAILS = 4
 MAX_AFFECTED = 3
+MAX_OBSERVED = 5
 QUOTE_CHARS = 160
 CONFIG_KINDS = ("ConfigMap", "Secret")
 SAME_CHANGE_SECONDS = 10  # one change applied to several workloads lands within this window
@@ -143,6 +144,9 @@ def subject(snapshot: ClusterSnapshot, d: Diagnosis) -> tuple[str, str | None]:
     if comp is not None and d.blocked_input:
         blocked = d.blocked_input
         source = blocked.get("topic") or blocked.get("input")
+        env = re.match(r"env (\S+?)=(.+)", str(source or ""))
+        if env:
+            source = f"{env.group(2)}` (named by env `{env.group(1)}"
         if source:
             return f"the input `{source}` consumed by {describe(comp['kind'], comp['name'], comp['namespace'])}", None
     path = None if d.blocked_input else feedback_path(snapshot, d)
@@ -233,11 +237,7 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     if comp:
         shown = "\n".join(lines)
         state = [s for s in comp.get("signals") or [] if STATE_WORDS.search(s) and s.rstrip(".") not in shown][:2]
-        pods = comp.get("pods") or []
-        all_ready = bool(pods) and all(
-            str(p.get("ready", "0/1")).split("/")[0] == str(p.get("ready", "0/1")).split("/")[-1] for p in pods
-        )
-        effects = [s.rstrip(".") for s in state] or (["its pods are Running and Ready"] if all_ready else [])
+        effects = [s.rstrip(".") for s in state]
         classes: dict[str, int] = {}
         for by_class in (comp.get("referenced_by_errors_from") or {}).values():
             for klass, n in by_class.items():
@@ -247,6 +247,12 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
             effects.append(f"its callers see {seen}")
         if effects:
             lines.append(f"Effect: {'; '.join(effects)}.")
+        # the cause's other own facts, so every part involved (containers, jobs, accounts) is named
+        shown = "\n".join(lines)
+        observed = [x.rstrip(".") for x in comp.get("signals") or [] if not x.startswith(_POINTERS)]
+        observed = [x for x in dict.fromkeys(observed) if x not in shown][:MAX_OBSERVED]
+        if observed:
+            lines.append("Observed: " + "; ".join(observed) + ".")
 
     affected: list[str] = []
     for src, by_class in sorted(
