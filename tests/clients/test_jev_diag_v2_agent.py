@@ -118,3 +118,19 @@ def test_every_answer_gets_v1s_key_evidence_and_fault_type_and_the_linked_outsid
         "Fault type: config value" in diag.text
         and "Fault object: networkpolicy `deny` in namespace `shop`" in diag.text
     )
+
+
+def test_a_slow_pre_read_still_gets_one_decision_and_never_crashes(monkeypatch):
+    import clients.jev_diag.v2.agent as agent_mod
+
+    clock = [0.0]
+    monkeypatch.setattr(agent_mod.time, "monotonic", lambda: clock[0])
+    snap = snapshot()
+    snap.components["deployment/edge-proxy"]["healthy"] = True
+
+    def slow_read(s, cid):
+        clock[0] += 121  # the read alone uses up the whole time budget
+        return {}
+
+    diag = V2Diagnoser(client=Client("change 'container envoy"), fetch_detail=slow_read).diagnose(snap)
+    assert len(diag.investigation["rounds"]) == 1 and diag.text.startswith("Root cause")
