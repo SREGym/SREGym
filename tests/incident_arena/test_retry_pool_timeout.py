@@ -32,13 +32,13 @@ def oracle(offline_port_cluster):
     return result
 
 
-@pytest.mark.parametrize("timeout", [0, 0.1, 0.25, 0.5, 1.0, 30.0])
+@pytest.mark.parametrize("timeout", [0.01, 0.1, 0.25, 0.5, 1.0, 30.0])
 def test_bounded_pool_wait_is_not_rejected_before_behavioral_replay(oracle, timeout):
     oracle.problem.pool_timeout = timeout
     assert oracle._policy_outside_envelope() is None
 
 
-@pytest.mark.parametrize("timeout", [-1, 31, float("inf"), float("nan")])
+@pytest.mark.parametrize("timeout", [0, -1, 31, float("inf"), float("nan")])
 def test_invalid_pool_wait_still_fails(oracle, timeout):
     oracle.problem.pool_timeout = timeout
     assert oracle._policy_outside_envelope()["reason"] == "backend_pool_outside_safe_envelope"
