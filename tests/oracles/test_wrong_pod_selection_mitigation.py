@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from kubernetes.client.rest import ApiException
 
@@ -135,6 +136,20 @@ def test_accepts_frontend_only_ready_endpoints_and_connectivity():
     command = core_v1.created[0][1].spec.containers[0].command[-1]
     assert "frontend.hotel-reservation.svc.cluster.local 5000" in command
     assert len(core_v1.deleted) == 1
+
+
+def test_empty_endpoint_slice_decode_error_still_fails_as_no_endpoints():
+    oracle, core_v1 = _oracle([], [_pod("frontend-abc", "frontend", "frontend-rs")])
+    oracle.discovery_v1.list_namespaced_endpoint_slice = Mock(
+        side_effect=ValueError("Invalid value for `endpoints`, must not be `None`")
+    )
+    core_v1.read_namespaced_endpoints = Mock(return_value=SimpleNamespace(subsets=[]))
+
+    result = oracle.evaluate()
+
+    assert result["success"] is False
+    assert result["reason"] == "no_ready_endpoints"
+    assert not core_v1.created
 
 
 def test_rejects_ready_search_endpoint_selected_by_frontend_service():

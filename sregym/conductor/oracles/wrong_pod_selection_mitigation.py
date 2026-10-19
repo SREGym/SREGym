@@ -241,7 +241,9 @@ class WrongPodSelectionMitigationOracle(Oracle):
                     if endpoint.target_ref and endpoint.target_ref.kind == "Pod" and ready is True:
                         pod_names.add(endpoint.target_ref.name)
             return pod_names
-        except ApiException as exc:
+        except (ApiException, ValueError) as exc:
+            # Some client versions reject the API's null endpoints field on
+            # an empty slice. The legacy API still reports that route safely.
             print(f"EndpointSlice lookup failed, falling back to Endpoints API: {exc}")
 
         endpoints = kubectl.core_v1_api.read_namespaced_endpoints(service_name, namespace)
