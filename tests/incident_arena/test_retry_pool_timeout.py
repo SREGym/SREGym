@@ -1,6 +1,7 @@
 from unittest.mock import Mock
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.apps.slack_spine.retry_storm import RetryStormMitigationOracle
 from sregym.conductor.problems.apps.slack_spine.retry_storm import RetryStormCollapseIA
@@ -58,3 +59,23 @@ def test_short_pool_wait_does_not_allow_disabled_policy_checks(oracle):
     oracle.problem.pool_timeout = 0.5
     oracle._container_env.return_value = ({"AUTHZ_CHECK": "0", "WORKSPACE_POLICY_CHECK": "0"}, 1)
     assert oracle._policy_outside_envelope()["reason"] == "policy_check_disabled"
+
+
+@pytest.mark.parametrize("role", ["message", "channel", "workspace"])
+@pytest.mark.parametrize("missing", [False, True])
+def test_removed_capacity_is_rejected_before_contacting_the_services(oracle, role, missing):
+    original = oracle._container_env.return_value
+
+    def environment(requested):
+        if requested == role:
+            if missing:
+                raise ApiException(status=404)
+            return original[0], 0
+        return original
+
+    oracle._container_env.side_effect = environment
+    result = oracle._policy_outside_envelope()
+    assert result["reason"] == ("required_deployment_missing" if missing else "required_deployment_scaled_to_zero")
+    assert result["failure_class"] == ("ambiguous" if missing else "agent_error")
+    assert result["detail"]["deployment"] == f"svc-{role}"
+    oracle.problem.admin_all.assert_not_called()
