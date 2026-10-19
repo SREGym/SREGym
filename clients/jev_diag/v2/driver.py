@@ -44,42 +44,7 @@ def run(
         trace.record("setup", "app_info", source="conductor", app_info=app_info)
     logger.info("Diagnosing %s in namespaces %s", app_info.get("app_name"), app_info.get("namespaces"))
 
-    delay = 0.0 if standalone else max(0.0, args.start_delay)
-    interval = (
-        args.trend_interval if args.trend_interval is not None else (0.0 if standalone else host.DEFAULT_TREND_INTERVAL)
-    )
-    interval = max(0.0, interval)
-    if delay - interval > 0:
-        logger.info("Waiting %.0fs before reading the cluster so the fault has time to surface", delay)
-        with trace.timed("setup", "start_delay", seconds=delay - interval):
-            time.sleep(delay - interval)
-    baseline = None
-    if interval > 0:
-        from clients.jev_diag.v2 import trend
-
-        with trace.timed("collect", "trend_baseline", interval=interval):
-            baseline = trend.collect_sample(list(app_info.get("namespaces") or [app_info.get("namespace")]))
-        time.sleep(interval)
-
-    with trace.timed("collect", "snapshot", include_logs=not args.no_logs, log_tail=args.log_tail):
-        snapshot = collect_snapshot(
-            app_info,
-            log_tail=args.log_tail,
-            alerts_fetcher=None if (args.no_alerts or standalone) else fetch_alerts_via_mcp,
-            include_logs=not args.no_logs,
-            trend_baseline=baseline,
-        )
-    if args.exec_probes:
-        from clients.jev_diag.v2 import probes
-        from clients.jev_diag.v2.derive import post_process
-
-        with trace.timed("collect", "broker_progress") as info:
-            skipped: dict = {}
-            stalled = probes.broker_progress(snapshot, None, skipped=skipped)
-            info["stalled"] = stalled
-            info["skipped"] = skipped
-        if stalled:
-            post_process(snapshot)
+    snapshot = collect(args, app_info, trace, standalone, host)
     trace.record("collect", "summary", **host.collection_summary(snapshot))
     host.write_json(
         prefix.with_name(prefix.name + "_snapshot.json"),
@@ -103,16 +68,7 @@ def run(
         results["success"] = True
         return "dry_run"
 
-    probe = None
-    if args.exec_probes:
-        from clients.jev_diag.v2.probes import backend_probe as probe
-    diagnoser = IterativeDiagnoser(
-        fetch_detail=collect_component_detail,
-        max_steps=args.max_steps,
-        probe=probe,
-        state_token_budget=args.state_token_budget,
-        trace=trace,
-    )
+    diagnoser = make_diagnoser(args, trace)
     try:
         diagnosis = diagnoser.diagnose(snapshot)
     finally:
@@ -154,3 +110,59 @@ def run(
         }
     )
     return "ok" if submission is not None or args.no_submit or standalone else "submit_failed"
+
+
+def collect(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standalone: bool, host: ModuleType):
+    """Wait for the fault to surface, then read the cluster into a snapshot (v2's collection)."""
+    delay = 0.0 if standalone else max(0.0, args.start_delay)
+    interval = (
+        args.trend_interval if args.trend_interval is not None else (0.0 if standalone else host.DEFAULT_TREND_INTERVAL)
+    )
+    interval = max(0.0, interval)
+    if delay - interval > 0:
+        logger.info("Waiting %.0fs before reading the cluster so the fault has time to surface", delay)
+        with trace.timed("setup", "start_delay", seconds=delay - interval):
+            time.sleep(delay - interval)
+    baseline = None
+    if interval > 0:
+        from clients.jev_diag.v2 import trend
+
+        with trace.timed("collect", "trend_baseline", interval=interval):
+            baseline = trend.collect_sample(list(app_info.get("namespaces") or [app_info.get("namespace")]))
+        time.sleep(interval)
+
+    with trace.timed("collect", "snapshot", include_logs=not args.no_logs, log_tail=args.log_tail):
+        snapshot = collect_snapshot(
+            app_info,
+            log_tail=args.log_tail,
+            alerts_fetcher=None if (args.no_alerts or standalone) else fetch_alerts_via_mcp,
+            include_logs=not args.no_logs,
+            trend_baseline=baseline,
+        )
+    if args.exec_probes:
+        from clients.jev_diag.v2 import probes
+        from clients.jev_diag.v2.derive import post_process
+
+        with trace.timed("collect", "broker_progress") as info:
+            skipped: dict = {}
+            stalled = probes.broker_progress(snapshot, None, skipped=skipped)
+            info["stalled"] = stalled
+            info["skipped"] = skipped
+        if stalled:
+            post_process(snapshot)
+    return snapshot
+
+
+def make_diagnoser(args: argparse.Namespace, trace: DecisionTrace, client=None) -> IterativeDiagnoser:
+    """v2's diagnoser; `client` overrides the decision model client (one per arm in experiments)."""
+    probe = None
+    if args.exec_probes:
+        from clients.jev_diag.v2.probes import backend_probe as probe
+    return IterativeDiagnoser(
+        client,
+        fetch_detail=collect_component_detail,
+        max_steps=args.max_steps,
+        probe=probe,
+        state_token_budget=args.state_token_budget,
+        trace=trace,
+    )
