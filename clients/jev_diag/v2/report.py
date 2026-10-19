@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2 import checks, paths
 from clients.jev_diag.v2.classifier import CARRIER_KINDS, Diagnosis
-from clients.jev_diag.v2.collector import ClusterSnapshot
+from clients.jev_diag.v2.collector import ClusterSnapshot, is_error_line
 from clients.jev_diag.v2.derive import TELEMETRY_RE
 
 MAX_DETAILS = 4
@@ -36,6 +36,7 @@ STATE_WORDS = re.compile(
 _CAUSAL = re.compile(r"(?i)\bso\b|because|which (?:is|are|blocks|prevents)")
 _POINTERS = ("errors logged by", "server ")
 _CONTAINER = re.compile(r"\bcontainer \S+ ")
+_NAME_PREFIX = re.compile(r"^(?:\[pod/[^\]]+\]\s?)?[a-z0-9][a-z0-9./-]{0,58}: ")
 _TIMESTAMP = re.compile(r"^\[?\S*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s\]]*\]?\s*")
 _JSON_MSG = re.compile(r'"msg"\s*:\s*"(?P<msg>[^"]+)"')
 _JSON_ERR = re.compile(r'"(?:error|errmsg|reason)"\s*:\s*"(?P<err>[^"]+)"')
@@ -55,7 +56,8 @@ def component_phrase(comp: dict, *, both_kinds: bool) -> str:
 
 def quote(line: str) -> str:
     """One log line as quotable text: the message of a structured line, without timestamps or the container prefix."""
-    body = line.split(": ", 1)[1] if ": " in line[:60] and not line.lstrip().startswith("{") else line
+    prefix = _NAME_PREFIX.match(line)  # "container-name: " as the collector writes it, never "FATAL: " etc.
+    body = line[prefix.end() :] if prefix else line
     msg = _JSON_MSG.search(body)
     if msg:
         err = _JSON_ERR.search(body)
@@ -65,13 +67,14 @@ def quote(line: str) -> str:
 
 
 def own_error_line(comp: dict) -> str | None:
-    """The component's own still-occurring error line, else the last line its crashed container printed."""
+    """The component's own still-occurring error line, else the last error line its crashed container printed (a
+    crashed container's last line is often a harmless startup notice, so only lines that read as errors count)."""
     for sig in comp.get("log_signals") or []:
         if sig.get("state") != "stopped" and sig.get("line") and not TELEMETRY_RE.search(sig["line"]):
             return quote(sig["line"])
     for lines in (comp.get("previous_container_logs") or {}).values():
         for line in reversed(lines or []):
-            if line.strip():
+            if is_error_line(line) and not TELEMETRY_RE.search(line):
                 return quote(line)
     return None
 

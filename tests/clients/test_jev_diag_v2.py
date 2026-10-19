@@ -646,3 +646,14 @@ def test_queue_puts_the_top_workload_before_the_cluster_node_and_telemetry_last(
     kind = ChoiceResult(choice="node_or_cluster", confidence=0.6, probabilities={"node_or_cluster": 0.6})
     queue = IterativeDiagnoser(_Answers([], {}), fetch_detail=lambda s, c: {}).initial_queue(snap, triage, kind)
     assert queue == ["deployment/front", OTHER_OPTION, "deployment/otel"]
+
+
+def test_a_crashed_containers_quote_is_its_last_error_line_not_a_startup_notice():
+    from clients.jev_diag.v2.report import own_error_line
+
+    logs = ["starting server", "FATAL: data files are incompatible with this version", "We suggest setting x to 0"]
+    assert (
+        own_error_line({"previous_container_logs": {"c": logs}})
+        == "FATAL: data files are incompatible with this version"
+    )
+    assert own_error_line({"previous_container_logs": {"c": ["starting server", "listening on 8080"]}}) is None
