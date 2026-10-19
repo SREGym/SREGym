@@ -613,6 +613,8 @@ def test_a_caller_retrying_into_a_capped_callee_is_reported_as_the_call_path():
     found = paths.call_paths(comps)
     assert found[0]["caller_settings"] == ["B_RPC_TIMEOUT_MS=750", "B_RPC_MAX_ATTEMPTS=3"]
     assert found[0]["feedback_loop"] and comps["deployment/b"]["call_paths"]
+    loop = "a retries a timed-out call (B_RPC_MAX_ATTEMPTS=3), adding requests to b, which caps its throughput"
+    assert loop in comps["deployment/b"]["call_paths"][0] and "multiplies" not in comps["deployment/b"]["call_paths"][0]
     snap = _snap(comps)
     snap.cluster["call_paths"] = found
     assert report.build_report(snap, _diag("deployment/b")).startswith("Root cause: Deployment `b`")  # model's pick

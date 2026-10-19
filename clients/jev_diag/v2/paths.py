@@ -5,9 +5,9 @@ The facts are both sides' call settings: on the caller, timeouts, deadlines, ret
 the settings that cap how much work it takes (rate limits, queues, workers, concurrency). A setting is read by its
 name and needs a numeric value; telemetry and tracing settings are left out. No value is judged here.
 
-A path is a feedback loop when the caller retries timed-out calls and the callee caps its throughput: each slow
-period multiplies the requests the callee receives, which keeps it at its cap. Only then is the path itself reported
-as the cause (report.subject); otherwise its facts are details of the component.
+A path is marked a feedback loop when the caller has a retry and a timeout setting for the callee and the callee has
+a capacity setting. That is read from the settings alone; no request rate or latency is measured, so the text
+states only the settings.
 """
 
 from __future__ import annotations
@@ -145,8 +145,9 @@ def describe(path: dict, names: dict[str, str]) -> str:
     if path["callee_settings"]:
         text += f"; {callee}'s capacity settings: {', '.join(path['callee_settings'])}"
     if path["feedback_loop"]:
+        retry = next(s for s in path["caller_settings"] if RETRY_SETTING.search(s.split("=")[0]))
         text += (
-            f"; {caller} retries calls that time out, so every slow period multiplies the requests {callee} receives "
-            "while it is capped"
+            f"; {caller} retries a timed-out call ({retry}), adding requests to {callee}, which caps its throughput "
+            f"({path['callee_settings'][0]})"
         )
     return text
