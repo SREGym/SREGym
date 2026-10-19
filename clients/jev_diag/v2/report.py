@@ -1,13 +1,13 @@
 """The submitted diagnosis, built by code from the investigation's choices and the collected facts. No model
 writes text.
 
-Lines, in this order: Root cause, Mechanism, Details, Effect, Observed, Affected. The subject of the root-cause
+Lines, in this order: Root cause, Mechanism, Fault type, Details, Effect, Observed, Affected. The subject of the root-cause
 sentence is the object that holds the bad value or the bad state, and the other object involved is named in the same
 sentence with its relation. Which object that is depends on the kind of relation (RELATIONS: a blocked input, a
 retry call path, a job driving a failing component, an object carrying the bad value, one change on several
 workloads, or the workload itself). Changed values are written old -> new. Callers with symptoms are listed as
-affected, never as causes. There is no fault-category line and no probabilities. A second, independent cause gets its
-own block.
+affected, never as causes. The fault type is the investigation's cause category in v1's words; there are no
+probabilities. A second, independent cause gets its own block.
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from clients.jev_diag.classifier import CATEGORY_GLOSS
 from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2 import checks, paths
-from clients.jev_diag.v2.classifier import CARRIER_KINDS, Diagnosis
+from clients.jev_diag.v2.classifier import CARRIER_KINDS, OTHER_OPTION, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot, is_error_line
 from clients.jev_diag.v2.derive import DEPENDENCY_CLASSES, TELEMETRY_RE
 
@@ -380,6 +381,9 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
             parts.append(pick.rstrip("."))
     if parts:
         lines.append("Mechanism: " + "; ".join(dict.fromkeys(parts)) + ".")
+    category = d.category_result.choice if d.category_result else None
+    if category in CATEGORY_GLOSS and category != OTHER_OPTION:
+        lines.append(f"Fault type: {category.replace('_', ' ')} ({CATEGORY_GLOSS[category]}).")
 
     details = [c for c in changes if c != fact]
     for step in (d.investigation or {}).get("steps") or []:

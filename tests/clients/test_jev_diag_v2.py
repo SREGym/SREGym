@@ -265,7 +265,7 @@ def _snap(comps: dict):
     return v2_collector.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster={})
 
 
-def test_report_leads_with_the_changed_workload_and_has_no_fault_type_line():
+def test_report_leads_with_the_changed_workload_and_states_the_fault_type():
     from clients.jev_diag.v2.report import build_report
 
     comp = {
@@ -276,7 +276,8 @@ def test_report_leads_with_the_changed_workload_and_has_no_fault_type_line():
     }
     text = build_report(_snap({"deployment/frontend": comp}), _diag("deployment/frontend", "env CART_ADDR removed"))
     assert text.startswith("Root cause: Deployment `frontend` in namespace `shop`: env CART_ADDR removed.")
-    assert "Fault type" not in text and "Effect: only 0 of 1 desired replicas are ready." in text
+    assert "\nFault type: config value (a wrong, missing, or shadowed value in this component's own configuration).\n" in text
+    assert "Effect: only 0 of 1 desired replicas are ready." in text
 
 
 def test_report_names_the_owning_component_through_its_configmap_and_an_outside_object_first():
