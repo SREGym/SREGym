@@ -243,9 +243,6 @@ class EdgeRequestFilterIA(EdgeRequestFilterCPUSaturation):
         self.regex_env = "WAF_RULE_REGEX"
         self.bad_regex = "^([a-zA-Z]+)*$"
         self.safe_regex = "^[A-Za-z]+$"
-        # Frappe's nginx rejects a 5000-character URI; 4000 still backtracks
-        # catastrophically against the vulnerable rule.
-        self.crafted_payload = "a" * 4000 + "!"
         self.probe_host_header = site_host
         self.cpu_limit = "100m"
         self.memory_limit = "65Mi"
