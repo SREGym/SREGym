@@ -285,10 +285,13 @@ def _run_wait(monkeypatch, samples):
 
 
 def test_adaptive_wait_reads_early_once_the_same_pods_stay_abnormal(monkeypatch):
-    crash = {"pods": {"shop/a-1": {"phase": "Running", "restarts": {"a": 3}}}}
-    ok = {"pods": {"shop/a-1": {"phase": "Running", "restarts": {"a": 0}}}}
-    assert _run_wait(monkeypatch, [crash, crash]) == 60  # 45 s minimum, one poll
-    assert _run_wait(monkeypatch, [ok] * 10) == 120  # nothing abnormal in pods: v1's full wait
+    def pod(restarts: int) -> dict:
+        return {"pods": {"shop/a-1": {"phase": "Running", "restarts": {"a": restarts}}}}
+
+    # restarting again and again after the baseline: read once stable and a trend window has passed (45 + 45 s)
+    assert _run_wait(monkeypatch, [pod(1), pod(2), pod(3), pod(4), pod(5)]) == 90
+    # restarts left over from the application's start-up are not a fault surfacing: v1's full wait
+    assert _run_wait(monkeypatch, [pod(3)] * 10) == 120
 
 
 def test_outside_objects_link_to_the_components_they_act_on(monkeypatch):
