@@ -30,7 +30,7 @@ SAME_CHANGE_SECONDS = 10  # one change applied to several workloads lands within
 # Signals that state the component's own condition (used for the Effect line).
 STATE_WORDS = re.compile(
     r"(?i)desired replicas are ready|CrashLoopBackOff|OOMKilled|ready endpoints|Pending|Unschedulable|"
-    r"ImagePullBackOff|ErrImagePull|not ready|restarted|terminat|evicted|at its limit|failed to start|"
+    r"ImagePullBackOff|ErrImagePull|not ready|restarted\b|terminat|evicted|at its limit|failed to start|"
     r"complet|still active|pile up"
 )
 _CAUSAL = re.compile(r"(?i)\bso\b|because|which (?:is|are|blocks|prevents)")
@@ -120,8 +120,8 @@ def users_of(snapshot: ClusterSnapshot, fo: dict) -> list[str]:
 
 
 def feedback_path(snapshot: ClusterSnapshot, d: Diagnosis) -> dict | None:
-    """The retry/capacity loop the concluded component is one end of, when the fault object is not a config
-    object (a ConfigMap holding the settings is the subject itself)."""
+    """The call path the investigation located the fault on (the decision model chose it), unless a ConfigMap or
+    Secret holding the settings is the fault object, which then is the subject itself."""
     fo = d.fault_object
     if fo and fo["kind"] in CONFIG_KINDS:
         return None
@@ -248,7 +248,9 @@ def fault_object_cause(snapshot: ClusterSnapshot, d: Diagnosis, comp: dict) -> C
         return None
     phrase = describe(fo["kind"], fo["name"], fo.get("namespace"))
     if not comp:
-        return Cause(subject=phrase)
+        users = [snapshot.components[c] for c in users_of(snapshot, fo)][:MAX_AFFECTED]
+        acted = ", ".join(_where(u) for u in users)
+        return Cause(subject=f"{phrase}, acting on {acted}" if acted else phrase, broken=users[0] if users else None)
     outside = not fo.get("namespace") or fo.get("namespace") not in set(snapshot.app.get("namespaces") or [])
     if fo["kind"] in CARRIER_KINDS or fo["kind"] == "NetworkPolicy" or outside:
         return Cause(subject=f"{phrase}, acting on {_where(comp)}", broken=comp)
@@ -337,7 +339,13 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     head = f"Root cause: {cause.subject}" + (f", {cause.related}" if cause.related else "")
     lines = [head + (f": {fact.rstrip('.')}." if fact else ".")]
 
-    lead = blocked_mechanism(d.blocked_input) if d.blocked_input and comp else (fo or {}).get("signal")
+    rejecting = [
+        (sid, s)
+        for sid, s in snapshot.components.items()
+        if d.component in (s.get("login_candidates") or []) and sid != d.component
+    ]
+    login = next((x for x in comp.get("signals") or [] if x.startswith("server ") and "rejects logins" in x), None)
+    lead = blocked_mechanism(d.blocked_input) if d.blocked_input and comp else (login or (fo or {}).get("signal"))
     parts = [m.rstrip(".") for m in [lead, *cause.mechanism] if m and m != fact]
     error = own_error_line(comp) if comp and cause.own_error else None
     if error and (not fact or error not in fact):
@@ -384,6 +392,9 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
             lines.append("Observed: " + "; ".join(observed) + ".")
 
     affected: list[str] = []
+    for _, server in rejecting[:MAX_AFFECTED]:
+        why = next((x for x in server.get("signals") or [] if "rejects logins" in x), "rejects its logins")
+        affected.append(f"{describe(server['kind'], server['name'], server.get('namespace'))}: {why.rstrip('.')}")
     for src, by_class in sorted(
         (broken.get("referenced_by_errors_from") or {}).items(), key=lambda kv: -sum(kv[1].values())
     )[:MAX_AFFECTED]:
@@ -394,6 +405,7 @@ def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     if fo and not affected:
         others = [c for c in users_of(snapshot, fo) if c != d.component][:MAX_AFFECTED]
         affected += [describe(snapshot.components[c]["kind"], snapshot.components[c]["name"], None) for c in others]
+    affected = [a for a in affected if a.split(":", 1)[0] not in lines[0]]
     if affected:
         lines.append("Affected (symptoms only, not causes): " + "; ".join(affected) + ".")
     return "\n".join(lines)

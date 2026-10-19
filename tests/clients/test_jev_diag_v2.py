@@ -553,3 +553,93 @@ def test_a_job_driving_a_failing_component_and_a_topic_input_are_named_as_the_br
     d = _diag("deployment/reader", blocked_input={"source": "logs", "input": "env IN_TOPIC=events-x"})
     text = build_report(_snap({"deployment/reader": consumer, "deployment/queue-a": broker}), d)
     assert text.startswith("Root cause: the Kafka topic `events-x` (named by env `IN_TOPIC`) consumed by Deployment")
+
+
+def test_a_decided_client_server_pair_is_not_reported_as_two_causes():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    server = {
+        **_comp("db", "t"),
+        "signals": ["server rejects logins for account app (12 lines, still occurring)"],
+        "evidence_kinds": ["own_failure_logs", "symptoms"],
+        "login_candidates": ["deployment/client"],
+        "healthy": False,
+    }
+    client_comp = {**_comp("client", "t"), "signals": ["s"], "evidence_kinds": ["configuration", "symptoms"]}
+    snap = _snap({"deployment/db": server, "deployment/client": client_comp, "deployment/c": _comp("c", "t")})
+    triage = [{"deployment/db": 0.8, "deployment/client": 0.15, "deployment/c": 0.05, "other": 0.0}] * 2
+    picks = {"fault_category": "credentials_or_auth", "faulty_side": "deployment/client", "fault_start": "both"}
+    client = _Answers(triage, {"deployment/db": 0.9, "deployment/client": 0.95}, picks=picks)
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap)
+    assert d.component == "deployment/client" and d.second is None
+
+
+def test_a_model_failure_after_an_origin_is_confirmed_keeps_that_origin():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    class FailsAfter(_Answers):  # the decision model stops answering after triage (2 asks) and one examination
+        calls = 0
+
+        def system_one(self, state, questions, **kwargs):
+            self.calls += 1
+            if self.calls > 3:
+                raise RuntimeError("Decisions API HTTP 402: insufficient credits")
+            return super().system_one(state, questions, **kwargs)
+
+    snap = _two_faults(link=False)
+    snap.components["deployment/a"]["evidence_kinds"] = ["configuration", "symptoms"]
+    snap.components["deployment/b"]["evidence_kinds"] = ["change", "symptoms"]
+    triage = [{"deployment/a": 0.8, "deployment/b": 0.15, "deployment/c": 0.05, "other": 0.0}] * 2
+    d = IterativeDiagnoser(
+        FailsAfter(triage, {"deployment/a": 0.95, "deployment/b": 0.9}), fetch_detail=lambda s, c: {}
+    ).diagnose(snap)
+    assert d.component == "deployment/a"
+
+
+def test_telemetry_lines_never_push_the_dependency_facts_out_of_the_evidence():
+    from clients.jev_diag.v2.tree import detail_evidence
+
+    comp = {**_comp("cart", "t"), "signals": [f"signal {i}" for i in range(30)]}  # a long list of settings/signals
+    detail = {
+        "telemetry": [f"cpu metrics: line {i}" for i in range(6)],
+        "failing_targets": ["deployment/valkey-cart"],
+        "calls": {"deployment/valkey-cart": {"looks_healthy_on_its_own": True, "pods_ready": "1/1"}},
+    }
+    texts = [e["text"] for e in detail_evidence(comp, detail)]
+    assert any("refer to its dependency deployment/valkey-cart" in x for x in texts)
+    assert any("deployment/valkey-cart looks healthy on its own" in x for x in texts)
+
+
+def test_two_confirmed_origins_that_share_a_config_object_are_never_two_causes():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    snap = _two_faults(link=False)
+    for cid in ("deployment/a", "deployment/b"):
+        snap.components[cid]["config_objects"] = {"configmap/shared": {"keys": ["k"]}}
+    triage = [{"deployment/a": 0.8, "deployment/b": 0.15, "deployment/c": 0.05, "other": 0.0}] * 2
+    # the model would say "both", but linked sides are never offered that option; an unclear answer keeps the stronger
+    client = _Answers(triage, {"deployment/a": 0.95, "deployment/b": 0.9}, picks={"fault_start": "both"})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap)
+    assert d.investigation["fallback"] is None
+    assert d.component == "deployment/a" and d.second is None
+    assert [s["component"] for s in d.investigation["steps"]] == ["deployment/a", "deployment/b"]
+
+
+def test_queue_puts_the_top_workload_before_the_cluster_node_and_telemetry_last():
+    from clients.jev_diag.v2.classifier import ChoiceResult
+    from clients.jev_diag.v2.tree import OTHER_OPTION, IterativeDiagnoser
+
+    comps = {
+        "deployment/otel": {**_comp("otel", "t"), "role": "observability", "evidence_kinds": ["change"]},
+        "deployment/front": {**_comp("front", "t"), "evidence_kinds": ["configuration", "symptoms"]},
+    }
+    snap = _snap(comps)
+    snap.cluster["findings"] = [{"kind": "ConfigMap", "name": "coredns", "signal": "written", "components": []}]
+    triage = ChoiceResult(
+        choice=OTHER_OPTION,
+        confidence=0.5,
+        probabilities={OTHER_OPTION: 0.5, "deployment/otel": 0.3, "deployment/front": 0.2},
+    )
+    kind = ChoiceResult(choice="node_or_cluster", confidence=0.6, probabilities={"node_or_cluster": 0.6})
+    queue = IterativeDiagnoser(_Answers([], {}), fetch_detail=lambda s, c: {}).initial_queue(snap, triage, kind)
+    assert queue == ["deployment/front", OTHER_OPTION, "deployment/otel"]
