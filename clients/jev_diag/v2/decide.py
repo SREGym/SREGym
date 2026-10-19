@@ -25,6 +25,11 @@ NONE = "none_of_these"
 TOP_K = 6
 CONFIDENT_P = 0.6  # averaged probability the leader needs to be accepted without another check
 QUESTION = "best_explanation"
+# v1's investigation asks the category with this rule; its separate characterization request lacks it.
+LIMIT_RULE = (
+    "A limit is the cause only if the limit is too low for the workload's normal needs; when a recent change "
+    "(see `component.template_changes`) makes the workload consume more, the change is the cause."
+)
 
 
 @dataclass
@@ -124,6 +129,17 @@ class Characterization:
     category_probability: float = 0.0
 
 
+def characterization_questions(items: list[dict]) -> dict[str, Choice]:
+    """v1's characterization request, with v1's limit-vs-change rule added to the category question."""
+    questions = build_characterization_questions(items)
+    category = questions[CATEGORY_QUESTION]
+    how = [*category.instructions["how_to_decide"], LIMIT_RULE]
+    questions[CATEGORY_QUESTION] = Choice(
+        instructions={**category.instructions, "how_to_decide": how}, criteria=category.criteria
+    )
+    return questions
+
+
 def characterize(
     ask: Callable[[str, dict, dict], Any], state: dict, facts: list[str], *, rng: random.Random, asks: int = 2
 ) -> Characterization:
@@ -137,7 +153,7 @@ def characterize(
         rng.shuffle(order)
         items = [{"id": f"f{i + 1}", "text": text} for i, text in enumerate(order)]
         by_id = {item["id"]: item["text"] for item in items}
-        response = ask(f"characterize:{n + 1}", {**state, "evidence": items}, build_characterization_questions(items))
+        response = ask(f"characterize:{n + 1}", {**state, "evidence": items}, characterization_questions(items))
         choices = response.choices
         if EVIDENCE_QUESTION in choices:
             for label, prob in (choices[EVIDENCE_QUESTION].probabilities or {}).items():

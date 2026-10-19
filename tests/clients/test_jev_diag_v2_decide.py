@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 from typesafe_sdk import ChoiceAnswer
 
-from clients.jev_diag.v2.decide import NONE, QUESTION, pick, shortlist
+from clients.jev_diag.classifier import CATEGORY_QUESTION, EVIDENCE_QUESTION
+from clients.jev_diag.v2.decide import LIMIT_RULE, NONE, QUESTION, characterization_questions, pick, shortlist
 from clients.jev_diag.v2.explain import CONTRADICTS, PARTIAL, SUPPORTS, Explanation, Prediction
 from clients.jev_diag.v2.report import build_report
 
@@ -103,3 +104,9 @@ def test_report_names_origin_values_and_only_observed_impact():
     partial = Explanation(key="p", pattern=PARTIAL, origin="mutatingwebhookconfiguration/admission-hook", mechanism="")
     assert "not established" in build_report([partial], observed=[], uncertain=True)
     assert "mutatingwebhookconfiguration `admission-hook`" in build_report([partial], observed=[])
+
+
+def test_category_question_carries_v1_limit_rule():
+    questions = characterization_questions([{"id": "f1", "text": "env FRONTEND set twice"}])
+    assert LIMIT_RULE in questions[CATEGORY_QUESTION].instructions["how_to_decide"]
+    assert set(questions) == {CATEGORY_QUESTION, EVIDENCE_QUESTION}
