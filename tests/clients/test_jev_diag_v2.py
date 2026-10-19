@@ -149,10 +149,14 @@ def test_template_changes_are_diffed_against_the_revision_current_at_deploy():
         (NS, "Deployment", "a"): set_then_restart,
         (NS, "Deployment", "b"): [*history, rev(3, "2026-10-19T07:56:00Z", "old", "x")],
     }
+    recreated = [rev(1, "2026-10-19T07:52:00Z", "old"), rev(2, "2026-10-19T07:52:06Z", "new")]
+    comps["deployment/c"] = _comp("c", "2026-10-19T07:52:00Z")  # deleted and re-created after the deploy
+    revisions[(NS, "Deployment", "c")] = recreated
     changes.attach_template_changes(comps, revisions, changes.parse_time("2026-10-19T07:50:00Z"))
     a, b = comps["deployment/a"]["template_changes"], comps["deployment/b"]["template_changes"]
     assert "container a env DB: old -> new" in a["changes"] and not a["restart_only"] and len(a["changes"]) == 2
     assert b["restart_only"] and len(b["changes"]) == 1  # no pod-template-hash line, no deploy-time volume
+    assert "container a env DB: old -> new" in comps["deployment/c"]["template_changes"]["changes"]
 
 
 def test_a_change_made_before_the_application_existed_is_dropped():
