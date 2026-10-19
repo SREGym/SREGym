@@ -657,6 +657,11 @@ def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
     }
     detail["called_by_with_errors"] = comp.get("referenced_by_errors_from") or {}
     detail["failing_targets"] = failing_targets(snapshot, cid, calls, detail["logs"].get("error_samples") or [])
+    from clients.jev_diag.v2 import telemetry
+
+    lines = telemetry.component_lines(snapshot, cid)
+    if lines:
+        detail["telemetry"] = lines
     if errors:
         detail["collection_errors"] = errors
     return compact(detail)

@@ -426,3 +426,23 @@ def test_when_the_two_triage_asks_disagree_both_picks_are_examined_and_the_stron
     assert d.component == "deployment/b"
     examined = [s["component"] for s in d.investigation["steps"] if s.get("component")]
     assert set(examined[:2]) == {"deployment/a", "deployment/b"}
+
+
+def test_telemetry_lines_come_from_the_team_tools_and_skip_empty_results(monkeypatch):
+    from types import SimpleNamespace
+
+    from clients.jev_agent import metrics
+    from clients.jev_agent.tools import call_edges
+    from clients.jev_diag.v2 import telemetry
+
+    monkeypatch.setattr(telemetry, "_available", True)
+    monkeypatch.setenv("JEV_DIAG_V2_TELEMETRY", "1")
+    by_family = {"cpu": ["cpu 0.95 cores of a 1.0 limit (95%)"], "memory": ["no memory series found for x"], "rpc": []}
+    monkeypatch.setattr(metrics, "metric_lines", lambda ctx, cid, fam: SimpleNamespace(lines=by_family[fam]))
+    monkeypatch.setattr(
+        call_edges, "run_call_edges", lambda ctx, cid: SimpleNamespace(lines=["frontend -> cart 40% errors"])
+    )
+    lines = telemetry.component_lines(_snap({"deployment/cart": _comp("cart", "t")}), "deployment/cart")
+    assert lines == ["cpu metrics: cpu 0.95 cores of a 1.0 limit (95%)", "observed calls: frontend -> cart 40% errors"]
+    monkeypatch.setenv("JEV_DIAG_V2_TELEMETRY", "0")
+    assert telemetry.component_lines(_snap({}), "deployment/cart") == []
