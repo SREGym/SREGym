@@ -376,3 +376,53 @@ def test_one_change_on_several_workloads_is_reported_as_one_cause():
     assert text.startswith(
         "Root cause: Deployments `mongodb-geo`, `mongodb-rate` in namespace `shop` (the same change on 2)"
     )
+
+
+class _Answers:
+    """A fake decision model: triage picks from a script; each investigated candidate gets its scripted origin
+    probability; every other question takes its first option."""
+
+    def __init__(self, triage: list[dict[str, float]], origin: dict[str, float]):
+        self.triage, self.origin, self.model = list(triage), origin, "fake"
+
+    def system_one(self, state, questions, **kwargs):
+        from typesafe_sdk import Choice, ChoiceAnswer, NoulAnswer
+
+        from clients.jev_diag.v2.classifier import COMPONENT_QUESTION
+
+        answers = {}
+        for name, q in questions.items():
+            if name == COMPONENT_QUESTION:
+                probs = self.triage.pop(0)
+            elif name == "verdict":
+                p = self.origin.get(state["candidate"]["id"], 0.1)
+                probs = {"origin": p, "victim": 1 - p, "unrelated": 0.0, "undetermined": 0.0}
+            elif isinstance(q, Choice):
+                opts = list(q.criteria)
+                probs = {o: (1.0 if i == 0 else 0.0) for i, o in enumerate(opts)}
+            else:
+                answers[name] = NoulAnswer(noul=0.1)
+                continue
+            best = max(probs, key=probs.get)
+            answers[name] = ChoiceAnswer(choice=best, confidence=probs[best], probabilities=probs)
+
+        from types import SimpleNamespace
+
+        choices = {k: v for k, v in answers.items() if isinstance(v, ChoiceAnswer)}
+        nouls = {k: v for k, v in answers.items() if isinstance(v, NoulAnswer)}
+        return SimpleNamespace(model="fake", usage=None, choices=choices, nouls=nouls, answers=dict(answers))
+
+
+def test_when_the_two_triage_asks_disagree_both_picks_are_examined_and_the_stronger_origin_wins():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b", "c")}
+    triage = [
+        {"deployment/a": 0.6, "deployment/b": 0.3, "deployment/c": 0.1, "other": 0.0},
+        {"deployment/a": 0.3, "deployment/b": 0.6, "deployment/c": 0.1, "other": 0.0},
+    ]
+    client = _Answers(triage, {"deployment/a": 0.65, "deployment/b": 0.95})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_snap(comps))
+    assert d.component == "deployment/b"
+    examined = [s["component"] for s in d.investigation["steps"] if s.get("component")]
+    assert set(examined[:2]) == {"deployment/a", "deployment/b"}

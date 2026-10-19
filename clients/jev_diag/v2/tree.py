@@ -460,14 +460,24 @@ class IterativeDiagnoser(JevDiagnoser):
             tokens_after=estimate_tokens(state),
             applied=trims,
         )
-        response = self._ask("triage", state, build_component_questions(snapshot))
-        component = ChoiceResult.from_answer(response.choices[COMPONENT_QUESTION])
+        # Asked twice, the second time with the options in reverse order; the two answers are averaged, and when
+        # their picks differ both are examined before an origin is concluded (see _diagnose).
+        questions = build_component_questions(snapshot)
+        answers = [
+            self._ask("triage", state, questions),
+            self._ask("triage:reversed", state, reversed_options(questions)),
+        ]
+        picks = [a.choices[COMPONENT_QUESTION].choice for a in answers]
+        self.triage_picks = list(dict.fromkeys(picks))
+        component = averaged([ChoiceResult.from_answer(a.choices[COMPONENT_QUESTION]) for a in answers])
         kind = (
-            ChoiceResult.from_answer(response.choices[FAULT_KIND_QUESTION])
-            if FAULT_KIND_QUESTION in response.choices
+            averaged([ChoiceResult.from_answer(a.choices[FAULT_KIND_QUESTION]) for a in answers])
+            if all(FAULT_KIND_QUESTION in a.choices for a in answers)
             else None
         )
-        visible = response.nouls[FAULT_VISIBLE_QUESTION].noul if FAULT_VISIBLE_QUESTION in response.nouls else None
+        nouls = [a.nouls[FAULT_VISIBLE_QUESTION].noul for a in answers if FAULT_VISIBLE_QUESTION in a.nouls]
+        visible = sum(nouls) / len(nouls) if nouls else None
+        self._trace("decide", "triage_agreement", picks=picks, agreed=len(self.triage_picks) == 1)
         return component, kind, visible
 
     def initial_queue(
@@ -768,6 +778,7 @@ class IterativeDiagnoser(JevDiagnoser):
         investigated: dict[str, dict] = {}
         steps: list[dict] = []
         concluded: str | None = None
+        confirmed: dict[str, float] = {}  # origin probability of every confirmed origin; the strongest is concluded
         cluster_pick: dict | None = None
         # other side -> (component waiting to be concluded, reason, further candidates to examine after this one)
         waiting_on: dict[str, tuple[str, str, list[tuple[str, str]]]] = {}
@@ -860,8 +871,16 @@ class IterativeDiagnoser(JevDiagnoser):
                     and c not in investigated
                     and p > component.probabilities.get(cid, 0.0)
                 ]
-                if not higher or result["origin_p"] >= STRONG_ORIGIN_PROBABILITY:
-                    concluded = cid
+                confirmed[cid] = result["origin_p"]
+                split = [
+                    c
+                    for c in getattr(self, "triage_picks", [])
+                    if c != cid and c in snapshot.components and c not in investigated
+                ]
+                if split:  # the two triage asks disagreed: examine the other pick before concluding
+                    higher = list(dict.fromkeys([*split, *higher]))
+                if not higher or (not split and result["origin_p"] >= STRONG_ORIGIN_PROBABILITY):
+                    concluded = max(confirmed, key=confirmed.get)
                     break
                 for c in reversed(higher[:2]):
                     if c in queue:
@@ -1168,3 +1187,18 @@ def code_only_diagnosis(snapshot: ClusterSnapshot, reason: str) -> Diagnosis:
     )
     diagnosis.text = build_report(snapshot, diagnosis)
     return diagnosis
+
+
+def reversed_options(questions: dict) -> dict:
+    """The same questions with the component options in reverse order (position bias check)."""
+    q = questions[COMPONENT_QUESTION]
+    flipped = Choice(instructions=q.instructions, criteria=dict(reversed(list(q.criteria.items()))))
+    return {**questions, COMPONENT_QUESTION: flipped}
+
+
+def averaged(results: list[ChoiceResult]) -> ChoiceResult:
+    """The mean of several answers to one choice question."""
+    keys = list(dict.fromkeys(k for r in results for k in r.probabilities))
+    probs = {k: round(sum(r.probabilities.get(k, 0.0) for r in results) / len(results), 4) for k in keys}
+    best = max(probs, key=probs.get)
+    return ChoiceResult(choice=best, confidence=probs[best], probabilities=probs)
