@@ -627,6 +627,22 @@ def test_a_caller_retrying_into_a_capped_callee_is_reported_as_the_call_path():
     assert paths.setting_pairs({"svc.json": shared}) == {"svc.json:workers": "4"}  # whose timeout_ms is unknown
 
 
+def test_call_settings_need_a_number_and_the_callee_named_as_a_whole_word():
+    from clients.jev_diag.v2 import paths
+
+    assert paths.setting_pairs({"QUEUE_NAME": "orders", "AD_TIMEOUT_MS": "300"}) == {"AD_TIMEOUT_MS": "300"}
+    line = "request to ad failed: context deadline exceeded"
+    caller = {
+        **_comp("front", "t"),
+        "log_findings": [
+            {"classes": ["connectivity or timeout"], "count": 9, "targets": ["deployment/ad"], "line": line}
+        ],
+        "_call_settings": {"READ_TIMEOUT": "5", "AD_TIMEOUT_MS": "300", "tracing:jaeger.yml:timeout": "1"},
+    }
+    comps = {"deployment/front": caller, "deployment/ad": _comp("ad", "t")}
+    assert paths.call_paths(comps)[0]["caller_settings"] == ["AD_TIMEOUT_MS=300"]
+
+
 def _two_faults(link: bool):
     comps = {
         "deployment/a": {**_comp("a", "t"), "signals": ["s"], "evidence_kinds": ["change", "symptoms"]},
