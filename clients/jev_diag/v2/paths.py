@@ -26,7 +26,9 @@ MAX_VALUE_CHARS = 40
 MAX_SETTINGS = 8
 # key: value / key=value / "key": value inside a ConfigMap file
 _INLINE = re.compile(r"""(?P<key>[A-Za-z_][\w.-]{2,60})["']?\s*[:=]\s*["']?(?P<value>[\w.+-]{1,40})""")
-_POINTER_PREFIXES = ("errors logged by", "server ")
+# Signals that are not a failure or change of the component's own: others' errors naming it, and a restart that
+# changed no setting (changes.describe_change).
+_NOT_OWN_PREFIXES = ("errors logged by", "server ", "rolling restart")
 
 
 def setting_pairs(data: dict[str, str]) -> dict[str, str]:
@@ -83,8 +85,9 @@ def _towards(settings: dict[str, str], callee: str, others: list[str]) -> list[s
 
 
 def own_failure(comp: dict) -> bool:
-    """Whether the component shows a failure of its own (state, own error lines), not counting others' errors."""
-    if any(not s.startswith(_POINTER_PREFIXES) for s in comp.get("signals") or []):
+    """Whether the component shows a failure or a change of its own (state, own error lines, a recent change made to
+    it or to an object it reads), not counting others' errors."""
+    if any(not s.startswith(_NOT_OWN_PREFIXES) for s in comp.get("signals") or []):
         return True
     return any(f["classes"] and "telemetry export failure" not in f["classes"] for f in comp.get("log_findings") or [])
 
