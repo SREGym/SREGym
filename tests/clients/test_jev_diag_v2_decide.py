@@ -88,7 +88,18 @@ def test_none_of_these_routes_to_a_wider_look_and_disagreement_to_a_check():
 def test_report_names_origin_values_and_only_observed_impact():
     text = build_report([REGEX], observed=["edge-proxy CPU at its 100m limit"])
     assert "Deployment" not in text and "deployment `edge-proxy` in namespace `store`" in text
-    assert "rule-v2" in text and "Observed impact: deployment `frontend`" in text
+    assert "rule-v2" in text and "Observed impact" not in text  # one-component cause: callers are evidence
+    assert "- deployment `frontend` in namespace `store` fails as a result" in text
+    dep = Explanation(
+        key="d",
+        pattern="dependency",
+        origin="deployment/shop/media",
+        mechanism="media rejects calls",
+        impact=["deployment/shop/media", "deployment/shop/compose"],
+    )
+    text = build_report([dep], observed=[], key_fact="FailedScheduling: no free ports")
+    assert "Mechanism: FailedScheduling: no free ports." in text and "Key evidence" not in text
+    assert "Observed impact: deployment `media` in namespace `shop`." in text
     partial = Explanation(key="p", pattern=PARTIAL, origin="mutatingwebhookconfiguration/admission-hook", mechanism="")
     assert "not established" in build_report([partial], observed=[], uncertain=True)
     assert "mutatingwebhookconfiguration `admission-hook`" in build_report([partial], observed=[])

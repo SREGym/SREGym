@@ -26,7 +26,6 @@ logger = logging.getLogger("all.jev_diag v2.agent")
 STATE_BUDGET = 20000  # tokens of focused evidence per decision request
 MAX_SIGNALS = 8
 CHARACTERIZE_REQUESTS = 2  # beyond max_requests: v1's characterization of the root-cause component
-FAULT_TYPE_MIN_P = 0.5  # a fault type is a claim: state it only when the model is fairly sure
 PRE_READ = 6  # components read before the first question: those the initial top candidates are about
 
 
@@ -167,7 +166,7 @@ class V2Diagnoser(JevDiagnoser):
             observed=self._observed(snapshot, winner),
             uncertain=uncertain,
             key_fact=char.fact,
-            fault_type=char.category if char.category_probability >= FAULT_TYPE_MIN_P else None,
+            fault_type=char.category,
             fault_object=fault_object,
         )
         probs = result.probabilities if result else {}
