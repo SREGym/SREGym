@@ -241,3 +241,36 @@ def test_an_object_created_after_the_application_states_what_it_holds():
         set_now(None)
     assert change and '"globalDefault": true' in change["content"] and '"value": 1000000' in change["content"]
     assert "it holds" in changes.describe_change({**change, "seconds_ago": 30})
+
+
+def test_a_flag_turned_on_is_a_change_on_the_service_it_names_not_on_the_flag_server():
+    import json
+
+    from clients.jev_diag.v2 import flags
+
+    doc = {
+        "flags": {
+            "paymentServiceFailure": {
+                "state": "ENABLED",
+                "variants": {"on": True, "off": False},
+                "defaultVariant": "on",
+            },
+            "cartCacheFailure": {"state": "ENABLED", "variants": {"on": True, "off": False}, "defaultVariant": "off"},
+            "adHighCpu": {"state": "DISABLED", "variants": {"on": True}, "defaultVariant": "on"},
+        }
+    }
+    comps = {
+        f"deployment/{n}": {"name": n, "namespace": "shop", "signals": []}
+        for n in ("payment", "cart", "ad", "flag-server", "payment-gateway")
+    }
+    config = {("ConfigMap", "shop", "flags"): {"_object": {"data": {"flags.json": json.dumps(doc)}}}}
+    flags.attribute_flags(comps, config, {"configmap/shop/flags"})
+    assert comps["deployment/payment"]["signals"][0].startswith("feature flag paymentServiceFailure is on")
+    assert not any(comps[c]["signals"] for c in comps if c != "deployment/payment")
+    derive.classify_evidence(comps)
+    assert comps["deployment/payment"]["evidence_kinds"] == ["change"]
+    # a flag ConfigMap not written after deploy holds the baseline: nothing is attributed
+    comps["deployment/payment"]["signals"] = []
+    flags.attribute_flags(comps, config, set())
+    assert not comps["deployment/payment"]["signals"]
+    assert flags.key_tokens("loadGeneratorFloodHomepage") == {"load", "generator", "flood", "homepage"}

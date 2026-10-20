@@ -92,7 +92,18 @@ LOG_CLASSES: list[tuple[str, re.Pattern[str]]] = [
             r"CERTIFICATE_VERIFY_FAILED|SSLHandshakeException|ERR_TLS|remote error: tls)"
         ),
     ),
-    ("out of memory", re.compile(r"(?i)(out of memory|OOMKilled|\bOOM\b|Cannot allocate memory|heap)")),
+    (
+        "out of memory",
+        re.compile(r"(?i)(out of memory|OOMKilled|\bOOM\b|Cannot allocate memory|heap|OutOfMemoryError)"),
+    ),
+    (
+        "resource exhaustion",
+        re.compile(
+            r"(?i)(too many open files|EMFILE|no space left|ENOSPC|address already in use|EADDRINUSE|EADDRNOTAVAIL|"
+            r"pool (?:is )?exhausted|connection pool|deadlock|lock wait timeout|could not obtain lock|"
+            r"resource temporarily unavailable|thread pool|queue (?:is )?full|EAGAIN)"
+        ),
+    ),
     ("filesystem permission denied", re.compile(r"(?i)(permission denied|EACCES|read-only file system|EROFS)")),
     (
         "overload or quota exhaustion",
@@ -123,6 +134,7 @@ DEPENDENCY_CLASSES = {
     "overload or quota exhaustion",
 }
 OWN_FAILURE_CLASSES = {
+    "resource exhaustion",
     "authorization denied (RBAC)",
     "message or data processing failure",
     "out of memory",

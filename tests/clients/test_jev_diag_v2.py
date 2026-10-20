@@ -53,9 +53,13 @@ def test_v2_reads_the_cluster_through_v1s_single_kubectl_runner():
     assert v2_collector.set_kubectl_replay is v1_collector.set_kubectl_replay
 
 
-def test_v2_triage_question_matches_v1_on_the_same_snapshot():
+def test_v2_triage_question_matches_v1_except_that_a_component_s_own_failure_can_be_the_origin():
     a = {k: msgspec.to_builtins(q) for k, q in v1_questions(snapshot(v1_collector)).items()}
     b = {k: msgspec.to_builtins(q) for k, q in v2_questions(snapshot(v2_collector)).items()}
+    rules_a = a["root_cause_component"]["instructions"]["triage_order"]
+    rules_b = b["root_cause_component"]["instructions"]["triage_order"]
+    assert "never select a component on their own" in rules_a[3] and "some faults change no object" in rules_b[3]
+    rules_a[3] = rules_b[3] = None
     assert a == b
 
 
