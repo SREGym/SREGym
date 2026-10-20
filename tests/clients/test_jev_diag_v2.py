@@ -582,11 +582,11 @@ def test_when_the_two_triage_asks_disagree_both_picks_are_examined_and_the_stron
     assert d.component == "deployment/b"
     examined = [s["component"] for s in d.investigation["steps"] if s.get("component")]
     assert set(examined[:2]) == {"deployment/a", "deployment/b"}
-    # only one pick is an origin: it is concluded once both picks are examined, with no walk to other candidates
+    # only one pick is an origin: it is concluded once triage's top hypotheses are examined, with no walk beyond them
     client = _Answers(triage, {"deployment/a": 0.95, "deployment/b": 0.1})
     d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_snap(comps))
     assert d.component == "deployment/a" and d.investigation["fallback"] is None
-    assert [s["component"] for s in d.investigation["steps"]] == ["deployment/a", "deployment/b"]
+    assert [s["component"] for s in d.investigation["steps"]] == ["deployment/a", "deployment/b", "deployment/c"]
 
 
 def test_telemetry_lines_come_from_the_team_tools_and_skip_empty_results(monkeypatch):
@@ -709,7 +709,7 @@ def test_failures_the_cause_does_not_explain_can_add_a_second_independent_cause(
     # b calls a: a explains b, so b is never offered as a second cause
     client = _Answers(triage, origin, picks={"fault_start": "both"})
     d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_two_faults(link=True))
-    assert d.second is None and [s["component"] for s in d.investigation["steps"]] == ["deployment/a"]
+    assert d.component == "deployment/a" and d.second is None
 
 
 def test_report_states_only_what_the_facts_show_for_a_job_that_never_completes():
@@ -826,7 +826,7 @@ def test_two_confirmed_origins_that_share_a_config_object_are_never_two_causes()
     d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap)
     assert d.investigation["fallback"] is None
     assert d.component == "deployment/a" and d.second is None
-    assert [s["component"] for s in d.investigation["steps"]] == ["deployment/a", "deployment/b"]
+    assert [s["component"] for s in d.investigation["steps"]][:2] == ["deployment/a", "deployment/b"]
 
 
 def test_queue_puts_the_top_workload_before_the_cluster_node_and_telemetry_last():
@@ -909,3 +909,52 @@ def test_a_caller_configured_to_call_the_cause_and_failing_is_listed_as_affected
     )
     assert "Affected (symptoms only, not causes): Deployment `app` in namespace `shop`: connectivity or timeout" in text
     assert "its callers see connectivity or timeout (5 lines)" in text and "idle" not in text
+
+
+def test_a_confirmed_top_pick_is_compared_with_the_other_hypotheses_before_it_is_concluded():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b", "c")}
+    triage = [{"deployment/a": 0.86, "deployment/b": 0.08, "deployment/c": 0.06, "other": 0.0}] * 2
+    # triage is sure of a, and a looks like an origin on its own; b, ranked far below, is where the fault started
+    client = _Answers(triage, {"deployment/a": 0.95, "deployment/b": 0.9}, picks={"fault_start": "deployment/b"})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(_snap(comps))
+    assert d.component == "deployment/b"
+    assert {"deployment/a", "deployment/b"} <= {s.get("component") for s in d.investigation["steps"]}
+
+
+def test_a_cluster_object_competes_as_a_hypothesis_instead_of_ending_the_search():
+    from clients.jev_diag.v2 import collector as v2c
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b")}
+    finding = {
+        "kind": "MutatingWebhookConfiguration",
+        "name": "policy",
+        "signal": "rewrites pods",
+        "components": ["deployment/a"],
+    }
+    snap = v2c.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster={"findings": [finding]})
+    triage = [{"other": 0.5, "deployment/a": 0.45, "deployment/b": 0.05}] * 2
+    client = _Answers(triage, {"deployment/a": 0.9}, picks={"cluster_object": "F1", "fault_start": "other"})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap)
+    assert d.component == "other" and d.fault_object["name"] == "policy"
+    assert any(s.get("component") == "deployment/a" for s in d.investigation["steps"])  # a was examined too
+
+
+def test_an_investigation_never_shows_triage_probabilities():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b")}
+    seen = []
+
+    class Recording(_Answers):
+        def system_one(self, state, questions, **kwargs):
+            if "candidate" in state:
+                seen.append(state)
+            return super().system_one(state, questions, **kwargs)
+
+    triage = [{"deployment/a": 0.7, "deployment/b": 0.3, "other": 0.0}] * 2
+    IterativeDiagnoser(Recording(triage, {"deployment/a": 0.9}), fetch_detail=lambda s, c: {}).diagnose(_snap(comps))
+    assert seen and all("probability" not in str(s.get("triage_order")) for s in seen)
+    assert all("triage_ranking" not in s for s in seen)
