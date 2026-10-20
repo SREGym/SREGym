@@ -289,10 +289,11 @@ def build_component_questions(snapshot: ClusterSnapshot) -> dict[str, Choice | N
                     "rejecting its pods.",
                     "3. Otherwise prefer a component with `pointed_at` or `own_failure_logs` in `evidence_kinds`.",
                     "4. `symptoms` (Pending, terminating, not ready, restarting, at a CPU or memory limit) and "
-                    "`error_logs_only` never select a component on their own. A component whose "
-                    "`evidence_kinds` is only [`symptoms`] or [`error_logs_only`] is a candidate only if no "
-                    "component in the application has `change`, `configuration`, `pointed_at`, or "
-                    "`own_failure_logs`, and `cluster.findings` is empty.",
+                    "`error_logs_only` are weaker evidence, but not nothing: some faults change no object (a leak, "
+                    "lock contention, exhausted resources, a traffic surge). When no change or configuration "
+                    "explains the abnormal signals, prefer the component whose own failure started first and "
+                    "explains the others' failures over a component whose only problem is calling it. A change "
+                    "or finding that does not explain the observed failures does not outrank it.",
                     "5. A component whose only abnormality is error logs about calls to another component is a "
                     "victim of that component. A telemetry component (`role: observability`) is a low-priority "
                     "candidate unless rule 1, 2, or 3 selects it.",

@@ -39,7 +39,7 @@ from clients.jev_diag.collector import (  # noqa: F401 - re-exported for the v2 
 )
 from clients.jev_diag.timeutil import now, parse_time
 from clients.jev_diag.v2 import changes as change_log
-from clients.jev_diag.v2 import checks, paths, platform_events
+from clients.jev_diag.v2 import checks, flags, paths, platform_events
 from clients.jev_diag.v2.checks import parse_cpu_millis, parse_memory_bytes  # noqa: F401 - re-exported
 
 logger = logging.getLogger("all.jev_diag.v2.collector")
@@ -2099,6 +2099,8 @@ def collect_snapshot(
         comp["healthy_hint"] = not comp["signals"]
     attach_namespace_constraints(constraints, components)
     attach_config_objects(config_objects, components, changes)
+    changed_after_deploy = {c["object"] for c in changes if not change_log.before_deploy(c, deployed)}
+    flags.attribute_flags(components, config_objects, changed_after_deploy)
     for cid, comp in components.items():
         change = change_log.object_change(
             cid,
