@@ -1,0 +1,355 @@
+{
+ "label": "MINI (kwok+procnode) + hotel-reservation (idle app)",
+ "interval": 30.007057905197144,
+ "categories": {
+  "other": {
+   "n": 77,
+   "rss": 34689024,
+   "pss": 33660928,
+   "cpu": 0.001999529583658655
+  },
+  "docker-host": {
+   "n": 1,
+   "rss": 110641152,
+   "pss": 109350912,
+   "cpu": 0.0
+  },
+  "container-runtime": {
+   "n": 1,
+   "rss": 54984704,
+   "pss": 53874688,
+   "cpu": 0.0009997647918293276
+  },
+  "control-plane": {
+   "n": 4,
+   "rss": 567742464,
+   "pss": 569102336,
+   "cpu": 0.06631773119134539
+  },
+  "kwok": {
+   "n": 1,
+   "rss": 59699200,
+   "pss": 60149760,
+   "cpu": 0.0
+  },
+  "kube-proxy": {
+   "n": 1,
+   "rss": 49123328,
+   "pss": 49582080,
+   "cpu": 0.0009997647918293276
+  },
+  "procnode": {
+   "n": 1,
+   "rss": 82636800,
+   "pss": 80504832,
+   "cpu": 0.0006665098612195518
+  },
+  "ns:kube-system/cluster-addons": {
+   "n": 4,
+   "rss": 112467968,
+   "pss": 69298176,
+   "cpu": 0.004998823959146638
+  },
+  "app": {
+   "n": 2,
+   "rss": 4595712,
+   "pss": 1249280,
+   "cpu": 0.0
+  },
+  "ns:hotel-reservation": {
+   "n": 39,
+   "rss": 919236608,
+   "pss": 667714560,
+   "cpu": 0.11730573557464108
+  }
+ },
+ "total": {
+  "n": 131,
+  "rss": 1995816960,
+  "pss": 1694487552,
+  "cpu": 0.19328785975366997
+ },
+ "host_used": 1864556544,
+ "top": [
+  {
+   "pss": 338190336,
+   "cpu": 0.03265898319975803,
+   "cat": "control-plane",
+   "comm": "kube-apiserver",
+   "cmd": "/root/.kwok/clusters/mini/bin/kube-apiserver --etcd-prefix=/registry --allow-privileged=tr"
+  },
+  {
+   "pss": 113577984,
+   "cpu": 0.014329962016220362,
+   "cat": "control-plane",
+   "comm": "kube-controller",
+   "cmd": "/root/.kwok/clusters/mini/bin/kube-controller-manager --node-monitor-period=25s --node-mon"
+  },
+  {
+   "pss": 109350912,
+   "cpu": 0.0,
+   "cat": "docker-host",
+   "comm": "dockerd",
+   "cmd": "dockerd"
+  },
+  {
+   "pss": 105754624,
+   "cpu": 0.017995766252927897,
+   "cat": "ns:hotel-reservation",
+   "comm": "consul",
+   "cmd": "consul agent -data-dir=/consul/data -config-dir=/consul/config -dev -client 0.0.0.0"
+  },
+  {
+   "pss": 80504832,
+   "cpu": 0.0006665098612195518,
+   "cat": "procnode",
+   "comm": "python",
+   "cmd": "/home/user/SREGym/.venv/bin/python /home/user/SREGym/experiments/mini-k8s/cluster/../procn"
+  },
+  {
+   "pss": 70274048,
+   "cpu": 0.004665569028536863,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --bind_ip_all"
+  },
+  {
+   "pss": 70090752,
+   "cpu": 0.0049988239591466374,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --bind_ip_all"
+  },
+  {
+   "pss": 70079488,
+   "cpu": 0.004665569028536863,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --bind_ip_all"
+  },
+  {
+   "pss": 69467136,
+   "cpu": 0.0049988239591466374,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --bind_ip_all"
+  },
+  {
+   "pss": 68719616,
+   "cpu": 0.0049988239591466374,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --auth --bind_ip_all"
+  },
+  {
+   "pss": 68670464,
+   "cpu": 0.0049988239591466374,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --auth --bind_ip_all"
+  },
+  {
+   "pss": 60149760,
+   "cpu": 0.0,
+   "cat": "kwok",
+   "comm": "kwok-controller",
+   "cmd": "/root/.kwok/clusters/mini/bin/kwok-controller --manage-all-nodes=true --kubeconfig=/root/."
+  },
+  {
+   "pss": 59359232,
+   "cpu": 0.016329491599879016,
+   "cat": "control-plane",
+   "comm": "etcd",
+   "cmd": "/root/.kwok/clusters/mini/bin/etcd --name=node0 --auto-compaction-retention=1 --quota-back"
+  },
+  {
+   "pss": 57974784,
+   "cpu": 0.0029992943754879827,
+   "cat": "control-plane",
+   "comm": "kube-scheduler",
+   "cmd": "/root/.kwok/clusters/mini/bin/kube-scheduler --kubeconfig=/root/.kwok/clusters/mini/kubeco"
+  },
+  {
+   "pss": 53874688,
+   "cpu": 0.0009997647918293276,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/bin/containerd --config /var/run/docker/containerd/containerd.toml"
+  },
+  {
+   "pss": 49582080,
+   "cpu": 0.0009997647918293276,
+   "cat": "kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/var/lib/procnode-cluster/mini/kube-proxy --kubeconfig /root/.kwok/clusters/mini/kubeconfi"
+  },
+  {
+   "pss": 34799616,
+   "cpu": 0.0023327845142684313,
+   "cat": "ns:kube-system/cluster-addons",
+   "comm": "coredns",
+   "cmd": "/coredns -conf /etc/coredns/Corefile"
+  },
+  {
+   "pss": 34750464,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "all-in-one-linu",
+   "cmd": "/go/bin/all-in-one-linux"
+  },
+  {
+   "pss": 34189312,
+   "cpu": 0.002666039444878207,
+   "cat": "ns:kube-system/cluster-addons",
+   "comm": "coredns",
+   "cmd": "/coredns -conf /etc/coredns/Corefile"
+  },
+  {
+   "pss": 30609408,
+   "cpu": 0.0,
+   "cat": "other",
+   "comm": "docker",
+   "cmd": "docker export ab03cf4ab74739cbad19c524962ed695b3cafb4e35449799391d8c278317879d"
+  },
+  {
+   "pss": 13774848,
+   "cpu": 0.0003332549306097759,
+   "cat": "ns:hotel-reservation",
+   "comm": "user",
+   "cmd": "user"
+  },
+  {
+   "pss": 12304384,
+   "cpu": 0.0003332549306097759,
+   "cat": "ns:hotel-reservation",
+   "comm": "profile",
+   "cmd": "profile"
+  },
+  {
+   "pss": 12304384,
+   "cpu": 0.0003332549306097759,
+   "cat": "ns:hotel-reservation",
+   "comm": "recommendation",
+   "cmd": "recommendation"
+  },
+  {
+   "pss": 12269568,
+   "cpu": 0.0003332549306097759,
+   "cat": "ns:hotel-reservation",
+   "comm": "geo",
+   "cmd": "geo"
+  },
+  {
+   "pss": 12028928,
+   "cpu": 0.06698424105256494,
+   "cat": "ns:hotel-reservation",
+   "comm": "rate",
+   "cmd": "rate"
+  },
+  {
+   "pss": 11990016,
+   "cpu": 0.0003332549306097759,
+   "cat": "ns:hotel-reservation",
+   "comm": "reservation",
+   "cmd": "reservation"
+  },
+  {
+   "pss": 11580416,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "frontend",
+   "cmd": "frontend"
+  },
+  {
+   "pss": 11401216,
+   "cpu": 0.0006665098612195518,
+   "cat": "ns:hotel-reservation",
+   "comm": "search",
+   "cmd": "search"
+  },
+  {
+   "pss": 3102720,
+   "cpu": 0.0003332549306097759,
+   "cat": "ns:hotel-reservation",
+   "comm": "memcached",
+   "cmd": "memcached"
+  },
+  {
+   "pss": 3051520,
+   "cpu": 0.0003332549306097759,
+   "cat": "other",
+   "comm": "6",
+   "cmd": "sbx-telemetry-collector"
+  },
+  {
+   "pss": 3004416,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "memcached",
+   "cmd": "memcached"
+  },
+  {
+   "pss": 2996224,
+   "cpu": 0.0003332549306097759,
+   "cat": "ns:hotel-reservation",
+   "comm": "memcached",
+   "cmd": "memcached"
+  },
+  {
+   "pss": 996352,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "tar",
+   "cmd": "tar -x -C /var/lib/procnode/images/6efa052039903e73.tmp"
+  },
+  {
+   "pss": 252928,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "sh",
+   "cmd": "/bin/sh -c docker export ab03cf4ab74739cbad19c524962ed695b3cafb4e35449799391d8c278317879d "
+  },
+  {
+   "pss": 166912,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "unshare",
+   "cmd": "/usr/bin/unshare --mount --pid --fork --kill-child --mount-proc --root=/var/lib/procnode/p"
+  },
+  {
+   "pss": 166912,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "unshare",
+   "cmd": "/usr/bin/unshare --mount --pid --fork --kill-child --mount-proc --root=/var/lib/procnode/p"
+  },
+  {
+   "pss": 166912,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "unshare",
+   "cmd": "/usr/bin/unshare --mount --pid --fork --kill-child --mount-proc --root=/var/lib/procnode/p"
+  },
+  {
+   "pss": 162816,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "unshare",
+   "cmd": "/usr/bin/unshare --mount --pid --fork --kill-child --mount-proc --root=/var/lib/procnode/p"
+  },
+  {
+   "pss": 162816,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "unshare",
+   "cmd": "/usr/bin/unshare --mount --pid --fork --kill-child --mount-proc --root=/var/lib/procnode/p"
+  },
+  {
+   "pss": 162816,
+   "cpu": 0.0,
+   "cat": "ns:hotel-reservation",
+   "comm": "unshare",
+   "cmd": "/usr/bin/unshare --mount --pid --fork --kill-child --mount-proc --root=/var/lib/procnode/p"
+  }
+ ]
+}

@@ -1,0 +1,53 @@
+# Four nodes shaped like SREGym's kind cluster, so node names, roles and the
+# control-plane taint match what problems and the conductor expect. All four
+# are the same host: KWOK keeps them registered, procnode runs their pods.
+apiVersion: v1
+kind: List
+items:
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: kind-control-plane
+    annotations: {kwok.x-k8s.io/node: fake}
+    labels:
+      kubernetes.io/hostname: kind-control-plane
+      kubernetes.io/os: linux
+      kubernetes.io/arch: amd64
+      node-role.kubernetes.io/control-plane: ""
+      procnode.sregym.io/managed: "true"
+  spec:
+    taints:
+    - {key: node-role.kubernetes.io/control-plane, effect: NoSchedule}
+  status: &status
+    allocatable: {cpu: "4", memory: 15Gi, pods: "110", ephemeral-storage: 100Gi}
+    capacity: {cpu: "4", memory: 15Gi, pods: "110", ephemeral-storage: 100Gi}
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: kind-worker
+    annotations: {kwok.x-k8s.io/node: fake}
+    labels: {kubernetes.io/hostname: kind-worker, kubernetes.io/os: linux, kubernetes.io/arch: amd64, procnode.sregym.io/managed: "true"}
+  status: *status
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: kind-worker2
+    annotations: {kwok.x-k8s.io/node: fake}
+    labels: {kubernetes.io/hostname: kind-worker2, kubernetes.io/os: linux, kubernetes.io/arch: amd64, procnode.sregym.io/managed: "true"}
+  status: *status
+- apiVersion: v1
+  kind: Node
+  metadata:
+    name: kind-worker3
+    annotations: {kwok.x-k8s.io/node: fake}
+    labels: {kubernetes.io/hostname: kind-worker3, kubernetes.io/os: linux, kubernetes.io/arch: amd64, procnode.sregym.io/managed: "true"}
+  status: *status
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard
+  annotations: {storageclass.kubernetes.io/is-default-class: "true"}
+provisioner: procnode.sregym.io/hostpath
+reclaimPolicy: Delete
+volumeBindingMode: Immediate

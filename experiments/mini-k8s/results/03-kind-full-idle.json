@@ -1,0 +1,391 @@
+{
+ "label": "FULL SREGym stack on kind (idle app), per-namespace",
+ "interval": 30.051342010498047,
+ "categories": {
+  "other": {
+   "n": 74,
+   "rss": 2883584,
+   "pss": 3051520,
+   "cpu": 0.015639900535417407
+  },
+  "docker-host": {
+   "n": 2,
+   "rss": 104185856,
+   "pss": 101913600,
+   "cpu": 0.0019965830470745623
+  },
+  "container-runtime": {
+   "n": 137,
+   "rss": 1176793088,
+   "pss": 571342848,
+   "cpu": 1.076158262373189
+  },
+  "ns:hotel-reservation": {
+   "n": 20,
+   "rss": 876867584,
+   "pss": 744322048,
+   "cpu": 0.07187698969468426
+  },
+  "ns:observe": {
+   "n": 28,
+   "rss": 1639960576,
+   "pss": 1630475264,
+   "cpu": 0.8082833702240185
+  },
+  "ns:kube-system/cluster-addons": {
+   "n": 3,
+   "rss": 185274368,
+   "pss": 145637376,
+   "cpu": 0.020631358153103813
+  },
+  "ns:openebs": {
+   "n": 12,
+   "rss": 326316032,
+   "pss": 295465984,
+   "cpu": 1.0309023799728325
+  },
+  "cni": {
+   "n": 2,
+   "rss": 116334592,
+   "pss": 116334592,
+   "cpu": 0.0
+  },
+  "node-init": {
+   "n": 8,
+   "rss": 101711872,
+   "pss": 45365248,
+   "cpu": 0.0006655276823581875
+  },
+  "app": {
+   "n": 14,
+   "rss": 42868736,
+   "pss": 8341504,
+   "cpu": 0.0
+  },
+  "control-plane": {
+   "n": 4,
+   "rss": 710270976,
+   "pss": 711827456,
+   "cpu": 0.2668766006256332
+  },
+  "kubelet": {
+   "n": 4,
+   "rss": 427184128,
+   "pss": 239296512,
+   "cpu": 0.1427556878658312
+  },
+  "ns:kube-system/kube-proxy": {
+   "n": 4,
+   "rss": 205238272,
+   "pss": 206008320,
+   "cpu": 0.002329346888253656
+  },
+  "ns:kube-system/app": {
+   "n": 21,
+   "rss": 79867904,
+   "pss": 58858496,
+   "cpu": 0.00033276384117909375
+  },
+  "ns:kube-system/cni": {
+   "n": 48,
+   "rss": 1750142976,
+   "pss": 740806656,
+   "cpu": 0.06023025525341596
+  },
+  "ns:local-path-storage": {
+   "n": 1,
+   "rss": 37478400,
+   "pss": 37343232,
+   "cpu": 0.0006655276823581875
+  }
+ },
+ "total": {
+  "n": 382,
+  "rss": 7783378944,
+  "pss": 5656390656,
+  "cpu": 3.49934455383935
+ },
+ "host_used": 4283543552,
+ "top": [
+  {
+   "pss": 410071040,
+   "cpu": 0.1587283522424277,
+   "cat": "control-plane",
+   "comm": "kube-apiserver",
+   "cmd": "kube-apiserver --advertise-address=172.18.0.5 --allow-privileged=true --authorization-mode"
+  },
+  {
+   "pss": 371122176,
+   "cpu": 0.08651859870656438,
+   "cat": "ns:observe",
+   "comm": "loki",
+   "cmd": "/usr/bin/loki -config.file=/etc/loki/config/config.yaml -target=all"
+  },
+  {
+   "pss": 222863360,
+   "cpu": 0.016970955900133783,
+   "cat": "ns:observe",
+   "comm": "prometheus",
+   "cmd": "/bin/prometheus --storage.tsdb.retention.time=15d --config.file=/etc/config/prometheus.yml"
+  },
+  {
+   "pss": 153907200,
+   "cpu": 0.00033276384117909375,
+   "cat": "ns:observe",
+   "comm": "otelcol-contrib",
+   "cmd": "/otelcol-contrib --config=/etc/otel/config.yaml"
+  },
+  {
+   "pss": 132263936,
+   "cpu": 0.014641609011880125,
+   "cat": "control-plane",
+   "comm": "kube-controller",
+   "cmd": "kube-controller-manager --allocate-node-cidrs=true --authentication-kubeconfig=/etc/kubern"
+  },
+  {
+   "pss": 113352704,
+   "cpu": 0.21962413517820187,
+   "cat": "ns:observe",
+   "comm": "promtail",
+   "cmd": "/usr/bin/promtail -config.file=/etc/promtail/promtail.yaml"
+  },
+  {
+   "pss": 112861184,
+   "cpu": 0.23127086961947016,
+   "cat": "ns:observe",
+   "comm": "promtail",
+   "cmd": "/usr/bin/promtail -config.file=/etc/promtail/promtail.yaml"
+  },
+  {
+   "pss": 112504832,
+   "cpu": 0.22461559279588827,
+   "cat": "ns:observe",
+   "comm": "promtail",
+   "cmd": "/usr/bin/promtail -config.file=/etc/promtail/promtail.yaml"
+  },
+  {
+   "pss": 106500096,
+   "cpu": 0.010315679076551907,
+   "cat": "ns:observe",
+   "comm": "promtail",
+   "cmd": "/usr/bin/promtail -config.file=/etc/promtail/promtail.yaml"
+  },
+  {
+   "pss": 104017920,
+   "cpu": 0.004325929935328219,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --bind_ip_all"
+  },
+  {
+   "pss": 97424384,
+   "cpu": 0.0019965830470745623,
+   "cat": "docker-host",
+   "comm": "dockerd",
+   "cmd": "dockerd"
+  },
+  {
+   "pss": 93372416,
+   "cpu": 0.08385648797713163,
+   "cat": "control-plane",
+   "comm": "etcd",
+   "cmd": "etcd --advertise-client-urls=https://172.18.0.5:2379 --cert-file=/etc/kubernetes/pki/etcd/"
+  },
+  {
+   "pss": 91578368,
+   "cpu": 0.01331055364716375,
+   "cat": "ns:hotel-reservation",
+   "comm": "consul",
+   "cmd": "consul agent -data-dir=/consul/data -config-dir=/consul/config -dev -client 0.0.0.0"
+  },
+  {
+   "pss": 86122496,
+   "cpu": 0.004325929935328219,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --bind_ip_all"
+  },
+  {
+   "pss": 83603456,
+   "cpu": 0.0,
+   "cat": "ns:observe",
+   "comm": "python",
+   "cmd": "python -u /app/sidecar.py"
+  },
+  {
+   "pss": 82481152,
+   "cpu": 0.004658693776507313,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --auth --bind_ip_all"
+  },
+  {
+   "pss": 77348864,
+   "cpu": 0.004325929935328219,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --bind_ip_all"
+  },
+  {
+   "pss": 77139968,
+   "cpu": 0.0039931660941491245,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --bind_ip_all"
+  },
+  {
+   "pss": 76120064,
+   "cpu": 0.009650151394193719,
+   "cat": "control-plane",
+   "comm": "kube-scheduler",
+   "cmd": "kube-scheduler --authentication-kubeconfig=/etc/kubernetes/scheduler.conf --authorization-"
+  },
+  {
+   "pss": 74418176,
+   "cpu": 0.0039931660941491245,
+   "cat": "ns:hotel-reservation",
+   "comm": "mongod",
+   "cmd": "mongod --auth --bind_ip_all"
+  },
+  {
+   "pss": 68349952,
+   "cpu": 0.0029948745706118436,
+   "cat": "ns:kube-system/cluster-addons",
+   "comm": "metrics-server",
+   "cmd": "/metrics-server --cert-dir=/tmp --secure-port=10250 --kubelet-preferred-address-types=Inte"
+  },
+  {
+   "pss": 64175104,
+   "cpu": 0.04392482703564038,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 60444672,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "/bin/calico-node -felix-ready -bird-ready"
+  },
+  {
+   "pss": 60239872,
+   "cpu": 0.0006655276823581875,
+   "cat": "ns:kube-system/kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/usr/local/bin/kube-proxy --config=/var/lib/kube-proxy/config.conf --hostname-override=kin"
+  },
+  {
+   "pss": 59723776,
+   "cpu": 0.02828492650022297,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 57761792,
+   "cpu": 0.03593849484734213,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 57635840,
+   "cpu": 0.03460743948262575,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 57217024,
+   "cpu": 0.0006655276823581875,
+   "cat": "ns:kube-system/kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/usr/local/bin/kube-proxy --config=/var/lib/kube-proxy/config.conf --hostname-override=kin"
+  },
+  {
+   "pss": 55889920,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "/bin/calico-node -felix-live -bird-live"
+  },
+  {
+   "pss": 55379968,
+   "cpu": 0.21063951146636634,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 55042048,
+   "cpu": 0.00033276384117909375,
+   "cat": "ns:kube-system/app",
+   "comm": "kube-controller",
+   "cmd": "/usr/bin/kube-controllers"
+  },
+  {
+   "pss": 54692864,
+   "cpu": 0.015307136694238313,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 53597184,
+   "cpu": 0.21130503914872453,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 52458496,
+   "cpu": 0.20631358153103813,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 45137920,
+   "cpu": 0.0006655276823581875,
+   "cat": "ns:kube-system/kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/usr/local/bin/kube-proxy --config=/var/lib/kube-proxy/config.conf --hostname-override=kin"
+  },
+  {
+   "pss": 44503040,
+   "cpu": 0.0016638192058954688,
+   "cat": "ns:observe",
+   "comm": "kube-state-metr",
+   "cmd": "/kube-state-metrics --port=8080 --telemetry-port=8081 --port=8080 --resources=certificates"
+  },
+  {
+   "pss": 43413504,
+   "cpu": 0.00033276384117909375,
+   "cat": "ns:kube-system/kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/usr/local/bin/kube-proxy --config=/var/lib/kube-proxy/config.conf --hostname-override=kin"
+  },
+  {
+   "pss": 42975232,
+   "cpu": 0.01430884517070103,
+   "cat": "ns:kube-system/cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -felix"
+  },
+  {
+   "pss": 42700800,
+   "cpu": 0.004991457617686406,
+   "cat": "ns:openebs",
+   "comm": "provisioner-loc",
+   "cmd": "/usr/local/bin/provisioner-localpv --bd-time-out=12"
+  },
+  {
+   "pss": 42572800,
+   "cpu": 0.01430884517070103,
+   "cat": "ns:kube-system/cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -felix"
+  }
+ ]
+}

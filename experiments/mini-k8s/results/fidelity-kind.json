@@ -1,0 +1,134 @@
+[
+ {
+  "problem": "wrong_service_selector_hotel_reservation",
+  "inject_s": 6.7,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 0.3,
+  "recover_s": 0.7,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 9.2,
+  "faithful": true,
+  "total_s": 77.1
+ },
+ {
+  "problem": "namespace_memory_limit",
+  "inject_s": 2.7,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 0.1,
+  "recover_s": 9.0,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 9.7,
+  "faithful": true,
+  "total_s": 81.6
+ },
+ {
+  "problem": "missing_configmap_hotel_reservation",
+  "inject_s": 9.8,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 64.5,
+  "recover_s": 10.7,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 0.8,
+  "faithful": true,
+  "total_s": 146.9
+ },
+ {
+  "problem": "readiness_probe_misconfiguration_hotel_reservation",
+  "inject_s": 8.6,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 121.4,
+  "recover_s": 10.1,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 7.6,
+  "faithful": true,
+  "total_s": 207.9
+ },
+ {
+  "problem": "init_container_dependency_hang_hotel_reservation",
+  "inject_s": 0.9,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 61.2,
+  "recover_s": 5.3,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 0.9,
+  "faithful": true,
+  "total_s": 129.0
+ },
+ {
+  "problem": "service_wrong_pod_selection_hotel_reservation",
+  "inject_s": 13.6,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 0.3,
+  "recover_s": 7.5,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 8.9,
+  "faithful": true,
+  "total_s": 90.3
+ },
+ {
+  "problem": "missing_service_hotel_reservation",
+  "inject_s": 58.9,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 11.2,
+  "recover_s": 24.1,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 1.3,
+  "faithful": true,
+  "total_s": 155.9
+ },
+ {
+  "problem": "wrong_bin_usage",
+  "inject_s": 7.1,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 0.0,
+  "recover_s": 1.0,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 0.1,
+  "faithful": true,
+  "total_s": 68.3
+ },
+ {
+  "problem": "sidecar_port_conflict_hotel_reservation",
+  "inject_s": 7.6,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 61.8,
+  "recover_s": 5.6,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 0.9,
+  "faithful": true,
+  "total_s": 136.4
+ },
+ {
+  "problem": "configmap_drift_hotel_reservation",
+  "inject_s": 5.8,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 0.2,
+  "recover_s": 5.6,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 0.2,
+  "faithful": true,
+  "total_s": 71.9
+ },
+ {
+  "problem": "network_policy_block",
+  "inject_s": 0.1,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 22.2,
+  "recover_s": 0.2,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 9.0,
+  "faithful": true,
+  "total_s": 91.6
+ },
+ {
+  "problem": "revoke_auth_mongodb-1",
+  "inject_s": 15.2,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 61.7,
+  "recover_s": 7.5,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 0.7,
+  "faithful": true,
+  "total_s": 146.2
+ }
+]

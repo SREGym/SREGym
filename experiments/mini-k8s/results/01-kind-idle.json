@@ -1,0 +1,355 @@
+{
+ "label": "kind 4-node + calico, idle (no app)",
+ "interval": 30.01677894592285,
+ "categories": {
+  "other": {
+   "n": 77,
+   "rss": 2883584,
+   "pss": 3051520,
+   "cpu": 0.003664617052954684
+  },
+  "docker-host": {
+   "n": 2,
+   "rss": 111349760,
+   "pss": 108950528,
+   "cpu": 0.0013325880192562487
+  },
+  "container-runtime": {
+   "n": 41,
+   "rss": 566013952,
+   "pss": 317751296,
+   "cpu": 0.05696813782320463
+  },
+  "cni": {
+   "n": 49,
+   "rss": 1743253504,
+   "pss": 749349888,
+   "cpu": 0.0932811613479374
+  },
+  "node-init": {
+   "n": 8,
+   "rss": 95420416,
+   "pss": 39040000,
+   "cpu": 0.0006662940096281244
+  },
+  "app": {
+   "n": 35,
+   "rss": 117542912,
+   "pss": 62219264,
+   "cpu": 0.0006662940096281244
+  },
+  "control-plane": {
+   "n": 4,
+   "rss": 596578304,
+   "pss": 598265856,
+   "cpu": 0.12493012680527331
+  },
+  "kubelet": {
+   "n": 4,
+   "rss": 379125760,
+   "pss": 193849344,
+   "cpu": 0.07462492907834992
+  },
+  "kube-proxy": {
+   "n": 4,
+   "rss": 233197568,
+   "pss": 234233856,
+   "cpu": 0.001665735024070311
+  },
+  "cluster-addons": {
+   "n": 3,
+   "rss": 140918784,
+   "pss": 101724160,
+   "cpu": 0.0043309110625828085
+  }
+ },
+ "total": {
+  "n": 227,
+  "rss": 3986284544,
+  "pss": 2408435712,
+  "cpu": 0.3621307942328856
+ },
+ "host_used": 2254139392,
+ "top": [
+  {
+   "pss": 336633856,
+   "cpu": 0.05996646086653119,
+   "cat": "control-plane",
+   "comm": "kube-apiserver",
+   "cmd": "kube-apiserver --advertise-address=172.18.0.5 --allow-privileged=true --authorization-mode"
+  },
+  {
+   "pss": 121937920,
+   "cpu": 0.019322526279215605,
+   "cat": "control-plane",
+   "comm": "kube-controller",
+   "cmd": "kube-controller-manager --allocate-node-cidrs=true --authentication-kubeconfig=/etc/kubern"
+  },
+  {
+   "pss": 104596480,
+   "cpu": 0.0013325880192562487,
+   "cat": "docker-host",
+   "comm": "dockerd",
+   "cmd": "dockerd"
+  },
+  {
+   "pss": 71782400,
+   "cpu": 0.009994410144421864,
+   "cat": "control-plane",
+   "comm": "kube-scheduler",
+   "cmd": "kube-scheduler --authentication-kubeconfig=/etc/kubernetes/scheduler.conf --authorization-"
+  },
+  {
+   "pss": 67911680,
+   "cpu": 0.035646729515104655,
+   "cat": "control-plane",
+   "comm": "etcd",
+   "cmd": "etcd --advertise-client-urls=https://172.18.0.5:2379 --cert-file=/etc/kubernetes/pki/etcd/"
+  },
+  {
+   "pss": 59604992,
+   "cpu": 0.0,
+   "cat": "kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/usr/local/bin/kube-proxy --config=/var/lib/kube-proxy/config.conf --hostname-override=kin"
+  },
+  {
+   "pss": 58327040,
+   "cpu": 0.0006662940096281244,
+   "cat": "kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/usr/local/bin/kube-proxy --config=/var/lib/kube-proxy/config.conf --hostname-override=kin"
+  },
+  {
+   "pss": 58163200,
+   "cpu": 0.0003331470048140622,
+   "cat": "kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/usr/local/bin/kube-proxy --config=/var/lib/kube-proxy/config.conf --hostname-override=kin"
+  },
+  {
+   "pss": 58138624,
+   "cpu": 0.0006662940096281244,
+   "cat": "kube-proxy",
+   "comm": "kube-proxy",
+   "cmd": "/usr/local/bin/kube-proxy --config=/var/lib/kube-proxy/config.conf --hostname-override=kin"
+  },
+  {
+   "pss": 54212608,
+   "cpu": 0.027651201399567157,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 51744768,
+   "cpu": 0.0013325880192562487,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/bin/containerd --config /var/run/docker/containerd/containerd.toml"
+  },
+  {
+   "pss": 50036736,
+   "cpu": 0.0006662940096281244,
+   "cat": "app",
+   "comm": "kube-controller",
+   "cmd": "/usr/bin/kube-controllers"
+  },
+  {
+   "pss": 48028672,
+   "cpu": 0.01898937927440154,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 46242816,
+   "cpu": 0.014325321207004672,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 45365248,
+   "cpu": 0.013659027197376548,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 42533888,
+   "cpu": 0.011660145168492175,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 40431616,
+   "cpu": 0.010327557149235927,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 38519808,
+   "cpu": 0.023653437341798412,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -felix"
+  },
+  {
+   "pss": 38303744,
+   "cpu": 0.022653996327356228,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -felix"
+  },
+  {
+   "pss": 37998592,
+   "cpu": 0.008994969129979678,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 37937152,
+   "cpu": 0.02165455531291404,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -felix"
+  },
+  {
+   "pss": 37898240,
+   "cpu": 0.02165455531291404,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -felix"
+  },
+  {
+   "pss": 37873664,
+   "cpu": 0.007995528115537491,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 35024896,
+   "cpu": 0.0,
+   "cat": "cluster-addons",
+   "comm": "local-path-prov",
+   "cmd": "local-path-provisioner --debug start --helper-image docker.io/kindest/local-path-helper:v2"
+  },
+  {
+   "pss": 33370112,
+   "cpu": 0.0023320290336984353,
+   "cat": "cluster-addons",
+   "comm": "coredns",
+   "cmd": "/coredns -conf /etc/coredns/Corefile"
+  },
+  {
+   "pss": 33329152,
+   "cpu": 0.0019988820288843728,
+   "cat": "cluster-addons",
+   "comm": "coredns",
+   "cmd": "/coredns -conf /etc/coredns/Corefile"
+  },
+  {
+   "pss": 31542272,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -confd"
+  },
+  {
+   "pss": 30653440,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -confd"
+  },
+  {
+   "pss": 30117888,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -allocate-tunnel-addrs"
+  },
+  {
+   "pss": 30023680,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -confd"
+  },
+  {
+   "pss": 29927424,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -confd"
+  },
+  {
+   "pss": 29799424,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -allocate-tunnel-addrs"
+  },
+  {
+   "pss": 29538304,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -allocate-tunnel-addrs"
+  },
+  {
+   "pss": 29458432,
+   "cpu": 0.0003331470048140622,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -allocate-tunnel-addrs"
+  },
+  {
+   "pss": 27675648,
+   "cpu": 0.0,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -status-reporter"
+  },
+  {
+   "pss": 27486208,
+   "cpu": 0.0003331470048140622,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -monitor-addresses"
+  },
+  {
+   "pss": 27462656,
+   "cpu": 0.0006662940096281244,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -monitor-addresses"
+  },
+  {
+   "pss": 27375616,
+   "cpu": 0.0003331470048140622,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -status-reporter"
+  },
+  {
+   "pss": 27159552,
+   "cpu": 0.0003331470048140622,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -status-reporter"
+  },
+  {
+   "pss": 26745856,
+   "cpu": 0.0006662940096281244,
+   "cat": "cni",
+   "comm": "calico-node",
+   "cmd": "calico-node -monitor-token"
+  }
+ ]
+}

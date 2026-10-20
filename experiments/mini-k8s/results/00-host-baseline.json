@@ -1,0 +1,331 @@
+{
+ "label": "host-before-cluster",
+ "interval": 3.004760980606079,
+ "categories": {
+  "other": {
+   "n": 80,
+   "rss": 38666240,
+   "pss": 35304448,
+   "cpu": 0.0
+  },
+  "docker-host": {
+   "n": 2,
+   "rss": 108785664,
+   "pss": 106475520,
+   "cpu": 0.0033280517367417816
+  },
+  "container-runtime": {
+   "n": 9,
+   "rss": 321097728,
+   "pss": 196067328,
+   "cpu": 0.013312206946967126
+  },
+  "app": {
+   "n": 19,
+   "rss": 119365632,
+   "pss": 78536704,
+   "cpu": 0.0
+  },
+  "node-init": {
+   "n": 8,
+   "rss": 91418624,
+   "pss": 32782336,
+   "cpu": 0.0033280517367417816
+  },
+  "kubelet": {
+   "n": 1,
+   "rss": 84111360,
+   "pss": 83021824,
+   "cpu": 0.019968310420450688
+  }
+ },
+ "total": {
+  "n": 119,
+  "rss": 763445248,
+  "pss": 532188160,
+  "cpu": 0.039936620840901375
+ },
+ "host_used": 969306112,
+ "top": [
+  {
+   "pss": 102625280,
+   "cpu": 0.0033280517367417816,
+   "cat": "docker-host",
+   "comm": "dockerd",
+   "cmd": "dockerd"
+  },
+  {
+   "pss": 83021824,
+   "cpu": 0.019968310420450688,
+   "cat": "kubelet",
+   "comm": "kubelet",
+   "cmd": "/usr/bin/kubelet --bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfi"
+  },
+  {
+   "pss": 54702080,
+   "cpu": 0.0,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/bin/containerd --config /var/run/docker/containerd/containerd.toml"
+  },
+  {
+   "pss": 50962432,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "kubeadm",
+   "cmd": "kubeadm init --config=/kind/kubeadm.conf --skip-token-print --v=6"
+  },
+  {
+   "pss": 32968704,
+   "cpu": 0.006656103473483563,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 31289344,
+   "cpu": 0.0,
+   "cat": "other",
+   "comm": "docker",
+   "cmd": "docker exec --privileged kind-control-plane kubeadm init --config=/kind/kubeadm.conf --ski"
+  },
+  {
+   "pss": 27551744,
+   "cpu": 0.0,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 27291648,
+   "cpu": 0.0033280517367417816,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 27089920,
+   "cpu": 0.0033280517367417816,
+   "cat": "container-runtime",
+   "comm": "containerd",
+   "cmd": "/usr/local/bin/containerd"
+  },
+  {
+   "pss": 15466496,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "kind",
+   "cmd": "kind create cluster --config /home/user/SREGym/kind/kind-config.yaml"
+  },
+  {
+   "pss": 6699008,
+   "cpu": 0.0,
+   "cat": "container-runtime",
+   "comm": "containerd-shim",
+   "cmd": "/usr/bin/containerd-shim-runc-v2 -namespace moby -id cd80d3233f5e07393d28f9d7dd093a0a535b3"
+  },
+  {
+   "pss": 6667264,
+   "cpu": 0.0,
+   "cat": "container-runtime",
+   "comm": "containerd-shim",
+   "cmd": "/usr/bin/containerd-shim-runc-v2 -namespace moby -id 240e0383cad0bd5dc04110eeb28bceba5a6b1"
+  },
+  {
+   "pss": 6561792,
+   "cpu": 0.0,
+   "cat": "container-runtime",
+   "comm": "containerd-shim",
+   "cmd": "/usr/bin/containerd-shim-runc-v2 -namespace moby -id ac42b040e1e3fb4258d09327c34580fb4f835"
+  },
+  {
+   "pss": 6535168,
+   "cpu": 0.0,
+   "cat": "container-runtime",
+   "comm": "containerd-shim",
+   "cmd": "/usr/bin/containerd-shim-runc-v2 -namespace moby -id 9118b53cb50f388abb13e52095ce78e6007d0"
+  },
+  {
+   "pss": 5122048,
+   "cpu": 0.0,
+   "cat": "node-init",
+   "comm": "systemd-journal",
+   "cmd": "/lib/systemd/systemd-journald"
+  },
+  {
+   "pss": 5014528,
+   "cpu": 0.0,
+   "cat": "node-init",
+   "comm": "systemd-journal",
+   "cmd": "/lib/systemd/systemd-journald"
+  },
+  {
+   "pss": 5011456,
+   "cpu": 0.0,
+   "cat": "node-init",
+   "comm": "systemd-journal",
+   "cmd": "/lib/systemd/systemd-journald"
+  },
+  {
+   "pss": 4911104,
+   "cpu": 0.0,
+   "cat": "node-init",
+   "comm": "systemd-journal",
+   "cmd": "/lib/systemd/systemd-journald"
+  },
+  {
+   "pss": 4837376,
+   "cpu": 0.0,
+   "cat": "node-init",
+   "comm": "systemd",
+   "cmd": "/sbin/init"
+  },
+  {
+   "pss": 3850240,
+   "cpu": 0.0,
+   "cat": "docker-host",
+   "comm": "docker-proxy",
+   "cmd": "/usr/bin/docker-proxy -proto tcp -host-ip 127.0.0.1 -host-port 39693 -container-ip 172.18."
+  },
+  {
+   "pss": 3051520,
+   "cpu": 0.0,
+   "cat": "other",
+   "comm": "6",
+   "cmd": "sbx-telemetry-collector"
+  },
+  {
+   "pss": 2926592,
+   "cpu": 0.0033280517367417816,
+   "cat": "node-init",
+   "comm": "systemd",
+   "cmd": "/sbin/init"
+  },
+  {
+   "pss": 2634752,
+   "cpu": 0.0,
+   "cat": "node-init",
+   "comm": "systemd",
+   "cmd": "/sbin/init"
+  },
+  {
+   "pss": 2324480,
+   "cpu": 0.0,
+   "cat": "node-init",
+   "comm": "systemd",
+   "cmd": "/sbin/init"
+  },
+  {
+   "pss": 2019328,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "(agetty)",
+   "cmd": "(agetty)"
+  },
+  {
+   "pss": 1753088,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "(agetty)",
+   "cmd": "(agetty)"
+  },
+  {
+   "pss": 1306624,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "(agetty)",
+   "cmd": "(agetty)"
+  },
+  {
+   "pss": 1195008,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "(agetty)",
+   "cmd": "(agetty)"
+  },
+  {
+   "pss": 1195008,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "(agetty)",
+   "cmd": "(agetty)"
+  },
+  {
+   "pss": 1097728,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "(agetty)",
+   "cmd": "(agetty)"
+  },
+  {
+   "pss": 1097728,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "(agetty)",
+   "cmd": "(agetty)"
+  },
+  {
+   "pss": 963584,
+   "cpu": 0.0,
+   "cat": "other",
+   "comm": "bash",
+   "cmd": "bash kind/setup_kind_cluster.sh"
+  },
+  {
+   "pss": 257024,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "agetty",
+   "cmd": "/sbin/agetty -o -p -- \\u --noclear --keep-baud - 115200,38400,9600 xterm"
+  },
+  {
+   "pss": 257024,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "agetty",
+   "cmd": "/sbin/agetty -o -p -- \\u --noclear --keep-baud - 115200,38400,9600 xterm"
+  },
+  {
+   "pss": 256000,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "agetty",
+   "cmd": "/sbin/agetty -o -p -- \\u --noclear --keep-baud - 115200,38400,9600 xterm"
+  },
+  {
+   "pss": 251904,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "agetty",
+   "cmd": "/sbin/agetty -o -p -- \\u --noclear --keep-baud - 115200,38400,9600 xterm"
+  },
+  {
+   "pss": 240640,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "agetty",
+   "cmd": "/sbin/agetty -o -p -- \\u --noclear - linux"
+  },
+  {
+   "pss": 240640,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "agetty",
+   "cmd": "/sbin/agetty -o -p -- \\u --noclear - linux"
+  },
+  {
+   "pss": 239616,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "agetty",
+   "cmd": "/sbin/agetty -o -p -- \\u --noclear - linux"
+  },
+  {
+   "pss": 238592,
+   "cpu": 0.0,
+   "cat": "app",
+   "comm": "agetty",
+   "cmd": "/sbin/agetty -o -p -- \\u --noclear - linux"
+  }
+ ]
+}

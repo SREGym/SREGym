@@ -1,0 +1,37 @@
+diff --git a/pkg/kwok/server/debugging_exec.go b/pkg/kwok/server/debugging_exec.go
+index a2cbc77..45db2e9 100644
+--- a/pkg/kwok/server/debugging_exec.go
++++ b/pkg/kwok/server/debugging_exec.go
+@@ -69,6 +69,14 @@ func (s *Server) ExecInContainer(ctx context.Context, name string, uid string, c
+ 		ctx = utilsexec.WithDir(ctx, execTarget.Local.WorkDir)
+ 	}
+
++	// KWOK_EXEC_PREFIX lets a node agent that runs real processes wrap the
++	// command (e.g. with nsenter into the pod's namespaces and root).
++	for _, env := range execTarget.Local.Envs {
++		if env.Name == "KWOK_EXEC_PREFIX" && env.Value != "" {
++			cmd = append(strings.Fields(env.Value), cmd...)
++		}
++	}
++
+ 	// Set cancel context.
+ 	ctx, cancel := context.WithCancel(ctx)
+ 	defer cancel()
+diff --git a/pkg/kwok/server/debugging_port_forword.go b/pkg/kwok/server/debugging_port_forword.go
+index 531527e..b713d4f 100644
+--- a/pkg/kwok/server/debugging_port_forword.go
++++ b/pkg/kwok/server/debugging_port_forword.go
+@@ -59,7 +59,12 @@ func (s *Server) PortForward(ctx context.Context, name string, uid string, port
+ 	}
+
+ 	if target := forward.Target; target != nil {
+-		addr := net.JoinHostPort(target.Address, strconv.FormatInt(int64(target.Port), 10))
++		targetPort := target.Port
++		if targetPort == 0 {
++			// Port 0 forwards to the requested port on the target address.
++			targetPort = port
++		}
++		addr := net.JoinHostPort(target.Address, strconv.FormatInt(int64(targetPort), 10))
+ 		var dialer net.Dialer
+ 		dial, err := dialer.DialContext(ctx, "tcp", addr)
+ 		if err != nil {
