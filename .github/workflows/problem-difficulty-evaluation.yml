@@ -1,20 +1,25 @@
 name: Problem Difficulty Evaluation
 
 # Opt-in only: a core team member starts this workflow from the Actions UI or
-# comments "/evaluate-problem <id> [3|5] [glm-5.3-flash]" on a pull request.
-# Codex requires the Responses API, so a local LiteLLM proxy translates its
-# requests to Z.ai's OpenAI-compatible GLM Coding Plan endpoint. Z.ai is a
-# low-volume annual plan, so when its preflight fails (quota, outage, or the
-# secret simply isn't set) this workflow falls back to a personal Cursor CLI
-# subscription instead of failing outright. The fallback doesn't try to match
-# models between runs -- it exists purely to flag whether a problem still
-# gets solved by *some* capable agent, not to compare agents.
+# comments "/evaluate-problem <id> [3|5] [model]" on a pull request.
+#
+# By default Claude Code runs on Claude Opus through the Anthropic API
+# (ANTHROPIC_API_KEY, a monthly credit grant) for three attempts. When the
+# Anthropic preflight fails (credits exhausted, outage, or the secret isn't
+# set), or when glm-5.3-flash is requested, the Z.ai pipeline runs instead
+# with five attempts: Codex requires the Responses API, so a local LiteLLM
+# proxy translates its requests to Z.ai's OpenAI-compatible GLM Coding Plan
+# endpoint. Z.ai is a low-volume annual plan, so when its preflight fails too,
+# this workflow falls back to a personal Cursor CLI subscription instead of
+# failing outright. The fallbacks don't try to match models between runs --
+# they exist purely to flag whether a problem still gets solved by *some*
+# capable agent, not to compare agents.
 #
 # Comment runs evaluate the PR merged into the default branch so that problems
 # introduced by the PR itself can be scored before merge. Because this job
-# holds ZCODE_API_KEY/CURSOR_API_KEY, only OWNER/MEMBER/COLLABORATOR comments
-# are honoured; review the PR diff before issuing the command, as it executes
-# PR code.
+# holds ANTHROPIC_API_KEY/ZCODE_API_KEY/CURSOR_API_KEY, only
+# OWNER/MEMBER/COLLABORATOR comments are honoured; review the PR diff before
+# issuing the command, as it executes PR code.
 
 on:
   issue_comment:
@@ -26,19 +31,22 @@ on:
         required: true
         type: string
       attempts:
-        description: "Number of independent evaluations"
+        description: "Number of independent evaluations (default: 3 on Claude, 5 on GLM/Cursor)"
         required: true
-        default: "3"
+        default: default
         type: choice
         options:
-          - "5"
+          - default
           - "3"
+          - "5"
       model:
-        description: "Z.ai Coding Plan model"
+        description: "Model; Claude models fall back to the GLM pipeline when the Anthropic API is unusable"
         required: true
-        default: glm-5.3-flash
+        default: claude-opus-5-5
         type: choice
         options:
+          - claude-opus-5-5
+          - claude-sonnet-5-5
           - glm-5.3-flash
 
 concurrency:
@@ -92,6 +100,7 @@ jobs:
             workflow_dispatch)
               problem_id="$DISPATCH_ID"
               attempts="$DISPATCH_ATTEMPTS"
+              [ "$attempts" = "default" ] && attempts=""
               model="$DISPATCH_MODEL"
               checkout_ref="$DISPATCH_REF"
               ;;
@@ -117,11 +126,18 @@ jobs:
                   | head -n1 \
                   | sed -E 's#^[[:space:]]*/evaluate-problem[[:space:]:]+##I' || true)
                 raw=$(printf '%s' "$raw" | tr -d '\r')
-                problem_id=$(printf '%s' "$raw" | awk '{print $1}')
-                attempts=$(printf '%s' "$raw" | awk '{print $2}')
-                model=$(printf '%s' "$raw" | awk '{print $3}')
-                attempts=${attempts:-5}
-              model=${model:-glm-5.3-flash}
+                read -r -a words <<< "$raw" || true
+                problem_id=${words[0]:-}
+                # Both optional values may be omitted, so tell them apart by
+                # shape: "/evaluate-problem <id> glm-5.3-flash" keeps GLM's
+                # default attempt count.
+                for word in "${words[@]:1:2}"; do
+                  case "$word" in
+                    *[!0-9]*) model="$word" ;;
+                    *) attempts="$word" ;;
+                  esac
+                done
+                model=${model:-claude-opus-5-5}
               fi
               ;;
           esac
@@ -133,12 +149,13 @@ jobs:
           if [ -z "$skip_reason" ]; then
             if ! [[ "$problem_id" =~ ^[A-Za-z0-9_.-]+$ ]]; then
               skip_reason="problem ID must contain only letters, numbers, dots, underscores, or hyphens"
-            elif [ "$attempts" != "3" ] && [ "$attempts" != "5" ]; then
+            elif [ -n "$attempts" ] && [ "$attempts" != "3" ] && [ "$attempts" != "5" ]; then
               skip_reason="attempts must be 3 or 5"
-            elif [ "$model" != "glm-5.3-flash" ]; then
-              skip_reason="model must be glm-5.3-flash"
             else
-              should_run=true
+              case "$model" in
+                claude-opus-5-5|claude-sonnet-5-5|glm-5.3-flash) should_run=true ;;
+                *) skip_reason="model must be claude-opus-5-5, claude-sonnet-5-5, or glm-5.3-flash" ;;
+              esac
             fi
           fi
 
@@ -152,7 +169,7 @@ jobs:
           echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
 
           if [ "$should_run" = "true" ]; then
-            echo "::notice::Difficulty evaluation will run for '$problem_id' ($attempts attempts, $model)"
+            echo "::notice::Difficulty evaluation will run for '$problem_id' (${attempts:-default} attempts, $model)"
           else
             echo "::notice::Difficulty evaluation skipped: $skip_reason"
           fi
@@ -168,8 +185,10 @@ jobs:
       issues: write
     env:
       PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
-      ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
-      ZAI_MODEL: ${{ needs.resolve.outputs.model }}
+      # ATTEMPTS, ZAI_MODEL and RUN_MODEL are set once a provider is chosen:
+      # the default attempt count and the Z.ai model depend on which one ran.
+      REQUESTED_ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
+      REQUESTED_MODEL: ${{ needs.resolve.outputs.model }}
       LITELLM_PORT: "4000"
       CURSOR_JUDGE_BRIDGE_PORT: "4100"
       CURSOR_MODEL: "auto"
@@ -177,14 +196,65 @@ jobs:
       - name: Choose evaluation provider
         id: provider
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -euo pipefail
           provider=""
+          claude_reason=""
           zai_reason=""
+          ZAI_MODEL="glm-5.3-flash"
 
-          if [ -n "$ZCODE_API_KEY" ]; then
+          case "$REQUESTED_MODEL" in
+            claude-*)
+              if [ -n "$ANTHROPIC_API_KEY" ]; then
+                response_file="$RUNNER_TEMP/anthropic-preflight.json"
+                request_body=$(jq -cn --arg model "$REQUESTED_MODEL" '{
+                  model: $model,
+                  max_tokens: 1024,
+                  messages: [{role: "user", content: "Reply with OK."}]
+                }')
+                # Exhausted credits come back as an HTTP error here, which
+                # sends this run to the GLM pipeline. Retries keep a passing
+                # overload or connection blip from doing the same.
+                http_status=$(curl --silent --show-error \
+                  --connect-timeout 10 \
+                  --max-time 120 \
+                  --retry 2 \
+                  --retry-delay 5 \
+                  --output "$response_file" \
+                  --write-out '%{http_code}' \
+                  --request POST \
+                  --url https://api.anthropic.com/v1/messages \
+                  --header "x-api-key: $ANTHROPIC_API_KEY" \
+                  --header 'anthropic-version: 2023-06-01' \
+                  --header 'Content-Type: application/json' \
+                  --data "$request_body" || true)
+
+                case "$http_status" in
+                  2??)
+                    provider="anthropic"
+                    echo "Anthropic API preflight passed for $REQUESTED_MODEL."
+                    ;;
+                  *)
+                    error_type=$(jq -r '.error.type // "unknown"' "$response_file" 2>/dev/null || true)
+                    error_message=$(jq -r '.error.message // "unknown error"' "$response_file" 2>/dev/null || true)
+                    claude_reason="HTTP ${http_status:-000}, ${error_type:-unknown}: ${error_message:-unknown error}"
+                    echo "Anthropic API preflight failed: $claude_reason"
+                    ;;
+                esac
+              else
+                claude_reason="repository secret ANTHROPIC_API_KEY is not configured"
+                echo "$claude_reason"
+              fi
+              ;;
+            *)
+              ZAI_MODEL="$REQUESTED_MODEL"
+              ;;
+          esac
+
+          if [ -z "$provider" ] && [ -n "$ZCODE_API_KEY" ]; then
             response_file="$RUNNER_TEMP/zai-preflight.json"
             request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
               model: $model,
@@ -216,7 +286,7 @@ jobs:
                 echo "Z.ai Coding Plan preflight failed: $zai_reason"
                 ;;
             esac
-          else
+          elif [ -z "$provider" ]; then
             zai_reason="repository secret ZCODE_API_KEY is not configured"
             echo "$zai_reason"
           fi
@@ -232,12 +302,15 @@ jobs:
               provider="cursor"
               echo "Falling back to the Cursor CLI ($zai_reason)."
             else
-              echo "::error::Neither Z.ai nor Cursor is usable for this run."
+              echo "::error::No evaluation provider is usable for this run."
               {
                 echo "# Problem Difficulty Evaluation"
                 echo
                 echo "❌ No usable evaluation backend."
                 echo
+                if [ -n "$claude_reason" ]; then
+                  echo "- **Anthropic**: $claude_reason"
+                fi
                 echo "- **Z.ai**: $zai_reason"
                 echo "- **Cursor**: repository secret \`CURSOR_API_KEY\` is not configured."
               } | tee evaluation-report.md >> "$GITHUB_STEP_SUMMARY"
@@ -245,14 +318,30 @@ jobs:
             fi
           fi
 
-          run_model="$ZAI_MODEL"
-          [ "$provider" = "cursor" ] && run_model="$CURSOR_MODEL"
+          case "$provider" in
+            anthropic) run_model="$REQUESTED_MODEL"; harness="Claude Code"; default_attempts=3 ;;
+            zai) run_model="$ZAI_MODEL"; harness="Codex"; default_attempts=5 ;;
+            cursor) run_model="$CURSOR_MODEL"; harness="Cursor CLI"; default_attempts=5 ;;
+          esac
+          attempts="${REQUESTED_ATTEMPTS:-$default_attempts}"
+
+          fallback_note=""
+          [ -n "$claude_reason" ] && fallback_note="Claude unavailable ($claude_reason)."
+          [ -n "$zai_reason" ] && fallback_note="${fallback_note:+$fallback_note }Z.ai unavailable ($zai_reason)."
+          # Provider error text is written to GITHUB_ENV, so keep it on one line.
+          fallback_note=$(printf '%s' "$fallback_note" | tr '\r\n' '  ')
 
           echo "provider=$provider" >> "$GITHUB_OUTPUT"
-          echo "PROVIDER=$provider" >> "$GITHUB_ENV"
-          echo "PROVIDER_READY=true" >> "$GITHUB_ENV"
-          echo "RUN_MODEL=$run_model" >> "$GITHUB_ENV"
-          echo "::notice::Using provider '$provider' (model '$run_model') for this evaluation."
+          {
+            echo "PROVIDER=$provider"
+            echo "PROVIDER_READY=true"
+            echo "RUN_MODEL=$run_model"
+            echo "ZAI_MODEL=$ZAI_MODEL"
+            echo "HARNESS=$harness"
+            echo "ATTEMPTS=$attempts"
+            echo "FALLBACK_NOTE=$fallback_note"
+          } >> "$GITHUB_ENV"
+          echo "::notice::Using provider '$provider' (model '$run_model', $attempts attempts) for this evaluation."
 
       - name: React to triggering comment
         if: needs.resolve.outputs.comment_id != ''
@@ -278,9 +367,10 @@ jobs:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
           COMMENT_ID: ${{ needs.resolve.outputs.comment_id }}
           PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
-          ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
+          ATTEMPTS: ${{ env.ATTEMPTS }}
           PROVIDER: ${{ env.PROVIDER }}
           RUN_MODEL: ${{ env.RUN_MODEL }}
+          FALLBACK_NOTE: ${{ env.FALLBACK_NOTE }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         with:
           script: |
@@ -289,14 +379,20 @@ jobs:
             const commandUrl =
               `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/pull/` +
               `${process.env.PR_NUMBER}#issuecomment-${process.env.COMMENT_ID}`;
-            const providerLabel = process.env.PROVIDER === 'cursor'
-              ? 'Cursor CLI fallback'
-              : 'Z.ai Coding Plan';
+            const providerLabel = {
+              anthropic: 'Claude Code on the Anthropic API',
+              zai: 'Codex on the Z.ai Coding Plan',
+              cursor: 'Cursor CLI fallback',
+            }[process.env.PROVIDER];
+            const fallbackNote = process.env.FALLBACK_NOTE
+              ? `> ⚠️ ${process.env.FALLBACK_NOTE}\n\n`
+              : '';
             const body =
               `${marker}\n> In response to [this command](${commandUrl}).\n\n` +
               `## ⏳ Problem Difficulty Evaluation\n\n` +
               `Running for \`${process.env.PROBLEM_ID}\` ` +
               `(${process.env.ATTEMPTS} attempts, \`${process.env.RUN_MODEL}\` via ${providerLabel})\n\n` +
+              fallbackNote +
               `Evaluating this PR merged into \`${process.env.DEFAULT_BRANCH}\`.\n\n` +
               `_[Live workflow run](${runUrl})_`;
 
@@ -527,6 +623,9 @@ jobs:
 
       - name: Run repeated agent evaluation
         env:
+          # Only Claude runs get the Anthropic key; SREGym forwards provider
+          # keys into the agent container, and other agents don't need it.
+          ANTHROPIC_API_KEY: ${{ env.PROVIDER == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -euo pipefail
@@ -534,6 +633,15 @@ jobs:
 
           build_args=()
           case "$PROVIDER" in
+            anthropic)
+              # The released agent image carries its own copy of clients/;
+              # build so the checked-out Claude Code driver is what runs.
+              build_args+=(--force-build)
+              agent_name="claudecode"
+              # The judge calls the same model through LiteLLM, which reads
+              # ANTHROPIC_API_KEY from the environment.
+              judge_model="anthropic/$RUN_MODEL"
+              ;;
             zai)
               build_args+=(--force-build)
               agent_name="codex"
@@ -591,13 +699,19 @@ jobs:
             exit 1
           fi
 
+          note_args=()
+          if [ -n "${FALLBACK_NOTE:-}" ]; then
+            note_args=(--note "$FALLBACK_NOTE")
+          fi
           uv run python -m sregym.results.report \
             --csv "$result_csv" \
             --problem "$PROBLEM_ID" \
             --model "$RUN_MODEL" \
+            --harness "$HARNESS" \
             --attempts "$ATTEMPTS" \
             --output evaluation-report.md \
-            --github-summary "$GITHUB_STEP_SUMMARY"
+            --github-summary "$GITHUB_STEP_SUMMARY" \
+            "${note_args[@]}"
 
       - name: Upload evaluation artifacts
         if: always() && env.PROVIDER_READY == 'true'
