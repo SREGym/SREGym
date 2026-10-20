@@ -274,3 +274,146 @@ def test_a_flag_turned_on_is_a_change_on_the_service_it_names_not_on_the_flag_se
     flags.attribute_flags(comps, config, set())
     assert not comps["deployment/payment"]["signals"]
     assert flags.key_tokens("loadGeneratorFloodHomepage") == {"load", "generator", "flood", "homepage"}
+
+
+def test_a_workload_outside_the_application_becomes_a_finding_and_its_own_workload_change_does_not():
+    ranked = [
+        {
+            "object": "cronjob/ops/updater",
+            "kind": "CronJob",
+            "name": "updater",
+            "namespace": "ops",
+            "affects": [],
+            "at": "2026-10-19T08:00:00Z",
+            "created_after_targets_s": 300,
+            "seconds_ago": 60,
+        },
+        {
+            "object": "deployment/web",
+            "kind": "Deployment",
+            "name": "web",
+            "namespace": "ns",
+            "affects": ["deployment/web"],
+            "at": "2026-10-19T08:00:00Z",
+            "modified_after_creation_s": 300,
+            "seconds_ago": 60,
+        },
+    ]
+    findings = derive.cluster_findings({}, ranked, {})
+    assert [(x["kind"], x["name"]) for x in findings] == [("CronJob", "updater")]
+
+
+def test_a_config_object_is_a_finding_only_when_some_workload_it_acts_on_does_not_read_it():
+    comps = {
+        "deployment/web": {"namespace": "ns", "config_objects": {"secret/db-conn": {}}},
+        "deployment/db": {"namespace": "ns", "config_objects": {}},
+    }
+
+    def change(kind, name, ns, affects):
+        return {
+            "object": f"{kind.lower()}/{ns}/{name}",
+            "kind": kind,
+            "name": name,
+            "namespace": ns,
+            "affects": affects,
+            "at": "2026-10-19T08:00:00Z",
+            "modified_after_creation_s": 300,
+        }
+
+    ranked = [
+        change("Secret", "db-conn", "ns", ["deployment/web"]),  # web's own configuration
+        change("ConfigMap", "coredns", "kube-system", ["deployment/web"]),  # acts on web, which does not read it
+        change("Secret", "db-conn", "other", ["deployment/web"]),  # same name, another namespace
+    ]
+    findings = derive.cluster_findings({}, ranked, comps)
+    assert [(x["kind"], x["name"], x["namespace"]) for x in findings] == [
+        ("ConfigMap", "coredns", "kube-system"),
+        ("Secret", "db-conn", "other"),
+    ]
+
+
+def test_webhook_timeouts_that_add_up_past_the_api_timeout_are_a_finding():
+    rules = [{"operations": ["CREATE"], "apiGroups": [""], "resources": ["pods"]}]
+    hooks = [
+        {
+            "kind": "MutatingWebhookConfiguration",
+            "configuration": f"hook-{i}",
+            "webhook": f"h{i}.io",
+            "timeout_seconds": t,
+            "failure_policy": "Ignore",
+            "_rules": rules,
+            "namespace_selector": None,
+        }
+        for i, t in enumerate((12, 8, 11, 9))
+    ]
+    comps = {"deployment/web": {"namespace": "ns"}}
+    (finding,) = checks.admission_budgets(hooks, ["ns"], {}, comps)
+    assert "add up to 40s" in finding["signals"][0] and finding["components"] == ["deployment/web"]
+    assert checks.admission_budgets(hooks[:2], ["ns"], {}, comps) == []
+    comps["deployment/db"] = {"namespace": "ns", "warning_events": [{"reason": "FailedCreate", "count": 4}]}
+    (finding,) = checks.admission_budgets(hooks, ["ns"], {}, comps)
+    assert finding["components"] == ["deployment/db"]  # the workload whose pods are seen failing to be created
+
+
+def test_an_object_only_a_package_manager_and_its_install_hooks_wrote_is_an_install_not_a_change():
+    def change(*writes):
+        meta = {
+            "creationTimestamp": "2026-10-19T08:10:00Z",
+            "managedFields": [{"manager": m, "operation": "Update", "time": t} for m, t in writes],
+        }
+        return changes.object_change(
+            "x/y", "ValidatingWebhookConfiguration", "y", None, meta, targets_created=["2026-10-19T08:00:00Z"]
+        )
+
+    from clients.jev_diag.timeutil import set_now
+
+    set_now(parse_time("2026-10-19T08:16:00Z"))  # changes older than an hour are not listed
+    try:
+        helm = ("helm", "2026-10-19T08:10:00Z")
+        assert change(("kubectl-create", "2026-10-19T08:10:00Z")) is not None  # the same object, not installed
+        assert change(helm) is None
+        assert change(helm, ("kube-webhook-certgen", "2026-10-19T08:10:06Z")) is None  # a hook injecting a CA bundle
+        assert change(helm, ("kubectl-patch", "2026-10-19T08:15:00Z")) is not None  # an edit after the install
+    finally:
+        set_now(None)
+
+
+def _tls_secret(name: str, not_before, not_after) -> dict:
+    import base64
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "shop.example")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(1)
+        .not_valid_before(not_before)
+        .not_valid_after(not_after)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("shop.example")]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    pem = cert.public_bytes(serialization.Encoding.PEM)
+    return {
+        "type": "kubernetes.io/tls",
+        "metadata": {"name": name, "namespace": "ns"},
+        "data": {"tls.crt": base64.b64encode(pem).decode(), "tls.key": "never-read"},
+    }
+
+
+def test_an_expired_certificate_is_reported_from_the_public_certificate_only():
+    from datetime import timedelta
+
+    at = parse_time("2026-10-19T08:00:00Z")
+    expired = _tls_secret("web-tls", at - timedelta(days=30), at - timedelta(days=1))
+    problems = checks.certificate_problems(expired, at)
+    assert problems == ["its certificate for shop.example expired at 2026-10-18T08:00:00+00:00"]
+    valid = _tls_secret("ok-tls", at - timedelta(days=1), at + timedelta(days=30))
+    assert checks.certificate_problems(valid, at) == []
+    assert checks.certificate_problems({"type": "Opaque", "data": {"tls.crt": "x"}}, at) == []

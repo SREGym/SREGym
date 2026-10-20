@@ -109,6 +109,8 @@ def collect_outside(
     errors: list[str],
     changes: list[dict],
     deployed: datetime | None = None,
+    *,
+    cert_problems: dict[tuple[str, str], list[str]] | None = None,
 ) -> list[dict]:
     """Outside objects as findings ({kind, name, namespace, signals, components}); change records are appended to
     `changes`. `pod_priority` maps a PriorityClass name to the components whose pods use it. A kube-system object
@@ -135,6 +137,9 @@ def collect_outside(
                     signals.append(f"routes {route} to Service {svc}, which has 0 ready endpoints")
             elif ns in namespaces:
                 signals.append(f"routes {route} to Service {svc}:{port}, which selects no workload or does not exist")
+        for tls in (ing.get("spec") or {}).get("tls") or []:
+            for problem in (cert_problems or {}).get((ns, tls.get("secretName")), []):
+                signals.append(f"serves TLS with Secret {tls.get('secretName')}: {problem}")
         if not linked and ns not in namespaces:
             continue
         out.append({**_finding("Ingress", name, ns, signals, linked), "routes": routes})
@@ -154,6 +159,14 @@ def collect_outside(
         )
         out.append({**_finding("PriorityClass", name, None, [], users), "settings": settings})
         _change(changes, "PriorityClass", name, None, meta, users, apps_created, deployed, pc)
+
+    for (ns, name), problems in (cert_problems or {}).items():  # a certificate that cannot be served is a finding
+        users = {
+            c
+            for c, comp in components.items()
+            if comp["namespace"] == ns and f"secret/{name}" in (comp.get("config_objects") or {})
+        }
+        out.append(_finding("Secret", name, ns, [f"TLS Secret {name}: {p}" for p in problems], users))
 
     for resource, kind in (("daemonsets", "DaemonSet"), ("cronjobs", "CronJob")):
         for obj in kubectl_items(resource, "kube-system", errors):

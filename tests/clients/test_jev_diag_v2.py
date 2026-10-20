@@ -402,10 +402,10 @@ def test_outside_objects_link_to_the_components_they_act_on(monkeypatch):
     assert ing["components"] == ["deployment/front"] and ing["routes"] == ["shop/ -> Service front:80"]
     pc = next(f for f in found if f["kind"] == "PriorityClass")
     assert pc["components"] == ["deployment/front"] and "globalDefault True" in pc["settings"]
-    findings = cluster_findings({"outside_objects": found}, [])  # a healthy route or a setting is no finding
+    findings = cluster_findings({"outside_objects": found}, [], {})  # a healthy route or a setting is no finding
     assert [f["signal"] for f in findings] == ["routes shop/ to Service front, which has 0 ready endpoints"]
     comps["deployment/front"]["services"][0]["ready_endpoints"] = 1
-    assert cluster_findings({"outside_objects": outside.collect_outside([NS], comps, {}, [], [])}, []) == []
+    assert cluster_findings({"outside_objects": outside.collect_outside([NS], comps, {}, [], [])}, [], comps) == []
 
 
 @pytest.mark.parametrize(
@@ -558,8 +558,8 @@ class _Answers:
                 probs = {"origin": p, "victim": 1 - p, "unrelated": 0.0, "undetermined": 0.0}
             elif isinstance(q, Choice):
                 opts = list(q.criteria)
-                pick = self.picks.get(name, opts[0])
-                probs = {o: (1.0 if o == pick else 0.0) for o in opts}
+                pick = self.picks.get(name, opts[0])  # an option, or {option: probability}
+                probs = {o: pick.get(o, 0.0) if isinstance(pick, dict) else float(o == pick) for o in opts}
             else:
                 answers[name] = NoulAnswer(noul=0.1)
                 continue
@@ -944,6 +944,28 @@ def test_a_cluster_object_competes_as_a_hypothesis_instead_of_ending_the_search(
     d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap)
     assert d.component == "other" and d.fault_object["name"] == "policy"
     assert any(s.get("component") == "deployment/a" for s in d.investigation["steps"])  # a was examined too
+
+
+def test_an_unconfirmed_conclusion_outside_the_workloads_names_the_object_the_cluster_question_ranked_first():
+    from clients.jev_diag.v2 import collector as v2c
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    comps = {"deployment/a": {**_comp("a", "t"), "signals": ["x"], "healthy": False}}
+    findings = [
+        {"kind": "ValidatingWebhookConfiguration", "name": "hook", "signal": "created after deploy"},
+        {
+            "kind": "Ingress",
+            "name": "web",
+            "signal": "serves TLS with an expired certificate",
+            "components": ["deployment/a"],
+        },
+    ]
+    snap = v2c.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster={"findings": findings})
+    triage = [{"other": 0.6, "deployment/a": 0.4}] * 2
+    lead = {"F2": 0.5, "none": 0.3, "F1": 0.2}  # first, but not sure enough to confirm
+    client = _Answers(triage, {"deployment/a": 0.1}, picks={"cluster_object": lead})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap)
+    assert d.component == "other" and d.fault_object["name"] == "web"
 
 
 def test_an_investigation_never_shows_triage_probabilities():

@@ -53,7 +53,9 @@ def test_a_server_no_service_selects_is_flagged_when_the_others_have_one():
     comps = _app(**{"deployment/mongodb-orders": _server("mongodb-orders", service=False)})
     deps.build_graph(comps, [])
     deps.flag_unrouted_servers(comps)
-    assert comps["deployment/mongodb-orders"]["signals"][0].startswith("no Service selects this workload")
+    assert comps["deployment/mongodb-orders"]["signals"][0].startswith(
+        "its Service is missing (deleted or never created): no Service selects"
+    )
     assert "(clients: deployment/orders)" in comps["deployment/mongodb-orders"]["signals"][0]
     assert not any(c["signals"] for cid, c in comps.items() if cid != "deployment/mongodb-orders")
 

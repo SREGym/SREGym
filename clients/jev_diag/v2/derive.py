@@ -670,7 +670,7 @@ def classify_evidence(components: dict[str, dict]) -> None:
         comp["evidence_kinds"] = sorted(kinds)
 
 
-def cluster_findings(cluster: dict, ranked_changes: list[dict]) -> list[dict]:
+def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict[str, dict]) -> list[dict]:
     """Cluster-scoped and namespace-scoped objects with a computed signal, for the `other` path.
 
     Each finding carries `components`: the workloads the object is known to act on (the pods a webhook
@@ -767,7 +767,7 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict]) -> list[dict]:
             }
         )
     for ch in ranked_changes:
-        if ch["kind"] in ("Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job"):
+        if _owned_by_targets(ch, components):
             continue
         text = change_log.describe_change(ch)
         existing = next((f for f in out if f.get("kind") == ch["kind"] and f.get("name") == ch["name"]), None)
@@ -791,6 +791,22 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict]) -> list[dict]:
             seen.add(key)
             unique.append({k: v for k, v in f.items() if v not in (None, [])})
     return unique
+
+
+def _owned_by_targets(change: dict, components: dict[str, dict]) -> bool:
+    """Whether every workload a change acts on owns the changed object: its own spec, or a ConfigMap or Secret it reads.
+    Such a change is a candidate through those workloads, which show it with how they read it; it is not an object
+    outside the application."""
+    affects = change.get("affects") or []
+    if change["object"] in affects:
+        return True
+    ref = f"{change['kind'].lower()}/{change['name']}"
+    return bool(affects) and all(
+        c in components
+        and components[c]["namespace"] == change.get("namespace")
+        and ref in (components[c].get("config_objects") or {})
+        for c in affects
+    )
 
 
 # Signal prefixes derived by an earlier version of this module; removed when re-deriving an old saved snapshot.
@@ -831,7 +847,7 @@ def post_process(snapshot) -> None:
     deps.apply(snapshot)
     ranked = change_log.rank_changes(components, snapshot.cluster, collected_at)
     snapshot.cluster["call_paths"] = paths.call_paths(components)  # after the change signals: a callee's own change
-    snapshot.cluster["findings"] = cluster_findings(snapshot.cluster, ranked)
+    snapshot.cluster["findings"] = cluster_findings(snapshot.cluster, ranked, components)
     for cid, comp in components.items():
         comp["signals"] = list(dict.fromkeys(comp["signals"]))
         kept = set(base.get(cid, []))

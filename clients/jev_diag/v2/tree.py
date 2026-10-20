@@ -1092,18 +1092,27 @@ class IterativeDiagnoser(JevDiagnoser):
         concluded: str | None = None
         confirmed: dict[str, float] = {}  # origin probability of every hypothesis judged an origin
         cluster_pick: dict | None = None
+        cluster_lead: dict | None = None  # the cluster question's first choice, even below MIN_ORIGIN_PROBABILITY
         # Triage's top candidates (and the other ask's pick when the two asks disagree) are hypotheses: every one is
         # examined before anything is concluded, so a confirmed first pick never hides a better second.
+        ranked = component.ranked()
+
+        def admissible(c: str, rank: int) -> bool:
+            if c == OTHER_OPTION:
+                return bool(snapshot.cluster.get("findings"))
+            # a telemetry component competes only when triage put it first: its own noise (export errors, index
+            # blocks) otherwise wins comparisons against the application's real origin
+            return c in snapshot.components and (rank == 0 or snapshot.components[c].get("role") != "observability")
+
         hypotheses = list(
             dict.fromkeys(
                 [
                     *(
                         c
-                        for c, p in component.ranked()[:TOP_HYPOTHESES]
-                        if p >= MIN_QUEUE_PROBABILITY
-                        and (c in snapshot.components or (c == OTHER_OPTION and snapshot.cluster.get("findings")))
+                        for rank, (c, p) in enumerate(ranked[:TOP_HYPOTHESES])
+                        if p >= MIN_QUEUE_PROBABILITY and admissible(c, rank)
                     ),
-                    *(c for c in getattr(self, "triage_picks", []) if c in snapshot.components),
+                    *(c for c in getattr(self, "triage_picks", []) if admissible(c, 0) and c != OTHER_OPTION),
                 ]
             )
         )
@@ -1139,6 +1148,7 @@ class IterativeDiagnoser(JevDiagnoser):
                 )
                 self._trace("decide", "step", **steps[-1])
                 p = node["result"].probabilities.get(node["result"].choice, 0) if node else 0.0
+                cluster_lead = node["object"] if node else None
                 if node and node["object"] and p >= MIN_ORIGIN_PROBABILITY:
                     cluster_pick, confirmed[OTHER_OPTION] = node["object"], p
                     self._progress["cluster_pick"] = cluster_pick
@@ -1231,6 +1241,8 @@ class IterativeDiagnoser(JevDiagnoser):
             cluster_pick = None  # a cluster object that lost the comparison is not the fault object
         if concluded is None:
             concluded, fallback_reason = self.fallback(snapshot, component, investigated)
+        if concluded == OTHER_OPTION and cluster_pick is None:
+            cluster_pick = cluster_lead  # the outside object the cluster question ranked first, when it was asked
 
         info = self._characterize(snapshot, concluded, investigated, kind, cluster_pick, fallback_reason)
         if not (paired or pair_decided) and concluded in investigated and len(steps) < self.max_steps:

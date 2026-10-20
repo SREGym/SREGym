@@ -17,13 +17,22 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from clients.jev_diag.classifier import CATEGORY_GLOSS
+from clients.jev_diag.classifier import CATEGORY_GLOSS as V1_GLOSS
 from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2 import checks, paths
 from clients.jev_diag.v2.classifier import CARRIER_KINDS, OTHER_OPTION, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot, is_error_line
 from clients.jev_diag.v2.derive import DEPENDENCY_CLASSES, TELEMETRY_RE
 
+# v1's glosses, plus the categories v2 adds
+CATEGORY_GLOSS = {
+    **V1_GLOSS,
+    "missing_object": "an object the application needs was deleted or never created",
+    "certificate_or_tls": "a TLS certificate is expired, not yet valid, for other names, or not trusted",
+    "pod_network_or_ipam": "the cluster network cannot set up or route pod networking, or IP addresses ran out",
+    "preemption_or_priority": "pods are preempted or kept from scheduling by pods of higher priority",
+    "node_or_kubelet": "a node or its kubelet fails the pods (pressure, eviction thresholds, runtime settings)",
+}
 MAX_DETAILS = 4
 MAX_AFFECTED = 3
 MAX_OBSERVED = 5
