@@ -155,6 +155,31 @@ FAULT_CATEGORIES: dict[str, dict[str, Any]] = {
         "because of its own logic.",
         "not_for": "Anything explained by another category.",
     },
+    "missing_object": {
+        "what": "An object the application needs was deleted or never created: a Service its clients address, a "
+        "ConfigMap, Secret, or PersistentVolumeClaim it references.",
+        "not_for": "An object that exists with a wrong value (config_value, service_routing).",
+    },
+    "certificate_or_tls": {
+        "what": "A TLS certificate is expired, not yet valid, issued for other names, or not trusted by its "
+        "clients (an Ingress, a webhook, or a server presenting it).",
+        "not_for": "Credentials such as passwords or tokens (credentials_or_auth).",
+    },
+    "pod_network_or_ipam": {
+        "what": "The cluster network fails the pods: the network plugin cannot set up pod networking, IP addresses "
+        "are exhausted, routing between nodes is broken.",
+        "not_for": "A NetworkPolicy (network_policy) or a Service's routing (service_routing).",
+    },
+    "preemption_or_priority": {
+        "what": "Pods are preempted or kept from scheduling by pods of higher priority (a PriorityClass, a default "
+        "priority, a workload that takes the capacity).",
+        "not_for": "Placement rules of the pod itself (scheduling_constraint).",
+    },
+    "node_or_kubelet": {
+        "what": "A node or its kubelet fails the pods: pressure, eviction thresholds, kubelet or runtime settings, "
+        "a node that is not ready.",
+        "not_for": "Limits set too low for one workload (resource_limits).",
+    },
     OTHER_OPTION: {"what": "None of the categories above describes the fault."},
 }
 

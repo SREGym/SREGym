@@ -124,7 +124,8 @@ def flag_unrouted_servers(components: dict[str, dict]) -> None:
             ports = sorted({p for c in comp.get("containers") or [] for p in c.get("ports") or []})
             clients = sorted(c for c, other in components.items() if cid in (other.get("_deps") or {}))
             comp["signals"].append(
-                f"no Service selects this workload, although its containers listen on {ports} and "
+                f"its Service is missing (deleted or never created): no Service selects this workload, although its "
+                f"containers listen on {ports} and "
                 f"{len(routed)} of the application's {len(servers)} servers have one; clients that address it "
                 "through its Service cannot reach it" + (f" (clients: {', '.join(clients)})" if clients else "")
             )

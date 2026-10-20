@@ -134,6 +134,25 @@ def later_writes(meta: dict) -> list[dict]:
     return out
 
 
+# Package managers install software as a unit (a Helm release); an object only they wrote is part of an install.
+_PACKAGE_MANAGERS = re.compile(r"(?i)^(helm|helm-controller|kustomize-controller|argocd-.*|flux.*)$")
+# An install includes its hooks (a job that injects a webhook's CA bundle, for example), which write right after it.
+INSTALL_HOOK_SECONDS = 60
+
+
+def _package_install(meta: dict) -> bool:
+    writes = spec_writes(meta)
+    installs = [parse_time(w["time"]) for w in writes if _PACKAGE_MANAGERS.match(w.get("manager") or "")]
+    if not installs:
+        return False
+    installed = max(installs)
+    return all(
+        _PACKAGE_MANAGERS.match(w.get("manager") or "")
+        or 0 <= seconds_between(parse_time(w["time"]), installed) <= INSTALL_HOOK_SECONDS
+        for w in writes
+    )
+
+
 # --------------------------------------------------------------------------- values of a change
 
 MAX_CHANGED_VALUES = 4
@@ -481,6 +500,8 @@ def object_change(
     With the object itself (`obj`), the record also says what changed: the values the later writes set (old -> new
     where the last applied configuration keeps the old one), or, for an object created late, what it contains.
     """
+    if _package_install(meta):
+        return None  # written only by a package manager: installed software, not a change to the running system
     created = meta.get("creationTimestamp")
     modified = modified_after_creation(meta)
     late = created_after(created, targets_created or [])

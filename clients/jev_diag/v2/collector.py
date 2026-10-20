@@ -2069,6 +2069,8 @@ def collect_snapshot(
 
     constraints: list[dict] = []
     config_objects: dict = {}
+    # (namespace, TLS Secret name) -> what is wrong with its certificate
+    cert_problems: dict[tuple[str, str], list[str]] = {}
     claim_modes: dict[tuple[str, str], list[str]] = {}
     for ns in namespaces:
         raw_events[ns] = kubectl_items("events", ns, errors, managed_fields=False)
@@ -2091,6 +2093,10 @@ def collect_snapshot(
         secrets, configmaps = kubectl_items("secrets", ns, errors), kubectl_items("configmaps", ns, errors)
         deletable += [("Secret", o) for o in secrets] + [("ConfigMap", o) for o in configmaps]
         config_objects.update(summarize_config_objects(secrets, configmaps))
+        for secret in secrets:
+            problems = checks.certificate_problems(secret, now())
+            if problems:
+                cert_problems[(ns, (secret.get("metadata") or {}).get("name"))] = problems
     checks.resolve_env_hosts(components)
     checks.local_traffic_policy_gaps(components)
     checks.shared_rwo_claims(components, claim_modes)
@@ -2188,7 +2194,10 @@ def collect_snapshot(
             cid = pod_to_component.get((pod.get("metadata") or {}).get("name"))
             if pc and _in_namespace(cid, components, ns):
                 pod_priority.setdefault(pc, set()).add(cid)
-    outside_objects = outside.collect_outside(namespaces, components, pod_priority, errors, changes, deployed)
+    outside_objects = outside.collect_outside(
+        namespaces, components, pod_priority, errors, changes, deployed, cert_problems=cert_problems
+    )
+    outside_objects += checks.admission_budgets(webhooks, namespaces, namespace_labels, components)
     cluster_dns = summarize_cluster_dns(errors)
     dns_affected = coredns_service_overrides(cluster_dns, components)
     if dns_affected:

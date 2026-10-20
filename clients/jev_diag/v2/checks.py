@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from datetime import datetime
 
 from clients.jev_diag.timeutil import seconds_ago
 
@@ -659,6 +660,86 @@ def violates_limit_range(comp: dict, limits: list[dict]) -> bool:
                 if value is not None and parse(floor) is not None and value < parse(floor):
                     return True
     return False
+
+
+def certificate_problems(secret: dict, at: datetime) -> list[str]:
+    """What is wrong with the certificate a `kubernetes.io/tls` Secret serves: expired, not yet valid. Only the public
+    certificate (`tls.crt`) is read, never the private key; a certificate is public, unlike every other Secret value."""
+    if secret.get("type") != "kubernetes.io/tls":
+        return []
+    from cryptography import x509
+
+    try:
+        pem = base64.b64decode((secret.get("data") or {}).get("tls.crt") or "")
+        cert = x509.load_pem_x509_certificates(pem)[0]
+    except (ValueError, IndexError):
+        return []
+    try:
+        names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
+            x509.DNSName
+        )
+    except x509.ExtensionNotFound:
+        names = []
+    covers = f" for {', '.join(names[:4])}" if names else ""
+    if cert.not_valid_after_utc < at:
+        return [f"its certificate{covers} expired at {cert.not_valid_after_utc.isoformat(timespec='seconds')}"]
+    if cert.not_valid_before_utc > at:
+        return [
+            f"its certificate{covers} is not valid before {cert.not_valid_before_utc.isoformat(timespec='seconds')}"
+        ]
+    return []
+
+
+API_REQUEST_TIMEOUT_SECONDS = 30  # the API server gives up on a request after this long
+WEBHOOK_DEFAULT_TIMEOUT_SECONDS = 10
+
+
+def admission_budgets(
+    webhooks: list[dict], namespaces: list[str], namespace_labels: dict[str, dict], components: dict[str, dict]
+) -> list[dict]:
+    """Namespaces where the admission webhooks that intercept pod creation take longer, together, than the API server
+    waits for a request. Webhooks are called one after another and each may use its full timeout, so even webhooks
+    that ignore their own failure (failurePolicy Ignore) make every pod creation fail when their timeouts add up past
+    API_REQUEST_TIMEOUT_SECONDS. Each such namespace becomes an outside object naming the webhooks."""
+    out = []
+    for ns in namespaces:
+        labels = namespace_labels.get(ns) or {"kubernetes.io/metadata.name": ns}
+        chain = [
+            wh
+            for wh in webhooks
+            if rules_cover_pod_create(wh.get("_rules")) and label_selector_matches(wh.get("namespace_selector"), labels)
+        ]
+        total = sum(wh.get("timeout_seconds") or WEBHOOK_DEFAULT_TIMEOUT_SECONDS for wh in chain)
+        if len(chain) < 2 or total <= API_REQUEST_TIMEOUT_SECONDS:
+            continue
+        configs = list(dict.fromkeys(wh["configuration"] for wh in chain))
+        each = ", ".join(
+            f"{wh['webhook']} ({wh.get('timeout_seconds') or WEBHOOK_DEFAULT_TIMEOUT_SECONDS}s, "
+            f"failurePolicy={wh.get('failure_policy')})"
+            for wh in chain
+        )
+        kinds = {wh["kind"] for wh in chain}
+        in_ns = [c for c, comp in components.items() if comp["namespace"] == ns]
+        # it acts on the workloads whose pods are seen failing to be created; on all of them while none is seen yet
+        failing = [
+            c
+            for c in in_ns
+            if any(ev.get("reason") == "FailedCreate" for ev in components[c].get("warning_events") or [])
+        ]
+        out.append(
+            {
+                "kind": kinds.pop() if len(kinds) == 1 else "admission webhooks",
+                "name": ", ".join(configs),
+                "namespace": None,
+                "signals": [
+                    f"admission webhooks intercepting pod creation in namespace {ns}: {each}; their timeouts add up "
+                    f"to {total}s, more than the API server's {API_REQUEST_TIMEOUT_SECONDS}s request timeout, so pod "
+                    "creation times out even where each webhook ignores its own failure"
+                ],
+                "components": sorted(failing or in_ns),
+            }
+        )
+    return out
 
 
 def host_port_clashes(components: dict[str, dict], daemonsets: list[dict]) -> None:
