@@ -68,8 +68,8 @@ NONE_OPTION = "none"
 BOTH_OPTION = "both"
 
 DEFAULT_MAX_STEPS = 18
-MIN_ORIGIN_PROBABILITY = 0.6  # confirm and stop
-STRONG_ORIGIN_PROBABILITY = 0.9  # confirm even when a higher-ranked triage candidate is still unexamined
+MIN_ORIGIN_PROBABILITY = 0.6  # a candidate judged origin this surely is a hypothesis for the final comparison
+TOP_HYPOTHESES = 3  # triage's top candidates (cluster objects included) are all examined before any conclusion
 MIN_VICTIM_PROBABILITY = 0.5  # follow the dependency Jev names
 MIN_NEXT_PROBABILITY = 0.3
 MIN_QUEUE_PROBABILITY = 0.05  # every triage candidate at least this plausible is examined, budget permitting
@@ -118,11 +118,12 @@ VERDICTS: dict[str, dict[str, str]] = {
         "evidence.",
     },
     "victim": {
-        "what": "`candidate` misbehaves only because something it calls is failing or refusing it: its "
-        "still-occurring errors name another component, a Service name, an address, or a backend role "
-        "(database, cache, queue, redis, broker), and `candidate`'s own configuration shows nothing wrong. The "
-        "dependency may look healthy itself: a server whose password, ACL, or config changed shows the failure on "
-        "its clients, not on itself.",
+        "what": "`candidate` misbehaves only because of another component: something it calls is failing or "
+        "refusing it (its still-occurring errors name another component, a Service name, an address, or a backend "
+        "role such as database, cache, queue, redis, broker), or another workload acts on it (floods it with "
+        "requests or data, patches, scales, or deletes its objects, preempts or evicts its pods), while "
+        "`candidate`'s own configuration shows nothing wrong. The other component may look healthy itself: a "
+        "server whose password, ACL, or config changed shows the failure on its clients, not on itself.",
         "not_for": "A component whose own configuration or referenced config content is abnormal.",
     },
     "unrelated": {
@@ -344,7 +345,7 @@ def build_investigation_questions(
                     "redis or a cache maps to the cache component in `calls`; `candidate.detail.failing_targets` "
                     "lists the matches code found). Choose it even if it shows no abnormal signals of its own.",
                     "Second choice: a component in `candidate.detail.called_by_with_errors`, `candidate.detail.clients`, "
-                    "or `triage_ranking` with abnormal signals of its own.",
+                    "or `triage_order` with abnormal signals of its own.",
                     f"Select `{NONE_OPTION}` when `candidate` is the origin.",
                 ],
             },
@@ -469,12 +470,14 @@ def build_pair_questions(a: str, b: str, reason: str) -> dict[str, Choice]:
     }
 
 
-def build_tiebreak_questions(a: str, b: str, linked: bool) -> dict[str, Choice]:
+def build_tiebreak_questions(ids: list[str], allow_both: bool) -> dict[str, Choice]:
+    """Where did the fault start, among hypotheses each judged an origin on its own? With two hypotheses that share no
+    link and each changed on their own, `both` (two independent faults) is offered too."""
     criteria = {
-        a: f'The fault started at `sides["{a}"]`; the other side\'s abnormal signals follow from it or are unrelated.',
-        b: f'The fault started at `sides["{b}"]`; the other side\'s abnormal signals follow from it or are unrelated.',
+        cid: f'The fault started at `sides["{cid}"]`; the other sides\' abnormal signals follow from it or are unrelated.'
+        for cid in ids
     }
-    if not linked:
+    if allow_both and len(ids) == 2:
         criteria[BOTH_OPTION] = (
             "Two independent faults: each side has its own abnormal configuration, change, or state, and neither "
             "side's signals can follow from the other."
@@ -482,13 +485,15 @@ def build_tiebreak_questions(a: str, b: str, linked: bool) -> dict[str, Choice]:
     return {
         TIEBREAK_QUESTION: Choice(
             instructions={
-                "question": "Both `sides` were judged origins of the fault. Where did the fault start?",
+                "question": "Each of the `sides` was judged an origin of the fault in its own examination. Where did "
+                "the fault start?",
                 "how_to_decide": [
-                    "A side whose failures are calls to the other side, or that uses what the other side changed, "
-                    "is not where the fault started.",
+                    "A side whose failures are calls to another side, or that uses, runs on, or is acted on by what "
+                    "another side changed, is not where the fault started.",
+                    "A side that acts on another (rewrites, patches, deletes, floods, schedules, or preempts it) is "
+                    "where the fault started when its action explains the other side's abnormal state.",
                     "Prefer the side whose own configuration, change, or state explains its signals and the "
-                    "application's symptoms.",
-                    "`links` lists every connection code found between the two sides.",
+                    "application's symptoms. `links` lists every connection code found between the sides.",
                 ],
             },
             criteria=criteria,
@@ -745,7 +750,8 @@ class IterativeDiagnoser(JevDiagnoser):
                 "detail": detail,
             },
             "evidence": evidence,
-            "triage_ranking": [{"component": c, "probability": p} for c, p in triage.ranked()[:8]],
+            # triage's order only: its probabilities would anchor this candidate's own verdict
+            "triage_order": [c for c, _ in triage.ranked()[:8]],
             "investigated_so_far": [
                 {"component": c, "verdict": r["verdict"], "origin_probability": r["origin_p"]}
                 for c, r in investigated.items()
@@ -879,7 +885,17 @@ class IterativeDiagnoser(JevDiagnoser):
         return {"result": result, "object": chosen}
 
     @staticmethod
-    def side(snapshot: ClusterSnapshot, cid: str, investigated: dict) -> dict:
+    def side(snapshot: ClusterSnapshot, cid: str, investigated: dict, cluster_pick: dict | None = None) -> dict:
+        """What a comparison shows of one hypothesis: its own facts, never a probability (which would anchor it)."""
+        if cid == OTHER_OPTION:
+            fo = cluster_pick or {}
+            return {
+                "component": f"{fo.get('kind')} {fo.get('name')}",
+                "kind": fo.get("kind"),
+                "namespace": fo.get("namespace"),
+                "finding": fo.get("signal"),
+                "acts_on": fo.get("components") or [],
+            }
         r = investigated[cid]
         comp = snapshot.components[cid]
         key = next(
@@ -888,7 +904,6 @@ class IterativeDiagnoser(JevDiagnoser):
         return {
             "component": cid,
             "kind": comp["kind"],
-            "origin_probability": r["origin_p"],
             "cause_category": r["category"].choice,
             "key_evidence": key,
             "code_checks": r["spec_checks"],
@@ -896,32 +911,54 @@ class IterativeDiagnoser(JevDiagnoser):
             "config_objects": comp.get("config_objects"),
         }
 
-    def tiebreak(
-        self, snapshot: ClusterSnapshot, a: str, b: str, investigated: dict, reason: str, *, allow_both: bool = True
+    def compare_origins(
+        self,
+        snapshot: ClusterSnapshot,
+        hypotheses: dict[str, float],
+        investigated: dict,
+        reason: str,
+        *,
+        cluster_pick: dict | None = None,
+        allow_both: bool = True,
     ) -> list[str]:
-        """Two origins: the one where the fault started, or (when allowed) both when they are independent faults.
-        Without a clear answer, the higher origin probability."""
-        links = link_facts(snapshot, a, b, investigated)
-        own_change = all("change" in (snapshot.components[c].get("evidence_kinds") or []) for c in (a, b))
+        """Hypotheses each judged an origin (component id, or `other` for the cluster object picked) compared side by
+        side: the one where the fault started, or (two unlinked sides, when allowed) both. Without a clear answer,
+        the hypothesis judged most surely an origin."""
+        ids = sorted(hypotheses, key=lambda c: -hypotheses[c])  # strongest first, as each examination judged them
+        workloads = [c for c in ids if c != OTHER_OPTION]
+        links: list[str] = []
+        for i, a in enumerate(workloads):
+            for b in workloads[i + 1 :]:
+                links += link_facts(snapshot, a, b, investigated)
+        if OTHER_OPTION in hypotheses and cluster_pick:
+            fo = f"{cluster_pick.get('kind')} {cluster_pick.get('name')}"
+            links += [f"{fo} acts on {c}" for c in workloads if c in (cluster_pick.get("components") or [])]
+        own_change = all("change" in (snapshot.components[c].get("evidence_kinds") or []) for c in workloads)
+        both = allow_both and not links and own_change and OTHER_OPTION not in hypotheses
         state = {
             "application": snapshot.app,
             "why_asked": reason,
             "links": links or ["none found"],
-            "sides": {a: self.side(snapshot, a, investigated), b: self.side(snapshot, b, investigated)},
+            "sides": {c: self.side(snapshot, c, investigated, cluster_pick) for c in ids},
         }
-        single = bool(links) or not own_change or not allow_both
-        response = self._ask(f"tiebreak:{a}|{b}", state, build_tiebreak_questions(a, b, single))
+        response = self._ask(f"tiebreak:{'|'.join(ids)}", state, build_tiebreak_questions(ids, both))
         answer = ChoiceResult.from_answer(response.choices[TIEBREAK_QUESTION])
         p = answer.probabilities.get(answer.choice, 0.0)
-        higher = max((a, b), key=lambda c: investigated[c]["origin_p"])
         if answer.choice == BOTH_OPTION and p >= MIN_BOTH_PROBABILITY:
-            picks = [higher, a if higher == b else b]
-        elif answer.choice in (a, b) and p >= MIN_PAIR_PROBABILITY:
+            picks = ids[:2]
+        elif answer.choice in ids and p >= MIN_PAIR_PROBABILITY:
             picks = [answer.choice]
         else:
-            picks = [higher]
-        self._trace("decide", "tiebreak", sides=[a, b], reason=reason, links=links, ranked=answer.ranked(), picks=picks)
+            picks = ids[:1]
+        self._trace("decide", "tiebreak", sides=ids, reason=reason, links=links, ranked=answer.ranked(), picks=picks)
         return picks
+
+    def tiebreak(
+        self, snapshot: ClusterSnapshot, a: str, b: str, investigated: dict, reason: str, *, allow_both: bool = True
+    ) -> list[str]:
+        """Two origins compared side by side (see compare_origins)."""
+        hypotheses = {c: investigated[c]["origin_p"] for c in (a, b)}
+        return self.compare_origins(snapshot, hypotheses, investigated, reason, allow_both=allow_both)
 
     def pair_node(self, snapshot: ClusterSnapshot, a: str, b: str, investigated: dict, reason: str) -> str:
         """Ask which of two confirmed origins holds the faulty setting; fall back to the higher origin probability."""
@@ -1000,7 +1037,7 @@ class IterativeDiagnoser(JevDiagnoser):
             concluded, why = max(confirmed, key=confirmed.get), "confirmed origin"
         else:
             concluded, why = self.fallback(snapshot, component, investigated)
-        info = self._characterize(snapshot, concluded, investigated, kind, None, why)
+        info = self._characterize(snapshot, concluded, investigated, kind, p.get("cluster_pick"), why)
         final = ChoiceResult(
             choice=concluded, confidence=component.confidence, probabilities=dict(component.probabilities)
         )
@@ -1036,13 +1073,31 @@ class IterativeDiagnoser(JevDiagnoser):
         investigated: dict[str, dict] = {}
         steps: list[dict] = []
         concluded: str | None = None
-        confirmed: dict[str, float] = {}  # origin probability of every confirmed origin; the strongest is concluded
+        confirmed: dict[str, float] = {}  # origin probability of every hypothesis judged an origin
         cluster_pick: dict | None = None
+        # Triage's top candidates (and the other ask's pick when the two asks disagree) are hypotheses: every one is
+        # examined before anything is concluded, so a confirmed first pick never hides a better second.
+        hypotheses = list(
+            dict.fromkeys(
+                [
+                    *(
+                        c
+                        for c, p in component.ranked()[:TOP_HYPOTHESES]
+                        if p >= MIN_QUEUE_PROBABILITY
+                        and (c in snapshot.components or (c == OTHER_OPTION and snapshot.cluster.get("findings")))
+                    ),
+                    *(c for c in getattr(self, "triage_picks", []) if c in snapshot.components),
+                ]
+            )
+        )
+        for c in hypotheses:
+            if c not in queue:
+                queue.append(c)
+        examined: set[str] = set()
         # other side -> (component waiting to be concluded, reason, further candidates to examine after this one)
         waiting_on: dict[str, tuple[str, str, list[tuple[str, str]]]] = {}
         checked_other_side: set[str] = set()
         pair_decided = False
-        awaiting: set[str] = set()  # candidates a confirmed origin's conclusion waits for
         self._progress = {
             "component": component,
             "kind": kind,
@@ -1051,21 +1106,23 @@ class IterativeDiagnoser(JevDiagnoser):
             "steps": steps,
         }
         while queue and len(steps) < self.max_steps:
+            pending = [h for h in hypotheses if h not in examined]
+            if (confirmed or cluster_pick) and not pending:
+                break  # every hypothesis is examined and at least one is an origin: compare them below
+            if confirmed or cluster_pick:  # an origin is known: the remaining hypotheses come before any other hop
+                queue = pending + [c for c in queue if c not in pending]
             cid = queue.pop(0)
+            examined.add(cid)
             if cid == OTHER_OPTION:
                 node = self.cluster_node(snapshot)
                 steps.append(
                     {"step": len(steps) + 1, "node": "cluster", "result": node["result"].ranked()[:3] if node else None}
                 )
                 self._trace("decide", "step", **steps[-1])
-                if (
-                    node
-                    and node["object"]
-                    and node["result"].probabilities.get(node["result"].choice, 0) >= MIN_ORIGIN_PROBABILITY
-                ):
-                    cluster_pick = node["object"]
-                    concluded = OTHER_OPTION
-                    break
+                p = node["result"].probabilities.get(node["result"].choice, 0) if node else 0.0
+                if node and node["object"] and p >= MIN_ORIGIN_PROBABILITY:
+                    cluster_pick, confirmed[OTHER_OPTION] = node["object"], p
+                    self._progress["cluster_pick"] = cluster_pick
                 continue
             if cid not in snapshot.components or cid in investigated:
                 continue
@@ -1110,39 +1167,8 @@ class IterativeDiagnoser(JevDiagnoser):
                     queue.insert(0, other)
                     self._trace("decide", "defer_for_other_side", component=cid, other=other, reason=reason)
                     continue
-                # A confirmed origin ends the search unless triage ranked an unexamined component higher: that
-                # component is examined first, and this one stays the fallback if nothing better is found.
-                higher = [
-                    c
-                    for c, p in component.ranked()
-                    if c != cid
-                    and c in snapshot.components
-                    and c not in investigated
-                    and p > component.probabilities.get(cid, 0.0)
-                ]
                 confirmed[cid] = result["origin_p"]
-                split = [
-                    c
-                    for c in getattr(self, "triage_picks", [])
-                    if c != cid and c in snapshot.components and c not in investigated
-                ]
-                if split:  # the two triage asks disagreed: examine the other pick before concluding
-                    higher = list(dict.fromkeys([*split, *higher]))
-                if not higher or (not split and result["origin_p"] >= STRONG_ORIGIN_PROBABILITY):
-                    concluded = max(confirmed, key=confirmed.get)
-                    break
-                for c in reversed(higher[:2]):
-                    if c in queue:
-                        queue.remove(c)
-                    queue.insert(0, c)
-                awaiting = set(higher[:2])
-                self._trace("decide", "defer_conclusion", component=cid, origin_p=result["origin_p"], first=higher[:2])
                 continue
-            if confirmed and cid in awaiting:
-                awaiting.discard(cid)
-                if not awaiting:  # what the conclusion waited for is examined and is not an origin
-                    concluded = max(confirmed, key=confirmed.get)
-                    break
             nxt = result["next"]
             is_victim = result["victim_p"] >= MIN_VICTIM_PROBABILITY
             usable = nxt != NONE_OPTION and nxt in snapshot.components and nxt not in investigated
@@ -1169,22 +1195,23 @@ class IterativeDiagnoser(JevDiagnoser):
 
         fallback_reason = None
         paired = False
+        second = None
         if concluded is None and waiting_on:
             # The budget ran out before the other side was examined: the confirmed origin stands.
             concluded = next(iter(waiting_on.values()))[0]
             fallback_reason = "confirmed origin; the other side was not examined within the budget"
-        elif not pair_decided and concluded in confirmed and len(confirmed) > 1:
-            # Several origins were confirmed (a split triage, or a higher-ranked candidate examined after the first):
-            # the two strongest are compared side by side instead of by their separate probabilities.
-            a, b = sorted(confirmed, key=confirmed.get, reverse=True)[:2]
-            reason = "both were confirmed as origins in separate examinations"
-            picks = self.tiebreak(snapshot, a, b, investigated, reason)
+        elif concluded is None and len(confirmed) > 1:
+            # Several hypotheses were judged origins: compared side by side, not by their separate probabilities.
+            reason = "each was judged an origin in its own examination"
+            picks = self.compare_origins(snapshot, dict(confirmed), investigated, reason, cluster_pick=cluster_pick)
             concluded, paired = picks[0], True
             second = picks[1] if len(picks) > 1 else None
+        elif concluded is None and confirmed:
+            concluded = next(iter(confirmed))
+        if concluded != OTHER_OPTION:
+            cluster_pick = None  # a cluster object that lost the comparison is not the fault object
         if concluded is None:
             concluded, fallback_reason = self.fallback(snapshot, component, investigated)
-        if not paired:
-            second = None
 
         info = self._characterize(snapshot, concluded, investigated, kind, cluster_pick, fallback_reason)
         if not (paired or pair_decided) and concluded in investigated and len(steps) < self.max_steps:
