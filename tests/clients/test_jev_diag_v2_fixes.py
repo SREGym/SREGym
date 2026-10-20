@@ -173,3 +173,71 @@ def test_quoted_text_in_a_pointer_signal_is_not_a_change_and_alerts_are_symptoms
 
 def test_label_selector_semantics_cover_expressions():
     assert checks.label_selector_matches({"matchExpressions": [{"key": "a", "operator": "Exists"}]}, {"a": "1"})
+
+
+def _meta_with_later_write(fields: dict, applied: dict | None = None) -> dict:
+    import json
+
+    meta = {
+        "creationTimestamp": "2026-10-19T08:00:00Z",
+        "managedFields": [
+            {"manager": "helm", "operation": "Update", "time": "2026-10-19T08:00:00Z", "fieldsV1": {"f:data": {}}},
+            {"manager": "kubectl-patch", "operation": "Update", "time": "2026-10-19T08:10:00Z", "fieldsV1": fields},
+        ],
+    }
+    if applied is not None:
+        meta["annotations"] = {"kubectl.kubernetes.io/last-applied-configuration": json.dumps(applied)}
+    return meta
+
+
+def test_a_change_states_the_value_it_set_and_the_old_one_when_kubernetes_kept_it():
+    obj = {"kind": "BGPPeer", "spec": {"peerSelector": "has(node-role.kubernetes.io/master)", "asNumber": 64512}}
+    meta = _meta_with_later_write({"f:spec": {"f:peerSelector": {}}})
+    assert changes.changed_values(obj, meta) == ["spec.peerSelector = has(node-role.kubernetes.io/master)"]
+    applied = {"spec": {"peerSelector": "has(node-role.kubernetes.io/control-plane)"}}
+    meta = _meta_with_later_write({"f:spec": {"f:peerSelector": {}}}, applied)
+    assert changes.changed_values(obj, meta) == [
+        "spec.peerSelector: has(node-role.kubernetes.io/control-plane) -> has(node-role.kubernetes.io/master)"
+    ]
+
+
+def test_a_long_text_change_is_shown_where_it_differs_and_secrets_are_never_read():
+    corefile = ".:53 {\n" + "    errors\n" * 40 + "    forward . /etc/resolv.conf\n}"
+    obj = {
+        "kind": "ConfigMap",
+        "data": {"Corefile": corefile.replace("forward . /etc/resolv.conf", "forward . 8.8.8.8")},
+    }
+    meta = _meta_with_later_write({"f:data": {"f:Corefile": {}}}, {"data": {"Corefile": corefile}})
+    (value,) = changes.changed_values(obj, meta)
+    assert value.startswith("data.Corefile: …") and "8.8.8.8" in value and "/etc/resolv.conf" in value
+    secret = {"kind": "Secret", "data": {"password": "c2VjcmV0"}}
+    assert changes.changed_values(secret, _meta_with_later_write({"f:data": {"f:password": {}}})) == []
+    assert changes.object_content(secret) == "keys password"
+
+
+def test_list_items_are_found_by_name_in_a_changed_path():
+    obj = {"spec": {"containers": [{"name": "app", "env": [{"name": "MODE", "value": "fast"}]}]}}
+    assert changes.value_at(obj, "spec.containers[app].env[MODE].value") == "fast"
+    assert changes.value_at(obj, "spec.containers[other].image") is changes._MISSING
+
+
+def test_an_object_created_after_the_application_states_what_it_holds():
+    pc = {"kind": "PriorityClass", "value": 1000000, "globalDefault": True, "metadata": {"name": "batch-critical"}}
+    from clients.jev_diag.timeutil import set_now
+
+    meta = {"creationTimestamp": "2026-10-19T08:10:00Z", "managedFields": []}
+    set_now(parse_time("2026-10-19T08:11:00Z"))  # changes older than an hour are not listed
+    try:
+        change = changes.object_change(
+            "priorityclass/batch-critical",
+            "PriorityClass",
+            "batch-critical",
+            None,
+            meta,
+            targets_created=["2026-10-19T08:00:00Z"],
+            obj=pc,
+        )
+    finally:
+        set_now(None)
+    assert change and '"globalDefault": true' in change["content"] and '"value": 1000000' in change["content"]
+    assert "it holds" in changes.describe_change({**change, "seconds_ago": 30})
