@@ -34,15 +34,22 @@ POD_TEMPLATE_HASH = "pod-template-hash"  # the label a Deployment puts on each R
 DEPLOY_TOLERANCE_SECONDS = 5  # a change this close to the application's creation still counts as after it
 
 _IGNORED_SUBRESOURCES = {"status", "scale"}
+# Managers that write a workload's scale on their own (autoscalers); a scale write by anyone else is a change.
+_SCALE_CONTROLLERS = re.compile(r"(?i)kube-controller-manager|autoscal|keda|vpa")
 
 # --------------------------------------------------------------------------- managedFields
 
 
 def spec_writes(meta: dict) -> list[dict]:
+    """Writes to an object's spec: not status, and not scale unless someone other than an autoscaler made it."""
     return [
         f
         for f in meta.get("managedFields") or []
-        if f.get("time") and f.get("subresource") not in _IGNORED_SUBRESOURCES
+        if f.get("time")
+        and (
+            f.get("subresource") not in _IGNORED_SUBRESOURCES
+            or (f.get("subresource") == "scale" and not _SCALE_CONTROLLERS.search(f.get("manager") or ""))
+        )
     ]
 
 
@@ -174,11 +181,15 @@ def revision_templates(replicasets: list[dict], controllerrevisions: list[dict])
     return out
 
 
+ENV_VALUE_CHARS = 80
+
+
 def _env_pairs(container: dict) -> list[tuple[str, str]]:
+    """(name, value) for each env entry; values are compared whole and shortened only for display (_shown)."""
     pairs = []
     for e in container.get("env") or []:
         if "value" in e:
-            desc = json_short(str(e.get("value")), 80)
+            desc = str(e.get("value"))
         else:
             vf = e.get("valueFrom") or {}
             ref = vf.get("secretKeyRef") or vf.get("configMapKeyRef") or vf.get("fieldRef") or {}
@@ -186,6 +197,23 @@ def _env_pairs(container: dict) -> list[tuple[str, str]]:
             desc = f"from {source} {ref.get('name') or ref.get('fieldPath') or ''}{('.' + ref['key']) if ref.get('key') else ''}"
         pairs.append((e.get("name"), desc))
     return pairs
+
+
+def _shown(old: str, new: str | None = None) -> tuple[str, str]:
+    """Display forms of an env value (and of what it changed to): whole when short; otherwise a window starting just
+    before the first difference, so a change late in a long value stays visible."""
+    if new is None:
+        return json_short(old, ENV_VALUE_CHARS), ""
+    if max(len(old), len(new)) <= ENV_VALUE_CHARS:
+        return old, new
+    first = next((i for i, (a, b) in enumerate(zip(old, new, strict=False)) if a != b), min(len(old), len(new)))
+    start = max(0, first - 20)
+
+    def window(text: str) -> str:
+        part = text[start : start + ENV_VALUE_CHARS]
+        return ("…" if start else "") + part + ("…" if start + ENV_VALUE_CHARS < len(text) else "")
+
+    return window(old), window(new)
 
 
 def _containers(pod_spec: dict) -> dict[str, dict]:
@@ -266,14 +294,15 @@ def template_diff(old: dict, new: dict) -> list[str]:
         map_a, map_b = dict(env_a), dict(env_b)  # a duplicated name resolves to its last value, as in Kubernetes
         for k in sorted(set(map_a) | set(map_b)):
             if k not in map_a:
-                changes.append(f"container {name} env {k} added: {map_b[k]}")
+                changes.append(f"container {name} env {k} added: {_shown(map_b[k])[0]}")
             elif k not in map_b:
-                changes.append(f"container {name} env {k} removed")
+                changes.append(f"container {name} env {k} removed (was {_shown(map_a[k])[0]})")
             elif map_a[k] != map_b[k]:
-                changes.append(f"container {name} env {k}: {map_a[k]} -> {map_b[k]}")
+                was, now_ = _shown(map_a[k], map_b[k])
+                changes.append(f"container {name} env {k}: {was} -> {now_}")
         names_a, names_b = [k for k, _ in env_a], [k for k, _ in env_b]
         for k in sorted({k for k in names_b if names_b.count(k) > 1} - {k for k in names_a if names_a.count(k) > 1}):
-            values = [v for n, v in env_b if n == k]
+            values = [_shown(v)[0] for n, v in env_b if n == k]
             changes.append(f"container {name} env {k} is now defined {len(values)} times: {', '.join(values)}")
         if (a.get("envFrom") or []) != (b.get("envFrom") or []):
             changes.append(
@@ -405,8 +434,14 @@ def object_change(
 def estimate_symptom_onset(
     components: dict[str, dict], cluster: dict, collected_at: datetime
 ) -> tuple[datetime | None, str | None]:
-    """The earliest start among abnormalities that are still active, outside telemetry components."""
+    """The earliest start among abnormalities that are still active, outside telemetry components.
+
+    Nothing dated before the application was deployed counts (the fault came after it), and an alert counts only when
+    its namespace label is one of the application's (cluster-wide alerts from earlier problems linger).
+    """
     candidates: list[tuple[datetime, str]] = []
+    deployed = application_created(components)
+    namespaces = {c["namespace"] for c in components.values()}
     for cid, comp in components.items():
         if comp.get("role") == "observability":
             continue
@@ -426,8 +461,9 @@ def estimate_symptom_onset(
                 candidates.append((moment, f"{ev.get('reason')} events on {cid}"))
     for alert in cluster.get("firing_alerts") or []:
         moment = parse_time(alert.get("active_since"))
-        if moment:
+        if moment and (alert.get("labels") or {}).get("namespace") in namespaces:
             candidates.append((moment, f"alert {alert.get('alertname')}"))
+    candidates = [c for c in candidates if deployed is None or c[0] >= deployed]
     if not candidates:
         return None, None
     moment, source = min(candidates, key=lambda c: c[0])

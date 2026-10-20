@@ -17,6 +17,7 @@ import ast
 import copy
 import json
 import logging
+import math
 import re
 import statistics
 from collections import Counter
@@ -54,6 +55,7 @@ MAX_EVENTS_PER_COMPONENT = 6
 # Error lines logged this soon after a pod started are warm-up noise (dependencies not up yet), not evidence.
 WARMUP_SECONDS = 120
 MAX_MESSAGE_CHARS = 240
+CLASSIFY_CHARS = 2000  # log text kept (privately) for classification; only MAX_MESSAGE_CHARS is shown
 # An error signature is "stopped" when it has been silent longer than this floor and longer than CADENCE_FACTOR
 # times its own median gap; a signature seen once is stopped after SINGLE_OCCURRENCE_WINDOW seconds.
 ONGOING_FLOOR_SECONDS = 15
@@ -72,7 +74,8 @@ _ERROR_LINE_RE = re.compile(
     r"(?i)(\berror\b|\berr\b|\bfail(?:ed|ure|ing)?\b|exception|panic|fatal|traceback|refused|timed?\s?out|"
     r"\btimeout\b|unavailable|denied|unauthorized|forbidden|not found|no such host|could not resolve|"
     r"\bEOF\b|\bOOM\b|out of memory|killed|crash|unhealthy|\b5\d\d\b|deadline exceeded|reset by peer|"
-    r"broken pipe|unreachable|no route to host|throttl)"
+    r"broken pipe|unreachable|no route to host|throttl|OutOfMemoryError|address already in use|EADDRINUSE|"
+    r"no space left|ENOSPC|too many open files|EMFILE|x509:|deadlock|lock wait timeout)"
 )
 _BENIGN_LINE_RE = re.compile(r"(?i)\b(errors?[:=]\s*0|0 errors|failed[:=]\s*0|no errors?)\b")
 # Explicit failure outcomes can be logged at INFO. Require protocol/status context or an unsuccessful action,
@@ -315,14 +318,17 @@ def summarize_workload(obj: dict) -> dict:
         desired = replicas.get("desired") or 0
         max_unavail, max_surge = rolling.get("maxUnavailable"), rolling.get("maxSurge")
 
-        def _as_count(v, total):
+        def _as_count(v, total, round_up):
+            """Kubernetes resolves a percentage against the replica count, rounding maxSurge up and maxUnavailable
+            down."""
             if v is None:
                 return None
             if isinstance(v, str) and v.endswith("%"):
-                return total * int(v[:-1]) / 100
+                exact = total * int(v[:-1]) / 100
+                return float(math.ceil(exact) if round_up else math.floor(exact))
             return float(v)
 
-        mu, ms = _as_count(max_unavail, desired), _as_count(max_surge, desired)
+        mu, ms = _as_count(max_unavail, desired, False), _as_count(max_surge, desired, True)
         if mu is not None and desired and mu >= desired:
             surge = f" and maxSurge={max_surge}" if max_surge is not None else ""
             tail = "; no replacement pod is started before the old ones stop" if ms == 0 else ""
@@ -330,7 +336,7 @@ def summarize_workload(obj: dict) -> dict:
                 f"rolling update allows maxUnavailable={max_unavail}{surge} for {desired} replicas: all pods may go "
                 f"down at once{tail}"
             )
-        if mu is not None and ms is not None and mu == 0 and ms == 0:
+        if desired and mu is not None and ms is not None and mu == 0 and ms == 0:  # with no replicas nothing rolls
             signals.append("rolling update has maxUnavailable=0 and maxSurge=0: a rollout can never progress")
     for key in ("minReadySeconds", "progressDeadlineSeconds"):
         if spec.get(key) is not None:
@@ -445,6 +451,13 @@ def summarize_workload(obj: dict) -> dict:
         elif "secret" in v:
             volumes.append({"name": v.get("name"), "secret": v["secret"].get("secretName")})
             config_refs["secrets"].add(v["secret"].get("secretName"))
+        elif "projected" in v:
+            sources = (v["projected"] or {}).get("sources") or []
+            cms = [(src.get("configMap") or {}).get("name") for src in sources if src.get("configMap")]
+            secrets = [(src.get("secret") or {}).get("name") for src in sources if src.get("secret")]
+            volumes.append(compact({"name": v.get("name"), "projected": {"configMaps": cms, "secrets": secrets}}))
+            config_refs["configmaps"].update(n for n in cms if n)
+            config_refs["secrets"].update(n for n in secrets if n)
     for tmpl in spec.get("volumeClaimTemplates", []) or []:
         volumes.append({"pvc_template": tmpl.get("metadata", {}).get("name")})
     pvc_names = [v.get("pvc") for v in volumes if v.get("pvc")]
@@ -740,6 +753,16 @@ def attach_warning_events(
 ) -> None:
     """Attach Warning events to components. Events from a settled pod's warm-up window are kept as history."""
     pod_index = pod_index or {}
+    # Platform reasons the scheduler and kubelet report as Normal events (preemption) are read for their meaning too.
+    for ev in events:
+        if ev.get("type") != "Warning" and ev.get("reason") in platform_events.NORMAL_EVENT_REASONS:
+            obj = ev.get("involvedObject") or {}
+            cid = component_for_object(
+                obj.get("kind", ""), obj.get("name", ""), obj.get("namespace", ""), components, job_owner
+            )
+            signal = platform_events.event_signal(ev.get("reason"), ev.get("message"))
+            if cid and signal and signal not in components[cid]["signals"]:
+                components[cid]["signals"].append(signal)
     warnings = [e for e in events if e.get("type") == "Warning"]
     warnings.sort(key=_event_time, reverse=True)
     for ev in warnings:
@@ -889,6 +912,7 @@ def summarize_network_policy(policy: dict) -> dict:
         "name": meta.get("name"),
         "namespace": meta.get("namespace"),
         "pod_selector": (spec.get("podSelector") or {}).get("matchLabels") or {},
+        "_selector": spec.get("podSelector") or {},
         "selects_all_pods": not (spec.get("podSelector") or {}).get("matchLabels")
         and not (spec.get("podSelector") or {}).get("matchExpressions"),
         "policy_types": types,
@@ -915,9 +939,11 @@ def attach_network_policies(
         for cid, comp in components.items():
             if comp["namespace"] != pol["namespace"]:
                 continue
-            if pol["selects_all_pods"] or selector_matches(pol["pod_selector"], comp["template_labels"]):
+            if pol["selects_all_pods"] or checks.label_selector_matches(pol["_selector"], comp["template_labels"]):
                 selected.append(cid)
-                comp["network_policies"].append({k: v for k, v in pol.items() if k not in ("namespace", "_meta")})
+                comp["network_policies"].append(
+                    {k: v for k, v in pol.items() if k not in ("namespace", "_meta", "_selector")}
+                )
                 comp["signals"].append(f"selected by NetworkPolicy {pol['name']} ({pol['effect']})")
         pol["components"] = selected
         if changes is not None:
@@ -1025,15 +1051,20 @@ def log_line_time(line: str) -> datetime | None:
     return parse_time(m.group(1)) if m else None
 
 
-def normalize_log_line(line: str) -> tuple[str, str]:
-    """Return (dedupe_key, display_text) for a raw `kubectl logs --prefix` line."""
+def log_text(line: str) -> tuple[str | None, str]:
+    """(container, text) of a raw `kubectl logs --prefix` line, without colour codes, prefix and timestamp."""
     text = strip_ansi(line).rstrip()
     container = None
     m = _PREFIX_RE.match(text)
     if m:
         container = m.group(1)
         text = text[m.end() :]
-    text = _TIMESTAMP_RE.sub("", text).strip()
+    return container, _TIMESTAMP_RE.sub("", text).strip()
+
+
+def normalize_log_line(line: str) -> tuple[str, str]:
+    """Return (dedupe_key, display_text) for a raw `kubectl logs --prefix` line."""
+    container, text = log_text(line)
     display = trim(f"{container}: {text}" if container else text)
     key = _UUID_RE.sub("<id>", text)
     key = _HEX_RE.sub("<hex>", key)
@@ -1111,6 +1142,7 @@ def extract_log_signals(
     """
     counts: Counter[str] = Counter()
     examples: dict[str, str] = {}
+    full: dict[str, str] = {}
     stamps: dict[str, list[datetime]] = {}
     container_of: dict[str, str] = {}
     for line in raw_logs:
@@ -1119,6 +1151,9 @@ def extract_log_signals(
         key, display = normalize_log_line(line)
         counts[key] += 1
         examples.setdefault(key, display)
+        if key not in full:
+            container, text = log_text(line)
+            full[key] = (f"{container}: {text}" if container else text)[:CLASSIFY_CHARS]
         prefix = _PREFIX_RE.match(line)
         if prefix:
             container_of[key] = prefix.group(1)
@@ -1129,6 +1164,8 @@ def extract_log_signals(
     out = []
     for key, n in counts.items():
         item = {"count": n, "line": examples[key], **signature_recency(stamps.get(key, []), at)}
+        if len(full[key]) > len(examples[key]):
+            item["_text"] = full[key]  # the whole line, for classification (derive.classify_logs)
         if ongoing_containers and container_of.get(key) in ongoing_containers and item.get("state") == "stopped":
             item["state"] = "ongoing"
             item["crash_loop"] = True
@@ -1177,13 +1214,27 @@ def _fetch_pod_logs(pod: str, namespace: str, tail: int) -> list[str]:
     return [strip_ansi(line) for line in out.splitlines()]
 
 
+PREVIOUS_LOG_READ = 200  # lines read from a crashed container, to find its last error before a long stack trace
+
+
+def crash_excerpt(lines: list[str], n: int) -> list[str]:
+    """The last `n` lines of a crashed container's log; when none of them is an error (a panic or exception message
+    followed by a long stack trace), the last error line before them is kept too, last and marked `earlier:` (so a
+    trim that keeps the last lines keeps it)."""
+    tail = lines[-n:]
+    if any(is_error_line(ln) for ln in tail):
+        return tail
+    earlier = [ln for ln in lines[:-n] if is_error_line(ln)]
+    return [*tail[1:], f"earlier: {earlier[-1]}"] if earlier else tail
+
+
 def _fetch_previous_logs(pod: str, container: str, namespace: str) -> list[str]:
     out = run_kubectl(
-        ["logs", pod, "-n", namespace, "-c", container, "--previous", f"--tail={MAX_PREVIOUS_LOG_LINES * 3}"],
+        ["logs", pod, "-n", namespace, "-c", container, "--previous", f"--tail={PREVIOUS_LOG_READ}"],
         timeout=LOG_TIMEOUT,
     )
     lines = [trim(_TIMESTAMP_RE.sub("", strip_ansi(ln))) for ln in out.splitlines() if ln.strip()]
-    return lines[-MAX_PREVIOUS_LOG_LINES:]
+    return crash_excerpt(lines, MAX_PREVIOUS_LOG_LINES)
 
 
 def attach_logs(
@@ -1497,10 +1548,6 @@ def summarize_webhooks(configs: list[dict], errors: list[str]) -> list[dict]:
                     f"{kind} {wh.get('name')} (failurePolicy={wh.get('failurePolicy')}) backend service "
                     f"{svc.get('namespace')}/{svc.get('name')} has 0 ready endpoints; matching admission requests "
                     f"({'; '.join(rules)}) {'fail' if wh.get('failurePolicy') == 'Fail' else 'are skipped'}"
-                )
-            elif kind == "MutatingWebhookConfiguration":
-                record["signals"].append(
-                    f"mutating webhook {wh.get('name')} rewrites objects matching {'; '.join(rules) or 'its rules'}"
                 )
             out.append(record)
     return out
@@ -2192,7 +2239,13 @@ def collect_snapshot(
         "services_matching_no_workload": dangling_services,
         "cluster_dns": compact(cluster_dns),
         "namespace_constraints": compact(constraints),
-        "admission_webhooks": compact([{k: v for k, v in wh.items() if k != "_rules"} for wh in webhooks]),
+        # webhooks that act on the application first, so a trim of this list never drops the one that matters
+        "admission_webhooks": compact(
+            [
+                {k: v for k, v in wh.items() if k != "_rules"}
+                for wh in sorted(webhooks, key=lambda w: not (w.get("signals") or w.get("components")))
+            ]
+        ),
         "outside_objects": compact(outside_objects),
         "rbac": compact(rbac),
         "stuck_terminating": stuck,

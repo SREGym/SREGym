@@ -128,9 +128,15 @@ def same_change(snapshot: ClusterSnapshot, cid: str) -> list[str]:
 
 
 def _normalized(comp: dict) -> tuple[str, ...]:
-    """A workload's template changes with its own name and its container names taken out."""
-    name = comp.get("name") or ""
-    return tuple(sorted(_CONTAINER.sub("container <c> ", c).replace(name, "<name>") for c in changed_values(comp)))
+    """A workload's template changes with its own name (as a whole word: `rate` is not taken out of `hotel-rate`) and
+    its container names taken out."""
+    own = re.compile(rf"(?<![\w.-]){re.escape(comp.get('name') or '')}(?![\w.-])") if comp.get("name") else None
+    return tuple(
+        sorted(
+            (own.sub("<name>", _CONTAINER.sub("container <c> ", c)) if own else _CONTAINER.sub("container <c> ", c))
+            for c in changed_values(comp)
+        )
+    )
 
 
 def failing_callers(snapshot: ClusterSnapshot, cid: str) -> dict[str, dict[str, int]]:

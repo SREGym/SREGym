@@ -32,6 +32,8 @@ _CALL_FAILURES = (
     ("its backend Service has no endpoints", re.compile(r"(?i)no endpoints available|service .* not found")),
 )
 _NODE_PRESSURE = re.compile(r"(?i)the node (?:was|had) low on resource|node had condition|evicted")
+# Reasons reported as Normal events that still state a platform failure for the application's pods.
+NORMAL_EVENT_REASONS = {"Preempted"}
 # Kubelet and node events that state a node-level cause (Warning, or a pressure or eviction reason).
 NODE_EVENT_REASONS = {
     "EvictionThresholdMet",

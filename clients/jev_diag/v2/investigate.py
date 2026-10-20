@@ -27,9 +27,11 @@ from typing import Any
 from clients.jev_diag.timeutil import now
 from clients.jev_diag.v2.checks import describe_probe
 from clients.jev_diag.v2.collector import (
+    PREVIOUS_LOG_READ,
     WARMUP_SECONDS,
     ClusterSnapshot,
     compact,
+    crash_excerpt,
     extract_log_signals,
     is_error_line,
     last_update_time,
@@ -257,6 +259,21 @@ def pod_details(pod_names: list[str], ns: str, message_chars: int = 120) -> tupl
     return pods, events[:MAX_EVENTS]
 
 
+def merged_events(pod_events: list[dict], comp: dict) -> list[dict]:
+    """The pods' current events plus the warning events collection attributed to the workload (its ReplicaSets, Jobs
+    and pods that no longer exist), newest first and without repeats. A workload whose pods are never created (an
+    admission rejection) has only the latter."""
+    out, seen = [], set()
+    attributed = [{**ev, "type": "Warning", "last": ev.get("last_seen")} for ev in comp.get("warning_events") or []]
+    for ev in [*pod_events, *attributed]:
+        key = (ev.get("reason"), ev.get("object"), (ev.get("message") or "")[:120])
+        if key not in seen:
+            seen.add(key)
+            out.append(ev)
+    out.sort(key=lambda e: e.get("last") or "", reverse=True)
+    return out[:MAX_EVENTS]
+
+
 def _settled_restart(pod: dict, cs: dict) -> bool:
     """A container that crashed only during warm-up and has been ready and running steadily since.
 
@@ -359,17 +376,20 @@ def log_detail(
             if (cs.get("restarts") or 0) > 0 and not _settled_restart(pod, cs):
                 try:
                     prev = run_kubectl(
-                        ["logs", name, "-n", ns, "-c", cs["name"], "--previous", "--tail=40"], timeout=30
+                        ["logs", name, "-n", ns, "-c", cs["name"], "--previous", f"--tail={PREVIOUS_LOG_READ}"],
+                        timeout=30,
                     )
-                    previous[f"{name}/{cs['name']}"] = [
-                        trim(rewrite(strip_ansi(ln)), 200) for ln in prev.splitlines()[-MAX_TAIL_LINES:]
-                    ]
+                    lines = [trim(rewrite(strip_ansi(ln)), 200) for ln in prev.splitlines() if ln.strip()]
+                    previous[f"{name}/{cs['name']}"] = crash_excerpt(lines, MAX_TAIL_LINES)
                 except Exception:  # noqa: BLE001
                     pass
     all_error_lines = [ln for ln in lines if is_error_line(ln)]
     telemetry_lines = [ln for ln in all_error_lines if TELEMETRY_RE.search(ln)]
     error_lines = [ln for ln in all_error_lines if not TELEMETRY_RE.search(ln)]
-    samples = extract_log_signals(error_lines, limit=MAX_ERROR_LINES, ongoing_containers=_crash_looping(pods))
+    samples = [
+        {k: v for k, v in smp.items() if k != "_text"}  # the shortened line is what the model reads
+        for smp in extract_log_signals(error_lines, limit=MAX_ERROR_LINES, ongoing_containers=_crash_looping(pods))
+    ]
     ongoing = [s for s in samples if s.get("state") != "stopped"]
     stopped = [s for s in samples if s.get("state") == "stopped"]
     classes: Counter[str] = Counter()
@@ -387,7 +407,9 @@ def log_detail(
             "error_classes_still_occurring": dict(classes),
             "error_samples": samples,
             "repeated_failures": repeated_failures(error_lines),
-            "telemetry_error_samples": extract_log_signals(telemetry_lines, limit=3),
+            "telemetry_error_samples": [
+                {k: v for k, v in smp.items() if k != "_text"} for smp in extract_log_signals(telemetry_lines, limit=3)
+            ],
             "tail": [trim(re.sub(r"^\[pod/[^\]]+\]\s?", "", ln), 200) for ln in lines[-MAX_TAIL_LINES:]],
             "previous_container_logs": previous,
         }
@@ -654,7 +676,7 @@ def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
         detail["workload"] = {}
     pod_names = [p["name"] for p in comp.get("pods") or [] if p.get("name")]
     pods, events = pod_details(pod_names, ns)
-    detail["pods"], detail["events"] = pods, events
+    detail["pods"], detail["events"] = pods, merged_events(events, comp)
     detail["logs"] = log_detail([p["name"] for p in pods if not p.get("error")], ns, pods)
     detail["spec_checks"] = spec_checks(snapshot, cid, detail["workload"], pods)
     for key in ("template_changes", "admission_changes", "calls_services", "clients", "blocked_input"):

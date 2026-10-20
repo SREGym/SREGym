@@ -247,9 +247,12 @@ def test_the_change_log_keeps_operator_writes_after_deploy_and_leaves_out_the_re
         found = outside.change_radar([NS], _app(), [], changes, parse_time("2026-10-19T08:00:00Z"))
     finally:
         set_now(None)
-    assert [(f["kind"], f["name"]) for f in found] == [("IPPool", "default")]
+    # the app's own ConfigMap edited after deploy is a change too; workloads, controller writes, pre-deploy writes,
+    # the benchmark's own objects and the fault tool's resources are not
+    assert [(f["kind"], f["name"]) for f in found] == [("IPPool", "default"), ("ConfigMap", "app-config")]
     assert found[0]["signals"] == ["written by kubectl-patch after the application was deployed"]
-    assert [c["object"] for c in changes] == ["ippool/default"]
+    assert found[1]["components"] == sorted(_app())
+    assert [c["object"] for c in changes] == ["ippool/default", f"configmap/{NS}/app-config"]
 
 
 def test_a_policy_cause_is_reported_with_its_scope():
