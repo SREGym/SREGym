@@ -32,6 +32,7 @@ from typing import Any
 
 from typesafe_sdk import Choice, Noul
 
+from clients.jev_diag.v2.changes import ONSET_TOLERANCE_SECONDS
 from clients.jev_diag.v2.checks import describe_probe
 from clients.jev_diag.v2.classifier import (
     CATEGORY_QUESTION,
@@ -567,6 +568,22 @@ def explained_by(snapshot: ClusterSnapshot, cid: str | None, fault_object: dict 
     return out
 
 
+def platform_change_first(snapshot: ClusterSnapshot) -> bool:
+    """Whether the change nearest before the symptoms (changes.rank_changes) is an object outside the application's
+    workloads that acts on none of them in particular (linked to no workload, or to most of them at once), so the
+    cluster-object path is examined whatever triage weighted it: a change just before an incident is the first
+    suspect, however unremarkable its object looks, and no single workload hypothesis stands for it."""
+    changes = snapshot.cluster.get("recent_changes") or []
+    first = changes[0] if changes else None
+    if not first or not snapshot.cluster.get("findings") or first.get("role") == "observability":
+        return False
+    before = first.get("seconds_before_symptoms")
+    near = before is None or before >= -ONSET_TOLERANCE_SECONDS
+    affects = first.get("affects") or []
+    broad = not affects or len(affects) >= max(2, len(snapshot.components) // 2)
+    return near and first.get("object") not in snapshot.components and broad
+
+
 def explaining_dependency(snapshot: ClusterSnapshot, cid: str, investigated: dict) -> str | None:
     """A dependency that may explain `cid`'s own failure: `cid`'s still-occurring errors are failed calls, and the
     dependency (deps.py graph or named by those errors) is abnormal on its own and not examined yet. The one with
@@ -1090,6 +1107,8 @@ class IterativeDiagnoser(JevDiagnoser):
                 ]
             )
         )
+        if OTHER_OPTION not in hypotheses and platform_change_first(snapshot):
+            hypotheses.append(OTHER_OPTION)  # the change nearest the symptoms is outside the workloads: a suspect
         for c in hypotheses:
             if c not in queue:
                 queue.append(c)

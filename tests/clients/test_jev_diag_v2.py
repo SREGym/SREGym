@@ -958,3 +958,27 @@ def test_an_investigation_never_shows_triage_probabilities():
     IterativeDiagnoser(Recording(triage, {"deployment/a": 0.9}), fetch_detail=lambda s, c: {}).diagnose(_snap(comps))
     assert seen and all("probability" not in str(s.get("triage_order")) for s in seen)
     assert all("triage_ranking" not in s for s in seen)
+
+
+def test_a_platform_change_just_before_the_symptoms_is_examined_whatever_triage_weighted_it():
+    from clients.jev_diag.v2 import collector as v2c
+    from clients.jev_diag.v2.tree import IterativeDiagnoser, platform_change_first
+
+    comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b", "c")}
+    finding = {
+        "kind": "IPPool",
+        "name": "default",
+        "signal": "IPPool default was modified; now spec.cidr = 10.0.0.0/30",
+    }
+    change = {"object": "ippool/default", "kind": "IPPool", "affects": [], "seconds_before_symptoms": 40}
+    cluster = {"findings": [finding], "recent_changes": [change]}
+    snap = v2c.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster=cluster)
+    assert platform_change_first(snap)
+    triage = [{"deployment/a": 0.9, "deployment/b": 0.06, "deployment/c": 0.04, "other": 0.0}] * 2
+    client = _Answers(triage, {"deployment/a": 0.9}, picks={"cluster_object": "F1", "fault_start": "other"})
+    d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap)
+    assert any(s.get("node") == "cluster" for s in d.investigation["steps"])
+    assert d.component == "other" and d.fault_object["name"] == "default"
+    # a change that acts on one workload is that workload's hypothesis, not the cluster path's
+    cluster["recent_changes"] = [{**change, "object": "configmap/ns/x", "affects": ["deployment/a"]}]
+    assert not platform_change_first(snap)

@@ -127,11 +127,101 @@ def later_writes(meta: dict) -> list[dict]:
         at = parse_time(f.get("time"))
         if f is creator or at is None or (at - created).total_seconds() < MIN_CHANGE_SECONDS:
             continue
-        paths = [readable_path(p) for p in _flatten(f.get("fieldsV1") or {})]
-        paths = [p for p in dict.fromkeys(paths) if not p.startswith("metadata.")]
+        raw = [p for p in dict.fromkeys(_flatten(f.get("fieldsV1") or {})) if not p.startswith("metadata.")]
+        paths = list(dict.fromkeys(readable_path(p) for p in raw))
         if paths:
-            out.append({"at": f.get("time"), "fields": paths[:MAX_FIELD_PATHS]})
+            out.append({"at": f.get("time"), "fields": paths[:MAX_FIELD_PATHS], "raw": raw[:MAX_FIELD_PATHS]})
     return out
+
+
+# --------------------------------------------------------------------------- values of a change
+
+MAX_CHANGED_VALUES = 4
+VALUE_CHARS = 300
+_MISSING = object()
+_PATH_TOKEN = re.compile(r"([^.\[\]]+)|\[([^\]]+)\]")
+_LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration"
+# Parts of an object that state what it does (its content when it was created after the application).
+_CONTENT_KEYS = (
+    "spec",
+    "data",
+    "rules",
+    "webhooks",
+    "subjects",
+    "roleRef",
+    "value",
+    "globalDefault",
+    "preemptionPolicy",
+)
+
+
+def value_at(obj: object, raw_path: str) -> object:
+    """The value at a managedFields path (`spec.peerSelector`, `data.Corefile`, `spec.containers[app].env[KEY]`) in
+    an object, list items found by their name or key; _MISSING when absent."""
+    node = obj
+    for field_name, label in _PATH_TOKEN.findall(raw_path):
+        if field_name:
+            if not isinstance(node, dict) or field_name not in node:
+                return _MISSING
+            node = node[field_name]
+            continue
+        if not isinstance(node, list):
+            return _MISSING
+        pairs = dict(kv.split("=", 1) for kv in label.split(",") if "=" in kv)
+        node = next(
+            (
+                item
+                for item in node
+                if (
+                    isinstance(item, dict)
+                    and (
+                        label in (str(item.get("name")), str(item.get("key")))
+                        or (pairs and all(str(item.get(k)) == v for k, v in pairs.items()))
+                    )
+                )
+                or str(item) == label
+            ),
+            _MISSING,
+        )
+        if node is _MISSING:
+            return _MISSING
+    return node
+
+
+def changed_values(obj: dict, meta: dict) -> list[str]:
+    """What the later writes set, as `path: old -> new` when the last applied configuration still holds the old value,
+    else `path = new`. Secrets are never read."""
+    if obj.get("kind") == "Secret":
+        return []
+    try:
+        applied = json.loads((meta.get("annotations") or {}).get(_LAST_APPLIED) or "null")
+    except ValueError:
+        applied = None
+    out = []
+    for write in later_writes(meta):
+        for raw in write.get("raw") or []:
+            new = value_at(obj, raw)
+            old = value_at(applied, raw) if applied else _MISSING
+            path = readable_path(raw)
+            if old is not _MISSING and old != new:
+                if isinstance(old, str) and isinstance(new, str):  # long text: where it differs
+                    was, now_ = _shown(old, new, VALUE_CHARS)
+                    out.append(f"{path}: {was} -> {now_}")
+                else:
+                    shown_new = "(removed)" if new is _MISSING else json_short(new, VALUE_CHARS)
+                    out.append(f"{path}: {json_short(old, VALUE_CHARS)} -> {shown_new}")
+            elif new is not _MISSING:
+                out.append(f"{path} = {json_short(new, VALUE_CHARS)}")
+    return list(dict.fromkeys(out))[:MAX_CHANGED_VALUES]
+
+
+def object_content(obj: dict) -> str | None:
+    """What a new object does: its spec, data, rules or settings (key names only for a Secret)."""
+    if obj.get("kind") == "Secret":
+        keys = sorted((obj.get("data") or {}) | (obj.get("stringData") or {}))
+        return f"keys {', '.join(keys)}" if keys else None
+    content = {k: obj[k] for k in _CONTENT_KEYS if k in obj}
+    return json_short(content, VALUE_CHARS * 2) if content else None
 
 
 # --------------------------------------------------------------------------- pod template revisions
@@ -199,19 +289,19 @@ def _env_pairs(container: dict) -> list[tuple[str, str]]:
     return pairs
 
 
-def _shown(old: str, new: str | None = None) -> tuple[str, str]:
-    """Display forms of an env value (and of what it changed to): whole when short; otherwise a window starting just
+def _shown(old: str, new: str | None = None, width: int = ENV_VALUE_CHARS) -> tuple[str, str]:
+    """Display forms of a text value (and of what it changed to): whole when short; otherwise a window starting just
     before the first difference, so a change late in a long value stays visible."""
     if new is None:
-        return json_short(old, ENV_VALUE_CHARS), ""
-    if max(len(old), len(new)) <= ENV_VALUE_CHARS:
+        return json_short(old, width), ""
+    if max(len(old), len(new)) <= width:
         return old, new
     first = next((i for i, (a, b) in enumerate(zip(old, new, strict=False)) if a != b), min(len(old), len(new)))
     start = max(0, first - 20)
 
     def window(text: str) -> str:
-        part = text[start : start + ENV_VALUE_CHARS]
-        return ("…" if start else "") + part + ("…" if start + ENV_VALUE_CHARS < len(text) else "")
+        part = text[start : start + width]
+        return ("…" if start else "") + part + ("…" if start + width < len(text) else "")
 
     return window(old), window(new)
 
@@ -382,11 +472,14 @@ def object_change(
     targets_created: list[str | None] | None = None,
     extra: dict | None = None,
     revised_at: str | None = None,
+    obj: dict | None = None,
 ) -> dict | None:
     """A change record for one object, or None when the object shows no separate recent write.
 
     `revised_at` is when the workload's current pod template revision was created: a revision diff is a change
     even when the object's write history (managedFields) records no separate spec write, e.g. a field removed.
+    With the object itself (`obj`), the record also says what changed: the values the later writes set (old -> new
+    where the last applied configuration keeps the old one), or, for an object created late, what it contains.
     """
     created = meta.get("creationTimestamp")
     modified = modified_after_creation(meta)
@@ -421,6 +514,13 @@ def object_change(
             record["fields"] = list(dict.fromkeys(fields))[:MAX_FIELD_PATHS]
     if late is not None:
         record["created_after_targets_s"] = late
+    if obj is not None:
+        values = changed_values(obj, meta) if modified is not None else []
+        content = object_content(obj) if modified is None and late is not None else None
+        if values:
+            record["values"] = values
+        if content:
+            record["content"] = content
     if modified is None and late is None:
         record["revision_changed"] = True
     if extra:
@@ -507,17 +607,24 @@ def describe_change(change: dict, component_id: str | None = None) -> str:
         return f"pod template changed {ago}s ago{template}{rel}"
     if change["object"] == component_id:
         if change.get("modified_after_creation_s") is not None:
+            own = f"; now {'; '.join(change['values'])}" if change.get("values") else ""
             return (
                 f"spec modified {ago}s ago, {change['modified_after_creation_s']}s after this object was created"
-                f"{fields}{template}{rel}"
+                f"{fields}{own}{template}{rel}"
             )
         return f"created {ago}s ago, {change['created_after_targets_s']}s after the workloads it calls{rel}"
     what = f"{change['kind']} {change['name']}"
+    values = f"; now {'; '.join(change['values'])}" if change.get("values") else ""
+    content = f"; it holds {change['content']}" if change.get("content") else ""
     if change.get("modified_after_creation_s") is not None:
         return (
-            f"{what} was modified {ago}s ago, {change['modified_after_creation_s']}s after it was created{fields}{rel}"
+            f"{what} was modified {ago}s ago, {change['modified_after_creation_s']}s after it was created{fields}"
+            f"{values}{rel}"
         )
-    return f"{what} was created {ago}s ago, {change['created_after_targets_s']}s after the workloads {_acts_on(change['kind'])}{rel}"
+    return (
+        f"{what} was created {ago}s ago, {change['created_after_targets_s']}s after the workloads "
+        f"{_acts_on(change['kind'])}{content}{rel}"
+    )
 
 
 def application_created(components: dict[str, dict]) -> datetime | None:
@@ -573,7 +680,9 @@ def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datet
         {
             k: v
             for k, v in c.items()
-            if k in ("object", "at", "seconds_ago", "seconds_before_symptoms", "fields", "role") or k.endswith("_s")
+            if k in ("object", "kind", "affects", "at", "seconds_ago", "seconds_before_symptoms", "fields", "role")
+            or k in ("values", "content")  # what the change set, so triage reads the value, not only the write
+            or k.endswith("_s")
         }
         for c in ranked[:MAX_RECENT_CHANGES]
     ]

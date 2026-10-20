@@ -64,7 +64,17 @@ SINGLE_OCCURRENCE_WINDOW = 60
 INIT_CONTAINER_STUCK_SECONDS = 60
 # Private fields hold raw data used during collection; they never reach the model's state, and the heavy or
 # sensitive ones are not written to the saved snapshot either.
-PRIVATE_NOT_SAVED = ("_meta", "_template", "_env_values", "_spec", "_labels", "_owner", "_started", "_config_modes")
+PRIVATE_NOT_SAVED = (
+    "_meta",
+    "_template",
+    "_env_values",
+    "_spec",
+    "_labels",
+    "_owner",
+    "_started",
+    "_config_modes",
+    "_object",  # an object's raw content, read only to say what a change set (changes.changed_values)
+)
 
 # Normal states that carry no signal on their own.
 _BENIGN_WAITING_REASONS = {"ContainerCreating", "PodInitializing"}
@@ -874,6 +884,7 @@ def attach_services(
                 meta,
                 affects=owners,
                 targets_created=[components[c].get("created") for c in owners],
+                obj=svc,
             )
             if change:
                 changes.append(change)
@@ -933,6 +944,7 @@ def attach_network_policies(
         pol = summarize_network_policy(raw)
         pol["created"] = raw.get("metadata", {}).get("creationTimestamp")
         pol["_meta"] = raw.get("metadata", {})
+        pol["_object"] = raw
         summaries.append(pol)
     for pol in summaries:
         selected = []
@@ -942,7 +954,7 @@ def attach_network_policies(
             if pol["selects_all_pods"] or checks.label_selector_matches(pol["_selector"], comp["template_labels"]):
                 selected.append(cid)
                 comp["network_policies"].append(
-                    {k: v for k, v in pol.items() if k not in ("namespace", "_meta", "_selector")}
+                    {k: v for k, v in pol.items() if k not in ("namespace", "_meta", "_selector", "_object")}
                 )
                 comp["signals"].append(f"selected by NetworkPolicy {pol['name']} ({pol['effect']})")
         pol["components"] = selected
@@ -955,6 +967,7 @@ def attach_network_policies(
                 pol.pop("_meta"),
                 affects=selected,
                 targets_created=[components[c].get("created") for c in selected],
+                obj=pol.pop("_object"),
             )
             if change:
                 changes.append(change)
@@ -1429,6 +1442,7 @@ def summarize_namespace_constraints(limit_ranges: list[dict], quotas: list[dict]
                 "name": meta.get("name"),
                 "created": meta.get("creationTimestamp"),
                 "_meta": meta,
+                "_object": lr,
                 "limits": (lr.get("spec") or {}).get("limits"),
                 "signals": [],
             }
@@ -1462,6 +1476,7 @@ def summarize_namespace_constraints(limit_ranges: list[dict], quotas: list[dict]
                 "name": meta.get("name"),
                 "created": meta.get("creationTimestamp"),
                 "_meta": meta,
+                "_object": q,
                 "hard": hard,
                 "used": used,
                 "signals": signals,
@@ -1531,6 +1546,7 @@ def summarize_webhooks(configs: list[dict], errors: list[str]) -> list[dict]:
                 "created": cfg.get("metadata", {}).get("creationTimestamp"),
                 "_rules": wh.get("rules") or [],
                 "_meta": cfg.get("metadata", {}),
+                "_object": cfg,
                 "webhook": wh.get("name"),
                 "failure_policy": wh.get("failurePolicy"),
                 "timeout_seconds": wh.get("timeoutSeconds"),
@@ -1614,6 +1630,7 @@ def summarize_cluster_dns(errors: list[str]) -> dict:
         ),
         "rules": [trim(block, 300) for block in _corefile_rules(corefile)][:6],
         "_meta": meta,
+        "_object": cm,
     }
     try:
         pods = json.loads(
@@ -1647,6 +1664,7 @@ def summarize_config_objects(secrets: list[dict], configmaps: list[dict]) -> dic
                 "created": meta.get("creationTimestamp"),
                 "last_update": last_update_time(meta),
                 "_meta": meta,
+                "_object": {**obj, "kind": kind},
                 "_settings": paths.setting_pairs(obj.get("data") or {}) if kind == "ConfigMap" else {},
             }
     return out
@@ -1740,6 +1758,7 @@ def attach_config_objects(
                 objects[(kind, ns, name)].get("_meta") or {},
                 affects=cids,
                 targets_created=[components[c].get("created") for c in cids],
+                obj=objects[(kind, ns, name)].get("_object"),
             )
             if change:
                 changes.append(change)
@@ -2110,6 +2129,7 @@ def collect_snapshot(
             c["namespace"],
             c.pop("_meta", None) or {},
             targets_created=in_namespace,
+            obj=c.pop("_object", None),
         )
         if change:
             changes.append(change)
@@ -2132,6 +2152,7 @@ def collect_snapshot(
     recorded: set[str] = set()
     for wh in webhooks:
         meta = wh.pop("_meta", None) or {}
+        obj = wh.pop("_object", None)
         name = wh["configuration"]
         if name in recorded:
             continue
@@ -2151,6 +2172,7 @@ def collect_snapshot(
             meta,
             affects=sorted({c for w in webhooks if w["configuration"] == name for c in w.get("components") or []}),
             targets_created=[comp.get("created") for comp in components.values() if comp["namespace"] in matched],
+            obj=obj,
         )
         if change:
             changes.append(change)
@@ -2169,10 +2191,16 @@ def collect_snapshot(
     dns_affected = coredns_service_overrides(cluster_dns, components)
     if dns_affected:
         cluster_dns["components"] = dns_affected
-    dns_meta = cluster_dns.pop("_meta", None)
+    dns_meta, dns_object = cluster_dns.pop("_meta", None), cluster_dns.pop("_object", None)
     if dns_meta:
         change = change_log.object_change(
-            "configmap/kube-system/coredns", "ConfigMap", "coredns", "kube-system", dns_meta, affects=dns_affected
+            "configmap/kube-system/coredns",
+            "ConfigMap",
+            "coredns",
+            "kube-system",
+            dns_meta,
+            affects=dns_affected,
+            obj=dns_object,
         )
         if change:
             changes.append(change)

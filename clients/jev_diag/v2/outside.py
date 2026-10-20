@@ -138,7 +138,7 @@ def collect_outside(
         if not linked and ns not in namespaces:
             continue
         out.append({**_finding("Ingress", name, ns, signals, linked), "routes": routes})
-        _change(changes, "Ingress", name, ns, meta, linked, apps_created, deployed)
+        _change(changes, "Ingress", name, ns, meta, linked, apps_created, deployed, ing)
 
     for pc in kubectl_items("priorityclasses", None, errors, cluster_scoped=True):
         meta = pc.get("metadata") or {}
@@ -153,12 +153,12 @@ def collect_outside(
             f"preemptionPolicy {pc.get('preemptionPolicy') or 'PreemptLowerPriority'}"
         )
         out.append({**_finding("PriorityClass", name, None, [], users), "settings": settings})
-        _change(changes, "PriorityClass", name, None, meta, users, apps_created, deployed)
+        _change(changes, "PriorityClass", name, None, meta, users, apps_created, deployed, pc)
 
     for resource, kind in (("daemonsets", "DaemonSet"), ("cronjobs", "CronJob")):
         for obj in kubectl_items(resource, "kube-system", errors):
             meta = obj.get("metadata") or {}
-            if _change(changes, kind, meta.get("name"), "kube-system", meta, set(), apps_created, deployed):
+            if _change(changes, kind, meta.get("name"), "kube-system", meta, set(), apps_created, deployed, obj):
                 out.append(_finding(kind, meta.get("name"), "kube-system", [f"kube-system {kind} written"], set()))
     return out
 
@@ -212,7 +212,7 @@ def change_radar(
             else:  # a namespaced object acts on its namespace; a Namespace object on the namespace it is
                 scope = name if kind == "Namespace" else ns
                 affects = {c for c, comp in components.items() if comp["namespace"] == scope}
-            if _change(changes, kind, name, ns, {**meta, "managedFields": writes}, affects, apps_created, settled):
+            if _change(changes, kind, name, ns, {**meta, "managedFields": writes}, affects, apps_created, settled, obj):
                 managers = ", ".join(dict.fromkeys(w["manager"] for w in writes))
                 out.append(
                     _finding(kind, name, ns, [f"written by {managers} after the application was deployed"], affects)
@@ -233,11 +233,13 @@ def _change(
     affects: set[str],
     apps_created: list,
     deployed: datetime | None,
+    obj: dict | None = None,
 ) -> bool:
-    """Record the object's change, if any; True when it was made after the application was deployed."""
+    """Record the object's change, if any (with what it set, given the object); True when it was made after the
+    application was deployed."""
     obj_id = f"{kind.lower()}/{ns}/{name}" if ns else f"{kind.lower()}/{name}"
     change = change_log.object_change(
-        obj_id, kind, name, ns, meta, affects=sorted(affects), targets_created=apps_created
+        obj_id, kind, name, ns, meta, affects=sorted(affects), targets_created=apps_created, obj=obj
     )
     if change:
         changes.append(change)
