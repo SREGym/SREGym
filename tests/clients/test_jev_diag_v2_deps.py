@@ -294,3 +294,69 @@ def test_a_policy_cause_is_reported_with_its_scope():
         "when next created"
     )
     assert scope(snap, diagnosis({"kind": "ConfigMap", "name": "x", "namespace": NS})) is None
+
+
+def test_platform_failures_are_read_from_event_messages():
+    from clients.jev_diag.v2.platform_events import event_signal
+
+    webhook = event_signal(
+        "FailedCreate",
+        'Error creating: Internal error occurred: failed calling webhook "validate.policy.io": failed to call webhook: '
+        'Post "https://policy.ops.svc:443/validate": tls: failed to verify certificate: x509: certificate signed by '
+        "unknown authority",
+    )
+    assert webhook.startswith(
+        "admission webhook validate.policy.io fails when the API server admits this workload's objects: its "
+        "certificate is not trusted or not valid"
+    )
+    timeout = event_signal("FailedCreate", 'failed calling webhook "m.io": context deadline exceeded')
+    assert "the call times out" in timeout
+    sandbox = event_signal(
+        "FailedCreatePodSandBox", 'plugin type="calico" failed (add): failed to allocate for range 0'
+    )
+    assert sandbox.startswith("pod network setup fails")
+    assert event_signal("Preempted", "Preempted by pod 1234 on node worker2").startswith("pods of this workload were")
+    assert event_signal("Evicted", "The node was low on resource: memory.").startswith("pods of this workload were")
+    psa = event_signal(
+        "FailedCreate", 'pods "x-1" is forbidden: violates PodSecurity "restricted:latest": runAsNonRoot'
+    )
+    assert psa.startswith("the namespace's Pod Security admission rejects this workload's pods")
+    assert event_signal("BackOff", "Back-off restarting failed container") is None
+    assert event_signal("FailedMount", 'configmap "x" not found') is None
+
+
+def test_node_events_since_deploy_become_node_problems_linked_to_its_workloads():
+    from clients.jev_diag.timeutil import parse_time
+    from clients.jev_diag.v2.platform_events import node_problems
+
+    comps = _app()
+    comps["deployment/orders"]["pods"] = [{"name": "orders-1", "node": "worker2"}]
+    nodes = [{"name": "worker2", "problems": []}, {"name": "worker3", "problems": []}]
+    events = [
+        {
+            "type": "Warning",
+            "reason": "EvictionThresholdMet",
+            "count": 3,
+            "message": "Attempting to reclaim memory",
+            "lastTimestamp": "2026-10-19T08:05:00Z",
+            "involvedObject": {"kind": "Node", "name": "worker2"},
+        },
+        {
+            "type": "Normal",
+            "reason": "NodeHasDiskPressure",
+            "lastTimestamp": "2026-10-19T07:00:00Z",
+            "involvedObject": {"kind": "Node", "name": "worker3"},
+        },
+    ]
+    node_problems(events, nodes, comps, parse_time("2026-10-19T08:00:00Z"))
+    assert nodes[0]["problems"] == ["node event EvictionThresholdMet x3: Attempting to reclaim memory"]
+    assert nodes[0]["components"] == ["deployment/orders"]
+    assert nodes[1]["problems"] == [] and "components" not in nodes[1]
+
+
+def test_a_tls_failure_in_logs_is_a_failed_call():
+    from clients.jev_diag.v2.derive import DEPENDENCY_CLASSES, LOG_CLASSES
+
+    line = "Get https://cart:8443/items: x509: certificate has expired or is not yet valid"
+    classes = [name for name, rx in LOG_CLASSES if rx.search(line)]
+    assert "TLS or certificate failure" in classes and "TLS or certificate failure" in DEPENDENCY_CLASSES

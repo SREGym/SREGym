@@ -38,7 +38,7 @@ from clients.jev_diag.collector import (  # noqa: F401 - re-exported for the v2 
 )
 from clients.jev_diag.timeutil import now, parse_time
 from clients.jev_diag.v2 import changes as change_log
-from clients.jev_diag.v2 import checks, paths
+from clients.jev_diag.v2 import checks, paths, platform_events
 from clients.jev_diag.v2.checks import parse_cpu_millis, parse_memory_bytes  # noqa: F401 - re-exported
 
 logger = logging.getLogger("all.jev_diag.v2.collector")
@@ -760,6 +760,9 @@ def attach_warning_events(
                 if len(history) < 3:
                     history.append(record)
                 continue
+        platform_failure = platform_events.event_signal(record.get("reason"), ev.get("message"))
+        if platform_failure and platform_failure not in components[cid]["signals"]:
+            components[cid]["signals"].append(platform_failure)  # read before the cap below
         bucket = components[cid]["warning_events"]
         if len(bucket) < MAX_EVENTS_PER_COMPONENT:
             bucket.append(record)
@@ -2077,6 +2080,7 @@ def collect_snapshot(
         errors,
     )
     attach_webhooks(webhooks, components)
+    platform_events.link_webhook_failures(components, webhooks)
     checks.admission_changes(components, revisions, webhooks, namespace_labels, constraints)
     recorded: set[str] = set()
     for wh in webhooks:
@@ -2151,6 +2155,14 @@ def collect_snapshot(
     stuck = checks.stuck_terminating(deletable)
     checks.link_stuck_objects(stuck, components, rbac)
     nodes = summarize_nodes(kubectl_items("nodes", None, errors, managed_fields=False))
+    try:
+        node_events = json.loads(
+            run_kubectl(["get", "events", "-A", "--field-selector", "involvedObject.kind=Node", "-o", "json"])
+        ).get("items", [])
+    except Exception as exc:  # noqa: BLE001 - node events are context; their absence changes nothing else
+        errors.append(f"node events: {exc}")
+        node_events = []
+    platform_events.node_problems(node_events, nodes, components, deployed)
     trend_summary = None
     if trend_baseline is not None:
         trend_summary = trend.apply_trend(components, trend_baseline, trend.sample_from_objects(raw_pods, raw_events))

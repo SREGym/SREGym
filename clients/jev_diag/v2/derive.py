@@ -83,6 +83,14 @@ LOG_CLASSES: list[tuple[str, re.Pattern[str]]] = [
             r"SchemaException|\bDATA_LOSS\b|\bDataLoss\b)"
         ),
     ),
+    (
+        "TLS or certificate failure",
+        re.compile(
+            r"(?i)(x509:|certificate (?:has expired|is not yet valid|signed by unknown authority|verify failed)|"
+            r"tls: (?:failed|bad|handshake|unknown|internal)|TLS handshake (?:error|timeout|failed)|SSL routines|"
+            r"CERTIFICATE_VERIFY_FAILED|SSLHandshakeException|ERR_TLS|remote error: tls)"
+        ),
+    ),
     ("out of memory", re.compile(r"(?i)(out of memory|OOMKilled|\bOOM\b|Cannot allocate memory|heap)")),
     ("filesystem permission denied", re.compile(r"(?i)(permission denied|EACCES|read-only file system|EROFS)")),
     (
@@ -107,6 +115,7 @@ TELEMETRY_RE = re.compile(
     r"HttpExporter|telemetry|prometheus remote|pushgateway|kubeletstats|scraper)"
 )
 DEPENDENCY_CLASSES = {
+    "TLS or certificate failure",
     "connectivity or timeout",
     "DNS resolution failure",
     "authentication failure",
@@ -601,6 +610,12 @@ SYMPTOM_MARKERS = (
     "unschedulable",
     "more time(s) in the last",
     "rejects logins for account",
+    # platform failures seen from the workload (platform_events): its symptoms, caused outside it
+    "fails when the API server admits",
+    "Pod Security admission rejects",
+    "pod network setup fails",
+    "were preempted to make room",
+    "were evicted under node pressure",
 )
 RESTART_SIGNAL = "rolling restart"  # changes.describe_change for a restart-only revision
 CHANGE_MARKERS = ("spec modified", "was modified", "was written", "was created", "created ", "pod template changed")
@@ -698,7 +713,9 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict]) -> list[dict]:
         )
     for node in cluster.get("nodes") or []:
         for p in node.get("problems") or []:
-            out.append({"kind": "Node", "name": node.get("name"), "signal": p})
+            out.append(
+                {"kind": "Node", "name": node.get("name"), "signal": p, "components": node.get("components") or []}
+            )
     dns = cluster.get("cluster_dns") or {}
     for sig in dns.get("signals") or []:
         out.append(
