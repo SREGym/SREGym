@@ -1,11 +1,11 @@
 """AWS S3 (February 2017) on OpenStack Swift: a capacity-removal command with a bad input.
 
-The drive-decommission runbook removes one device from the object ring. Its
-host part expands empty, so the search value matches that device on every
-storage node, and the rebalance moves every partition off those drives at once.
-Objects whose replicas were all on them return 404 while their bytes are intact
-on the removed drives. See scenarios/ring_capacity_removal.yaml for the mapping
-and deviations.
+The drive-decommission runbook removes one drive by device id (``d<id>``). The
+operator entered ``/<name>`` instead, a device-name search that matches that
+device on every storage node, and the rebalance moves every partition off those
+drives at once. Objects whose replicas were all on them return 404 while their
+bytes are intact on the removed drives. See scenarios/ring_capacity_removal.yaml
+for the mapping and deviations.
 """
 
 from __future__ import annotations
@@ -20,6 +20,17 @@ from sregym.service.apps.openstack import object_storage
 from sregym.service.apps.openstack.application import OpenStackCloud
 from sregym.utils.decorators import mark_fault_injected
 
+FINGERPRINT = """
+import hashlib, json, sys
+from swift.common.ring import RingData
+for path in sys.argv[1:]:
+    ring = RingData.load(path)
+    digest = hashlib.sha256(json.dumps(sorted(
+        (d["id"], d["ip"], d["device"], d["weight"]) for d in ring.devs if d)).encode())
+    for row in ring._replica2part2dev_id:
+        digest.update(row.tobytes())
+    print(path, digest.hexdigest())
+"""
 BUILDER = f"{object_storage.BUILDER_DIR}/object.builder"
 RING = f"{object_storage.BUILDER_DIR}/object.ring.gz"
 
@@ -28,31 +39,41 @@ class OpenStackRingCapacityRemovalProblem(Problem):
     scenario_name = "ring_capacity_removal"
 
     def __init__(self, scale_tier: str = "small"):
-        super().__init__(OpenStackCloud(tier=scale_tier, object_storage=True))
-        self.scenario = scenario.load(self.scenario_name, known_invariants=set(INVARIANTS))
-        self.params = self.scenario.fault(scale_tier)
+        spec = scenario.load(self.scenario_name, known_invariants=set(INVARIANTS))
+        params = spec.fault(scale_tier)
+        super().__init__(OpenStackCloud(tier=scale_tier, object_storage=True, object_replicas=params["replicas"]))
+        self.scenario = spec
+        self.params = params
         tier = self.app.tier
         self.device = self.params["device"]
         if self.device not in object_storage.devices(tier):
             raise ValueError(f"Device {self.device!r} is not on tier {tier.name}'s storage nodes")
-        node = tier.storage_nodes[self.params["intended_node"]]
-        zone = self.params["intended_node"] + 1
-        self.intended = f"z{zone}-{object_storage.node_host(self.app, node)}:6200/{self.device}"
-        # The runbook interpolates the host; it expanded empty.
+        node_index = self.params["intended_node"]
+        # Devices are added node by node (see swift_rings.py), so this is the
+        # failed drive's id.
+        device_id = node_index * tier.swift_devices_per_node + object_storage.devices(tier).index(self.device)
+        self.intended = f"d{device_id}"
+        self.intended_drive = f"{object_storage.node_host(self.app, tier.storage_nodes[node_index])}/{self.device}"
+        # One character: a device-name search instead of a device id.
         self.typed = f"/{self.device}"
         self.removed = [f"{object_storage.node_host(self.app, n)}/{self.device}" for n in tier.storage_nodes]
         self.faulty_service = "swift-ring-builder"
         self.baseline_duration_s = int(self.scenario.grading["window_s"]) + 120
         self.propagation_duration_s = 30
         diagnosis = self.scenario.diagnosis(
-            intended=self.intended, typed=self.typed, device=self.device, count=len(self.removed)
+            intended=self.intended,
+            drive=self.intended_drive,
+            typed=self.typed,
+            device=self.device,
+            count=len(self.removed),
         )
         self.root_cause = self.build_structured_root_cause(
             component=diagnosis["component"], namespace=self.namespace, description=diagnosis["description"]
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = OpenStackRegionRecoveryOracle(self, self.scenario)
-        self.injected_at: float | None = None
+        self.pre_ring_fingerprint: str | None = None
+        self.saved: dict[str, str] = {}
         self.actions: list[dict] = []
 
     def builder(self, *args) -> str:
@@ -81,11 +102,14 @@ class OpenStackRingCapacityRemovalProblem(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
-        self.injected_at = time.time()
+        self.pre_ring_fingerprint = self.ring_fingerprints(RING)[RING]
+        # Kept by the harness, outside the agent's reach, for recover_fault.
+        self.saved = {path: self.builder("base64", "-w0", path) for path in (BUILDER, RING)}
         # The change log records what an operator ran, as a change ticket would.
         note = (
             f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} DCOPS-2231 decommission failed drive "
-            f"{self.intended}: swift-ring-builder object.builder remove $TARGET/{self.device} --yes && rebalance"
+            f"{self.intended_drive} (id {self.intended[1:]}): "
+            f"swift-ring-builder object.builder remove {self.typed} --yes && rebalance"
         )
         self.builder("sh", "-c", f"echo {note!r} >> {object_storage.BUILDER_DIR}/changes.log")
         removed = self.builder("swift-ring-builder", BUILDER, "remove", self.typed, "--yes")
@@ -106,24 +130,38 @@ class OpenStackRingCapacityRemovalProblem(Problem):
             time.sleep(10)
         self.actions.append({"time": time.time(), "action": "objects_unavailable", "count": len(unavailable)})
 
+    def ring_fingerprints(self, *paths: str) -> dict[str, str]:
+        """Content fingerprints (devices and partition table) of ring files.
+
+        Backups are separate gzip files, so their bytes differ from the served
+        ring even when the ring is the same.
+        """
+        output = self.builder("python", "-c", FINGERPRINT, *paths)
+        return dict(line.split() for line in output.splitlines() if line.strip())
+
     def pre_incident_backup(self) -> tuple[str, str]:
-        """The newest builder and ring backups written before the injection."""
-        names = self.builder("ls", f"{object_storage.BUILDER_DIR}/backups").split()
+        """The backed-up ring identical to the one served before the injection, and its builder.
 
-        def newest(suffix):
-            stamps = [int(n.split(".")[0]) for n in names if n.endswith(suffix) and n.split(".")[0].isdigit()]
-            before = [s for s in stamps if s < (self.injected_at or time.time())]
-            if not before:
-                raise RuntimeError(f"No pre-incident backup ending in {suffix}")
-            return f"{object_storage.BUILDER_DIR}/backups/{max(before)}.{suffix}"
-
-        return newest("object.builder"), newest("object.ring.gz")
+        swift-ring-builder snapshots the new builder and ring into backups/ on
+        every change, so after several changes "the newest backup" is not the
+        good one; match the ring by content instead.
+        """
+        backups = f"{object_storage.BUILDER_DIR}/backups"
+        names = self.builder("ls", backups).split()
+        rings = self.ring_fingerprints(*(f"{backups}/{n}" for n in names if n.endswith("object.ring.gz")))
+        matches = sorted(path for path, digest in rings.items() if digest == self.pre_ring_fingerprint)
+        if not matches:
+            raise RuntimeError("No backup matches the pre-incident object ring")
+        stamp = matches[-1].rsplit("/", 1)[1].split(".")[0]
+        builders = sorted(n for n in names if n.endswith("object.builder") and n.split(".")[0] <= stamp)
+        return f"{backups}/{builders[-1]}", matches[-1]
 
     @mark_fault_injected
     def recover_fault(self):
-        if self.injected_at is None:
+        if not self.saved:
             return
-        builder, ring = self.pre_incident_backup()
-        self.builder("cp", builder, BUILDER)
-        self.builder("cp", ring, RING)
+        for path, data in self.saved.items():
+            self.app.command(
+                "exec", "-i", "deploy/swift-ring-builder", "--", "sh", "-c", f"base64 -d > {path}", input_text=data
+            )
         self.wait_ring_installed()

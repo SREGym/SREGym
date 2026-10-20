@@ -1,7 +1,8 @@
 """Create the region's initial Swift rings in the ring builder's directory (idempotent).
 
-Every storage node is one zone; its devices are named d0..dN-1. Ring device
-addresses are the storage pods' stable DNS names, which Swift resolves.
+Every storage node is one zone; its devices are named d0..dN-1 and added node by
+node, so device ids follow that order. Ring device addresses are the storage
+pods' stable DNS names, which Swift resolves.
 """
 
 import json
@@ -17,17 +18,34 @@ def ring_builder(*args):
     return subprocess.run(["swift-ring-builder", *args], capture_output=True, text=True, check=False)
 
 
-def main(nodes, devices, part_power, replicas=3, min_part_hours=1):
+def main(nodes, devices, part_power, replicas=3, object_replicas=None, min_part_hours=1):
     os.makedirs(BUILDERS, exist_ok=True)
     created = []
     for ring, port in PORTS.items():
         builder = os.path.join(BUILDERS, f"{ring}.builder")
         if os.path.exists(builder):
             continue
-        ring_builder(builder, "create", str(part_power), str(replicas), str(min_part_hours)).check_returncode()
+        count = object_replicas if ring == "object" and object_replicas else replicas
+        ring_builder(builder, "create", str(part_power), str(count), str(min_part_hours)).check_returncode()
         for zone, node in enumerate(nodes, start=1):
             for device in devices:
-                result = ring_builder(builder, "add", f"r1z{zone}-{node}:{port}/{device}", "100")
+                # The compact r<region>z<zone>-<ip> form accepts only IP addresses.
+                result = ring_builder(
+                    builder,
+                    "add",
+                    "--region",
+                    "1",
+                    "--zone",
+                    str(zone),
+                    "--ip",
+                    node,
+                    "--port",
+                    str(port),
+                    "--device",
+                    device,
+                    "--weight",
+                    "100",
+                )
                 result.check_returncode()
         result = ring_builder(builder, "rebalance")
         # Exit status 1 means "rebalanced with warnings", which is fine here.

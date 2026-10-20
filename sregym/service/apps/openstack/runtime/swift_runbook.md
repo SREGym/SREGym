@@ -7,10 +7,13 @@ the builder and ring to `backups/` on every change, named by Unix time.
 
 ## Decommission a failed drive (DCOPS)
 
-    TARGET=z<zone>-<storage host>:6200
-    swift-ring-builder object.builder remove $TARGET/<device> --yes
+Find the drive's device id, remove that id, rebalance:
+
+    swift-ring-builder object.builder search --ip <storage host> --device <name>
+    swift-ring-builder object.builder remove d<id> --yes
     swift-ring-builder object.builder rebalance
 
+In a search value `d<id>` is a device id and `/<name>` is a device name.
 Record the change in `changes.log`.
 
 ## Inspect

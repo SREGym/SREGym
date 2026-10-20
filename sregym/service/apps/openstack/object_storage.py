@@ -1,6 +1,8 @@
 """Swift object storage for the region: storage nodes, a proxy, and the operators' ring builder.
 
-One storage node per rack, each its own zone, three replicas. The ring builder
+One storage node per rack, each its own zone. Account and container rings keep
+three replicas; the object ring's replica count is the application's
+``object_replicas`` (three unless a family sets it). The ring builder
 pod holds the builder files (and the backups ``swift-ring-builder`` writes on
 every change) on a persistent volume and serves the current rings over HTTP. A
 sidecar in every proxy and storage pod installs whatever ring it serves, so a
@@ -208,6 +210,7 @@ def build_rings(app) -> dict:
         "nodes": [node_host(app, node) for node in app.tier.storage_nodes],
         "devices": devices(app.tier),
         "part_power": app.tier.swift_part_power,
+        "object_replicas": app.object_replicas,
     }
     output = app.command(
         "exec", "deploy/swift-ring-builder", "--", "python", "/runtime/swift_rings.py", json.dumps(arguments)

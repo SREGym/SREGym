@@ -144,6 +144,7 @@ def test_no_oracle_claims_a_harness_error_for_itself():
     """
     allowed = {
         # capture_baseline not having run is a sequencing failure, not a check.
+        "OpenStackRegionRecoveryOracle",
         "SearchRateRetryMitigationOracle",
         "RetryStormMitigationOracle",
         "ChannelRetryStormOracle",

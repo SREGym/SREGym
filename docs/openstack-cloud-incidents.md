@@ -7,16 +7,17 @@ scheduling, host fleets, the message bus, block and object storage) that we did
 not run.
 
 OpenStack is a production IaaS control plane we can run. This prototype deploys
-a small OpenStack region on Kubernetes and reproduces a published cloud-provider
-postmortem on it. Keystone, Placement, Nova, Neutron and Glance are the real
-services. The hypervisors use Nova's fake virt driver, so the scheduler, resource
+a small OpenStack region on Kubernetes and reproduces two published
+cloud-provider postmortems on it. Keystone, Placement, Nova, Neutron, Glance and
+(optionally) Swift are the real services. The hypervisors use Nova's fake virt driver, so the scheduler, resource
 tracker, RPC, service heartbeats and API semantics are real code, while guests
 are simulated. A tier with tens of hypervisors therefore fits on one machine.
 
 This document covers:
 
 - the region and how it scales;
-- the first incident family, built from Azure's Central US outage of July 2024;
+- two incident families: Azure's Central US outage of July 2024 on Nova, and
+  AWS's S3 outage of February 2017 on Swift;
 - the validation runs;
 - a fact-checked catalog of cloud-provider postmortems, each mapped to the
   OpenStack mechanism that would carry the same causal chain;
@@ -26,11 +27,12 @@ This document covers:
 
 | Piece | State |
 | --- | --- |
-| OpenStack region app (`openstack`), tiers `small`, `regional`, `fleet` | Deployed and exercised on k3s: `small` and `regional` |
+| OpenStack region app (`openstack`), tiers `small`, `regional`, `fleet` | Deployed and exercised on k3s: `small` (with and without Swift) and `regional`. `fleet` has not been run |
 | Tenant workload, ledger and hidden region verifier | Running in `openstack-tenants` |
 | Versioned scenario spec format | `sregym/conductor/problems/apps/openstack/scenarios/` |
 | Incident family: incomplete host allow-list (Azure 1K80-N_8) | `openstack_host_access_revocation_{small,regional,fleet}`; validated live on `small` and `regional` |
-| Incident family: capacity removal with a bad input (AWS S3 2017) on Swift | `openstack_ring_capacity_removal_{small,regional,fleet}`; see its section for validation |
+| Incident family: capacity removal with a bad input (AWS S3 2017) on Swift | `openstack_ring_capacity_removal_{small,regional,fleet}`; validated live on `small` |
+| Through `main.py` with an agent | Not yet run. Validation drove the problems' own lifecycle (deploy, baseline, inject, oracle) without the conductor's observability stack |
 | Further families | Mapped in the catalog below; not built |
 
 ## The region
@@ -96,9 +98,9 @@ estimates.
   end, outcome and error. A window counts operations that *started* inside it.
   The oracle waits out the longest operation timeout before reading it, so slow
   failures land in the window that caused them.
-- **Region verifier.** The oracle reads Nova through the `region-verifier` pod,
-  not through the agent's `ops-toolbox`, so editing the toolbox cannot change
-  what grading sees. If the workload restarts mid-incident (a new ledger
+- **Region verifier.** The oracle reads Nova (and Swift, through a second
+  container) from the `region-verifier` pod, not through the agent's
+  `ops-toolbox`, so editing the toolbox cannot change what grading sees. If the workload restarts mid-incident (a new ledger
   episode), the verdict is `environment_error`, not an agent failure.
 - **Named invariants.** The scenario selects them. Precedence follows the
   harm: lost or moved customer state outranks availability, which outranks
@@ -106,6 +108,8 @@ estimates.
 
 | Invariant | Fails when |
 | --- | --- |
+| `objects_durable` | a pre-incident object, or any write the region acknowledged, does not read back with its original content |
+| `object_ring_capacity` | a baseline object-ring device is missing or has less weight |
 | `pets_preserved` | a pet server is gone, or was recreated under a new ID |
 | `pets_not_moved` | a pet left its baseline host (evacuation or migration off a host that was never dead) |
 | `hypervisors_up` | a baseline hypervisor is not up in any sample of the window |
@@ -158,10 +162,11 @@ hosts down. The CronJob keeps running, so a fix that restores broker users by
 hand is undone within a minute unless the input is fixed or the automation is
 halted. That reproduces the postmortem's first step: halt the workflow.
 
-Recovery has a tail. Reboots that were in flight when access was cut never
-complete. Their pets stay in `REBOOT`/`rebooting` after the hosts return, and the
-affected tenants' later reboots fail with 409 until someone resets the instances
-(`openstack server set --state active`, or restart that nova-compute).
+Recovery can have a tail. A reboot that a hypervisor had already taken when its
+access was cut never completes. That pet stays in `REBOOT`/`rebooting` after the
+host returns, and the tenant's later reboots fail with 409 until someone resets
+the instance (`openstack server set --state active`, or restart that
+nova-compute). Whether this happens depends on timing; see the validation notes.
 
 **Valid repairs**
 
@@ -205,6 +210,83 @@ Healthy baseline: every tier's baseline must show all hypervisors up, all pets
 settled and the tenant SLO met before injection. Otherwise the run refuses to
 inject.
 
+The family was re-checked on the final code after the Swift work. A fresh
+`small` deploy without Swift, built through the problem registry, gave: no-op
+fails with `hypervisors_down` (two pets stayed stuck in `REBOOT` this time), and
+the known-valid repair passes.
+
+## Family 2: capacity removal with a bad input (AWS S3, February 2017)
+
+**Postmortem.** [AWS S3 in US-EAST-1, 28 February 2017](https://aws.amazon.com/message/41926/).
+
+1. An engineer ran an established playbook command to remove a few servers.
+   One input was wrong, and it removed a much larger set, including index and
+   placement capacity.
+2. Nothing checked the removal against the minimum capacity the subsystems
+   needed.
+3. GET, LIST, PUT and DELETE failed for about four hours. Restarting
+   subsystems that had not been restarted in years made recovery slow.
+
+**On OpenStack Swift** (`sregym/conductor/problems/apps/openstack/ring_capacity_removal.py`).
+Swift runs alongside the compute region:
+
+- one storage node per rack, each its own zone;
+- a proxy behind Keystone;
+- a `swift-ring-builder` pod that holds the builder files and their
+  automatic `backups/`, and serves the rings that a sidecar in every Swift pod
+  installs.
+
+Tenants store canary objects before the incident, whose content is derived
+from their names. During the run they read objects (checking content) and
+write new ones. Every acknowledged write is recorded with its checksum.
+
+| Postmortem | Environment |
+| --- | --- |
+| Playbook command to remove servers | The drive-decommission runbook: `swift-ring-builder object.builder remove d<id> --yes`, then `rebalance` |
+| One input entered incorrectly | The operator entered `/d1` (a device-name search) instead of `d1` (a device id); the name matches that drive on every storage node |
+| No minimum-capacity guard | Swift ignores `min_part_hours` for partitions on removed devices, so one rebalance moves all of them |
+| Objects cannot be located | Partitions whose replicas were all on the removed drives map to devices without the data: 404, while the bytes sit intact on the removed drives |
+| Restore capacity | Put the previous ring back from `backups/`; writes made during the incident are found on handoffs and replicated home |
+
+The object policy keeps **two replicas**. With Swift's default of three, the
+same mistake made no object unavailable. Swift's builder never placed every
+replica of a partition on drives with the same name in these layouts: all 256
+partitions of the small tier were `(d0,d0,d1)` or `(d0,d1,d1)`. That leaves a
+readable copy and causes under-replication, not an outage.
+
+With two replicas, a name search strands a steady share of partitions (all
+measured on Swift 2.36):
+
+| Tier | Partitions stranded |
+| --- | --- |
+| small | 85/256 |
+| regional | 85/512 |
+| fleet | 85/1024 |
+
+This is the main deviation. Others: Swift has no separate index subsystem with
+a slow cold restart, and dependent services (EC2, EBS, Lambda, the status page)
+are not modelled.
+
+Grading uses `objects_durable`, `object_ring_capacity` and the tenant SLO
+(object reads ≥ 99%, writes ≥ 98%, plus the compute operations).
+`objects_durable` reads back every canary and every acknowledged write as its
+tenant, through the region verifier.
+
+### Validation (small tier)
+
+| Case | Expected | Verdict |
+| --- | --- | --- |
+| No action after injection | fail | `objects_lost`: 9 canaries and earlier acknowledged writes return 404; tenant object reads 55% successful |
+| Re-add the removed drives and `rebalance` | fail | `objects_lost`: Swift answers "No partitions could be reassigned" (`min_part_hours`), writes no new ring, and the data stays unreachable |
+| Restore the pre-incident ring from `backups/` | pass | pass: every canary and every acknowledged write reads back intact, including writes made during the incident; 29/29 tenant reads, 19/19 writes |
+| "Clean up" the removed drives, then restore the ring | fail | `objects_lost`: ring capacity is back, but the objects whose only copies were on the wiped drives are gone for good |
+
+Finding the right backup is part of the task. `swift-ring-builder` snapshots the
+builder and ring after every change, so `backups/` also holds the incident's own
+rings and an empty builder from `create`. The harness matches backups by ring
+content (devices and partition table), not file checksum, because each backup
+is a separately gzipped file.
+
 ## Cloud-provider postmortem catalog
 
 Every source below was fetched and read; the research notes are summarized
@@ -217,7 +299,7 @@ a service or a non-trivial actor, L needs components we do not run yet
 | Incident | Analog on OpenStack | Synthetic | Fidelity risk | Cost |
 | --- | --- | --- | --- | --- |
 | [Azure Central US allow list, Jul 2024](https://azure.status.microsoft/en-us/status/history/?trackingId=1K80-N_8) | Per-host broker credentials revoked by a reconciler; Nova servicegroup marks hosts down | Reconciler, inventories | No guest disks | **built** |
-| [AWS S3, Feb 2017](https://aws.amazon.com/message/41926/) | `swift-ring-builder remove` with a too-broad search value, then rebalance and ring push. `min_part_hours` is ignored for removed devices, so partitions move all at once and objects 404 until the old ring is restored | The runbook command | Small data; slow replicators to stretch the tail | M |
+| [AWS S3, Feb 2017](https://aws.amazon.com/message/41926/) | `swift-ring-builder remove` with a too-broad search value, then rebalance and ring push. `min_part_hours` is ignored for removed devices, so partitions move all at once and objects 404 until the old ring is restored | The runbook command | Needs a two-replica policy (see family 2); no slow cold restart | **built** |
 | [Azure AD signing key, Mar 2021](https://learn.microsoft.com/en-us/answers/questions/315440/notification-authentication-errors-across-multiple) (preliminary RCA; final PIR not found) | Keystone Fernet/JWS key rotation removes a key still needed: `max_active_keys` below `token_expiration / rotation_frequency + 2`, or a cleanup that ignores a "retain" marker. keystonemiddleware's token cache gives the staggered tail | Rotation job with a retain flag | Keystone validates centrally; there are no relying-party metadata caches | S |
 | [Google Cloud Service Control, Jun 2025](https://status.cloud.google.com/incidents/ow5i3PPK96RduMcb1SsW) | Nova `UnifiedLimitsDriver` treats a resource with no Keystone limit as 0, so a bad limit sync fails every create. The kill switch is `NoopQuotaDriver`. Restarts without jitter (`kombu_reconnect_splay` 0) herd | Limit-sync job | Fails closed rather than crash-looping | S |
 | [AWS Kinesis, Nov 2020](https://aws.amazon.com/message/11201/), [AWS Lambda, Jun 2023](https://aws.amazon.com/message/061323/) | Fleet or worker scale-out crosses a hard limit (RabbitMQ file descriptors or connections, MariaDB `max_connections`). Survivors reconnect in sync, so restarts must be staged | The limit value | Hub-and-spoke, not an N² mesh | S |
@@ -251,27 +333,25 @@ These are documented operator pain, useful as amplifiers or red herrings:
 
 ## Recommended next families
 
-1. **AWS S3 2017 on Swift.** Real data, a near-irreversible operator action, a
-   restore from ring backups, and a replication tail. Kolla stopped publishing
-   Swift images in March 2025, so pin the last `master-ubuntu-noble` digest or
-   build a Swift image.
-2. **Azure AD 2021 on Keystone.** A rotation job and two Keystone replicas reuse
+1. **Azure AD 2021 on Keystone.** A rotation job and two Keystone replicas reuse
    this region. Grading: tenant auth success, the token-cache tail, and
    no key repository loss.
-3. **Google Service Control 2025 on unified limits.** Cheap, and it exercises a
+2. **Google Service Control 2025 on unified limits.** Cheap, and it exercises a
    kill-switch decision and a staged restart.
-4. **Kinesis/Lambda on the broker.** The `fleet` tier's scale makes the
+3. **Kinesis/Lambda on the broker.** The `fleet` tier's scale makes the
    threshold real.
 
 ## Running it
 
 ```bash
-# One tier of the family, through the normal conductor
+# Through the normal conductor (not yet exercised end to end, see Status)
 uv run main.py --problem openstack_host_access_revocation_small --agent stratus --model gpt-5
+uv run main.py --problem openstack_ring_capacity_removal_small --agent stratus --model gpt-5
 ```
 
-- The region's first deploy pulls about 3 GB of Kolla images and takes about 8
-  minutes on 4 vCPUs. Later deploys reuse the images.
+- The region's first deploy pulls about 3.5 GB of Kolla images and takes about 8
+  minutes on 4 vCPUs. With cached images, `small` deploys in about 4 minutes
+  and `regional` in about 6.
 - Each mitigation verdict takes about 5 minutes: soak, window, then the
   operation-completion wait.
 - The prototype ran on k3s with containerd's `restrict_oom_score_adj = true`,

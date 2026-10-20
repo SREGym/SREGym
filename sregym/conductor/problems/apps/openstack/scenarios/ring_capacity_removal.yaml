@@ -31,9 +31,9 @@ environment:
   app: openstack
   mapping:
     - postmortem: playbook command that removes servers from a subsystem
-      environment: the drive-decommission runbook, swift-ring-builder object.builder remove <zone>-<host>:<port>/<device> --yes, then rebalance
+      environment: the drive-decommission runbook, swift-ring-builder object.builder remove d<id> --yes, then rebalance
     - postmortem: one input entered incorrectly
-      environment: the host part of the search value expanded empty, leaving /<device>, which matches that device on every storage node
+      environment: the operator entered the drive's name, /<device>, instead of its id, d<id>; a name search matches that device on every storage node
     - postmortem: no minimum-capacity guard
       environment: Swift ignores min_part_hours for partitions on removed devices, so one rebalance reassigns all of them at once
     - postmortem: S3 cannot locate objects
@@ -41,6 +41,7 @@ environment:
     - postmortem: restore the removed capacity
       environment: put the previous ring back (swift-ring-builder keeps backups of every builder and ring it writes); objects written during the incident are found on handoffs and replicated home
   deviations:
+    - The object policy keeps two replicas. With three, Swift's ring builder never placed every replica of a partition on devices with the same name in these layouts (measured), so the same mistake leaves one readable copy and causes under-replication rather than an outage.
     - Swift's ring is the placement map; there is no separate index subsystem with a slow cold restart, so recovery after the ring is restored takes seconds, not hours.
     - Only the object ring is affected; account and container listings keep working.
     - Dependent services (EC2, EBS, Lambda, the status page) are not modelled; Nova keeps running alongside.
@@ -58,6 +59,10 @@ fault:
   params:
     # The drive the runbook was meant to remove: storage node index and device.
     intended_node: 0
+    # The object policy stores two replicas (one per zone). With three, Swift's
+    # builder never places every replica of a partition on same-named devices
+    # in these layouts, so a name search leaves a readable copy.
+    replicas: 2
 
 tiers:
   small: {device: d1}
@@ -79,13 +84,13 @@ grading:
 diagnosis:
   component: swift-ring-builder
   description: >-
-    A drive-decommission runbook was meant to remove one device,
-    {intended}, from the Swift object ring. Its search value was entered as {typed}, which matched
-    device {device} on every storage node, and swift-ring-builder removed {count} devices and
-    rebalanced. Swift ignores min_part_hours for partitions on removed devices, so the new ring
-    moved every one of their replicas at once. Objects whose replicas were all on {device} drives
+    A drive-decommission runbook was meant to remove one failed drive, device id {intended}
+    ({drive}), from the Swift object ring. The operator entered the search value {typed}, a
+    device-name search, which matched device {device} on every storage node, and
+    swift-ring-builder removed {count} devices and rebalanced. Swift ignores min_part_hours for
+    partitions on removed devices, so the new ring moved every one of their replicas at once. Objects whose replicas were all on {device} drives
     now map to devices that do not hold them and return 404, although the data is intact on the
-    removed drives. Recovery restores the previous object ring from the ring builder's backups
-    (re-adding the devices and rebalancing again does not move partitions back), without deleting
-    data on the removed devices, after which objects written during the incident are found on
-    handoffs and replicated home.
+    removed drives. Recovery restores the previous object ring from the ring builder's backups;
+    re-adding the drives and rebalancing again is refused by min_part_hours and writes no new ring.
+    Data on the removed drives must not be deleted. Once the ring is restored, objects written during
+    the incident are found on handoffs and replicated home.

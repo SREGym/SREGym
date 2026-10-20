@@ -72,7 +72,13 @@ class OpenStackCloud(KubernetesCommands, Application):
     metadata_file = Path(__file__).with_name("metadata.json")
     tenant_namespace = TENANT_NAMESPACE
 
-    def __init__(self, tier: str = "small", storage_class: str | None = None, object_storage: bool = False):
+    def __init__(
+        self,
+        tier: str = "small",
+        storage_class: str | None = None,
+        object_storage: bool = False,
+        object_replicas: int = 3,
+    ):
         if tier not in TIERS:
             raise ValueError(f"Unknown OpenStack tier {tier!r}; choose from {tuple(TIERS)}")
         super().__init__(self.metadata_file)
@@ -81,6 +87,7 @@ class OpenStackCloud(KubernetesCommands, Application):
         self.storage_class = storage_class
         #: Deploy Swift (storage nodes, proxy, ring builder) and object traffic.
         self.object_storage = object_storage
+        self.object_replicas = object_replicas
         self.load_app_json()
         self.kubectl = KubeCtl()
         self.helm_deploy = False
@@ -100,6 +107,13 @@ class OpenStackCloud(KubernetesCommands, Application):
             metadata["Desc"] += (
                 f" Tier {self.tier.name}: {len(self.tier.hypervisors)} hypervisors in racks "
                 f"{', '.join(self.tier.racks)}; {self.tier.tenants} tenant projects."
+            )
+        if getattr(self, "object_storage", False):
+            metadata["Desc"] += (
+                " Swift object storage: the swift-proxy deployment, the swift-storage StatefulSet (one storage"
+                " node per rack, each its own zone) and the swift-ring-builder deployment, which"
+                " holds the ring builder files in /etc/swift-builders (with backups/, changes.log and RUNBOOK.md)"
+                " and serves the rings every Swift pod installs."
             )
         return metadata
 
