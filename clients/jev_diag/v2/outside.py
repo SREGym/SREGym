@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+from clients.jev_diag.timeutil import parse_time
 from clients.jev_diag.v2 import changes as change_log
 from clients.jev_diag.v2.collector import kubectl_items, run_kubectl
 from clients.jev_diag.v2.derive import OBSERVABILITY_RE
@@ -32,7 +33,7 @@ _HARNESS_NAME = re.compile(r"(?i)(?:^|[-.])mcp(?:$|[-.])")
 # Tools people and scripts use to change a cluster. Controllers and package installs (helm) write under their own
 # names and are not changes someone made to the running system.
 _OPERATOR_MANAGER = re.compile(r"^(?:kubectl(?:-[a-z-]+)?|OpenAPI-Generator)$")
-# Resources controllers rewrite constantly, and those the application's own namespaces are already read for.
+# Resources controllers rewrite constantly.
 _CHURN_RESOURCES = {
     "events",
     "events.events.k8s.io",
@@ -45,24 +46,15 @@ _CHURN_RESOURCES = {
     "componentstatuses",
     "podtemplates",
 }
+# Workload kinds: the application's own workloads are read and dated by the per-namespace collection (template
+# revisions included). Every other kind in an application namespace goes through this log, which skips any object
+# another collection already dated (see `known` in change_radar).
 _READ_IN_APP = {
     "deployments.apps",
     "statefulsets.apps",
     "daemonsets.apps",
     "cronjobs.batch",
     "jobs.batch",
-    "services",
-    "configmaps",
-    "secrets",
-    "networkpolicies.networking.k8s.io",
-    "persistentvolumeclaims",
-    "resourcequotas",
-    "limitranges",
-    "roles.rbac.authorization.k8s.io",
-    "rolebindings.rbac.authorization.k8s.io",
-    "serviceaccounts",
-    "horizontalpodautoscalers.autoscaling",
-    "ingresses.networking.k8s.io",
 }
 _SVC_HOST = re.compile(
     r"(?i)(?<![\w.-])(?P<svc>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.(?P<ns>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc\b"
@@ -191,6 +183,9 @@ def change_radar(
         return []
     apps_created = [c.get("created") for c in components.values() if not c.get("related")]
     known = {c["object"] for c in changes}
+    # Faults come after the application finished deploying: an object written while it was still being deployed (a
+    # ConfigMap applied minutes after the first workload) is part of the deploy, not a change.
+    settled = max((t for t in (parse_time(c) for c in apps_created) if t), default=deployed)
     on_node: dict[str, set[str]] = {}
     for cid, comp in components.items():
         for pod in comp.get("pods") or []:
@@ -212,12 +207,12 @@ def change_radar(
             kind = obj.get("kind") or resource
             if (f"{kind.lower()}/{ns}/{name}" if ns else f"{kind.lower()}/{name}") in known:
                 continue  # read and dated by its own collection
-            affects = (
-                on_node.get(name, set())
-                if kind == "Node"
-                else {c for c, comp in components.items() if comp["namespace"] == ns}
-            )
-            if _change(changes, kind, name, ns, {**meta, "managedFields": writes}, affects, apps_created, deployed):
+            if kind == "Node":
+                affects = on_node.get(name, set())
+            else:  # a namespaced object acts on its namespace; a Namespace object on the namespace it is
+                scope = name if kind == "Namespace" else ns
+                affects = {c for c, comp in components.items() if comp["namespace"] == scope}
+            if _change(changes, kind, name, ns, {**meta, "managedFields": writes}, affects, apps_created, settled):
                 managers = ", ".join(dict.fromkeys(w["manager"] for w in writes))
                 out.append(
                     _finding(kind, name, ns, [f"written by {managers} after the application was deployed"], affects)

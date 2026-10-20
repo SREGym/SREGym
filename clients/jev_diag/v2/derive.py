@@ -34,9 +34,10 @@ from clients.jev_diag.timeutil import now, parse_time
 from clients.jev_diag.v2 import changes as change_log
 from clients.jev_diag.v2 import paths
 
+# Whole name tokens only: `otel` names the OpenTelemetry collector, not `hotel-reservation`.
 OBSERVABILITY_RE = re.compile(
-    r"(grafana|jaeger|prometheus|otel|opentelemetry|opensearch|elasticsearch|kibana|loki|fluent|promtail|"
-    r"alertmanager|kube-state-metrics|node-exporter|tempo|zipkin|pushgateway|blackbox)",
+    r"(?<![a-z0-9])(grafana|jaeger|prometheus|otel|opentelemetry|opensearch|elasticsearch|kibana|loki|fluent\w*|"
+    r"promtail|alertmanager|kube-state-metrics|node-exporter|tempo|zipkin|pushgateway|blackbox)(?![a-z])",
     re.I,
 )
 
@@ -299,7 +300,8 @@ def classify_logs(components: dict[str, dict]) -> None:
                 continue
             line = sig.get("line") or ""
             count = int(sig.get("count") or 1)
-            body = line.split(": ", 1)[1] if ": " in line[:40] else line  # drop the "container: " prefix
+            text = sig.get("_text") or line  # classified whole; `line` is the shortened display text
+            body = text.split(": ", 1)[1] if ": " in text[:40] else text  # drop the "container: " prefix
             if bool(TELEMETRY_RE.search(body)) and cid not in observability:
                 telemetry_lines += count
                 findings.append(
@@ -381,7 +383,7 @@ def server_login_rejections(components: dict[str, dict], collected_at: datetime)
         for sig in server.get("log_signals") or []:
             if sig.get("state") == "stopped":
                 continue
-            account = _login_rejection(sig.get("line") or "", role)
+            account = _login_rejection(sig.get("_text") or sig.get("line") or "", role)
             if account:
                 accounts[account] += int(sig.get("count") or 1)
                 if sig.get("first_seen_seconds_ago") is not None:
@@ -610,6 +612,8 @@ SYMPTOM_MARKERS = (
     "unschedulable",
     "more time(s) in the last",
     "rejects logins for account",
+    "firing alert",  # an alert reports a symptom of whatever caused it
+    "ready endpoints",  # a Service with no ready endpoints: its pods are not ready, a symptom
     # platform failures seen from the workload (platform_events): its symptoms, caused outside it
     "fails when the API server admits",
     "Pod Security admission rejects",
@@ -638,12 +642,13 @@ def classify_evidence(components: dict[str, dict]) -> None:
         for sig in comp.get("signals") or []:
             if sig.startswith(RESTART_SIGNAL):
                 continue
-            if any(m in sig for m in CHANGE_MARKERS):
-                kinds.add("change")
-            elif sig.startswith(POINTED_MARKERS):
+            # prefixes first: pointer and log signals quote other text, which may contain change words
+            if sig.startswith(POINTED_MARKERS):
                 kinds.add("pointed_at")
             elif sig.startswith(OWN_LOG_MARKERS):
                 kinds.add("own_failure_logs")
+            elif any(m in sig for m in CHANGE_MARKERS):
+                kinds.add("change")
             elif any(m in sig for m in SYMPTOM_MARKERS):
                 kinds.add("symptoms")
             else:

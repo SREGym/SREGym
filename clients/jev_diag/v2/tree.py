@@ -229,11 +229,9 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
     for key, lines in (logs.get("previous_container_logs") or {}).items():
         for ln in lines[-3:]:
             log_items.append(f"previous log {key}: {ln}")
-    for ev in (detail.get("events") or [])[:6]:
-        if ev.get("type") == "Warning":
-            event_items.append(
-                f"event {ev.get('reason')} x{ev.get('count')} on {ev.get('object')}: {ev.get('message')}"
-            )
+    warnings = [e for e in detail.get("events") or [] if e.get("type") == "Warning"]
+    for ev in warnings[:6]:  # filtered first, so Normal events never crowd out a Warning
+        event_items.append(f"event {ev.get('reason')} x{ev.get('count')} on {ev.get('object')}: {ev.get('message')}")
     for dep in detail.get("failing_targets") or []:
         dep_items.append(f"this component's still-occurring error lines refer to its dependency {dep}")
     for cid, info in (detail.get("calls") or {}).items():
