@@ -35,3 +35,17 @@ index 531527e..b713d4f 100644
  		var dialer net.Dialer
  		dial, err := dialer.DialContext(ctx, "tcp", addr)
  		if err != nil {
+diff --git a/pkg/utils/exec/exec.go b/pkg/utils/exec/exec.go
+index 8eb64a9..d5a4aad 100644
+--- a/pkg/utils/exec/exec.go
++++ b/pkg/utils/exec/exec.go
+@@ -223,6 +223,9 @@ func Command(ctx context.Context, name string, args ...string) (cmd *Cmd, err er
+ 				return nil, err
+ 			}
+ 			go func() {
++				// Close on EOF so the command sees end of input
++				// (e.g. `kubectl exec -i pod -- sh < script`).
++				defer func() { _ = inPipe.Close() }()
+ 				_, _ = io.Copy(inPipe, opt.In)
+ 			}()
+ 		} else {

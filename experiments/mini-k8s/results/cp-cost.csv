@@ -1,0 +1,7 @@
+config,cluster,etcd_mib,apiserver_mib,kcm_mib,scheduler_mib,kwok_mib,total_mib,create_s
+default,cp-default-0,45,267,94,49,49,504,5.931505179
+default,cp-default-1,43,261,92,48,49,493,4.103153908
+default,cp-default-2,46,252,91,48,50,487,3.963993650
+tuned,cp-tuned-0,42,205,89,48,50,434,3.907063706
+tuned,cp-tuned-1,42,204,91,48,51,436,4.178559310
+tuned,cp-tuned-2,42,205,90,48,51,436,4.489825071

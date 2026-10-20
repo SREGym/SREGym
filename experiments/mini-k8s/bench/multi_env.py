@@ -3,7 +3,7 @@
 Each copy lives in namespace <prefix>-<i>. Prints per-copy deploy time and,
 with --check, whether a probe through each copy's frontend Service answers.
 
-usage: python multi_env.py N [--prefix hr] [--start 0] [--check]
+usage: python multi_env.py N [--prefix hr] [--start 0] [--check] [--check-only]
 """
 
 import argparse
@@ -22,15 +22,16 @@ def main():
     ap.add_argument("--prefix", default="hr")
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--check-only", action="store_true", help="probe existing copies, deploy nothing")
     a = ap.parse_args()
     kubectl = KubeCtl()
-    for i in range(a.start, a.start + a.n):
+    for i in range(a.start, a.start + a.n) if not a.check_only else []:
         app = HotelReservation()
         app.namespace = f"{a.prefix}-{i}"
         t0 = time.time()
         app.deploy()
         print(f"ENV {app.namespace} deployed in {time.time() - t0:.1f}s", flush=True)
-    if a.check:
+    if a.check or a.check_only:
         for i in range(a.start, a.start + a.n):
             ns = f"{a.prefix}-{i}"
             out = kubectl.exec_command(

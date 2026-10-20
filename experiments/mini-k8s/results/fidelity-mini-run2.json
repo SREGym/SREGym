@@ -1,0 +1,24 @@
+[
+ {
+  "problem": "network_policy_block",
+  "inject_s": 0.0,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 8.2,
+  "recover_s": 0.0,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 2.1,
+  "faithful": true,
+  "total_s": 70.3
+ },
+ {
+  "problem": "revoke_auth_mongodb-1",
+  "inject_s": 9.6,
+  "oracle_after_inject": false,
+  "oracle_after_inject_s": 60.5,
+  "recover_s": 0.8,
+  "oracle_after_recover": true,
+  "oracle_after_recover_s": 0.2,
+  "faithful": true,
+  "total_s": 131.2
+ }
+]

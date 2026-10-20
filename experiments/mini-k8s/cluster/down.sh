@@ -25,11 +25,13 @@ done
 sleep 1
 grep -oE " $ROOT/[^ ]+" /proc/mounts | sort -r | xargs -r -n1 umount -l 2>/dev/null
 grep -oE " /run/procnode/ns/[^ ]+" /proc/mounts | xargs -r -n1 umount -l 2>/dev/null
-for ns in $(ip netns list | awk '/^pn-/{print $1}'); do ip netns del "$ns"; done
+for ns in $(ip netns list | awk '/^pn-/{print $1}'); do ip netns del "$ns" 2>/dev/null; done
+# After a host restart the netns files outlive their namespaces.
+for f in /run/netns/pn-*; do [[ -e $f ]] && { umount -l "$f" 2>/dev/null; rm -f "$f"; }; done
 for c in memory cpu cpuacct; do
   find /sys/fs/cgroup/$c/procnode -mindepth 1 -type d -delete 2>/dev/null
 done
-rm -rf "$ROOT/pods" /run/procnode/ns/*
+rm -rf "$ROOT/pods" "$ROOT/pv" /run/procnode/ns/*
 
 kwokctl delete cluster --name "$NAME" >/dev/null 2>&1
 echo "mini cluster $NAME removed (images kept in $ROOT/images)"

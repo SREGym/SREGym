@@ -1596,7 +1596,7 @@ class Agent:
         if cls.provisioner != PROVISIONER:
             return
         name = f"pvc-{md['uid']}"
-        path = self.root / "pv" / md["namespace"] / md["name"]
+        path = self.root / "pv" / md["uid"]  # per claim, like real provisioners
         path.mkdir(parents=True, exist_ok=True)
         os.chmod(path, 0o777)
         pv = client.V1PersistentVolume(

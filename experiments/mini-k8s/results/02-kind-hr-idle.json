@@ -1,15 +1,74 @@
-{"label": "kind 4-node + calico + hotel-reservation (idle app), no observability stack", "interval": 30.0,
- "note": "Transcribed from console output; the run's JSON write was lost to a broken pipe after printing.",
+{
+ "label": "kind 4-node + calico + hotel-reservation (idle app), no observability stack",
+ "interval": 30.0,
+ "note": "Transcribed from console output; the run's JSON write was lost to a broken pipe after printing. No --pods-json attribution in this run: the 'app' category includes Calico's kube-controllers (51 MiB); hotel-reservation itself is ~712 MiB (cf. 03, 710 MiB).",
  "categories": {
-  "app": {"n": 55, "rss": 988807168, "pss": 800063488, "cpu": 0.126},
-  "cni": {"n": 48, "rss": 1743781888, "pss": 738197504, "cpu": 0.104},
-  "control-plane": {"n": 4, "rss": 648019968, "pss": 650117120, "cpu": 0.132},
-  "container-runtime": {"n": 79, "rss": 797966336, "pss": 406847488, "cpu": 0.075},
-  "kube-proxy": {"n": 4, "rss": 236978176, "pss": 238026752, "cpu": 0.001},
-  "kubelet": {"n": 4, "rss": 394264576, "pss": 208666624, "cpu": 0.099},
-  "cluster-addons": {"n": 3, "rss": 148897792, "pss": 109051904, "cpu": 0.006},
-  "docker-host": {"n": 2, "rss": 103809024, "pss": 101711872, "cpu": 0.002},
-  "node-init": {"n": 8, "rss": 99614720, "pss": 42991616, "cpu": 0.001},
-  "other": {"n": 77, "rss": 4194304, "pss": 3145728, "cpu": 0.006}},
- "total": {"n": 284, "rss": 5166333952, "pss": 3298820096, "cpu": 0.551},
- "host_used": 2931818496}
+  "app": {
+   "n": 55,
+   "rss": 988807168,
+   "pss": 800063488,
+   "cpu": 0.126
+  },
+  "cni": {
+   "n": 48,
+   "rss": 1743781888,
+   "pss": 738197504,
+   "cpu": 0.104
+  },
+  "control-plane": {
+   "n": 4,
+   "rss": 648019968,
+   "pss": 650117120,
+   "cpu": 0.132
+  },
+  "container-runtime": {
+   "n": 79,
+   "rss": 797966336,
+   "pss": 406847488,
+   "cpu": 0.075
+  },
+  "kube-proxy": {
+   "n": 4,
+   "rss": 236978176,
+   "pss": 238026752,
+   "cpu": 0.001
+  },
+  "kubelet": {
+   "n": 4,
+   "rss": 394264576,
+   "pss": 208666624,
+   "cpu": 0.099
+  },
+  "cluster-addons": {
+   "n": 3,
+   "rss": 148897792,
+   "pss": 109051904,
+   "cpu": 0.006
+  },
+  "docker-host": {
+   "n": 2,
+   "rss": 103809024,
+   "pss": 101711872,
+   "cpu": 0.002
+  },
+  "node-init": {
+   "n": 8,
+   "rss": 99614720,
+   "pss": 42991616,
+   "cpu": 0.001
+  },
+  "other": {
+   "n": 77,
+   "rss": 4194304,
+   "pss": 3145728,
+   "cpu": 0.006
+  }
+ },
+ "total": {
+  "n": 284,
+  "rss": 5166333952,
+  "pss": 3298820096,
+  "cpu": 0.551
+ },
+ "host_used": 2931818496
+}
