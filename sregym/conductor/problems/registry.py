@@ -113,6 +113,8 @@ from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop im
 )
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.apps.stripe.feature_config import StripeFeatureConfigProblem
+from sregym.conductor.problems.apps.openstack.host_access_revocation import OpenStackHostAccessRevocationProblem
+from sregym.conductor.problems.apps.openstack.ring_capacity_removal import OpenStackRingCapacityRemovalProblem
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.apps.train_ticket.f17 import TrainTicketF17
 from sregym.conductor.problems.apps.train_ticket.f22 import TrainTicketF22
@@ -212,6 +214,14 @@ class ProblemRegistry:
             "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittentProblem(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAuditProblem(scale_tier="replicated"),
             "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
+            # ==================== CLOUD-PROVIDER INCIDENTS ON OPENSTACK ====================
+            # See docs/openstack-cloud-incidents.md.
+            "openstack_host_access_revocation_small": lambda: OpenStackHostAccessRevocationProblem(scale_tier="small"),
+            "openstack_host_access_revocation_regional": lambda: OpenStackHostAccessRevocationProblem(scale_tier="regional"),
+            "openstack_host_access_revocation_fleet": lambda: OpenStackHostAccessRevocationProblem(scale_tier="fleet"),
+            "openstack_ring_capacity_removal_small": lambda: OpenStackRingCapacityRemovalProblem(scale_tier="small"),
+            "openstack_ring_capacity_removal_regional": lambda: OpenStackRingCapacityRemovalProblem(scale_tier="regional"),
+            "openstack_ring_capacity_removal_fleet": lambda: OpenStackRingCapacityRemovalProblem(scale_tier="fleet"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,

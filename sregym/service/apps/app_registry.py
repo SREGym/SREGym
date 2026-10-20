@@ -30,6 +30,7 @@ from sregym.service.apps.gitea.application import GiteaApplication
 from sregym.service.apps.gitlab.application import GitLabApplication
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.mattermost.application import MattermostApplication
+from sregym.service.apps.openstack.application import OpenStackCloud
 from sregym.service.apps.saleor.application import Saleor
 from sregym.service.apps.slack_spine.application import SlackSpine
 from sregym.service.apps.social_network import SocialNetwork
@@ -132,6 +133,7 @@ APPLICATIONS = (
         scaled_factory=StripeApplication,
         recovery_checks=RecoveryChecks.POSTGRES_RECORDS,
     ),
+    AppDefinition("openstack", OpenStackCloud, OpenStackCloud.metadata_file, scaled_factory=OpenStackCloud),
     AppDefinition("frappe", Frappe, Frappe.metadata_file, service_port=8000),
     AppDefinition("saleor", Saleor, Saleor.metadata_file, service_port=8000),
     AppDefinition("slack-spine", SlackSpine, SlackSpine.metadata_file, ("slack_spine",), service_port=8000),

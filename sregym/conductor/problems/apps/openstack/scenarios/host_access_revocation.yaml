@@ -1,0 +1,104 @@
+version: 1
+id: openstack_host_access_revocation
+title: Incomplete host allow-list pushed to the whole region
+
+postmortem:
+  provider: Microsoft Azure
+  incident: Central US storage allow-list outage (tracking ID 1K80-N_8)
+  date: 2024-07-18 21:40 UTC to 2024-07-19 22:00 UTC
+  sources:
+    - https://azure.status.microsoft/en-us/status/history/?trackingId=1K80-N_8
+  chain:
+    trigger: >-
+      Storage scale units only accept disk I/O from VM hosts on a frequently regenerated allow list.
+      During routine host changes the generator read its source files from infrastructure file
+      servers that a recent network change had made partly unreachable, and it did not notice the
+      missing files.
+    mechanism: >-
+      The workflow published the incomplete list to every scale unit in the region at once, with no
+      VM-health check and no availability-zone sequencing. Hosts missing from the list lost access.
+    amplifier: >-
+      VMs with persistent disks on those hosts failed; control- and data-plane clusters built on
+      them (Cosmos DB, SQL, ARM) failed in turn, so the single trigger was hidden by the cascade.
+      Partially degraded regions still passed health checks.
+    impact: >-
+      Region-wide VM and dependent-service failures for about a day; storage access was fixed at
+      02:55 UTC, the long tail of failovers and failbacks took until 22:00.
+  responder_actions:
+    - Halted the allow-list workflow worldwide.
+    - Restored a complete allow list on every scale unit in the region.
+    - Repaired and failed back dependent services; some needed manual work.
+    - "Follow-ups: halt the generator on incomplete input, alert on rejected requests, serialize rollout by AZ, keep a last-known-good list in the data-plane firewall."
+
+environment:
+  app: openstack
+  mapping:
+    - postmortem: VM-host allow list on storage scale units
+      environment: per-hypervisor RabbitMQ users that every nova-compute authenticates with
+    - postmortem: allow-list generator workflow
+      environment: host-access-reconciler CronJob (every minute), which grants and deletes broker users
+    - postmortem: source files on partly unreachable file servers
+      environment: rack inventories mounted as optional projected ConfigMaps; a migration republished one rack's inventory under a new name
+    - postmortem: hosts lose disk access; VMs on them fail
+      environment: hypervisors lose the message bus (ACCESS_REFUSED); Nova marks them down and their instances cannot be managed; in-flight operations are lost and leave instances stuck in a task state
+    - postmortem: partially degraded region still passes health checks
+      environment: hypervisor pods stay Running and Ready; only Nova's service heartbeats and the broker show the loss
+  deviations:
+    - The fake virt driver has no guest data plane, so instances keep "running" and the visible damage is control-plane loss (stuck or failing reboots), not guest disk failure.
+    - Access is enforced by broker authentication rather than a network allow list on storage.
+    - One rack, not a whole region's scale units; dependent services (Cosmos DB, SQL) are not modelled.
+    - The generator logs what it revoked; Azure's did not report the omission. The log line is evidence, not a diagnosis.
+
+topology:
+  services: [keystone, glance, placement, neutron, nova-api, nova-conductor, nova-scheduler, mariadb, rabbitmq, memcached]
+  dependency_edges:
+    - [nova-compute, rabbitmq]
+    - [nova-compute, nova-conductor]
+    - [nova-scheduler, nova-compute]
+    - [host-access-reconciler, rack-inventories]
+    - [host-access-reconciler, rabbitmq]
+    - [tenants, keystone]
+    - [tenants, nova-api]
+
+fault:
+  type: inventory_source_moved
+  params:
+    # The rack inventory is republished under this suffix by an inventory
+    # migration; the reconciler still mounts the old name.
+    successor_suffix: -v2
+    exported_by: dcim-sync 2.0
+
+tiers:
+  small: {rack: r3}
+  regional: {rack: r3}
+  fleet: {rack: r5}
+
+grading:
+  soak_s: 30
+  window_s: 150
+  # Sample hypervisor state this often during the window; every sample must pass.
+  sample_interval_s: 25
+  slo:
+    min_success: {boot: 0.9, delete: 0.9, pet_reboot: 0.95, list: 0.95}
+    min_attempts: {boot: 3, pet_reboot: 5}
+    tenant_min_success: {pet_reboot: 0.8}
+  invariants:
+    - hypervisors_up
+    - hypervisor_status_as_baseline
+    - pets_preserved
+    - pets_not_moved
+    - pets_settled
+    - tenant_slo
+
+diagnosis:
+  component: host-access-reconciler
+  description: >-
+    An inventory migration republished rack {rack}'s host inventory as ConfigMap {successor} and
+    removed {source}. The host-access-reconciler CronJob mounts rack inventories as optional
+    projected sources, so it silently built its allow list without rack {rack} and deleted the
+    RabbitMQ users of {hosts}, which closed their connections. Their nova-compute services can no
+    longer reach the message bus (ACCESS_REFUSED), so Nova marks them down and instances on them
+    cannot be managed; operations in flight were lost and left instances stuck in a task state.
+    The hypervisor pods themselves stay Running. Recovery restores the reconciler's input (or halts
+    it and restores the users) so the hosts rejoin, then clears instances stuck in transitional
+    task states, without evacuating instances from hosts that are still running.

@@ -1,0 +1,91 @@
+version: 1
+id: openstack_ring_capacity_removal
+title: A capacity-removal command with a bad input removes far more storage than intended
+
+postmortem:
+  provider: Amazon Web Services
+  incident: S3 service disruption in US-EAST-1
+  date: 2017-02-28 09:37 to 13:54 PST
+  sources:
+    - https://aws.amazon.com/message/41926/
+  chain:
+    trigger: >-
+      An authorized engineer ran an established playbook command meant to remove a small number of
+      servers from an S3 subsystem. One input was entered incorrectly, and the command removed a
+      much larger set of servers, including capacity of the index and placement subsystems.
+    mechanism: >-
+      The tool removed capacity as fast as it was told, with no check against the minimum capacity
+      the subsystems needed, so S3 could no longer locate or place objects in the region.
+    amplifier: >-
+      The affected subsystems had not been fully restarted in years and took hours to come back;
+      services built on S3 (EC2 launches, EBS restores from snapshots, Lambda, the status
+      dashboard's own console) failed with it.
+    impact: >-
+      GET, LIST, PUT and DELETE failed in US-EAST-1 for about four hours; dependent services
+      drained their backlogs afterwards.
+  responder_actions:
+    - Restored the removed capacity; restarted the index subsystem (GET/LIST/DELETE back at 12:26, fully 13:18) and then placement (13:54).
+    - "Follow-ups: the tool removes capacity more slowly and refuses to go below a subsystem's minimum capacity; the subsystems are being partitioned into cells."
+
+environment:
+  app: openstack
+  mapping:
+    - postmortem: playbook command that removes servers from a subsystem
+      environment: the drive-decommission runbook, swift-ring-builder object.builder remove <zone>-<host>:<port>/<device> --yes, then rebalance
+    - postmortem: one input entered incorrectly
+      environment: the host part of the search value expanded empty, leaving /<device>, which matches that device on every storage node
+    - postmortem: no minimum-capacity guard
+      environment: Swift ignores min_part_hours for partitions on removed devices, so one rebalance reassigns all of them at once
+    - postmortem: S3 cannot locate objects
+      environment: partitions whose every replica was on a removed device now map to devices without the data; those objects return 404 although their bytes are intact on the removed drives
+    - postmortem: restore the removed capacity
+      environment: put the previous ring back (swift-ring-builder keeps backups of every builder and ring it writes); objects written during the incident are found on handoffs and replicated home
+  deviations:
+    - Swift's ring is the placement map; there is no separate index subsystem with a slow cold restart, so recovery after the ring is restored takes seconds, not hours.
+    - Only the object ring is affected; account and container listings keep working.
+    - Dependent services (EC2, EBS, Lambda, the status page) are not modelled; Nova keeps running alongside.
+
+topology:
+  services: [keystone, swift-proxy, swift-storage, swift-ring-builder, memcached, nova-api, nova-conductor, nova-scheduler, rabbitmq, mariadb]
+  dependency_edges:
+    - [swift-proxy, swift-rings]
+    - [swift-storage, swift-rings]
+    - [swift-proxy, keystone]
+    - [tenants, swift-proxy]
+
+fault:
+  type: ring_device_removal
+  params:
+    # The drive the runbook was meant to remove: storage node index and device.
+    intended_node: 0
+
+tiers:
+  small: {device: d1}
+  regional: {device: d2}
+  fleet: {device: d3}
+
+grading:
+  soak_s: 30
+  window_s: 150
+  sample_interval_s: 25
+  slo:
+    min_success: {object_get: 0.99, object_put: 0.98, boot: 0.9, pet_reboot: 0.95}
+    min_attempts: {object_get: 10, object_put: 5}
+  invariants:
+    - objects_durable
+    - object_ring_capacity
+    - tenant_slo
+
+diagnosis:
+  component: swift-ring-builder
+  description: >-
+    A drive-decommission runbook was meant to remove one device,
+    {intended}, from the Swift object ring. Its search value was entered as {typed}, which matched
+    device {device} on every storage node, and swift-ring-builder removed {count} devices and
+    rebalanced. Swift ignores min_part_hours for partitions on removed devices, so the new ring
+    moved every one of their replicas at once. Objects whose replicas were all on {device} drives
+    now map to devices that do not hold them and return 404, although the data is intact on the
+    removed drives. Recovery restores the previous object ring from the ring builder's backups
+    (re-adding the devices and rebalancing again does not move partitions back), without deleting
+    data on the removed devices, after which objects written during the incident are found on
+    handoffs and replicated home.

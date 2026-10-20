@@ -1,0 +1,14 @@
+{
+  "Name": "OpenStack",
+  "Namespace": "openstack",
+  "Desc": "A small OpenStack region (2025.1) running on Kubernetes: Keystone, Glance, Placement and Nova (API, conductor, scheduler) backed by MariaDB, RabbitMQ and memcached. Hypervisors are nova-compute processes using Nova's fake virt driver, one StatefulSet pod per host, grouped into racks (StatefulSet hv-<rack>). Each hypervisor authenticates to RabbitMQ with its own per-host credential, which the host-access-reconciler CronJob grants and revokes from the published rack inventories (ConfigMaps rack-<rack>-inventory). Tenant projects run customer workloads against the public APIs. The ops-toolbox deployment has the admin openstack CLI (OS_CLOUD=admin) and nova-manage.",
+  "frontend_service": "nova-api",
+  "frontend_port": 8774,
+  "Supported Operations": [
+    "kubectl exec -n openstack deploy/ops-toolbox -- openstack compute service list",
+    "kubectl exec -n openstack deploy/ops-toolbox -- openstack server list --all-projects --long",
+    "kubectl exec -n openstack rabbitmq-0 -- rabbitmqctl list_users",
+    "Inspect Nova, Keystone, Placement, RabbitMQ and MariaDB logs",
+    "Inspect host inventories and the host-access-reconciler CronJob"
+  ]
+}
