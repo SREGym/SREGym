@@ -25,8 +25,10 @@ RUN apt-get update \
 # 2. Python + pip
 # ───────────────────────────────────────────────
 RUN python3 -m ensurepip --upgrade \
-    && python3 -m pip install --upgrade pip \
+    && python3 -m pip install --upgrade 'pip==26.2.1' \
     && ln -sf /usr/bin/python3 /usr/bin/python
+
+ENV PIP_UPLOADED_PRIOR_TO=P7D
 
 # ───────────────────────────────────────────────
 # 3. kubectl

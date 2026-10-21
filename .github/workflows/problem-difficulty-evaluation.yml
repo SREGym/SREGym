@@ -473,7 +473,7 @@ jobs:
 
           # The proxy extra conflicts with SREGym's intentionally pinned web
           # stack, so run the matching LiteLLM proxy in an isolated uv tool env.
-          nohup uvx --from 'litellm[proxy]==1.91.0' litellm \
+          nohup uvx --exclude-newer '7 days' --from 'litellm[proxy]==1.91.0' litellm \
             --config "$RUNNER_TEMP/zai-litellm.yaml" \
             --host 0.0.0.0 \
             --port "$LITELLM_PORT" \
