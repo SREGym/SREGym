@@ -256,12 +256,15 @@ async def get_app():
     app_inst = _conductor.app
     logger.debug(f"API returns App instance: {app_inst}")
     namespaces = getattr(app_inst, "namespaces", None) or [app_inst.namespace]
-    return {
+    info = {
         "app_name": app_inst.app_name,
         "namespace": app_inst.namespace,
         "namespaces": namespaces,
         "descriptions": str(app_inst.description),
+        # Lets agents tailor their workflow, e.g. to mitigation-only problems.
+        "stages": [stage["name"] for stage in getattr(_conductor, "stage_sequence", None) or []],
     }
+    return info
 
 
 def run_api(conductor):

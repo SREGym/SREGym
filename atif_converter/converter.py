@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, cast
 
-from .adapters import claudecode, cloudthinker, codex, copilot, gemini, opencode, stratus
+from .adapters import claudecode, cloudthinker, codex, copilot, gemini, mini_sre, opencode, stratus
 from .atif import Trajectory
 from .errors import (
     AtifConverterError,
@@ -16,13 +16,14 @@ from .errors import (
     UnsupportedFormatError,
 )
 
-AgentName = Literal["claudecode", "cloudthinker", "codex", "copilot", "gemini", "opencode", "stratus"]
+AgentName = Literal["claudecode", "cloudthinker", "codex", "copilot", "gemini", "mini-sre", "opencode", "stratus"]
 SUPPORTED_AGENTS: tuple[AgentName, ...] = (
     "claudecode",
     "cloudthinker",
     "codex",
     "copilot",
     "gemini",
+    "mini-sre",
     "opencode",
     "stratus",
 )
@@ -33,6 +34,7 @@ _CONVERTERS = {
     "codex": codex.convert_file,
     "copilot": copilot.convert_file,
     "gemini": gemini.convert_file,
+    "mini-sre": mini_sre.convert_file,
     "opencode": opencode.convert_file,
     "stratus": stratus.convert_file,
 }
@@ -153,6 +155,12 @@ def _looks_like_cloudthinker(root: dict | None) -> bool:
     return isinstance(root, dict) and root.get("schema") == cloudthinker.SESSION_SCHEMA
 
 
+def _looks_like_mini_sre(records: list[dict]) -> bool:
+    return any(
+        record.get("type") == "meta" and "protocol" in record and "submission_mode" in record for record in records
+    )
+
+
 def _looks_like_stratus(records: list[dict]) -> bool:
     return any(
         record.get("type") == "event" and "stage" in record and isinstance(record.get("messages"), list)
@@ -217,6 +225,8 @@ def detect_agent(session_file: Path | str) -> AgentName:
         return "opencode"
     if _looks_like_gemini(root, records):
         return "gemini"
+    if _looks_like_mini_sre(records):
+        return "mini-sre"
     if _looks_like_stratus(records):
         return "stratus"
     if _looks_like_codex(records):

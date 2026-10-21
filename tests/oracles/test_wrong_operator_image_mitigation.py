@@ -48,7 +48,15 @@ def _pod(name, *, waiting=None):
     )
 
 
+def _no_items(*_args, **_kwargs):
+    return SimpleNamespace(items=[])
+
+
 class _KubeCtl:
+    # MitigationOracle's baseline of Services, PVCs and StatefulSets: none here.
+    core_v1_api = SimpleNamespace(list_namespaced_service=_no_items, list_namespaced_persistent_volume_claim=_no_items)
+    apps_v1_api = SimpleNamespace(list_namespaced_stateful_set=_no_items)
+
     def __init__(self):
         self.deployments = {"tidb-cluster": [_deployment("tidb-app")], OPERATOR_NAMESPACE: []}
         self.pods = {"tidb-cluster": [_pod("tidb-app-1")], OPERATOR_NAMESPACE: []}

@@ -96,16 +96,29 @@ if [[ -n ${SREGYM_DOCKER_TMPFS_SIZE:-} ]]; then
 fi
 export container=docker
 stage="private Docker daemon"
-dockerd_args=(--host=unix:///var/run/docker.sock --storage-driver="${SREGYM_DOCKER_STORAGE_DRIVER:-overlay2}")
-if [[ -n ${SREGYM_REGISTRY_MIRROR:-} ]]; then
-    # Every run starts with an empty image cache; a pull-through mirror keeps
-    # parallel runs from exhausting Docker Hub's anonymous pull limit.
-    dockerd_args+=(--registry-mirror="$SREGYM_REGISTRY_MIRROR")
+# Optional Docker Hub mirrors (comma-separated URLs, tried in order), e.g. a
+# pull-through cache on the host: every run has a private daemon and cluster,
+# so without one each run pulls every image from Docker Hub again.
+mirror_args=()
+IFS=, read -r -a registry_mirrors <<<"${SREGYM_REGISTRY_MIRRORS:-}"
+if (( ${#registry_mirrors[@]} )); then
+    # containerd reads per-registry hosts.toml files from config_path; every
+    # KIND node mounts this directory (kind_config.py), so mirrors apply from
+    # the first pull.
     mkdir -p /run/sregym-containerd-certs.d/docker.io
-    printf 'server = "https://registry-1.docker.io"\n\n[host."%s"]\n  capabilities = ["pull", "resolve"]\n' \
-        "$SREGYM_REGISTRY_MIRROR" > /run/sregym-containerd-certs.d/docker.io/hosts.toml
+    hosts='server = "https://registry-1.docker.io"\n'
+    for mirror in "${registry_mirrors[@]}"; do
+        mirror_args+=("--registry-mirror=$mirror")
+        hosts+="\n[host.\"$mirror\"]\n  capabilities = [\"pull\", \"resolve\"]\n"
+        if [[ $mirror == http://* ]]; then
+            mirror_args+=("--insecure-registry=${mirror#http://}")
+            hosts+='  skip_verify = true\n'
+        fi
+    done
+    printf '%b' "$hosts" > /run/sregym-containerd-certs.d/docker.io/hosts.toml
 fi
-dockerd "${dockerd_args[@]}" >"$daemon_log" 2>&1 &
+dockerd --host=unix:///var/run/docker.sock "${mirror_args[@]}" \
+    --storage-driver="${SREGYM_DOCKER_STORAGE_DRIVER:-overlay2}" >"$daemon_log" 2>&1 &
 daemon_pid=$!
 ready=false
 for ((i=0; i<120; i++)); do

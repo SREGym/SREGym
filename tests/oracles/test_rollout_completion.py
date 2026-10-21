@@ -172,6 +172,8 @@ def test_non_lite_status_checks_use_the_same_contract(total, expected):
         (CronJobSidecarBlocksCompletionMitigationOracle, "_unhealthy_deployment"),
     ]:
         oracle = object.__new__(klass)
+        if issubclass(klass, MitigationOracle):
+            MitigationOracle.__init__(oracle, SimpleNamespace(namespace="example"))
         oracle.apps_v1 = api
         assert (getattr(oracle, method)("example") is None) is expected
 
@@ -195,3 +197,49 @@ def test_non_lite_status_checks_use_the_same_contract(total, expected):
         return_value={"items": [{"metadata": {"name": "frontend"}, "status": {"phase": "Running"}}]}
     )
     assert hpa._deployment_ready(client.ApiClient().sanitize_for_serialization(dep))[0] is expected
+
+
+@pytest.mark.parametrize("kind", ["finalizer", "cronjob"])
+@pytest.mark.parametrize(
+    "baseline,current,expected",
+    [(1, 0, False), (0, 0, True), (1, None, False), (1, 3, True), (0, 2, True)],
+)
+def test_specialized_oracles_preserve_required_deployments(kind, baseline, current, expected):
+    from sregym.conductor.oracles.cronjob_sidecar_mitigation import CronJobSidecarBlocksCompletionMitigationOracle
+    from sregym.conductor.oracles.finalizer_deadlock_controller_mitigation import (
+        FinalizerDeadlockControllerMitigationOracle,
+    )
+
+    def replicas(count):
+        dep = deployment(replicas=count, updated_replicas=count, ready_replicas=count, available_replicas=count)
+        dep.spec.replicas = count
+        return dep
+
+    kube = Mock()
+    kube.list_deployments.return_value = SimpleNamespace(items=[replicas(baseline)])
+    for api in (kube.core_v1_api, kube.apps_v1_api):
+        for kind in ("service", "persistent_volume_claim", "config_map", "stateful_set"):
+            getattr(api, f"list_namespaced_{kind}").return_value = SimpleNamespace(items=[])
+    problem = SimpleNamespace(kubectl=kube, namespace="example")
+    if kind == "cronjob":
+        oracle = CronJobSidecarBlocksCompletionMitigationOracle(problem)
+        oracle.apps_v1 = Mock()
+    else:
+        oracle = FinalizerDeadlockControllerMitigationOracle(problem, "token", "cleanup", "controller")
+    oracle.capture_baseline()
+    deployments = SimpleNamespace(items=[] if current is None else [replicas(current)])
+    kube.list_deployments.return_value = deployments
+    kube.list_pods.return_value = SimpleNamespace(
+        items=[
+            SimpleNamespace(
+                metadata=SimpleNamespace(name="frontend-pod", deletion_timestamp=None),
+                status=SimpleNamespace(phase="Running", container_statuses=[]),
+            )
+        ]
+    )
+    if kind == "cronjob":
+        oracle.apps_v1.list_namespaced_deployment.return_value = deployments
+        healthy = oracle._unhealthy_deployment("example") is None
+    else:
+        healthy, _ = oracle._check_app_healthy(kube, "example")
+    assert healthy is expected

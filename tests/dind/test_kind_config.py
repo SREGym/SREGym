@@ -39,7 +39,7 @@ class KindConfigTests(unittest.TestCase):
         self.assertNotIn("/var/lib/etcd", self.mounts(config["nodes"][0]))
 
     def test_extra_ca_and_mirror_apply_to_every_node(self):
-        config = self.build({"SREGYM_EXTRA_CA_CERTS": "/ca.pem", "SREGYM_REGISTRY_MIRROR": "https://mirror.example"})
+        config = self.build({"SREGYM_EXTRA_CA_CERTS": "/ca.pem", "SREGYM_REGISTRY_MIRRORS": "https://mirror.example"})
         for node in config["nodes"]:
             mounts = self.mounts(node)
             self.assertTrue(mounts["/etc/ssl/certs/ca-certificates.crt"]["readOnly"])

@@ -63,6 +63,13 @@ Credential files must stay outside the image. Host login directories are not
 automatically mounted. The image build excludes common secret and output paths;
 review your checkout for other private files before building.
 
+Every run has a private daemon and cluster, so parallel runs quickly exhaust Docker Hub's
+unauthenticated pull limit (100 pulls per hour per IP). Set `SREGYM_REGISTRY_MIRRORS` in the env file
+to a comma-separated list of Docker Hub mirrors, for example a pull-through cache on the host
+(`docker run -d -p 5000:5000 -e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io registry:2`,
+then `SREGYM_REGISTRY_MIRRORS=http://172.17.0.1:5000,https://mirror.gcr.io`). The private daemon and
+every kind node's containerd then pull Docker Hub images through them, in order.
+
 Results and daemon logs survive container removal in `results/dind/<run-name>/`.
 Set `--output /absolute/path` to change this; always use a distinct directory for
 each concurrent run. Files are written by container root. Docker data uses a
@@ -150,9 +157,10 @@ Prior work inspected while implementing this runtime:
 Every run starts with an empty image cache. These optional env-file settings
 reduce the per-run cost or adapt to restricted networks:
 
-- `SREGYM_REGISTRY_MIRROR=https://mirror.gcr.io` configures a Docker Hub
-  pull-through mirror for the private daemon and for containerd on every KIND
-  node. Concurrent runs otherwise hit Docker Hub's anonymous pull limit quickly.
+- `SREGYM_REGISTRY_MIRRORS=https://mirror.gcr.io` (comma-separated, tried in
+  order) configures Docker Hub pull-through mirrors for the private daemon and
+  for containerd on every KIND node. Concurrent runs otherwise hit Docker Hub's
+  anonymous pull limit quickly.
 - `SREGYM_KIND_NODE_IMAGE=<image>` uses a prebuilt node image instead of
   building `kind/Dockerfile` in each run. Without the udev and socat additions,
   problems that rely on OpenEBS device discovery may not work.

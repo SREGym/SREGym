@@ -3,6 +3,7 @@ from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -12,24 +13,25 @@ from sregym.utils.decorators import mark_fault_injected
 class LivenessProbeMisconfiguration(Problem):
     """Deprecated in SREGym 1.1 after all variants reached 100% overall pass@3."""
 
-    def __init__(self, app_name="social_network", faulty_service="user-service"):
+    def __init__(self, app_name="social_network", faulty_service="user-service", *, app: Application | None = None):
         self.app_name = app_name
         self.faulty_service = faulty_service
 
-        if app_name == "social_network":
-            app = SocialNetwork()
-            app.create_workload(duration=30)
+        if app is None:
+            if app_name == "social_network":
+                app = SocialNetwork()
+                app.create_workload(duration=30)
 
-        elif app_name == "hotel_reservation":
-            app = HotelReservation()
-            app.create_workload(duration=30)
+            elif app_name == "hotel_reservation":
+                app = HotelReservation()
+                app.create_workload(duration=30)
 
-        elif app_name == "astronomy_shop":
-            app = AstronomyShop()
-            app.create_workload()
+            elif app_name == "astronomy_shop":
+                app = AstronomyShop()
+                app.create_workload()
 
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
+            else:
+                raise ValueError(f"Unsupported app name: {app_name}")
 
         super().__init__(app=app)
 

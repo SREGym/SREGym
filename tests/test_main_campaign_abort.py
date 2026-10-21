@@ -63,10 +63,10 @@ def test_result_csv_publication_with_results_on_another_filesystem(tmp_path, mon
 
 
 @pytest.mark.parametrize(
-    ("stages", "external", "expected_calls"),
-    [(None, False, 1), (["diagnosis"], False, 1), (["mitigation"], False, 0), (None, True, 0)],
+    ("stages", "external"),
+    [(None, False), (["diagnosis"], False), (["mitigation"], False), (None, True)],
 )
-def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, external, expected_calls):
+def test_judge_preflight_is_deferred_until_effective_stages_are_known(monkeypatch, stages, external):
     benchmark_main = _load_main_module()
     monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
     calls = []
@@ -90,14 +90,29 @@ def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, extern
         noise=False,
         use_external_harness=external,
         stages=stages,
+        baseline=None,
+        propagation=None,
     )
     with pytest.raises(ReachedConductor):
         benchmark_main._run_benchmark(args)
-    assert len(calls) == expected_calls
+    assert calls == []
+
+
+def test_cleanup_deadline_covers_namespace_deletion_and_honors_override(monkeypatch):
+    monkeypatch.delenv("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", raising=False)
+    benchmark_main = _load_main_module()
+    assert benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS == 600
+
+    monkeypatch.setenv("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "900")
+    benchmark_main = _load_main_module()
+    assert benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS == 900
 
 
 @pytest.mark.parametrize("platform_failure, expected_attempts", [(True, 1), (False, 3)])
-def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platform_failure, expected_attempts):
+@pytest.mark.parametrize("cleanup_budget", [None, 300, 900])
+def test_deployment_retries_only_transient_failures(
+    monkeypatch, tmp_path, platform_failure, expected_attempts, cleanup_budget
+):
     benchmark_main = _load_main_module()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
@@ -112,12 +127,21 @@ def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platf
         finish_problem_in_background=Mock(),
         wait_for_submission_work=AsyncMock(),
     )
+    if cleanup_budget is not None:
+        conductor.problem = SimpleNamespace(cleanup_timeout_seconds=cleanup_budget)
 
     results = benchmark_main.driver_loop(conductor, use_external_harness=True)
 
     assert conductor.start_problem.await_count == expected_attempts
     assert conductor.finish_problem_in_background.call_count == expected_attempts
     assert conductor.wait_for_submission_work.await_count == expected_attempts
+    expected_cleanup_budget = max(
+        benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS,
+        cleanup_budget or benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS,
+    )
+    assert all(
+        call.kwargs["timeout"] == expected_cleanup_budget for call in conductor.wait_for_submission_work.await_args_list
+    )
     conductor.bind_phase_ledger.assert_called_once()
     assert results == [
         {None: [{"problem_id": "problem", "attempt": 1, "deployment_profile": "full", "deploy_failed": True}]}

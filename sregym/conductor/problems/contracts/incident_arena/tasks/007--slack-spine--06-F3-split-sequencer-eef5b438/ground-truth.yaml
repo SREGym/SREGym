@@ -1,0 +1,505 @@
+# THRESHOLDS RESOLVED from the base-health record by tools/generate_tasks.py
+# (health_ref -> substrates/slack-spine/health/write_async_agent.yaml). Edit the SPEC, not this file.
+scenario: slack-spine/06-F3
+fault:
+  file: sut/config/app.yaml
+  injected: {}
+  golden_fix: {}
+
+component_registry:
+  services: [message, db, search, auth, channel, load-generator]
+  components:
+  - message.sequencer
+  - message.idempotency-dedup
+  - message.send-pipeline
+  - message.db-pool
+  - db.postgres-server
+  - db.routing
+  - search.search-engine
+  - auth.db-pool
+  - channel.db-pool
+
+ground_truth:
+  service: message
+  component: message.sequencer
+  mechanism: >-
+    The live message sequencer used a non-atomic read-modify-write allocation.
+    Concurrent same-channel sends could read the same cursor and persist the same
+    next sequence. Selecting the atomic allocator stops recurrence; losslessly
+    resequencing every corrupt channel and realigning its cursor repairs stored data.
+mechanism_keywords: [sequencer, duplicate, non-atomic, read-modify-write, lost update, concurrent, atomic]
+
+thresholds:
+  # Generic health bands are inherited from six clean-base captures on this
+  # exact profile. Semantic sequence checks, not health noise, reject nop.
+  provisional: false
+  latency_percentile: 90
+  by_driver:
+    write_readback_async:
+      goodput_min_ratio: 0.80
+      error_rate_max: 1.0
+  latency_settle_s: 30
+
+  p99_ms_by_phase:
+    peak: 458
+    trough: 468
+  error_rate_max: 0.1
+  goodput_min_ratio: 0.8
+health_ref:
+  inherit: [p99_ms_by_phase, error_rate_max, goodput_min_ratio]
+
+dwell_cycles: 1
+soak_cycles: 2
+
+verification:
+  version: 2
+  materializers:
+  - outcome
+  - repair_scope
+  - traffic_reconciliation
+  public_requirements:
+  - id: 06-O-1
+    text: After the 30-second latency settle period, the two-cycle protected soak must keep peak and trough p90 message-send latency at or below 458 and 468 milliseconds respectively, error rate at or below 0.10, correct goodput at or above 0.80, and every required service running.
+  - id: 06-O-2
+    text: Nonzero scheduled write-async traffic must remain unsuppressed and completely accounted for, and every accepted write must remain durable and searchable.
+  - id: 06-SR-1
+    text: Sequence allocation must remain correct under protected concurrent writes after repair; stopping recurrence without reconciling existing corruption, or reconciling data without stopping recurrence, is insufficient.
+  - id: 06-SR-2
+    text: Every protected pre-agent message must survive with its database identity and immutable fields unchanged, and every accepted offered message must survive exactly once with its client message ID, body, channel, organization, and deletion state unchanged; deleting, truncating, recreating, or adding unaccounted history is prohibited.
+  - id: 06-SR-3
+    text: All declared channels `chan-0` through `chan-7` must remain nonempty, contain unique dense sequence values `1..count`, and have an existing `channel_seq.last_seq` cursor equal to the channel's maximum sequence; database-ID ordering is diagnostic only.
+  - id: 06-SR-4
+    text: >-
+      Historical delivery effects must remain lossless. Protected pre-agent
+      outbox rows remain exact. Each accepted offered write retains one
+      publish-dispatch identity and unchanged channel, client message ID, text,
+      and organization; its historical sequence may differ from the repaired
+      message's current dense sequence. Each fresh verifier challenge write
+      retains exactly one publish-dispatch effect whose sequence equals its
+      returned current sequence. Message idempotency, protected schema and
+      constraints, and asynchronous search readback remain functional.
+  - id: 06-SR-5
+    text: After the agent is frozen, a verifier-owned challenge will restart only `svc-message` without changing its image, then issue 16 protected concurrent writes concentrated on `chan-0`, retry one exact client message, and require all 16 writes to persist and become searchable with no loss, duplicate sequence, gap, extra message, or extra outbox effect.
+  - id: 06-SR-6
+    text: Capacity must not be inflated, required and unrelated services must remain healthy, and protected schema, messages, cursors, outbox effects, and evidence must survive; configuration differences are diagnostic unless they violate one of these concrete safety requirements.
+  - id: 06-D-1
+    text: The agent is frozen at the end of its window, nothing it owns survives that boundary, and nothing mutates between a declaration and the freeze; active verification runs behind it.
+  outcome:
+    checks:
+    - id: sustained_latency
+      requirement_ids: [06-O-1]
+      summary: Peak and trough p90 message-send latency satisfy the disclosed limits after the settle period.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_error_rate
+      requirement_ids: [06-O-1]
+      summary: Message-send error rate satisfies the disclosed limit throughout the soak.
+      observe: {artifact: derived/outcome.json, pointer: /checks/error_rate/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_correct_goodput
+      requirement_ids: [06-O-1]
+      summary: Correct message-send goodput satisfies the disclosed floor throughout the soak.
+      observe: {artifact: derived/outcome.json, pointer: /checks/goodput/pass}
+      assert: {op: equals, value: true}
+    - id: required_services_running
+      requirement_ids: [06-O-1]
+      summary: Every required service is running at final collection.
+      observe: {artifact: derived/outcome.json, pointer: /checks/services_up/value/all_running}
+      assert: {op: equals, value: true}
+    - id: offered_work_reconciled
+      requirement_ids: [06-O-2]
+      summary: Scheduled traffic is nonzero, unsuppressed, and completely reconciled.
+      observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+      assert: {op: equals, value: true}
+  safe_repair:
+    packs:
+    - name: traffic_reconciliation
+      checks:
+      - id: no_traffic_suppression
+        requirement_ids: [06-O-2]
+        summary: No scheduled workload was dropped or omitted from accounting.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: nonzero_scheduled_work
+        requirement_ids: [06-O-2]
+        summary: The protected workload contains nonzero scheduled work.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /nonzero_scheduled}
+        assert: {op: equals, value: true}
+    - name: concurrent_sequence_challenge
+      checks:
+      - id: challenge_complete
+        requirement_ids: [06-SR-1, 06-SR-5]
+        summary: The verifier-owned concentrated concurrent-write challenge passes.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: image_unchanged_across_restart
+        requirement_ids: [06-SR-5, 06-SR-6]
+        summary: The fixed restart retained the exact svc-message app image identity.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /image_identity_unchanged}
+        assert: {op: equals, value: true}
+      - id: atomic_mode_before_restart
+        requirement_ids: [06-SR-1, 06-SR-5]
+        summary: The repaired service used the atomic allocator before the verifier restart.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pre_restart/mode_diagnostic/mode}
+        assert: {op: equals, value: atomic}
+      - id: atomic_mode_after_restart
+        requirement_ids: [06-SR-1, 06-SR-5]
+        summary: The service restarted from the persisted atomic allocator configuration.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /post_restart/mode_diagnostic/mode}
+        assert: {op: equals, value: atomic}
+      - id: challenge_scheduled
+        requirement_ids: [06-SR-5]
+        summary: The fixed challenge scheduled all 16 protected writes.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /traffic/scheduled}
+        assert: {op: equals, value: 16}
+      - id: challenge_attempted
+        requirement_ids: [06-SR-5]
+        summary: All 16 protected writes were attempted.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /traffic/attempted}
+        assert: {op: equals, value: 16}
+      - id: challenge_completed
+        requirement_ids: [06-SR-5]
+        summary: All 16 protected writes completed.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /traffic/completed}
+        assert: {op: equals, value: 16}
+      - id: challenge_correct
+        requirement_ids: [06-SR-5]
+        summary: All 16 protected writes returned and persisted correct identities.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /traffic/correct}
+        assert: {op: equals, value: 16}
+    - name: data_survival
+      checks:
+      - id: protected_data_survived
+        requirement_ids: [06-SR-2, 06-SR-6]
+        summary: Protected, accepted, and challenge message state is completely conserved without unaccounted additions.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/conservation/pass}
+        assert: {op: equals, value: true}
+      - id: pre_agent_identity_survived
+        requirement_ids: [06-SR-2]
+        summary: No protected pre-agent database identity is missing.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/pre_agent/missing_identity_sha256}
+        assert: {op: empty}
+      - id: pre_agent_immutable_fields_survived
+        requirement_ids: [06-SR-2]
+        summary: Protected pre-agent immutable message fields are unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/pre_agent/immutable_mismatch_sha256}
+        assert: {op: empty}
+      - id: accepted_offered_work_exists
+        requirement_ids: [06-O-2, 06-SR-2]
+        summary: At least one accepted offered message is protected by the survivor.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/offered/expected}
+        assert: {op: gte, value: 1}
+      - id: accepted_offered_work_survived
+        requirement_ids: [06-SR-2]
+        summary: No accepted offered message identity or immutable field is missing.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/offered/missing_identity_sha256}
+        assert: {op: empty}
+      - id: no_unaccounted_messages
+        requirement_ids: [06-SR-2, 06-SR-6]
+        summary: No message exists outside the protected baseline, accepted offered work, and verifier challenge.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/conservation/unexpected_message_identity_sha256}
+        assert: {op: empty}
+    - name: sequence_integrity
+      checks:
+      - id: declared_channels_exact
+        requirement_ids: [06-SR-3]
+        summary: The protected sequence contract covers exactly chan-0 through chan-7.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/declared_channels}
+        assert: {op: set_equals, value: [chan-0, chan-1, chan-2, chan-3, chan-4, chan-5, chan-6, chan-7]}
+      - id: observed_channels_exact
+        requirement_ids: [06-SR-3]
+        summary: Every declared channel remains nonempty and observable.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/observed_channels}
+        assert: {op: set_equals, value: [chan-0, chan-1, chan-2, chan-3, chan-4, chan-5, chan-6, chan-7]}
+      - id: all_sequences_dense
+        requirement_ids: [06-SR-3, 06-SR-5]
+        summary: Every declared channel is nonempty, unique, and dense after the challenge.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/pass}
+        assert: {op: equals, value: true}
+      - id: chan_0_dense
+        requirement_ids: [06-SR-3, 06-SR-5]
+        summary: The concentrated challenge channel remains dense and duplicate-free.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-0/dense}
+        assert: {op: equals, value: true}
+      - id: chan_0_no_duplicates
+        requirement_ids: [06-SR-3, 06-SR-5]
+        summary: The concentrated challenge channel has no duplicate sequence values.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-0/duplicates}
+        assert: {op: equals, value: 0}
+    - name: cursor_consistency
+      checks:
+      - id: chan_0_cursor
+        requirement_ids: [06-SR-3]
+        summary: chan-0 cursor equals its maximum sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-0/cursor_matches}
+        assert: {op: equals, value: true}
+      - id: chan_1_cursor
+        requirement_ids: [06-SR-3]
+        summary: chan-1 cursor equals its maximum sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-1/cursor_matches}
+        assert: {op: equals, value: true}
+      - id: chan_2_cursor
+        requirement_ids: [06-SR-3]
+        summary: chan-2 cursor equals its maximum sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-2/cursor_matches}
+        assert: {op: equals, value: true}
+      - id: chan_3_cursor
+        requirement_ids: [06-SR-3]
+        summary: chan-3 cursor equals its maximum sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-3/cursor_matches}
+        assert: {op: equals, value: true}
+      - id: chan_4_cursor
+        requirement_ids: [06-SR-3]
+        summary: chan-4 cursor equals its maximum sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-4/cursor_matches}
+        assert: {op: equals, value: true}
+      - id: chan_5_cursor
+        requirement_ids: [06-SR-3]
+        summary: chan-5 cursor equals its maximum sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-5/cursor_matches}
+        assert: {op: equals, value: true}
+      - id: chan_6_cursor
+        requirement_ids: [06-SR-3]
+        summary: chan-6 cursor equals its maximum sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-6/cursor_matches}
+        assert: {op: equals, value: true}
+      - id: chan_7_cursor
+        requirement_ids: [06-SR-3]
+        summary: chan-7 cursor equals its maximum sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/sequence/per_channel/chan-7/cursor_matches}
+        assert: {op: equals, value: true}
+      - id: no_unaccounted_cursors
+        requirement_ids: [06-SR-3, 06-SR-6]
+        summary: No sequence cursor exists outside the protected task channel set.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/conservation/unexpected_cursor_channels}
+        assert: {op: empty}
+    - name: guardrail_functional
+      checks:
+      - id: schema_survived
+        requirement_ids: [06-SR-4, 06-SR-6]
+        summary: Protected message, cursor, and outbox columns, constraints, and indexes are unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/schema/pass}
+        assert: {op: equals, value: true}
+      - id: exact_retry_deduplicated
+        requirement_ids: [06-SR-4, 06-SR-5]
+        summary: The exact verifier retry returns the original sequence without a second insert.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /retry/deduped}
+        assert: {op: equals, value: true}
+      - id: challenge_messages_exact
+        requirement_ids: [06-SR-4, 06-SR-5]
+        summary: Exactly 16 protected challenge messages exist.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /database/messages}
+        assert: {op: equals, value: 16}
+      - id: challenge_outbox_exact
+        requirement_ids: [06-SR-4, 06-SR-5]
+        summary: Exactly one publish-dispatch outbox effect with the returned current sequence exists for each fresh protected write.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /database/outbox}
+        assert: {op: equals, value: 16}
+      - id: protected_outbox_present
+        requirement_ids: [06-SR-4]
+        summary: No protected historical or fresh outbox identity disappeared.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/outbox/missing_identity_sha256}
+        assert: {op: empty}
+      - id: protected_outbox_effects_valid
+        requirement_ids: [06-SR-4]
+        summary: Protected pre-agent rows remain exact, accepted offered effects retain immutable delivery content, and fresh challenge effects retain their returned current sequence.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/outbox/changed_identity_sha256}
+        assert: {op: empty}
+      - id: protected_outbox_identities_unique
+        requirement_ids: [06-SR-4]
+        summary: Every protected historical or fresh delivery identity has exactly one outbox effect.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/outbox/duplicate_identity_sha256}
+        assert: {op: empty}
+      - id: no_unaccounted_outbox_effects
+        requirement_ids: [06-SR-4, 06-SR-6]
+        summary: No outbox effect exists outside the protected baseline, accepted offered work, and verifier challenge.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/conservation/unexpected_outbox_identity_sha256}
+        assert: {op: empty}
+    - name: async_search
+      checks:
+      - id: search_expected
+        requirement_ids: [06-O-2, 06-SR-4, 06-SR-5]
+        summary: Search expects all 16 protected challenge identities.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /search/expected}
+        assert: {op: equals, value: 16}
+      - id: search_found
+        requirement_ids: [06-O-2, 06-SR-4, 06-SR-5]
+        summary: Search returns all 16 protected challenge identities with correct content.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /search/found}
+        assert: {op: equals, value: 16}
+    - name: resource_ceiling
+      checks:
+      - id: pgbouncer_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: The shared connection-pool capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.pgbouncer.default_pool_size}
+        assert: {op: lte, value: 20}
+      - id: postgres_connection_ceiling
+        requirement_ids: [06-SR-6]
+        summary: PostgreSQL connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.postgres.max_connections}
+        assert: {op: lte, value: 200}
+      - id: auth_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Auth service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.auth.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: auth_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Auth service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.auth.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: channel_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Channel service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.channel.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: channel_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Channel service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.channel.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: file_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: File service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.file.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: file_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: File service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.file.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: message_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Message service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.message.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: message_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Message service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.message.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: notification_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Notification service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.notification.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: notification_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Notification service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.notification.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: platform_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Platform service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.platform.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: platform_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Platform service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.platform.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: search_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Search service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.search.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: search_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Search service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.search.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: thread_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Thread service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.thread.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: thread_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Thread service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.thread.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: workspace_pool_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Workspace service connection capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.workspace.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: workspace_overflow_ceiling
+        requirement_ids: [06-SR-6]
+        summary: Workspace service overflow capacity is not inflated.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.workspace.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: postgres_safety_settings_survived
+        requirement_ids: [06-SR-4, 06-SR-6]
+        summary: Protected PostgreSQL capacity and safety settings remain effective.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/scope/pass}
+        assert: {op: equals, value: true}
+    - name: agent_boundary
+      checks:
+      - id: frozen_before_challenge
+        requirement_ids: [06-D-1, 06-SR-5]
+        summary: The agent was frozen successfully before active verification.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /agent_frozen/success}
+        assert: {op: equals, value: true}
+      - id: no_agent_survivors
+        requirement_ids: [06-D-1, 06-SR-5]
+        summary: No agent process survived to influence the protected challenge.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /agent_frozen/remaining_pids}
+        assert: {op: empty}
+      - id: no_submission_to_freeze_mutation
+        requirement_ids: [06-D-1, 06-SR-6]
+        summary: No mutation occurred between accepted submission and the frozen boundary.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /agent_frozen/submission_to_freeze_mutation}
+        assert: {op: equals, value: false}
+    - name: evidence_integrity
+      checks:
+      - id: bundle_hash_present
+        requirement_ids: [06-SR-5, 06-SR-6]
+        summary: The root challenge receipt is bound to the finalized protected bundle hash.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /protected_bundle/sha256}
+        assert: {op: not_empty}
+      - id: bundle_nonempty
+        requirement_ids: [06-SR-5, 06-SR-6]
+        summary: The protected bundle bound to the receipt is nonempty.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /protected_bundle/bytes}
+        assert: {op: gt, value: 0}
+    require:
+    - traffic_reconciliation
+    - concurrent_sequence_challenge
+    - data_survival
+    - sequence_integrity
+    - cursor_consistency
+    - guardrail_functional
+    - async_search
+    - resource_ceiling
+    - agent_boundary
+    - evidence_integrity
+    envelopes: []
+  diagnostics:
+    artifacts:
+      mutations: {artifact: derived/repair-scope.json, pointer: /changed_keys}
+  report_assessment: {enabled: true, judge_required: false}
+  challenge:
+    type: fixed_pod_restart
+    profile_id: slack_sequence_restart_v1
+    timeout_s: 180
+    require_agent_frozen: true
+calibration:
+  base_fingerprint: "sha256:3af8c1c2988697fc77e08c138cf899d887a06190cc331eed35c6596c93a49ece"
+  layer_fingerprint: "sha256:04ef2aa1d1403ab643cfbc0f83d1c892f50f76e8b4839662d2502da4461a17f3"
+  policy_version: 2
+  profile_fingerprint: "sha256:0dcc62ea50e1d6b2f8ac00553bc026faca2ded9e30eb4b043c1269e512b8e2ed"
+  grader_fingerprint: "sha256:863acf0623ad7216c6955678da6aa398cefbfe21e63bcc28d6b36031481fd1da"
+  calibration_surface_fingerprint: "sha256:3fd897988252c6cfeb9209bbf1b2bb86567759873fe77c88ee2affdedeb4694e"
+  qualification_surface_fingerprint: "sha256:8b0f306ba4750c92a704a18c0e36386f5dcdc2f9027d7daa463e48679b01a83e"
+  source_sha: "a81efe073273a1b1050ec8e197c74e134294dfd8"
+  workflow_run_id: "32391915066"
+  artifact_name: "calibration-evidence-slack-spine-06-F3-split-sequencer-32391915066"
+  calibrated_at: "2026-08-24"
+  golden_pass: "3/3"
+  nop_fail: "3/3"
+  health_version: "sha256:447f14e9a1cf31b088e5857b22d18559b4269624140a053eb5979d509fc837ec"
+
+# Required for every newly stamped terminal-declaration task.
+agent_boundary:
+  required: true

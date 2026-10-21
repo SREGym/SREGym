@@ -7,8 +7,8 @@ docker/dind/entrypoint.sh:
 - SREGYM_ETCD_TMPFS_SIZE (default 512m; 0 disables): memory-backed etcd.
 - SREGYM_EXTRA_CA_CERTS: the entrypoint has added this CA to the container's
   bundle; mount that bundle into every node so containerd trusts it.
-- SREGYM_REGISTRY_MIRROR: point every node's containerd at the Docker Hub
-  mirror described in /run/sregym-containerd-certs.d.
+- SREGYM_REGISTRY_MIRRORS: point every node's containerd at the Docker Hub
+  mirrors described in /run/sregym-containerd-certs.d.
 
 Some sandboxed hosts forbid lowering oom_score_adj, even for root. Kubernetes
 requests -998 for every pod sandbox, so runc fails ("can't get final child's
@@ -54,9 +54,9 @@ def build_config(config: dict, env: dict[str, str], *, lower_oom_score: bool = T
     for node in nodes:
         if env.get("SREGYM_EXTRA_CA_CERTS"):
             _mount(node, CA_BUNDLE, CA_BUNDLE, read_only=True)
-        if env.get("SREGYM_REGISTRY_MIRROR"):
+        if env.get("SREGYM_REGISTRY_MIRRORS"):
             _mount(node, CONTAINERD_HOSTS_DIR, "/etc/containerd/certs.d", read_only=True)
-    if env.get("SREGYM_REGISTRY_MIRROR"):
+    if env.get("SREGYM_REGISTRY_MIRRORS"):
         config.setdefault("containerdConfigPatches", []).append(CONTAINERD_REGISTRY_PATCH)
     if not lower_oom_score:
         config.setdefault("containerdConfigPatches", []).append(CONTAINERD_RESTRICT_OOM_PATCH)

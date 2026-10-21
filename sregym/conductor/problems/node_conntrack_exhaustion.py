@@ -12,6 +12,7 @@ from sregym.conductor.oracles.conntrack_mitigation import (
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.service.rollout import deployment_rollout_complete
@@ -26,8 +27,8 @@ class NodeConntrackExhaustionHotelReservation(Problem):
     conntrack_max_cap = 262144
     inject_ratio_threshold, recovery_ratio_threshold = 0.98, 0.10
 
-    def __init__(self):
-        super().__init__(app=HotelReservation())
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else HotelReservation())
         self.kubectl = KubeCtl()
         self.apps_v1 = client.AppsV1Api()
         self.core_v1 = client.CoreV1Api()

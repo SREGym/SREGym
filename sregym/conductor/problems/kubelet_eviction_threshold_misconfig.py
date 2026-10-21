@@ -5,6 +5,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -13,12 +14,13 @@ class KubeletEvictionThresholdMisconfig(Problem):
     # Static so fix_kubernetes() can reference it without instantiating the problem
     NAMESPACE = "astronomy-shop"
 
-    def __init__(self):
-        app = AstronomyShop()
-        assert app.namespace == self.NAMESPACE, (
-            f"AstronomyShop namespace {app.namespace!r} drifted from "
-            f"KubeletEvictionThresholdMisconfig.NAMESPACE {self.NAMESPACE!r}"
-        )
+    def __init__(self, *, app: Application | None = None):
+        if app is None:
+            app = AstronomyShop()
+            assert app.namespace == self.NAMESPACE, (
+                f"AstronomyShop namespace {app.namespace!r} drifted from "
+                f"KubeletEvictionThresholdMisconfig.NAMESPACE {self.NAMESPACE!r}"
+            )
         super().__init__(app=app)
         self.kubectl = KubeCtl()
         self.faulty_service = "currency"

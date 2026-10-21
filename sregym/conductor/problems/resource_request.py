@@ -6,6 +6,7 @@ from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -13,18 +14,21 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class ResourceRequest(Problem):
-    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
+    def __init__(
+        self, app_name: str = "hotel_reservation", faulty_service: str = "frontend", *, app: Application | None = None
+    ):
         self.app_name = app_name
         self.faulty_service = faulty_service
 
-        if self.app_name == "hotel_reservation":
-            app = HotelReservation()
-        elif self.app_name == "social_network":
-            app = SocialNetwork()
-        elif self.app_name == "astronomy_shop":
-            app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app_name: {app_name}")
+        if app is None:
+            if self.app_name == "hotel_reservation":
+                app = HotelReservation()
+            elif self.app_name == "social_network":
+                app = SocialNetwork()
+            elif self.app_name == "astronomy_shop":
+                app = AstronomyShop()
+            else:
+                raise ValueError(f"Unsupported app_name: {app_name}")
 
         super().__init__(app=app)
         self.kubectl = KubeCtl()

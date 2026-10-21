@@ -12,14 +12,15 @@ from sregym.conductor.oracles.fd_exhaustion import FDMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class FileDescriptorExhaustion(Problem):
-    def __init__(self):
-        self.app = HotelReservation()
+    def __init__(self, *, app: Application | None = None):
+        self.app = app if app is not None else HotelReservation()
         self.namespace = self.app.namespace
         self.faulty_service = "frontend"
         self.forced_ulimit = 1024

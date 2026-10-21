@@ -32,7 +32,24 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.apps.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
+from sregym.conductor.problems.apps.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
+from sregym.conductor.problems.apps.gitlab.notification_unannounced import (
+    GitLabNotificationUnannouncedAmbiguityProblem,
+)
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
+from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
+from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
+from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import FrappeWritesAndQueueOOM
+from sregym.conductor.problems.apps.saleor.statement_timeout import SaleorCheckoutStatementTimeoutCanary
+from sregym.conductor.problems.apps.slack_spine.lock_leaks import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
+from sregym.conductor.problems.apps.slack_spine.store_consistency import SlackLoginsUnreadSendsAllSlow
+from sregym.conductor.problems.apps.slack_spine.maintenance import SlackMaintenanceCollision
+from sregym.conductor.problems.apps.slack_spine.strict_mode import (
+    SlackSendsFailComplianceWindow,
+    SlackSendsFailStrictMode,
+)
+from sregym.conductor.problems.apps.slack_spine.sequencer import SlackSplitSequencer
 from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
@@ -51,6 +68,7 @@ from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
+from sregym.conductor.problems.missing_stale_cache_fallback_astronomy_shop import MissingStaleCacheFallbackAstronomyShop
 from sregym.conductor.problems.mongo_storage_faults import LatentSectorError, SilentDataCorruption
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
@@ -94,9 +112,10 @@ from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop im
     StaleHostAliasesDNSPoisoningAstronomyShop,
 )
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
+from sregym.conductor.problems.apps.stripe.feature_config import StripeFeatureConfigProblem
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
-from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
-from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
+from sregym.conductor.problems.apps.train_ticket.f17 import TrainTicketF17
+from sregym.conductor.problems.apps.train_ticket.f22 import TrainTicketF22
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
@@ -105,6 +124,7 @@ from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.service.kubectl import KubeCtl
+from sregym.conductor.problems.slo_problem import slo_problems
 
 
 # fmt: off
@@ -154,6 +174,8 @@ class ProblemRegistry:
             "integer_overflow_primary_key_astronomy_shop": IntegerOverflowPrimaryKeyAstronomyShop,
             "missing_configmap_hotel_reservation": lambda: MissingConfigMap(app_name="hotel_reservation", faulty_service="mongodb-geo"),
             "missing_service_hotel_reservation": lambda: MissingService(app_name="hotel_reservation", faulty_service="mongodb-rate"),
+            "missing_stale_cache_fallback_astronomy_shop": MissingStaleCacheFallbackAstronomyShop,
+            "missing_stale_cache_fallback_long_delay_astronomy_shop": lambda: MissingStaleCacheFallbackAstronomyShop(delay="5s"),
             "namespace_memory_limit": NamespaceMemoryLimit,
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
@@ -184,6 +206,12 @@ class ProblemRegistry:
             "service_wrong_pod_selection_hotel_reservation": ServiceWrongPodSelectionHotelReservation,
             "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
+            "gitlab_notification_unannounced_ambiguity_replicated": lambda: GitLabNotificationUnannouncedAmbiguityProblem(
+                scale_tier="replicated"
+            ),
+            "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittentProblem(scale_tier="replicated"),
+            "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAuditProblem(scale_tier="replicated"),
+            "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
@@ -262,8 +290,27 @@ class ProblemRegistry:
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
             "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
+            # ==================== FRAPPE, SALEOR AND SLACK SPINE ====================
+            # Ported from Incident Arena (abundant-ai/incident-arena); see docs/incident-arena.md.
+            "frappe_desk_and_queue_outage": FrappeDeskAndQueueOutage,
+            "frappe_writes_and_queue_oom": FrappeWritesAndQueueOOM,
+            "saleor_checkout_statement_timeout_canary": SaleorCheckoutStatementTimeoutCanary,
+            "slack_split_sequencer": SlackSplitSequencer,
+            "slack_maintenance_collision": SlackMaintenanceCollision,
+            "slack_logins_unread_sends_all_slow": SlackLoginsUnreadSendsAllSlow,
+            "slack_sends_fail_strict_mode": SlackSendsFailStrictMode,
+            "slack_sends_fail_compliance_window": SlackSendsFailComplianceWindow,
+            "slack_seq_lock_leak": SlackSeqLockLeak,
+            "slack_distractor_volume_seq_lock": SlackDistractorVolumeSeqLock,
+            # Existing faults ported to Frappe, Saleor and Slack Spine.
+            **PORTED_PROBLEMS,
         }
 # fmt: on
+        slo_entries = slo_problems()
+        duplicates = self.PROBLEM_REGISTRY.keys() & slo_entries.keys()
+        if duplicates:
+            raise ValueError(f"SLO problem IDs already registered: {', '.join(sorted(duplicates))}")
+        self.PROBLEM_REGISTRY.update(slo_entries)
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 

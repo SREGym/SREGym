@@ -80,8 +80,10 @@ class ConductorConfig:
 
 
 class Conductor:
-    def __init__(self, config: ConductorConfig | None = None):
+    def __init__(self, config: ConductorConfig | None = None, *, judge_preflight: Callable[[], None] | None = None):
         self.config = config or ConductorConfig()
+        self._judge_preflight = judge_preflight
+        self._judge_preflight_done = False
 
         # core services
         self.problems = ProblemRegistry()
@@ -307,6 +309,17 @@ class Conductor:
                 "No stages left after checking oracles. This problem will complete without agent interaction."
             )
 
+    def _preflight_active_oracles(self) -> None:
+        """Check judge credentials once, only if an effective stage uses them."""
+        if self._judge_preflight_done or self._judge_preflight is None:
+            return
+        if any(
+            getattr(getattr(self.problem, f"{stage['name']}_oracle"), "requires_llm_judge", False)
+            for stage in self.stage_sequence
+        ):
+            self._judge_preflight()
+            self._judge_preflight_done = True
+
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
@@ -421,8 +434,7 @@ class Conductor:
             self.finish_problem_in_background()
             return
 
-        # Inject fault before the first stage if not already done -- the
-        # interactive visualizer injects itself before calling this.
+        # Inject the fault once before the first stage.
         if start_index == 0 and not self.fault_injected:
             with self._phase("inject_fault"):
                 self._inject_fault()
@@ -694,11 +706,12 @@ class Conductor:
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
         self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
-        with self._phase("fix_kubernetes"):
-            self.fix_kubernetes()
-
         self.get_problem_stages()
         self._build_stage_sequence()
+        self._preflight_active_oracles()
+
+        with self._phase("fix_kubernetes"):
+            self.fix_kubernetes()
 
         self.logger.info("Undeploying app leftovers...")
         with self._phase("undeploy_leftovers"):

@@ -1,0 +1,22 @@
+{
+  "problem_id": "profile_mongodb_eviction_unit_mismatch_hotel_reservation",
+  "app": "hotel_reservation",
+  "recurrence_bound_s": 300,
+  "title": "Profile MongoDB eviction thresholds use the wrong units",
+  "fault_layer": "app-config",
+  "fault_primitive": "Recurring MongoDB wiredTigerEngineRuntimeConfig publication from a detached mongo shell",
+  "root_cause_class": "orphaned_storage_eviction_threshold_unit_boundary",
+  "diagnosis": {
+    "component": "deployment/mongodb-recommendation",
+    "description": "An unmanaged storage maintenance process in mongodb-recommendation repeatedly sets mongodb-profile WiredTiger eviction_target=128 and eviction_trigger=256. WiredTiger interprets values above 100 as byte thresholds, not percentages, which forces excessive eviction and stalls ordinary profile reads. Management commands can still succeed. Failed lookups also leave incomplete cached profiles, causing frontend search and recommendation failures. Changing the destination thresholds alone is temporary because the maintenance process restores the incorrect values."
+  },
+  "incident_class": "Cancelled storage tuning rollout with an unmanaged operational session and an ambiguous unit contract",
+  "affected_components": [
+    "mongodb-profile",
+    "profile",
+    "memcached-profile",
+    "frontend",
+    "mongodb-recommendation"
+  ],
+  "symptoms": "Hotel search and recommendation requests stall and fail while all application pods remain Running and Ready. Profile MongoDB still accepts management commands, but ordinary reads accumulate without waiting for locks. Failed reads populate incomplete cached profiles, causing frontend response-assembly panics and a large error-log surge."
+}

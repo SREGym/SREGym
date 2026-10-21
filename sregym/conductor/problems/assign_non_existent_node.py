@@ -6,6 +6,7 @@ from sregym.conductor.oracles.assign_non_existent_node_mitigation import AssignN
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.service.apps.base import Application
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -14,8 +15,8 @@ from sregym.utils.decorators import mark_fault_injected
 class AssignNonExistentNode(Problem):
     """Deprecated in SREGym 1.1 after reaching 100% overall pass@3."""
 
-    def __init__(self):
-        super().__init__(app=SocialNetwork())
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else SocialNetwork())
         self.kubectl = KubeCtl()
         self.faulty_service = "user-service"
         self.root_cause = self.build_structured_root_cause(

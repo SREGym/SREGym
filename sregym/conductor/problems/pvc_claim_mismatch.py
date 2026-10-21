@@ -5,6 +5,7 @@ from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.paths import TARGET_MICROSERVICES
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -13,8 +14,8 @@ from sregym.utils.decorators import mark_fault_injected
 class PVCClaimMismatch(Problem):
     """Deprecated in SREGym 1.1 after reaching 100% overall pass@3."""
 
-    def __init__(self):
-        super().__init__(app=HotelReservation())
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else HotelReservation())
         self.kubectl = KubeCtl()
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"

@@ -2,15 +2,16 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.service.apps.base import Application
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class TaintNoToleration(Problem):
-    def __init__(self):
+    def __init__(self, *, app: Application | None = None):
         self.kubectl = KubeCtl()
-        super().__init__(app=SocialNetwork())
+        super().__init__(app=app if app is not None else SocialNetwork())
 
         self.faulty_service = "user-service"
         self.root_cause = self.build_structured_root_cause(

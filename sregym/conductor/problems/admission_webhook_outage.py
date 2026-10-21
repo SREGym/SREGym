@@ -34,6 +34,7 @@ from sregym.conductor.oracles.admission_webhook_outage_mitigation import (
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -63,13 +64,19 @@ class AdmissionWebhookOutage(Problem):
     BACKEND_SVC_NAME = "pod-policy-webhook"
     BACKEND_SVC_NAMESPACE = "policy-system"
 
-    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "recommendation"):
+    def __init__(
+        self,
+        app_name: str = "hotel_reservation",
+        faulty_service: str = "recommendation",
+        *,
+        app: Application | None = None,
+    ):
         if app_name not in self.APPS:
             raise ValueError(f"Unsupported app name: {app_name}")
 
         self.app_name = app_name
         self.faulty_service = faulty_service
-        app = self.APPS[app_name]()
+        app = app if app is not None else self.APPS[app_name]()
         super().__init__(app=app)
 
         self.kubectl = KubeCtl()
@@ -172,7 +179,7 @@ class AdmissionWebhookOutage(Problem):
         self.kubectl.get_deployment(self.faulty_service, self.namespace)
         self.kubectl.wait_for_ready(
             self.namespace,
-            service_names=self.faulty_service,
+            service_names=getattr(self, "service_name", None) or self.faulty_service,
             max_wait=180,
         )
 
@@ -239,10 +246,11 @@ class AdmissionWebhookOutage(Problem):
         # a pod CREATE that should hit it.
         time.sleep(2)
 
-        pods = self.core_api.list_namespaced_pod(
-            namespace=self.namespace,
-            label_selector=f"io.kompose.service={self.faulty_service}",
-        )
+        # The Deployment's own selector (io.kompose.service=<name> on the
+        # kompose-generated apps) finds its pods on every app.
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        selector = ",".join(f"{key}={value}" for key, value in deployment.spec.selector.match_labels.items())
+        pods = self.core_api.list_namespaced_pod(namespace=self.namespace, label_selector=selector)
         if not pods.items:
             raise RuntimeError(f"No pods found for service '{self.faulty_service}' in namespace '{self.namespace}'")
         target = pods.items[0].metadata.name

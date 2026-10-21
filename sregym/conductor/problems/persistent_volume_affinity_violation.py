@@ -2,14 +2,15 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.service.apps.base import Application
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class PersistentVolumeAffinityViolation(Problem):
-    def __init__(self, faulty_service: str = "user-service"):
-        super().__init__(app=SocialNetwork())
+    def __init__(self, faulty_service: str = "user-service", *, app: Application | None = None):
+        super().__init__(app=app if app is not None else SocialNetwork())
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
         self.root_cause = self.build_structured_root_cause(

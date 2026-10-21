@@ -48,7 +48,18 @@ _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
 EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
-CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
+# Namespace deletion may itself wait 300 seconds, after fault recovery and Helm
+# teardown have already consumed part of the cleanup budget. Keep the outer
+# watchdog long enough for those bounded steps to finish and allow slower hosts
+# to raise it without editing the benchmark runner.
+CLEANUP_DRAIN_TIMEOUT_SECONDS = float(os.environ.get("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "600"))
+
+
+def problem_cleanup_timeout(conductor) -> float:
+    """Allow stateful reference recovery its own budget after agent grading."""
+    problem = getattr(conductor, "problem", None)
+    problem_timeout = getattr(problem, "cleanup_timeout_seconds", CLEANUP_DRAIN_TIMEOUT_SECONDS)
+    return max(CLEANUP_DRAIN_TIMEOUT_SECONDS, problem_timeout)
 
 
 def _http_endpoint(value: str) -> str:
@@ -82,6 +93,7 @@ def run_preflight_check(
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
         "cursor": "clients.cursor.driver",
+        "mini-sre": "clients.mini_sre.driver",
     }
     module_path = agent_driver_modules.get(agent_name)
     if not module_path:
@@ -265,7 +277,7 @@ def driver_loop(
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
             try:
                 conductor.finish_problem_in_background()
-                await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
             except TimeoutError:
                 conductor.abandon_submission_work()
                 conductor.results["cleanup_timed_out"] = True
@@ -516,7 +528,7 @@ def driver_loop(
                     console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
                     if conductor.close_submissions():
                         try:
-                            await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                            await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                         except TimeoutError:
                             abort_campaign_after_attempt = True
                             conductor.abandon_submission_work()
@@ -622,7 +634,7 @@ def driver_loop(
                 # freezing the attempt snapshot or starting another attempt.
                 if not abort_campaign_after_attempt and conductor.close_submissions():
                     try:
-                        await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                        await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                     except TimeoutError:
                         abort_campaign_after_attempt = True
                         conductor.abandon_submission_work()
@@ -894,11 +906,6 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
             "Run it with --internet-access open or enable container isolation."
         )
 
-    # Mitigation-only runs use the problem's executable oracle, not the
-    # diagnosis judge. They must also work with key-free agents like autosubmit.
-    if not args.use_external_harness and (args.stages is None or "diagnosis" in args.stages):
-        run_judge_preflight_check()
-
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
         if internet_policy.is_filtered and not args.use_external_harness
@@ -937,7 +944,10 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         LAUNCHER.cleanup_all()
         raise
 
-    conductor = Conductor(config=conductor_config)
+    conductor = Conductor(
+        config=conductor_config,
+        judge_preflight=None if args.use_external_harness else run_judge_preflight_check,
+    )
 
     suite = getattr(args, "suite", None)
     problem_selection = (args.problem,) if args.problem else PROBLEM_SETS.get(suite)

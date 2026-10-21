@@ -1,0 +1,185 @@
+"""Script-defined fault artifacts.
+
+An artifact is a directory::
+
+    fault.json    metadata (schema below)
+    inject.sh     applies the fault; must be idempotent
+    recover.sh    restores the original state (used for cleanup)
+    mitigate.sh   reference mitigation a competent SRE could apply
+    ...           any files the scripts reference (manifests, patches)
+
+Scripts run with ``bash -euo pipefail`` from the artifact directory, with
+``NAMESPACE`` (application namespace), ``ARTIFACT_DIR`` and an admin
+``KUBECONFIG``. They are executed by the conductor, never inside an agent
+session, so the agent sees only the fault's effect on the cluster.
+
+Optional ``diagnosis`` metadata supplies a root-cause ``component`` and
+``description`` for the ordinary diagnosis judge. Bundles without this
+metadata retain their mitigation-only workflow.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+REQUIRED_SCRIPTS = ("inject.sh", "recover.sh", "mitigate.sh")
+REQUIRED_FIELDS = ("problem_id", "app", "title", "fault_layer", "fault_primitive", "root_cause_class", "incident_class")
+SUPPORTED_APPS = ("hotel_reservation", "social_network")
+# Leaks the fixer could read from cluster state. Scripts may use these words
+# in comments; resource names, labels and annotations may not.
+SUSPICIOUS_WORDS = ("chaos", "fault", "inject", "sregym", "benchmark")
+# Word starts only: "default" must not match "fault".
+SUSPICIOUS = re.compile(r"(?<![a-z])(" + "|".join(SUSPICIOUS_WORDS) + ")", re.I)
+# Files that can put content into the cluster (scripts, manifests, app config).
+CLUSTER_STATE_SUFFIXES = (".sh", ".py", ".yaml", ".yml", ".json", ".lua", ".conf", ".tmpl", ".cfg", ".ini", ".js")
+
+BUILTIN_FAULT_ROOT = Path(__file__).resolve().parents[1] / "conductor" / "problems" / "apps"
+PROBLEM_ID_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*")
+
+
+def artifact_roots() -> list[Path]:
+    roots = [BUILTIN_FAULT_ROOT]
+    for extra in filter(None, os.environ.get("SREGYM_FAULT_DIRS", "").split(os.pathsep)):
+        roots.append(Path(extra))
+    return roots
+
+
+@dataclass
+class FaultArtifact:
+    path: Path
+    meta: dict
+
+    @property
+    def problem_id(self) -> str:
+        value = self.meta.get("problem_id")
+        if not isinstance(value, str) or not PROBLEM_ID_PATTERN.fullmatch(value):
+            raise ValueError(f"{self.path}/fault.json: problem_id must be a lowercase snake_case name")
+        return value
+
+    @property
+    def app(self) -> str:
+        return self.meta["app"]
+
+    @property
+    def recurrence_bound_s(self) -> int:
+        """Maximum normal delay before an incomplete repair regresses."""
+        value = self.meta.get("recurrence_bound_s", 0)
+        if type(value) is not int or value < 0:
+            raise ValueError("recurrence_bound_s must be a nonnegative integer")
+        return value
+
+    @property
+    def diagnosis(self) -> dict[str, str] | None:
+        """Private diagnosis ground truth; absent for mitigation-only bundles."""
+        if "diagnosis" not in self.meta:
+            return None
+        value = self.meta["diagnosis"]
+        if not isinstance(value, dict):
+            raise ValueError("diagnosis must contain component and description strings")
+        for field in ("component", "description"):
+            if not isinstance(value.get(field), str) or not value[field].strip():
+                raise ValueError(f"diagnosis.{field} must be a nonempty string")
+        return value
+
+    @classmethod
+    def load(cls, path: Path) -> FaultArtifact:
+        meta = json.loads((path / "fault.json").read_text())
+        return cls(path=path, meta=meta)
+
+    def problems(self) -> list[str]:
+        """Return structural problems with the artifact (empty when valid)."""
+        out = [f"missing {name}" for name in REQUIRED_SCRIPTS if not (self.path / name).is_file()]
+        out += [f"fault.json missing {key}" for key in REQUIRED_FIELDS if not self.meta.get(key)]
+        if self.meta.get("app") not in SUPPORTED_APPS:
+            out.append(f"unsupported app {self.meta.get('app')!r}")
+        try:
+            _ = self.problem_id
+        except ValueError as exc:
+            out.append(str(exc))
+        try:
+            _ = self.recurrence_bound_s
+        except ValueError as exc:
+            out.append(str(exc))
+        try:
+            _ = self.diagnosis
+        except ValueError as exc:
+            out.append(str(exc))
+        return out
+
+    def leak_findings(self) -> list[str]:
+        """Lines in non-comment script code that would plant a telltale name in the cluster."""
+        findings = []
+        for file in sorted(self.path.rglob("*")):
+            if not file.is_file() or file.suffix not in CLUSTER_STATE_SUFFIXES:
+                continue
+            if file.suffix == ".json" and '"apiVersion"' not in file.read_text(errors="ignore"):
+                continue  # notes and validation records, not manifests
+            try:
+                lines = file.read_text().splitlines()
+            except UnicodeDecodeError:
+                continue
+            for n, line in enumerate(lines, 1):
+                code = line.split("#", 1)[0] if file.suffix == ".sh" else line
+                if SUSPICIOUS.search(code):
+                    findings.append(f"{file.name}:{n}: {line.strip()[:160]}")
+        return findings
+
+    def workspace(self) -> FaultWorkspace:
+        """Copy the current artifact into a private workspace for one attempt."""
+        root = Path(os.environ.get("SREGYM_FAULT_WORKDIR") or Path(tempfile.gettempdir()) / "sregym-fault-work")
+        root.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix=f"{self.path.name}-", dir=root))
+        try:
+            shutil.copytree(self.path, work, dirs_exist_ok=True)
+            for path in (work, *work.rglob("*")):
+                path.chmod(path.stat().st_mode | (0o700 if path.is_dir() else 0o600))
+        except BaseException:
+            shutil.rmtree(work)
+            raise
+        return FaultWorkspace(work)
+
+
+@dataclass
+class FaultWorkspace:
+    """Attempt-owned scripts and recovery state; retained if recovery fails."""
+
+    path: Path
+
+    def run(self, script: str, namespace: str, timeout_s: int = 900) -> subprocess.CompletedProcess:
+        env = dict(os.environ)
+        env.update(NAMESPACE=namespace, ARTIFACT_DIR=str(self.path))
+        return subprocess.run(
+            ["bash", "-euo", "pipefail", str(self.path / script)],
+            cwd=self.path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+
+    def close(self) -> None:
+        """Remove the workspace only after its recovery state is no longer needed."""
+        shutil.rmtree(self.path)
+
+
+def discover_faults() -> dict[str, FaultArtifact]:
+    """Find app-owned fault bundles and optional SREGYM_FAULT_DIRS bundles."""
+    found: dict[str, FaultArtifact] = {}
+    for root in artifact_roots():
+        if not root.is_dir():
+            continue
+        for metadata in sorted(root.rglob("fault.json")):
+            artifact = FaultArtifact.load(metadata.parent)
+            problem_id = artifact.problem_id
+            if problem_id in found:
+                previous = found[problem_id]
+                raise ValueError(f"Duplicate problem ID {problem_id!r}: {previous.path} and {artifact.path}")
+            found[problem_id] = artifact
+    return found

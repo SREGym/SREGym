@@ -8,6 +8,7 @@ intercepting tool responses.
 
 import contextlib
 import copy
+import json
 import logging
 import os
 import random
@@ -268,15 +269,76 @@ class NoiseManager:
 
     # ── Chaos Mesh installation ───────────────────────────────────────
 
-    def _wait_for_chaos_mesh_ready(self):
-        """Require the controller and node daemon to complete their rollouts."""
+    def wait_for_chaos_mesh_ready(self):
+        """Reconcile existing installs and require a ready daemon on every Linux node."""
         timeout = 180
+        self._reconcile_daemon_tolerations()
         for workload in ("deployment/chaos-controller-manager", "daemonset/chaos-daemon"):
             self.kubectl.exec_command_checked(
                 f"kubectl rollout status {workload} -n {CHAOS_NAMESPACE} --timeout={timeout}s",
                 timeout=timeout + 10,
             )
+        self._wait_for_daemon_coverage(timeout)
         self._chaos_mesh_ready = True
+
+    def _reconcile_daemon_tolerations(self):
+        """Allow the daemon on tainted workload nodes without replacing existing tolerations."""
+        daemon = json.loads(
+            self.kubectl.exec_command_checked(
+                f"kubectl get daemonset chaos-daemon -n {CHAOS_NAMESPACE} -o json", timeout=30
+            )
+        )
+        pod_spec = daemon["spec"]["template"]["spec"]
+        tolerations = pod_spec.get("tolerations") or []
+        if not any(t.get("operator") == "Exists" and not t.get("key") and not t.get("effect") for t in tolerations):
+            # Append rather than replace user tolerations. The version check prevents overwriting a concurrent edit.
+            path = "/spec/template/spec/tolerations"
+            patch = [
+                {"op": "test", "path": "/metadata/resourceVersion", "value": daemon["metadata"]["resourceVersion"]}
+            ]
+            if isinstance(pod_spec.get("tolerations"), list):
+                patch.append({"op": "add", "path": f"{path}/-", "value": {"operator": "Exists"}})
+            else:
+                patch.append({"op": "add", "path": path, "value": [{"operator": "Exists"}]})
+            self.kubectl.exec_command_checked(
+                f"kubectl patch daemonset chaos-daemon -n {CHAOS_NAMESPACE} --type=json -p {shlex.quote(json.dumps(patch))}",
+                timeout=30,
+            )
+
+    def _wait_for_daemon_coverage(self, timeout: int):
+        """Rollout status alone excludes nodes that the old DaemonSet could not schedule on."""
+        deadline = time.monotonic() + timeout
+        while True:
+            nodes = json.loads(self.kubectl.exec_command_checked("kubectl get nodes -o json", timeout=30))
+            required = {
+                node["metadata"]["name"]
+                for node in nodes["items"]
+                if node["metadata"].get("labels", {}).get("kubernetes.io/os") == "linux"
+                and not node["metadata"].get("deletionTimestamp")
+            }
+            endpoints = json.loads(
+                self.kubectl.exec_command_checked(
+                    f"kubectl get endpointslices -n {CHAOS_NAMESPACE} "
+                    "-l kubernetes.io/service-name=chaos-daemon -o json",
+                    timeout=30,
+                )
+            )
+            covered = {
+                endpoint["nodeName"]
+                for item in endpoints["items"]
+                for endpoint in item.get("endpoints", [])
+                if endpoint.get("nodeName")
+                and endpoint.get("addresses")
+                and endpoint.get("conditions", {}).get("ready") is not False
+            }
+            missing = required - covered
+            if required and not missing:
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"Chaos Mesh has no ready daemon endpoint on nodes: {sorted(missing) or 'no Linux nodes'}"
+                )
+            time.sleep(2)
 
     def _ensure_chaos_mesh_installed(self):
         """Check if Chaos Mesh is installed; install if missing."""
@@ -288,7 +350,7 @@ class NoiseManager:
                     f"kubectl get deployment chaos-controller-manager -n {CHAOS_NAMESPACE} -o name"
                 )
                 if "deployment.apps/chaos-controller-manager" in controller:
-                    self._wait_for_chaos_mesh_ready()
+                    self.wait_for_chaos_mesh_ready()
                     logger.info("Chaos Mesh is already installed and ready.")
                     return
 
@@ -331,7 +393,7 @@ class NoiseManager:
                 logger.error(f"Failed to install Chaos Mesh: {result}")
                 return
 
-            self._wait_for_chaos_mesh_ready()
+            self.wait_for_chaos_mesh_ready()
             logger.info("Chaos Mesh installed successfully.")
         except Exception as e:
             logger.error(f"Error ensuring Chaos Mesh installation: {e}")

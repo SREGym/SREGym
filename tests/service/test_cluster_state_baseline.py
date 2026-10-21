@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from kubernetes.client.rest import ApiException
 
-from sregym.service.cluster_state import ClusterStateManager
+from sregym.service.cluster_state import ClusterBaseline, ClusterStateManager
 
 
 @pytest.fixture
@@ -23,6 +23,8 @@ def manager():
         ("apiextensions_v1", "list_custom_resource_definition"),
         ("admission_v1", "list_validating_webhook_configuration"),
         ("admission_v1", "list_mutating_webhook_configuration"),
+        ("admission_v1", "list_validating_admission_policy"),
+        ("admission_v1", "list_validating_admission_policy_binding"),
         ("core_v1", "list_node"),
     ):
         getattr(getattr(manager, client_name), method_name).return_value = SimpleNamespace(items=[])
@@ -40,6 +42,8 @@ def manager():
         ("apiextensions_v1", "list_custom_resource_definition", 1),
         ("admission_v1", "list_validating_webhook_configuration", 1),
         ("admission_v1", "list_mutating_webhook_configuration", 1),
+        ("admission_v1", "list_validating_admission_policy", 1),
+        ("admission_v1", "list_validating_admission_policy_binding", 1),
         ("core_v1", "list_node", 1),
         ("core_v1", "list_node", 2),
         ("core_v1", "read_namespaced_config_map", 1),
@@ -67,3 +71,56 @@ def test_empty_successful_reads_remain_valid(manager, tmp_path):
 
     assert json.loads(path.read_text())["cluster_roles"] == []
     assert manager.load_baseline_state(path)
+
+
+def test_admission_policy_baseline_round_trip():
+    baseline = ClusterBaseline(
+        validating_admission_policies={"existing-policy"},
+        validating_admission_policy_bindings={"existing-binding"},
+    )
+    assert ClusterBaseline.from_json(baseline.to_json()) == baseline
+    assert baseline.to_dict()["validating_admission_policies"] == ["existing-policy"]
+
+
+def test_legacy_baseline_preserves_preexisting_admission_policies(manager, tmp_path):
+    manager.admission_v1.list_validating_admission_policy.return_value.items = [
+        SimpleNamespace(metadata=SimpleNamespace(name="existing-policy"))
+    ]
+    path = tmp_path / "baseline.json"
+    path.write_text("{}")
+    assert manager.load_baseline_state(path)
+    assert manager.baseline.validating_admission_policies == {"existing-policy"}
+
+
+@pytest.mark.parametrize("resource", ["policies", "bindings"])
+@pytest.mark.parametrize("status", [403, 404, 503])
+def test_admission_policy_api_errors(manager, resource, status):
+    method = "list_validating_admission_policy" + ("_binding" if resource == "bindings" else "")
+    getattr(manager.admission_v1, method).side_effect = ApiException(status=status)
+    if status == 404:
+        assert manager._get_admission_policy_names(resource) == set()
+    else:
+        with pytest.raises(ApiException):
+            manager._get_admission_policy_names(resource)
+
+
+def test_reconcile_removes_new_policies_before_namespaces_and_preserves_baseline(manager):
+    manager.core_v1.read_namespaced_config_map.side_effect = ApiException(status=404)
+    manager.capture_baseline()
+    manager.baseline.validating_admission_policies = {"existing-policy"}
+    manager.baseline.validating_admission_policy_bindings = {"existing-binding"}
+    for method, names in (
+        ("list_validating_admission_policy", ["existing-policy", "new-policy"]),
+        ("list_validating_admission_policy_binding", ["existing-binding", "new-binding"]),
+    ):
+        getattr(manager.admission_v1, method).return_value.items = [
+            SimpleNamespace(metadata=SimpleNamespace(name=name)) for name in names
+        ]
+    manager.kubectl = MagicMock()
+    manager.kubectl.gc_orphan_localpv_dirs.return_value = {}
+    changes = manager.reconcile_to_baseline()
+    manager.admission_v1.delete_validating_admission_policy.assert_called_once_with(name="new-policy")
+    manager.admission_v1.delete_validating_admission_policy_binding.assert_called_once_with(name="new-binding")
+    deletes = [call[0] for call in manager.admission_v1.method_calls if call[0].startswith("delete_")]
+    assert deletes == ["delete_validating_admission_policy_binding", "delete_validating_admission_policy"]
+    assert changes["validating_admission_policies_deleted"] == ["new-policy"]

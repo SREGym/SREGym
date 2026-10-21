@@ -65,6 +65,23 @@ class LauncherTests(unittest.TestCase):
         ):
             self.assertEqual(launcher.main(), 17)
 
+    def test_campaign_can_select_only_its_own_credentials(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "unrelated"}, clear=True),
+        ):
+            args = launcher.parser().parse_args(["run", "--output", directory])
+            command = launcher.run_command(
+                args,
+                mounts=("type=bind,src=/private/auth.json,dst=/root/.codex/auth.json",),
+                environment=("FEATURE=1",),
+                forward_credentials=False,
+            )
+            self.assertIn("FEATURE=1", command)
+            self.assertIn("type=bind,src=/private/auth.json,dst=/root/.codex/auth.json", command)
+            self.assertNotIn("ANTHROPIC_API_KEY", command)
+            self.assertNotIn("unrelated", command)
+
     def test_missing_docker_has_actionable_error(self):
         with (
             tempfile.TemporaryDirectory() as directory,
