@@ -23,8 +23,8 @@ logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_AGENT_IMAGE = (
-    "ghcr.io/sregym/agent-base:sha-b60a6068d5edb635c0b55ac7f16441b7d2e3a7f0"
-    "@sha256:7dd5e2256eb7581cbe516ad89767a0257d53f72716b31a0ef01c2b39cd7524e0"
+    "ghcr.io/sregym/agent-base:sha-802e7e8595a75e44b3bd6071157f0369722d2100"
+    "@sha256:4f547bf83bc0f28d04025f2d37d81ed2980e01e0eba0d3aefbc948be5a270150"
 )
 LOCAL_AGENT_IMAGE = "sregym-agent-base:latest"
 HARDENING_FLAGS = (
