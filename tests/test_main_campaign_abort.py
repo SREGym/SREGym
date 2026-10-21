@@ -1,6 +1,9 @@
 import importlib.util
 import sys
 import tempfile
+import threading
+import time
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -48,6 +51,152 @@ def test_driver_wrapper_preserves_partial_results_and_failure(monkeypatch):
     assert shutdown_called == [True]
 
 
+def test_interrupted_problem_uses_the_bounded_cleanup_budget():
+    benchmark_main = _load_main_module()
+    cleanup = Mock()
+    conductor = SimpleNamespace(
+        problem=SimpleNamespace(cleanup_timeout_seconds=42),
+        finish_problem_in_background=Mock(return_value=cleanup),
+        close_submissions=Mock(return_value=False),
+    )
+
+    benchmark_main.cleanup_interrupted_problem(conductor)
+
+    cleanup.result.assert_called_once_with(timeout=benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS)
+
+
+@pytest.mark.parametrize("evaluation_stuck", [False, True])
+def test_interrupt_drains_evaluation_before_cleanup(evaluation_stuck):
+    benchmark_main = _load_main_module()
+    conductor = SimpleNamespace(
+        problem=SimpleNamespace(),
+        close_submissions=Mock(return_value=True),
+        wait_for_submission_evaluations=AsyncMock(side_effect=TimeoutError if evaluation_stuck else None),
+        finish_problem_in_background=Mock(),
+        abandon_submission_work=Mock(),
+    )
+
+    benchmark_main.cleanup_interrupted_problem(conductor)
+
+    conductor.wait_for_submission_evaluations.assert_awaited_once_with(
+        timeout=benchmark_main.EVALUATION_DRAIN_TIMEOUT_SECONDS
+    )
+    if evaluation_stuck:
+        conductor.finish_problem_in_background.assert_not_called()
+        conductor.abandon_submission_work.assert_called_once()
+    else:
+        conductor.finish_problem_in_background.assert_called_once()
+
+
+def test_stopped_driver_does_not_start_deployment(monkeypatch, tmp_path):
+    benchmark_main = _load_main_module()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
+    stop_event = threading.Event()
+    stop_event.set()
+    conductor = SimpleNamespace(start_problem=AsyncMock())
+
+    with pytest.raises(benchmark_main.BenchmarkCampaignAborted, match="interrupted"):
+        benchmark_main.driver_loop(conductor, use_external_harness=True, stop_event=stop_event)
+    conductor.start_problem.assert_not_awaited()
+
+
+def test_interrupt_stops_agent_before_driver_owned_teardown(monkeypatch):
+    benchmark_main = _load_main_module()
+    entered_driver = threading.Event()
+    entered_cleanup = threading.Event()
+    agent_running = [True]
+    cleanup_active = [False]
+    overlapping_cleanup = []
+    cleanup_states = []
+    finished = Future()
+    finished.set_result(None)
+
+    def finish():
+        cleanup_states.append(agent_running[0])
+        return finished
+
+    conductor = SimpleNamespace(
+        problem=SimpleNamespace(),
+        finish_problem_in_background=finish,
+        close_submissions=Mock(return_value=False),
+        stop_k8s_proxy=Mock(),
+    )
+
+    def driver(*args, stop_event, **kwargs):
+        entered_driver.set()
+        assert stop_event.wait(2)
+        assert entered_cleanup.wait(2)
+        raise benchmark_main.BenchmarkCampaignAborted("interrupted", [])
+
+    def stop_agents():
+        if cleanup_active[0]:
+            overlapping_cleanup.append(True)
+        cleanup_active[0] = True
+        entered_cleanup.set()
+        time.sleep(0.02)
+        agent_running[0] = False
+        cleanup_active[0] = False
+
+    def interrupt(_):
+        assert entered_driver.wait(2)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(benchmark_main, "Conductor", lambda **kwargs: conductor)
+    monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
+    monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "driver_loop", driver)
+    monkeypatch.setattr(benchmark_main, "run_api", interrupt)
+    monkeypatch.setattr(benchmark_main, "request_shutdown", Mock())
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", stop_agents)
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "enable_container_isolation", Mock())
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "_container_runner", None)
+    monkeypatch.setattr(benchmark_main, "run_preflight_check", Mock())
+    args = SimpleNamespace(
+        agent=None,
+        internet_access="open",
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        use_external_harness=False,
+        force_build=False,
+        stages=["mitigation"],
+        baseline=None,
+        propagation=None,
+        suite=None,
+        problem=None,
+        n_attempts=1,
+        agent_timeout=30,
+        resume=None,
+    )
+
+    with pytest.raises(RuntimeError, match="Benchmark campaign did not complete"):
+        benchmark_main._run_benchmark(args)
+    assert cleanup_states == [False]
+    assert not overlapping_cleanup
+
+
+def test_interrupt_after_setup_does_not_start_another_attempt(monkeypatch, tmp_path):
+    benchmark_main = _load_main_module()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
+    stop_event = threading.Event()
+
+    async def finish_setup():
+        stop_event.set()
+        return object()
+
+    conductor = SimpleNamespace(
+        problems=Mock(get_problem_ids=Mock(return_value=["problem"])),
+        clear_cluster_egress_boundary=Mock(),
+        start_problem=AsyncMock(side_effect=finish_setup),
+        bind_phase_ledger=Mock(),
+    )
+    with pytest.raises(benchmark_main.BenchmarkCampaignAborted, match="interrupted"):
+        benchmark_main.driver_loop(conductor, use_external_harness=True, n_attempts=2, stop_event=stop_event)
+    conductor.start_problem.assert_awaited_once()
+
+
 def test_result_csv_publication_with_results_on_another_filesystem(tmp_path, monkeypatch):
     benchmark_main = _load_main_module()
     shared_memory = Path("/dev/shm")
@@ -63,10 +212,10 @@ def test_result_csv_publication_with_results_on_another_filesystem(tmp_path, mon
 
 
 @pytest.mark.parametrize(
-    ("stages", "external", "expected_calls"),
-    [(None, False, 1), (["diagnosis"], False, 1), (["mitigation"], False, 0), (None, True, 0)],
+    ("stages", "external"),
+    [(None, False), (["diagnosis"], False), (["mitigation"], False), (None, True)],
 )
-def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, external, expected_calls):
+def test_judge_preflight_is_deferred_until_effective_stages_are_known(monkeypatch, stages, external):
     benchmark_main = _load_main_module()
     monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
     calls = []
@@ -95,7 +244,7 @@ def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, extern
     )
     with pytest.raises(ReachedConductor):
         benchmark_main._run_benchmark(args)
-    assert len(calls) == expected_calls
+    assert calls == []
 
 
 def test_cleanup_deadline_covers_namespace_deletion_and_honors_override(monkeypatch):

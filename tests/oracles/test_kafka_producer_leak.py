@@ -82,6 +82,13 @@ def case(monkeypatch):
     kubectl = Mock()
     kubectl.get_deployment.side_effect = lambda name, namespace: resources[name][0]
     kubectl.list_deployments.return_value = SimpleNamespace(items=[v[0] for v in resources.values()])
+    for api in (kubectl.core_v1_api, kubectl.apps_v1_api):
+        api.configure_mock(
+            **{
+                f"list_namespaced_{kind}.return_value": SimpleNamespace(items=[])
+                for kind in ("service", "persistent_volume_claim", "config_map", "stateful_set")
+            }
+        )
     kubectl.get_deployment_pods.side_effect = lambda deployment, namespace: [resources[deployment.metadata.name][1]]
     problem = SimpleNamespace(kubectl=kubectl, namespace="test", faulty_service="checkout")
     oracle = module.KafkaProducerLeakOracle(problem)

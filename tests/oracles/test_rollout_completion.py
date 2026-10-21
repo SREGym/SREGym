@@ -217,6 +217,9 @@ def test_specialized_oracles_preserve_required_deployments(kind, baseline, curre
 
     kube = Mock()
     kube.list_deployments.return_value = SimpleNamespace(items=[replicas(baseline)])
+    for api in (kube.core_v1_api, kube.apps_v1_api):
+        for kind in ("service", "persistent_volume_claim", "config_map", "stateful_set"):
+            getattr(api, f"list_namespaced_{kind}").return_value = SimpleNamespace(items=[])
     problem = SimpleNamespace(kubectl=kube, namespace="example")
     if kind == "cronjob":
         oracle = CronJobSidecarBlocksCompletionMitigationOracle(problem)

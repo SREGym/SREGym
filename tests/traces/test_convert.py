@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from atif_converter import Trajectory
+from sregym.conductor.problem_sets import SREGYM_LITE_IA_PROBLEMS
 from sregym.traces import convert
 
 FIXTURE_RUN = Path(__file__).parent / "fixtures" / "claudecode_run"
@@ -74,12 +75,36 @@ def test_diagnosis_submitted_step(tmp_path):
         ("service_port_conflict_hotel_reservation", "Hotel Reservation"),
         ("duplicate_pvc_mounts_social_network", "Social Network"),
         ("missing_env_variable_astronomy_shop", "Astronomy Shop"),
+        ("cronjob_sidecar_blocks_completion_frappe", "Frappe"),
+        ("env_variable_shadowing_saleor", "Saleor"),
+        ("network_policy_block_slack_spine", "Slack Spine"),
         ("kubelet_crash", None),
         ("operator_overload_replicas", None),
     ],
 )
 def test_application_longest_suffix_mapping(problem_id, expected):
     assert convert.map_application(problem_id) == expected
+
+
+def test_all_lite_ia_problems_have_application_metadata(tmp_path):
+    expected = {
+        "frappe": "Frappe",
+        "saleor": "Saleor",
+        "slack_spine": "Slack Spine",
+    }
+    for run, problem_id in enumerate(SREGYM_LITE_IA_PROBLEMS, start=1):
+        suffix = next(suffix for suffix in expected if problem_id.endswith(f"_{suffix}"))
+        metadata = convert.build_sregym_meta(
+            tmp_path,
+            convert.RunPathInfo(
+                batch="batch",
+                tool="codex",
+                problem_id=problem_id,
+                run=run,
+                results_path=f"batch/codex/{problem_id}/run_{run}",
+            ),
+        )
+        assert metadata["application"] == expected[suffix]
 
 
 def test_parse_run_path():
