@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import pytest
 from kubernetes import client
 
-from sregym.service.kubectl import ContainerPlatformError, KubeCtl
+from sregym.service.kubectl import ContainerPlatformError, KubeCtl, PodReadinessTimeout
 
 
 def _pod(message, *, init=False, ready=False, previous=False):
@@ -63,6 +63,18 @@ def test_transient_pull_failure_can_recover():
     with patch("sregym.service.kubectl.time.sleep") as sleep:
         kubectl.wait_for_ready("test", max_wait=10)
     sleep.assert_called_once()
+
+
+def test_readiness_timeout_names_the_blocking_container_and_pull_error(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay))
+    kubectl = KubeCtl.__new__(KubeCtl)
+    kubectl.list_pods = Mock(return_value=client.V1PodList(items=[_pod("temporary registry timeout")]))
+    kubectl.core_v1_api = Mock()
+
+    with pytest.raises(PodReadinessTimeout, match="app-123.*ImagePullBackOff.*temporary registry timeout"):
+        kubectl.wait_for_ready("test", sleep=1, max_wait=1)
 
 
 def test_platform_status_is_checked_before_slow_logs_from_other_pods():

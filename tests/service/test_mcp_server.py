@@ -98,3 +98,46 @@ def test_failed_mcp_configuration_is_not_exposed(rendered_manifests, failed_comm
     with pytest.raises(RuntimeError, match="configuration failed"):
         server.deploy()
     server.start_port_forward.assert_not_called()
+
+
+def test_mcp_rollout_retries_once_and_logs_cluster_diagnostics(monkeypatch):
+    server = object.__new__(MCPServer)
+    server.namespace = "sregym"
+    server.service_name = "mcp-server"
+    server.kubectl = Mock()
+    rollouts = 0
+
+    def execute(command, **kwargs):
+        nonlocal rollouts
+        if "rollout status" in command:
+            rollouts += 1
+            if rollouts == 1:
+                raise RuntimeError("rollout timeout")
+        else:
+            assert kwargs["timeout"] == 10
+        return "pending pod" if "get pods" in command else "image pull in progress"
+
+    server.kubectl.exec_command_checked.side_effect = execute
+    monkeypatch.setattr("sregym.service.mcp_server.time.sleep", lambda _: None)
+
+    server._wait_for_rollout()
+
+    assert rollouts == 2
+    assert server.kubectl.exec_command_checked.call_count == 4
+    server.kubectl.exec_command.assert_not_called()
+
+
+def test_mcp_diagnostic_failures_remain_bounded_and_do_not_hide_rollout_error(monkeypatch):
+    server = object.__new__(MCPServer)
+    server.namespace = "sregym"
+    server.service_name = "mcp-server"
+    server.kubectl = Mock()
+    server.kubectl.exec_command_checked.side_effect = RuntimeError("command deadline")
+    monkeypatch.setattr("sregym.service.mcp_server.MCP_ROLLOUT_ATTEMPTS", 1)
+
+    with pytest.raises(RuntimeError, match="MCP rollout did not become ready.*command deadline"):
+        server._wait_for_rollout()
+
+    diagnostics = server.kubectl.exec_command_checked.call_args_list[1:]
+    assert len(diagnostics) == 2
+    assert all(call.kwargs["timeout"] == 10 for call in diagnostics)

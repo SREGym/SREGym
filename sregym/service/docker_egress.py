@@ -19,8 +19,14 @@ logger = logging.getLogger("all.sregym.docker_egress")
 
 DEFAULT_EGRESS_PROXY_IMAGE = "mitmproxy/mitmproxy:12.2.3"
 EGRESS_PROXY_PORT = 8080
+PROXY_BLOCKED_LOG_PATH = "/state/blocked-requests.jsonl"
 PROXY_CA_CONTAINER_PATH = "/etc/evaluation-egress/mitmproxy-ca-cert.pem"
 PROXY_BUNDLE_CONTAINER_PATH = "/etc/evaluation-egress/ca-certificates.crt"
+PROXY_CA_SOURCE_PATHS = (
+    "/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem",
+    "/root/.mitmproxy/mitmproxy-ca-cert.pem",
+)
+PROXY_BOOTSTRAP_SENTINEL = "/state/.sregym-proxy-ready"
 
 
 def _find_host_ca_bundle() -> Path:
@@ -59,13 +65,22 @@ class DockerEgress:
         self.k8s_proxy_port = k8s_proxy_port
         self._network_name: str | None = None
         self._proxy_name: str | None = None
+        self._cert_volume: str | None = None
         self._tmp_dir: Path | None = None
         self._proxy_ca: Path | None = None
         self._ca_bundle: Path | None = None
         self._rules: tuple[EndpointRule, ...] = ()
 
     def _require_ready(self) -> None:
-        if not all((self._network_name, self._proxy_name, self._proxy_ca, self._ca_bundle)):
+        if not all(
+            (
+                self._network_name,
+                self._proxy_name,
+                self._cert_volume,
+                self._proxy_ca,
+                self._ca_bundle,
+            )
+        ):
             raise RuntimeError("Filtered egress proxy is not ready")
 
     def docker_args(self) -> list[str]:
@@ -74,9 +89,7 @@ class DockerEgress:
             f"--network={self._network_name}",
             "--add-host=host.docker.internal:host-gateway",
             "-v",
-            f"{self._proxy_ca}:{PROXY_CA_CONTAINER_PATH}:ro",
-            "-v",
-            f"{self._ca_bundle}:{PROXY_BUNDLE_CONTAINER_PATH}:ro",
+            f"{self._cert_volume}:/etc/evaluation-egress:ro",
         ]
 
     def environment(self) -> dict[str, str]:
@@ -99,36 +112,59 @@ class DockerEgress:
         }
 
     def blocked_request_count(self) -> int:
-        if self._tmp_dir is None:
-            return 0
-        log_path = self._tmp_dir / "blocked-requests.jsonl"
-        try:
-            with log_path.open(encoding="utf-8") as handle:
-                return sum(1 for line in handle if line.strip())
-        except FileNotFoundError:
-            return 0
+        return sum(1 for line in self._blocked_request_lines(missing_ok=True) if line.strip())
 
     def blocked_request_records(self, start: int = 0) -> list[dict[str, str | int]]:
         """Read this attempt's records before the proxy state is removed."""
-        if self._tmp_dir is None:
-            return []
         records = []
         count = 0
-        with (self._tmp_dir / "blocked-requests.jsonl").open(encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                count += 1
-                if count <= start:
-                    continue
-                record = json.loads(line)
-                # Whitelist exported fields, including when reading an older log.
-                records.append(
-                    {key: record[key] for key in ("timestamp", "method", "scheme", "host", "port", "reason")}
-                )
+        for line in self._blocked_request_lines():
+            if not line.strip():
+                continue
+            count += 1
+            if count <= start:
+                continue
+            record = json.loads(line)
+            # Whitelist exported fields, including when reading an older log.
+            records.append({key: record[key] for key in ("timestamp", "method", "scheme", "host", "port", "reason")})
         if count < start:
             raise ValueError("blocked-request log was truncated during the attempt")
         return records
+
+    def _blocked_request_lines(self, *, missing_ok: bool = False) -> list[str]:
+        """Read authoritative proxy state, including from a stopped container."""
+        if self._proxy_name:
+            try:
+                result = subprocess.run(
+                    ["docker", "exec", self._proxy_name, "cat", PROXY_BLOCKED_LOG_PATH],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    return result.stdout.splitlines()
+                # docker exec requires a running container; docker cp does not.
+                # Never substitute the untouched host bootstrap log for this audit.
+                with tempfile.TemporaryDirectory(prefix="evaluation-egress-audit-") as directory:
+                    log_path = Path(directory) / "blocked-requests.jsonl"
+                    copied = subprocess.run(
+                        ["docker", "cp", f"{self._proxy_name}:{PROXY_BLOCKED_LOG_PATH}", str(log_path)],
+                        capture_output=True,
+                        timeout=10,
+                    )
+                    if copied.returncode != 0:
+                        raise OSError("Could not copy the filtered egress audit")
+                    return log_path.read_text(encoding="utf-8").splitlines()
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise OSError("Could not read the filtered egress proxy audit") from exc
+        if self._tmp_dir is None:
+            return []
+        try:
+            return (self._tmp_dir / "blocked-requests.jsonl").read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            if missing_ok:
+                return []
+            raise
 
     def ensure_started(self, rules: tuple[EndpointRule, ...]) -> None:
         if self._proxy_name is not None:
@@ -145,6 +181,7 @@ class DockerEgress:
         suffix = uuid.uuid4().hex[:8]
         self._network_name = f"evaluation-egress-{suffix}"
         self._proxy_name = f"evaluation-egress-proxy-{suffix}"
+        self._cert_volume = f"evaluation-egress-certs-{suffix}"
         self._rules = rules
 
         repo_root = Path(__file__).resolve().parents[2]
@@ -156,50 +193,47 @@ class DockerEgress:
 
         try:
             self._prepare_state()
+            state_dir = self._tmp_dir
+            if state_dir is None:
+                raise RuntimeError("Filtered egress state is not initialized")
             self._run_docker_checked(
                 ["docker", "network", "create", "--internal", self._network_name],
                 "create the filtered egress network",
+            )
+            self._run_docker_checked(
+                ["docker", "volume", "create", self._cert_volume],
+                "create the filtered egress certificate volume",
             )
             self._run_docker_checked(
                 [
                     "docker",
                     "run",
                     "-d",
-                    "--rm",
                     "--name",
                     self._proxy_name,
                     "--network",
                     self._network_name,
                     "--add-host=host.docker.internal:host-gateway",
                     "-v",
-                    f"{addon_path}:/addons/egress_proxy.py:ro",
-                    "-v",
-                    f"{policy_path}:/addons/internet_policy.py:ro",
-                    "-v",
-                    f"{self._tmp_dir}:/state",
+                    f"{self._cert_volume}:/certs",
                     "-e",
-                    "BLOCKED_REQUEST_LOG=/state/blocked-requests.jsonl",
+                    f"BLOCKED_REQUEST_LOG={PROXY_BLOCKED_LOG_PATH}",
                     "-e",
                     "EGRESS_POLICY_STATE=/state/policy.json",
                     "-e",
                     "PYTHONPATH=/addons",
                     self.image,
-                    "mitmdump",
-                    "--listen-host",
-                    "0.0.0.0",
-                    "--listen-port",
-                    str(EGRESS_PROXY_PORT),
-                    "--set",
-                    "connection_strategy=lazy",
-                    # Keep the local Kubernetes TLS connection as an
-                    # end-to-end tunnel. The agent trusts the per-run
-                    # certificate from its kubeconfig; mitmproxy must not
-                    # replace it with an egress certificate.
-                    "--set",
-                    rf"ignore_hosts=^host\.docker\.internal:{self.k8s_proxy_port}$",
-                    "-s",
-                    "/addons/egress_proxy.py",
+                    "sh",
+                    "-ec",
+                    self._proxy_start_command(),
                 ],
+                "start the filtered egress proxy",
+            )
+            self._copy_file_to_proxy(addon_path, "/addons/egress_proxy.py")
+            self._copy_file_to_proxy(policy_path, "/addons/internet_policy.py")
+            self._copy_file_to_proxy(state_dir / "policy.json", "/state/policy.json")
+            self._run_docker_checked(
+                ["docker", "exec", self._proxy_name, "touch", PROXY_BLOCKED_LOG_PATH, PROXY_BOOTSTRAP_SENTINEL],
                 "start the filtered egress proxy",
             )
             self._run_docker_checked(
@@ -215,6 +249,38 @@ class DockerEgress:
             self.close()
             raise
 
+    def _proxy_start_command(self) -> str:
+        """Wait for copied policy files before starting the proxy process.
+
+        Docker Desktop's Windows daemon cannot consume a WSL path as a bind
+        mount, although the Docker client can upload the same path with
+        ``docker cp``.  Starting a small bootstrap shell lets every supported
+        Docker client copy the addon and policy into the container before
+        mitmdump becomes its long-running process.
+        """
+        return " ".join(
+            (
+                "mkdir -p /addons /state;",
+                f"while [ ! -f {PROXY_BOOTSTRAP_SENTINEL} ]; do sleep 0.05; done;",
+                "exec mitmdump --listen-host 0.0.0.0",
+                f"--listen-port {EGRESS_PROXY_PORT}",
+                "--set connection_strategy=lazy",
+                # Keep the local Kubernetes TLS connection as an end-to-end
+                # tunnel. The agent trusts the per-run certificate from its
+                # kubeconfig; mitmproxy must not replace it with an egress CA.
+                f"--set 'ignore_hosts=^host\\.docker\\.internal:{self.k8s_proxy_port}$'",
+                "-s /addons/egress_proxy.py",
+            )
+        )
+
+    def _copy_file_to_proxy(self, source: Path, destination: str) -> None:
+        if self._proxy_name is None:
+            raise RuntimeError("Filtered egress proxy is not initialized")
+        self._run_docker_checked(
+            ["docker", "cp", str(source), f"{self._proxy_name}:{destination}"],
+            f"copy {source.name} into the filtered egress proxy",
+        )
+
     def _prepare_state(self) -> None:
         """Create the fixed allowlist and blocked-request audit log."""
         self._tmp_dir = Path(tempfile.mkdtemp(prefix="evaluation-egress-"))
@@ -222,9 +288,9 @@ class DockerEgress:
         blocked_log.touch()
         self._write_policy(self._rules)
 
-        # The mitmproxy image drops privileges before loading the addon. Allow
-        # it to traverse the private temp directory and append to the audit log
-        # without making the audit log readable by other host users.
+        # Keep the host files private. They are copied into the proxy during
+        # bootstrap instead of bind-mounted so this also works through Docker
+        # Desktop from a WSL client.
         self._tmp_dir.chmod(0o711)
         blocked_log.chmod(0o622)
 
@@ -260,16 +326,15 @@ class DockerEgress:
         proxy_ca = self._tmp_dir / "mitmproxy-ca-cert.pem"
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            copied = subprocess.run(
-                [
-                    "docker",
-                    "cp",
-                    f"{self._proxy_name}:/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem",
-                    str(proxy_ca),
-                ],
-                capture_output=True,
-            )
-            if copied.returncode == 0 and proxy_ca.is_file() and proxy_ca.stat().st_size > 0:
+            copied = None
+            for container_path in PROXY_CA_SOURCE_PATHS:
+                copied = subprocess.run(
+                    ["docker", "cp", f"{self._proxy_name}:{container_path}", str(proxy_ca)],
+                    capture_output=True,
+                )
+                if copied.returncode == 0 and proxy_ca.is_file() and proxy_ca.stat().st_size > 0:
+                    break
+            if copied and copied.returncode == 0 and proxy_ca.is_file() and proxy_ca.stat().st_size > 0:
                 break
             running = subprocess.run(
                 ["docker", "inspect", "-f", "{{.State.Running}}", self._proxy_name],
@@ -290,6 +355,8 @@ class DockerEgress:
         system_bundle = _find_host_ca_bundle()
         combined_bundle = self._tmp_dir / "ca-certificates.crt"
         combined_bundle.write_bytes(system_bundle.read_bytes() + b"\n" + proxy_ca.read_bytes())
+        self._copy_file_to_proxy(combined_bundle, "/certs/ca-certificates.crt")
+        self._copy_file_to_proxy(proxy_ca, "/certs/mitmproxy-ca-cert.pem")
         self._proxy_ca = proxy_ca
         self._ca_bundle = combined_bundle
 
@@ -303,8 +370,18 @@ class DockerEgress:
 
     def close(self) -> None:
         if self._proxy_name:
+            if self._tmp_dir:
+                subprocess.run(
+                    [
+                        "docker",
+                        "cp",
+                        f"{self._proxy_name}:{PROXY_BLOCKED_LOG_PATH}",
+                        str(self._tmp_dir / "blocked-requests.jsonl"),
+                    ],
+                    capture_output=True,
+                )
             subprocess.run(
-                ["docker", "rm", "-f", self._proxy_name],
+                ["docker", "rm", "-f", "-v", self._proxy_name],
                 capture_output=True,
             )
         if self._network_name:
@@ -312,10 +389,16 @@ class DockerEgress:
                 ["docker", "network", "rm", self._network_name],
                 capture_output=True,
             )
+        if self._cert_volume:
+            subprocess.run(
+                ["docker", "volume", "rm", self._cert_volume],
+                capture_output=True,
+            )
         if self._tmp_dir:
             shutil.rmtree(self._tmp_dir, ignore_errors=True)
         self._network_name = None
         self._proxy_name = None
+        self._cert_volume = None
         self._tmp_dir = None
         self._proxy_ca = None
         self._ca_bundle = None

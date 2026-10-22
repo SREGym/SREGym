@@ -15,6 +15,7 @@ import requests
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
 from clients.harness.problem_id import resolve_problem_id
+from clients.harness.stages import mitigation_workflow
 from logger import init_logger
 
 # Add SREGym root to path
@@ -155,17 +156,7 @@ def build_instruction(app_info: dict) -> str:
     else:
         namespace_block = f"Namespace: {namespaces[0]}"
 
-    # Build instruction similar to how it would be done in Harbor
-    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
-
-Application: {app_name}
-{namespace_block}
-
-{descriptions}
-
-CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
-
-WORKFLOW: You will perform TWO tasks in sequence:
+    workflow = f"""WORKFLOW: You will perform TWO tasks in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
@@ -191,6 +182,20 @@ For DIAGNOSIS stage:
 For MITIGATION stage:
 - Submit with an EMPTY STRING after you have applied the fix
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
+""".rstrip("\n")
+    if app_info.get("stages") == ["mitigation"]:
+        workflow = mitigation_workflow(get_api_base_url())
+
+    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
+
+Application: {app_name}
+{namespace_block}
+
+{descriptions}
+
+CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
+
+{workflow}
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace(s): {", ".join(namespaces)}

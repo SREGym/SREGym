@@ -159,6 +159,10 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.11.1",
 ]
 
+[tool.uv]
+required-version = ">=0.11.8"
+exclude-newer = "7 days"
+
 [tool.black]
 line-length = 120
 target-version = ["py312"]
@@ -211,6 +215,7 @@ quote-style = "double"
 docstring-code-format = true
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 addopts = ["--ignore=docker/apps/stripe/backend/vendor"]
 markers = [
     "integration: end-to-end tests requiring a running Kubernetes cluster",

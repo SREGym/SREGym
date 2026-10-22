@@ -174,6 +174,7 @@ def test_driver_records_profile_in_result_rows(tmp_path, monkeypatch, selected_p
     run.finalize_and_publish.return_value = None
     monkeypatch.setattr(benchmark.RunArtifacts, "create", lambda **kwargs: run)
     conductor = MagicMock()
+    conductor.problem = None
     conductor.problems.get_problem_ids.return_value = ["example"]
     conductor.start_problem = AsyncMock(side_effect=RuntimeError("deploy failed") if deploy_failed else None)
     conductor.wait_for_submission_work = AsyncMock()

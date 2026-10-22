@@ -40,7 +40,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 - [Docker](https://docs.docker.com/get-docker/)
 - [Helm](https://helm.sh/docs/intro/install/) >= 4.0
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- [uv](https://github.com/astral-sh/uv)
+- [uv](https://github.com/astral-sh/uv) >= 0.11.8
 - [kind](https://kind.sigs.k8s.io/) (if running locally)
 
 ### Recommendations
@@ -53,6 +53,10 @@ cd SREGym
 uv sync
 uv run prek install
 ```
+
+When resolving dependencies, uv excludes packages uploaded in the last seven days. The agent image applies the same delay to pip dependencies and npm-based agent installers. The existing lockfile keeps its pinned versions. A new package version, including a security fix, can be unavailable until the delay ends.
+
+The delay requires upload-time metadata from the package registry. It does not cover existing installed packages, container images, OS packages, Git dependencies, or direct downloads. The DinD image uses an older uv for frozen installs. Resolve dependencies outside that image with uv 0.11.8 or later.
 
 <h2 id="🚀quickstart">🚀 Quickstart</h2>
 
