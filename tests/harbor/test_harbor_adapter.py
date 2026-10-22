@@ -212,6 +212,23 @@ def test_score_reports_backend_failures_as_errors(task_dir, tmp_path):
     assert not reward_file.exists()
 
 
+@pytest.mark.parametrize("failure_class", ["environment_error", "harness_error"])
+def test_score_reports_unjudgeable_failures_as_errors(task_dir, tmp_path, failure_class):
+    grade, reward_file = tmp_path / "grade.json", tmp_path / "reward.json"
+    mitigation = {"success": False, "failure_class": failure_class, "reason": "prometheus_unreachable"}
+    grade.write_text(json.dumps({"success": False, "mitigation": mitigation}))
+    assert _load_score(task_dir, grade, reward_file).main() == 1
+    assert not reward_file.exists()
+
+
+@pytest.mark.parametrize("failure_class", ["agent_error", "ambiguous", None])
+def test_score_counts_other_failures(task_dir, tmp_path, failure_class):
+    grade, reward_file = tmp_path / "grade.json", tmp_path / "reward.json"
+    grade.write_text(json.dumps({"success": False, "mitigation": {"success": False, "failure_class": failure_class}}))
+    assert _load_score(task_dir, grade, reward_file).main() == 0
+    assert json.loads(reward_file.read_text()) == {"reward": 0.0}
+
+
 def test_inspection_skips_problems_that_cannot_run_on_kind():
     inspection = adapter.inspect_problems(["network_policy_block", "node_clock_drift_hotel_reservation"])
     assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]

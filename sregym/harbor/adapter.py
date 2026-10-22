@@ -49,7 +49,11 @@ DEFAULT_STORAGE_MB = 10240
 # Default oracle budget: the base mitigation oracle waits up to 60s for
 # rollouts, and custom oracles can declare a longer evaluation_timeout_seconds.
 DEFAULT_GRADE_TIMEOUT_S = 900
-READY_WAIT_S = 300
+# Each healthcheck blocks for up to READY_WAIT_S. Harbor fails the trial when a
+# check outlives its timeout rather than retrying, and on a loaded Docker host
+# `docker exec` alone has taken minutes, so leave a wide margin.
+READY_WAIT_S = 120
+READY_EXEC_MARGIN_S = 240
 READY_BUDGET_S = 3600
 # Problems graded by Prometheus alerts let the application run this long before
 # the fault is injected. AlertOracle ignores alerts already firing at injection;
@@ -331,7 +335,7 @@ class SREGymAdapter:
             "grade_timeout": str(info.grade_timeout_s),
             "grade_timeout_hook": f"{float(info.grade_timeout_s + 60)}",
             "ready_wait": str(READY_WAIT_S),
-            "ready_timeout": f"{float(READY_WAIT_S + 60)}",
+            "ready_timeout": f"{float(READY_WAIT_S + READY_EXEC_MARGIN_S)}",
             "ready_retries": str(READY_BUDGET_S // READY_WAIT_S),
             "backend_image": self.backend_image,
             "oracle_secret_env": protocol.ORACLE_SECRET_ENV,

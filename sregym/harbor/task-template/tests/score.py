@@ -12,6 +12,9 @@ from pathlib import Path
 
 GRADE = Path("{{grade_path}}")
 REWARD = Path("/logs/verifier/reward.json")
+# Failure classes (sregym/conductor/oracles/failure.py) that are not the agent's
+# doing: the cluster or SREGym itself broke, so the trial cannot be scored.
+NOT_SCORED = {"environment_error", "harness_error"}
 
 
 def main() -> int:
@@ -27,6 +30,12 @@ def main() -> int:
     print(json.dumps(grade, indent=2))
     if "mitigation" not in grade:
         print(f"SREGym backend could not grade this trial: {grade.get('error')}", file=sys.stderr)
+        return 1
+
+    failure_class = grade["mitigation"].get("failure_class")
+    if grade.get("success") is not True and failure_class in NOT_SCORED:
+        reason = grade["mitigation"].get("reason")
+        print(f"SREGym could not judge this trial ({failure_class}: {reason})", file=sys.stderr)
         return 1
 
     reward = 1.0 if grade.get("success") is True else 0.0
