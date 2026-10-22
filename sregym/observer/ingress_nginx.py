@@ -52,7 +52,13 @@ class IngressNginx:
                     [
                         "helm",
                         "list",
-                        "--all",
+                        # Every release state, as Helm 3's --all did; Helm 4 removed --all.
+                        "--deployed",
+                        "--failed",
+                        "--pending",
+                        "--superseded",
+                        "--uninstalling",
+                        "--uninstalled",
                         "--namespace",
                         self.namespace,
                         "--filter",
