@@ -236,6 +236,16 @@ def test_inspection_skips_problems_that_cannot_run_on_kind():
     assert "non-emulated" in inspection.skipped["node_clock_drift_hotel_reservation"]
 
 
+def test_inspection_skips_ports_of_problems_the_unprivileged_cluster_cannot_run():
+    ports = ["calico_route_reflector_label_drift_slack_spine", "node_conntrack_exhaustion_frappe"]
+    inspection = adapter.inspect_problems(["network_policy_block", *ports])
+    assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]
+    assert sorted(inspection.skipped) == ports
+    assert inspection.skipped["node_conntrack_exhaustion_frappe"].startswith(
+        "port of node_conntrack_exhaustion_hotel_reservation, which writes a host-global sysctl"
+    )
+
+
 def test_inspection_skips_problems_the_unprivileged_cluster_cannot_run():
     # inspect_problems() rejects unknown IDs, so a renamed problem fails here.
     inspection = adapter.inspect_problems(["network_policy_block", *adapter.K3S_UNSUPPORTED])

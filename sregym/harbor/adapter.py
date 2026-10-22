@@ -145,8 +145,12 @@ def task_name(problem_id: str) -> str:
 def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
     """Inspect problems. Must run with KUBECONFIG set before kubernetes is imported."""
     from sregym.conductor.oracles.alert_oracle import AlertOracle
+    from sregym.conductor.problems.environment_ports import SOURCE_PORTS
     from sregym.conductor.problems.registry import ProblemRegistry
 
+    # Problems ported to another application inject the same fault, so they
+    # inherit their source problem's k3s limitation.
+    port_sources = {port_id: source for source, (port_id, _) in SOURCE_PORTS.items()}
     inspection = Inspection()
     registry = ProblemRegistry()
     all_ids = registry.get_problem_ids(all=True)
@@ -159,6 +163,10 @@ def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
             continue
         if problem_id in K3S_UNSUPPORTED:
             inspection.skipped[problem_id] = K3S_UNSUPPORTED[problem_id]
+            continue
+        if port_sources.get(problem_id) in K3S_UNSUPPORTED:
+            source = port_sources[problem_id]
+            inspection.skipped[problem_id] = f"port of {source}, which {K3S_UNSUPPORTED[source]}"
             continue
         try:
             problem = registry.get_problem(problem_id)()
