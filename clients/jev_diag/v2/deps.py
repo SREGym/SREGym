@@ -32,6 +32,7 @@ from clients.jev_diag.v2.derive import (
     GENERIC_NAME_SUFFIXES,
     OBSERVABILITY_RE,
     ROLE_SYNONYMS,
+    _name_aliases,
     backend_role,
 )
 
@@ -73,12 +74,7 @@ def naming_edges(components: dict[str, dict]) -> dict[str, set[str]]:
 
 def trace_edges(components: dict[str, dict], observed: list[dict]) -> dict[str, set[str]]:
     """caller -> callees from the tracing backend's call graph, matched by Service or workload name."""
-    index: dict[str, str] = {}
-    for cid, comp in components.items():
-        index.setdefault(comp["name"].lower(), cid)
-        for svc in comp.get("services") or []:
-            if svc.get("name"):
-                index.setdefault(svc["name"].lower(), cid)
+    index = _name_aliases(components)
     out: dict[str, set[str]] = {}
     for edge in observed:
         parent = index.get(str(edge.get("parent") or "").lower())
@@ -183,7 +179,8 @@ def flag_dangling_addresses(components: dict[str, dict], namespaceless_services:
             )
             if not internal or labels[0] in ("localhost",) or labels[0].isdigit():
                 continue
-            if host in index or labels[0] in known:
+            qualified = f"{host}.{comp['namespace']}" if len(labels) == 1 else host
+            if qualified in index or labels[0] in known:
                 resolved += 1
             else:
                 ns = labels[1] if len(labels) > 1 else comp["namespace"]

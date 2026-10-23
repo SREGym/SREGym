@@ -2,9 +2,9 @@
 
 Everything in this module is ordinary code: kubectl reads, label matching, and
 anomaly signals computed from the returned JSON. No model is involved. The
-result is a compact, JSON-serialisable snapshot keyed by component id
-("deployment/frontend") so a Jev question can point at
-`components["deployment/frontend"]`.
+result is a compact, JSON-serialisable snapshot keyed by namespaced component id
+("deployment/shop/frontend") so a Jev question can point at
+`components["deployment/shop/frontend"]`.
 
 Design rules (see docs.typesafe.ai/model-jaggedness): keep arithmetic and
 counting in code, send the model only the fields a judgment needs, and keep
@@ -255,8 +255,9 @@ def _probe_port(probe: dict | None):
     return None
 
 
-def component_id(kind: str, name: str) -> str:
-    return f"{kind.lower()}/{name}"
+def component_id(kind: str, name: str, namespace: str | None = None) -> str:
+    """Collected workloads include their namespace; legacy snapshots can still use kind/name."""
+    return f"{kind.lower()}/{namespace}/{name}" if namespace else f"{kind.lower()}/{name}"
 
 
 def _env_value_text(entry: dict) -> str:
@@ -730,6 +731,14 @@ def _in_namespace(cid: str | None, components: dict[str, dict], namespace: str |
     return cid in components and components[cid]["namespace"] == namespace
 
 
+def _component_key(kind: str, name: str, namespace: str | None, components: dict[str, dict]) -> str | None:
+    """Resolve object identity in both namespaced collections and older saved snapshots."""
+    for cid in (component_id(kind, name, namespace), component_id(kind, name)):
+        if _in_namespace(cid, components, namespace):
+            return cid
+    return None
+
+
 def component_for_pod(
     pod_summary: dict, components: dict[str, dict], job_owner: dict[str, str] | None = None
 ) -> str | None:
@@ -737,13 +746,14 @@ def component_for_pod(
     job_owner = job_owner or {}
     ns = pod_summary.get("_namespace")
     for kind, name in pod_summary.get("owner", []):
-        if kind in ("StatefulSet", "DaemonSet", "Job") and _in_namespace(component_id(kind, name), components, ns):
-            return component_id(kind, name)
+        if kind in ("StatefulSet", "DaemonSet", "Job"):
+            if cid := _component_key(kind, name, ns, components):
+                return cid
         if kind == "Job" and f"{ns}/{name}" in job_owner:
             return job_owner[f"{ns}/{name}"]
         if kind == "ReplicaSet":
-            dep = component_id("Deployment", _strip_hash_suffix(name, 1))
-            if _in_namespace(dep, components, ns):
+            dep = _component_key("Deployment", _strip_hash_suffix(name, 1), ns, components)
+            if dep:
                 return dep
     for cid, comp in components.items():
         if comp["namespace"] == pod_summary.get("_namespace") and selector_matches(
@@ -760,26 +770,25 @@ def component_for_object(
     if kind == "Job" and job_owner and f"{namespace}/{name}" in job_owner:
         return job_owner[f"{namespace}/{name}"]
     if kind in WORKLOAD_KINDS:
-        cid = component_id(kind, name)
-        if _in_namespace(cid, components, namespace):
+        cid = _component_key(kind, name, namespace, components)
+        if cid:
             return cid
         if kind == "Job":
-            cron = component_id("CronJob", _strip_hash_suffix(name, 1))
-            return cron if _in_namespace(cron, components, namespace) else None
+            return _component_key("CronJob", _strip_hash_suffix(name, 1), namespace, components)
         return None
-    candidates: list[str] = []
+    candidates: list[tuple[str, str]] = []
     if kind == "ReplicaSet":
-        candidates.append(component_id("Deployment", _strip_hash_suffix(name, 1)))
+        candidates.append(("Deployment", _strip_hash_suffix(name, 1)))
     elif kind == "Pod":
         candidates += [
-            component_id("Deployment", _strip_hash_suffix(name, 2)),
-            component_id("StatefulSet", _strip_hash_suffix(name, 1)),
-            component_id("DaemonSet", _strip_hash_suffix(name, 1)),
-            component_id("Job", _strip_hash_suffix(name, 1)),
-            component_id("CronJob", _strip_hash_suffix(name, 2)),
+            ("Deployment", _strip_hash_suffix(name, 2)),
+            ("StatefulSet", _strip_hash_suffix(name, 1)),
+            ("DaemonSet", _strip_hash_suffix(name, 1)),
+            ("Job", _strip_hash_suffix(name, 1)),
+            ("CronJob", _strip_hash_suffix(name, 2)),
         ]
-    for cid in candidates:
-        if cid in components and components[cid]["namespace"] == namespace:
+    for candidate_kind, candidate_name in candidates:
+        if cid := _component_key(candidate_kind, candidate_name, namespace, components):
             return cid
     return None
 
@@ -1078,8 +1087,8 @@ def attach_hpas(hpas: list[dict], components: dict[str, dict]) -> None:
     for hpa in hpas:
         spec, status, meta = hpa.get("spec", {}), hpa.get("status", {}), hpa.get("metadata", {})
         ref = spec.get("scaleTargetRef") or {}
-        cid = component_id(ref.get("kind", ""), ref.get("name", ""))
-        if cid not in components or components[cid]["namespace"] != meta.get("namespace"):
+        cid = _component_key(ref.get("kind", ""), ref.get("name", ""), meta.get("namespace"), components)
+        if cid is None:
             continue
         bad = [
             f"{c.get('type')}=False ({c.get('reason')}): {trim(c.get('message'), 120)}"
@@ -2170,8 +2179,8 @@ def collect_snapshot(
     namespaces += related
     components: dict[str, dict] = {}
     pods_by_component: dict[str, list[dict]] = {}
-    pod_to_component: dict[str, str] = {}
-    pod_index: dict[str, dict] = {}
+    pod_to_component: dict[tuple[str, str], str] = {}
+    pod_index: dict[tuple[str, str], dict] = {}
     unassigned_events: list[dict] = []
     unassigned_pods: list[dict] = []
     dangling_services: list[dict] = []
@@ -2187,10 +2196,7 @@ def collect_snapshot(
     job_owner: dict[str, str] = {}  # "ns/job-name" -> CronJob component id
 
     def add_workload(cid: str, comp: dict, ns: str) -> None:
-        # ids carry no namespace: a related namespace's workload never replaces one of the application's own
         if ns in related:
-            if cid in components:
-                return
             comp["related"] = True
         components[cid] = comp
 
@@ -2198,12 +2204,12 @@ def collect_snapshot(
         for resource in ("deployments", "statefulsets", "daemonsets", "cronjobs"):
             for obj in application_items(resource, ns, errors) or []:
                 comp = summarize_workload(obj)
-                add_workload(component_id(comp["kind"], comp["name"]), comp, ns)
+                add_workload(component_id(comp["kind"], comp["name"], ns), comp, ns)
                 deletable.append((comp["kind"], obj))
         for obj in kubectl_items("jobs", ns, errors):
             deletable.append(("Job", obj))
             owners = [(o.get("kind"), o.get("name")) for o in obj.get("metadata", {}).get("ownerReferences") or []]
-            cron = next((component_id("CronJob", n) for k, n in owners if k == "CronJob"), None)
+            cron = next((component_id("CronJob", n, ns) for k, n in owners if k == "CronJob"), None)
             job_name = obj.get("metadata", {}).get("name")
             if _in_namespace(cron, components, ns):
                 status = obj.get("status", {})
@@ -2221,7 +2227,7 @@ def collect_snapshot(
                     )
                 )
                 continue
-            add_workload(component_id("Job", job_name), summarize_workload(obj), ns)
+            add_workload(component_id("Job", job_name, ns), summarize_workload(obj), ns)
         replicasets += kubectl_items("replicasets", ns, errors, managed_fields=False)
         controllerrevisions += kubectl_items("controllerrevisions", ns, errors, managed_fields=False)
     for comp in components.values():
@@ -2254,8 +2260,8 @@ def collect_snapshot(
             labels = summary.pop("labels") or {}
             summary["template_hash"] = labels.get("pod-template-hash") or labels.get("controller-revision-hash")
             pods_by_component.setdefault(cid, []).append(summary)
-            pod_to_component[summary["name"]] = cid
-            pod_index[summary["name"]] = summary
+            pod_to_component[(ns, summary["name"])] = cid
+            pod_index[(ns, summary["name"])] = summary
 
     current = now()
     for comp in components.values():
@@ -2286,7 +2292,8 @@ def collect_snapshot(
     claim_modes: dict[tuple[str, str], list[str]] = {}
     for ns in namespaces:
         raw_events[ns] = kubectl_items("events", ns, errors, managed_fields=False)
-        attach_warning_events(raw_events[ns], components, unassigned_events, job_owner, pod_index)
+        namespace_pods = {name: pod for (pod_ns, name), pod in pod_index.items() if pod_ns == ns}
+        attach_warning_events(raw_events[ns], components, unassigned_events, job_owner, namespace_pods)
         services = kubectl_items("services", ns, errors)
         deletable += [("Service", svc) for svc in services]
         failed: list[str] = []
@@ -2412,7 +2419,7 @@ def collect_snapshot(
     for ns, pods in raw_pods.items():
         for pod in pods:
             pc = (pod.get("spec") or {}).get("priorityClassName")
-            cid = pod_to_component.get((pod.get("metadata") or {}).get("name"))
+            cid = pod_to_component.get((ns, (pod.get("metadata") or {}).get("name")))
             if pc and _in_namespace(cid, components, ns):
                 pod_priority.setdefault(pc, set()).add(cid)
     outside_objects = outside.collect_outside(
@@ -2442,7 +2449,7 @@ def collect_snapshot(
     for ns in namespaces:
         try:
             top = run_kubectl(["top", "pods", "-n", ns, "--containers", "--no-headers"], timeout=KUBECTL_TIMEOUT)
-            in_ns = {pod: cid for pod, cid in pod_to_component.items() if components[cid]["namespace"] == ns}
+            in_ns = {pod: cid for (pod_ns, pod), cid in pod_to_component.items() if pod_ns == ns}
             attach_resource_usage(top, components, in_ns)
         except Exception as exc:  # noqa: BLE001 - metrics-server is optional
             errors.append(f"kubectl top {ns}: {exc}")

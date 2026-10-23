@@ -48,6 +48,34 @@ def test_traced_calls_and_addresses_join_the_graph_with_their_sources():
     assert comps["deployment/orders"]["_deps"] == {"deployment/mongodb-orders": ["naming"]}
 
 
+def test_duplicate_names_resolve_with_the_callers_namespace_or_a_qualified_name():
+    from clients.jev_diag.v2.checks import resolve_env_hosts
+    from clients.jev_diag.v2.derive import _mentions, _name_aliases
+
+    comps = {
+        f"deployment/{ns}/{name}": {**_server(name), "namespace": ns}
+        for ns in ("shop", "data")
+        for name in ("api", "cache")
+    }
+    for ns in ("shop", "data"):
+        api = comps[f"deployment/{ns}/api"]
+        api["_env_hosts"] = ["cache"]
+        aliases = _name_aliases(comps, ns)
+        assert _mentions("connection refused: cache:8080", aliases, f"deployment/{ns}/api") == {
+            f"deployment/{ns}/cache"
+        }
+        assert _mentions("connection refused: cache.data.svc:8080", aliases, f"deployment/{ns}/api") == {
+            "deployment/data/cache"
+        }
+    resolve_env_hosts(comps)
+    assert comps["deployment/shop/api"]["_calls"] == ["deployment/shop/cache"]
+    assert comps["deployment/data/api"]["_calls"] == ["deployment/data/cache"]
+    assert deps.trace_edges(comps, [{"parent": "api", "child": "cache"}]) == {}  # ambiguous traces stay unknown
+    assert deps.trace_edges(comps, [{"parent": "api.shop", "child": "cache.data"}]) == {
+        "deployment/shop/api": {"deployment/data/cache"}
+    }
+
+
 def test_a_server_no_service_selects_is_flagged_when_a_client_needs_it():
     comps = _app(**{"deployment/mongodb-orders": _server("mongodb-orders", service=False)})
     deps.build_graph(comps, [])
