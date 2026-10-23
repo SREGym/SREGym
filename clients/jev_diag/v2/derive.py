@@ -523,7 +523,9 @@ def apply_quota_requirements(components: dict[str, dict], constraints: list[dict
             quota_events = [
                 e for e in comp.get("warning_events") or [] if "failed quota" in (e.get("message") or "").lower()
             ]
-            short = (comp.get("replicas") or {}).get("desired", 0) > len(comp.get("pods") or [])
+            short = not comp.get("pods_not_verified") and (comp.get("replicas") or {}).get("desired", 0) > len(
+                comp.get("pods") or []
+            )
             if missing and (quota_events or short):
                 comp["signals"].append(
                     f"ResourceQuota {c['name']} requires {', '.join(missing)} on every pod and this workload's "
@@ -540,6 +542,8 @@ def apply_quota_requirements(components: dict[str, dict], constraints: list[dict
 def retire_stale_events(components: dict[str, dict]) -> None:
     """Warning events about pods that no longer exist, on a workload whose pods are all ready, are history."""
     for comp in components.values():
+        if comp.get("pods_not_verified"):
+            continue
         pods = comp.get("pods") or []
         current = {p.get("name") for p in pods}
         all_ready = bool(pods) and all(
@@ -852,6 +856,13 @@ def _owned_by_targets(change: dict, components: dict[str, dict]) -> bool:
 _LEGACY_DERIVED_PREFIXES = ("errors logged by", "logs report", "ResourceQuota ", "pod spec: ", "referenced ")
 
 
+def component_health(comp: dict) -> bool | None:
+    """Known failures are unhealthy; an unread Pod list cannot establish health or absence."""
+    if comp.get("signals") or comp.get("log_error_lines"):
+        return False
+    return None if comp.get("pods_not_verified") else True
+
+
 def post_process(snapshot) -> None:
     """Apply every derivation in place. Safe to run again on the same snapshot or on a saved snapshot.
 
@@ -891,6 +902,6 @@ def post_process(snapshot) -> None:
         comp["signals"] = list(dict.fromkeys(comp["signals"]))
         kept = set(base.get(cid, []))
         comp["_derived_signals"] = [s for s in comp["signals"] if s not in kept]
-        comp["healthy"] = not comp["signals"] and not comp.get("log_error_lines")
+        comp["healthy"] = component_health(comp)
         comp["_derived"] = True
     classify_evidence(components)

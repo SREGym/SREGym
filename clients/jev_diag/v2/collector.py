@@ -174,11 +174,14 @@ class ClusterSnapshot:
         Components with any abnormality come first, so a reader meets the symptomatic ones before the healthy ones.
         """
         ordered = sorted(self.components.items(), key=lambda item: bool(item[1].get("healthy")))
-        return {
+        state = {
             "application": self.app,
             "cluster": _public(self.cluster, include_private),
             "components": {cid: _public(c, include_private) for cid, c in ordered},
         }
+        if self.errors:
+            state["collection_errors"] = self.errors
+        return state
 
 
 def _public(obj, include_private: bool):
@@ -1876,8 +1879,8 @@ def _stale_readers(comp: dict, kind: str, name: str, obj: dict) -> str | None:
     return head
 
 
-def application_items(resource: str, namespace: str, errors: list[str], **kwargs) -> list[dict]:
-    """`kubectl_items` for a read that defines the application, retried when it fails before it counts as empty."""
+def application_items(resource: str, namespace: str, errors: list[str], **kwargs) -> list[dict] | None:
+    """Retry an application list read; None means unread, whereas [] is a verified empty list."""
     for attempt in range(APPLICATION_READ_ATTEMPTS):
         failed: list[str] = []
         items = kubectl_items(resource, namespace, failed, **kwargs)
@@ -1886,7 +1889,7 @@ def application_items(resource: str, namespace: str, errors: list[str], **kwargs
         if attempt + 1 < APPLICATION_READ_ATTEMPTS and kubectl_runner._REPLAY is None:
             time.sleep(APPLICATION_READ_PAUSE_SECONDS)
     errors.extend(failed)
-    return items
+    return None
 
 
 def attach_config_objects(
@@ -2175,6 +2178,7 @@ def collect_snapshot(
     all_policies: list[dict] = []
     changes: list[dict] = []
     raw_pods: dict[str, list[dict]] = {}
+    unread_pods: set[str] = set()
     raw_events: dict[str, list[dict]] = {}
     deletable: list[tuple[str, dict]] = []  # objects checked for a stuck finalizer
     replicasets: list[dict] = []
@@ -2192,7 +2196,7 @@ def collect_snapshot(
 
     for ns in namespaces:
         for resource in ("deployments", "statefulsets", "daemonsets", "cronjobs"):
-            for obj in application_items(resource, ns, errors):
+            for obj in application_items(resource, ns, errors) or []:
                 comp = summarize_workload(obj)
                 add_workload(component_id(comp["kind"], comp["name"]), comp, ns)
                 deletable.append((comp["kind"], obj))
@@ -2233,7 +2237,10 @@ def collect_snapshot(
     change_log.attach_template_changes(components, revisions, deployed)
 
     for ns in namespaces:
-        raw_pods[ns] = application_items("pods", ns, errors, managed_fields=False)
+        listed_pods = application_items("pods", ns, errors, managed_fields=False)
+        if listed_pods is None:
+            unread_pods.add(ns)
+        raw_pods[ns] = listed_pods or []
         for pod in raw_pods[ns]:
             summary = summarize_pod(pod)
             summary["_namespace"] = ns
@@ -2263,7 +2270,9 @@ def collect_snapshot(
             comp["signals"].extend(f"pod {pod['name']}: {s}" for s in pod["signals"])
             if pod.get("startup_notes"):
                 comp.setdefault("startup_history", []).extend(f"pod {pod['name']}: {n}" for n in pod["startup_notes"])
-        if comp["replicas"].get("desired", 0) and not pods:
+        if comp["namespace"] in unread_pods:
+            comp["pods_not_verified"] = f"the Pod list in namespace {comp['namespace']} could not be read"
+        elif comp["replicas"].get("desired", 0) and not pods:
             comp["signals"].append("no pods exist for this workload")
         comp["signals"].extend(
             change_log.live_revision_drift(comp, revisions.get((comp["namespace"], comp["kind"], comp["name"]), []))
@@ -2467,10 +2476,12 @@ def collect_snapshot(
     if trend_baseline is not None:
         trend_summary = trend.apply_trend(components, trend_baseline, trend.sample_from_objects(raw_pods, raw_events))
 
+    from clients.jev_diag.v2.derive import component_health
+
     for cid in list(components):
         comp = components[cid]
         comp["signals"] = list(dict.fromkeys(comp["signals"]))
-        comp["healthy"] = not comp["signals"] and not comp.get("log_error_lines")
+        comp["healthy"] = component_health(comp)
         for key in ("selector", "template_labels", "healthy_hint"):
             comp.pop(key, None)
         for pod in comp["pods"]:

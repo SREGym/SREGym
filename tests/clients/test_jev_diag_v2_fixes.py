@@ -472,7 +472,7 @@ def test_a_read_that_defines_the_application_is_retried_before_it_counts_as_empt
     monkeypatch.setattr(v2c, "APPLICATION_READ_PAUSE_SECONDS", 0)
     errors: list[str] = []
     assert v2c.application_items("deployments", "ns", errors) == [{"metadata": {"name": "web"}}] and errors == []
-    assert v2c.application_items("pods", "ns", errors) == [] and errors == ["kubectl get pods timed out after 45s"]
+    assert v2c.application_items("pods", "ns", errors) is None and errors == ["kubectl get pods timed out after 45s"]
 
 
 def test_a_workload_created_late_says_what_it_runs():
