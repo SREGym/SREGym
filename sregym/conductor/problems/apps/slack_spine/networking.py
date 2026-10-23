@@ -197,8 +197,8 @@ class CalicoRouteReflectorLabelDriftSlack(CalicoRouteReflectorLabelDriftHotelRes
         )
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
-        self._app_cleanup = self.app.cleanup
-        self.app.cleanup = self._cleanup
+        # The base class already wrapped self.app.cleanup; wrapping it again
+        # would make _cleanup call itself.
 
     def _prepare_cross_node_app_path(self):
         for deployment, node in zip(self.CROSS_NODE_PAIR, self.worker_nodes, strict=False):

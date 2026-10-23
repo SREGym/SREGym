@@ -226,8 +226,8 @@ class PriorityPreemptionCascadeSaleor(PriorityPreemptionCascadeHotelReservation)
             ),
             oracle_factory=PriorityPreemptionMitigationOracle,
         )
-        self._app_cleanup = self.app.cleanup
-        self.app.cleanup = self._cleanup
+        # The base class already wrapped self.app.cleanup; wrapping it again
+        # would make _cleanup call itself.
 
     def _protect_peer_deployments(self):
         peer_names = [
