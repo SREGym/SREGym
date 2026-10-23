@@ -452,6 +452,7 @@ def _fake_cluster(monkeypatch, items: dict, related: list[str]) -> None:
     monkeypatch.setattr(outside, "kubectl_items", read)
     monkeypatch.setattr(outside, "related_namespaces", lambda namespaces, errors: related)
     monkeypatch.setattr(v2_collector, "run_kubectl", no_cluster)
+    monkeypatch.setattr(outside, "run_kubectl", no_cluster)
 
 
 @pytest.mark.parametrize("read_failed", [False, True])
@@ -473,8 +474,8 @@ def test_failed_pod_list_is_not_a_verified_empty_list(monkeypatch, read_failed):
     monkeypatch.setattr(v2_collector, "kubectl_items", read_with_pod_failure)
     monkeypatch.setattr(v2_collector, "APPLICATION_READ_PAUSE_SECONDS", 0)
     snap = v2_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
-    comp = snap.components["deployment/frontend"]
-    detail = dependency_state(snap, "deployment/frontend", "deployment/client")
+    comp = snap.components[f"deployment/{NS}/frontend"]
+    detail = dependency_state(snap, f"deployment/{NS}/frontend", "deployment/client")
     assert ("no pods exist for this workload" in comp["signals"]) is not read_failed
     assert len(attempts) == (v2_collector.APPLICATION_READ_ATTEMPTS if read_failed else 1)
     if read_failed:
@@ -511,10 +512,72 @@ def test_a_related_namespace_never_replaces_or_dates_the_application(monkeypatch
     }
     _fake_cluster(monkeypatch, items, ["data"])
     snap = v2_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
-    front = snap.components["deployment/frontend"]
+    front = snap.components[f"deployment/{NS}/frontend"]
     assert front["namespace"] == NS and not front.get("related") and not front.get("pods")  # the Pending pod is not its
-    assert snap.components["deployment/db"]["related"]
+    assert snap.components["deployment/data/db"]["related"]
+    related_front = snap.components["deployment/data/frontend"]
+    assert related_front["related"] and related_front["pods"][0]["name"] == pending["metadata"]["name"]
     assert changes.application_created(snap.components) == changes.parse_time("2026-10-19T07:50:00Z")
+
+
+def test_same_named_workloads_keep_their_own_pods_services_events_and_metrics(monkeypatch):
+    items = {}
+    for ns, ip in ((NS, "10.0.0.1"), ("data", "10.0.0.2")):
+        workload = deployment("cache")
+        workload["metadata"]["namespace"] = ns
+        items[("deployments", ns)] = [workload]
+        items[("pods", ns)] = [
+            {
+                "metadata": {
+                    "name": "cache-rs-shared",
+                    "namespace": ns,
+                    "labels": {"app": "cache"},
+                    "ownerReferences": [{"kind": "ReplicaSet", "name": "cache-rs"}],
+                },
+                "spec": {"containers": [{"name": "cache"}]},
+                "status": {"phase": "Running", "podIP": ip, "containerStatuses": [{"name": "cache", "ready": True}]},
+            }
+        ]
+        items[("services", ns)] = [
+            {
+                "metadata": {"name": "cache", "namespace": ns},
+                "spec": {"selector": {"app": "cache"}, "ports": [{"port": 80, "targetPort": 8080}]},
+            }
+        ]
+        items[("endpoints", ns)] = [
+            {"metadata": {"name": "cache", "namespace": ns}, "subsets": [{"addresses": [{"ip": ip}]}]}
+        ]
+        items[("events", ns)] = [
+            {
+                "type": "Warning",
+                "reason": "FailedCreate",
+                "message": f"{ns} admission rejected the request",
+                "involvedObject": {"kind": "Deployment", "namespace": ns, "name": "cache"},
+            }
+        ]
+        items[("horizontalpodautoscalers", ns)] = [
+            {
+                "metadata": {"namespace": ns, "name": f"{ns}-autoscaler"},
+                "spec": {"scaleTargetRef": {"kind": "Deployment", "name": "cache"}},
+            }
+        ]
+    _fake_cluster(monkeypatch, items, ["data"])
+
+    def top(args, **kwargs):
+        if args[0] == "top":
+            return "cache-rs-shared cache 5m 8Mi"
+        raise RuntimeError("no cluster")
+
+    monkeypatch.setattr(v2_collector, "run_kubectl", top)
+    snap = v2_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
+    assert set(snap.components) == {f"deployment/{NS}/cache", "deployment/data/cache"}
+    for ns, ip in ((NS, "10.0.0.1"), ("data", "10.0.0.2")):
+        comp = snap.components[f"deployment/{ns}/cache"]
+        assert comp["pods"][0]["ip"] == ip
+        assert comp["services"][0]["ready_endpoints"] == 1
+        assert comp["warning_events"][0]["message"] == f"{ns} admission rejected the request"
+        assert comp["hpa"]["name"] == f"{ns}-autoscaler"
+        assert comp["resource_usage"][0]["pod"] == "cache-rs-shared"
 
 
 def test_namespaces_the_app_addresses_are_read_too(monkeypatch):

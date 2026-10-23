@@ -682,7 +682,7 @@ def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
         detail["rbac"] = rbac_detail(sa, ns)
         detail["rbac"]["roles"] = roles
     # dependency edges: env values naming other components, the error pointers and the dependency graph (deps.py)
-    aliases = _name_aliases(snapshot.components)
+    aliases = _name_aliases(snapshot.components, ns)
     calls = set(comp.get("errors_point_to") or []) | set(comp.get("_deps") or {})
     for c in detail["workload"].get("containers", []):
         for e in c.get("env", []):

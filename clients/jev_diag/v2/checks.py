@@ -252,7 +252,7 @@ def resolve_env_hosts(components: dict[str, dict]) -> None:
     for cid, comp in components.items():
         services, owners = set(), set()
         for host in comp.get("_env_hosts") or []:
-            hit = index.get(host)
+            hit = index.get(f"{host}.{comp['namespace']}" if "." not in host else host)
             if hit is None:
                 continue
             svc, owner = hit

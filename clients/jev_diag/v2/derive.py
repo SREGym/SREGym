@@ -245,20 +245,30 @@ def backend_role(comp: dict) -> str | None:
     return None
 
 
-def _name_aliases(components: dict[str, dict]) -> dict[str, str]:
+def _name_aliases(components: dict[str, dict], namespace: str | None = None) -> dict[str, str]:
     """Lowercased names that identify a component in log text: its own name, its Services' names and cluster IPs,
     its pods' IPs (an address in an error line names its target exactly), and, when exactly one component in the
     application plays a backend role, the synonyms of that role."""
-    aliases: dict[str, str] = {}
+    owners: dict[str, set[str]] = defaultdict(set)
     for cid, comp in components.items():
-        aliases.setdefault(comp["name"].lower(), cid)
+        ns = comp.get("namespace")
+        names = {comp["name"]} | {svc["name"] for svc in comp.get("services") or [] if svc.get("name")}
+        for name in names:
+            qualified = (f"{name}.{ns}", f"{name}.{ns}.svc", f"{name}.{ns}.svc.cluster.local") if ns else ()
+            for alias in (name, *qualified):
+                owners[alias.lower()].add(cid)
         for svc in comp.get("services") or []:
-            for alias in (svc.get("name"), svc.get("cluster_ip")):
-                if alias:
-                    aliases.setdefault(alias.lower(), cid)
+            if svc.get("cluster_ip"):
+                owners[svc["cluster_ip"].lower()].add(cid)
         for pod in comp.get("pods") or []:
             if pod.get("ip"):
-                aliases.setdefault(pod["ip"], cid)
+                owners[pod["ip"]].add(cid)
+    aliases = {}
+    for alias, candidates in owners.items():
+        local = {cid for cid in candidates if components[cid].get("namespace") == namespace}
+        choices = local or candidates
+        if len(choices) == 1:
+            aliases[alias] = next(iter(choices))
     tokens = {cid: _component_tokens(comp) for cid, comp in components.items()}
     for group in ROLE_SYNONYMS:
         players = [cid for cid, toks in tokens.items() if toks & group]
@@ -279,7 +289,7 @@ def _mentions(text: str, aliases: dict[str, str], exclude: str) -> set[str]:
     for alias, cid in aliases.items():
         if cid == exclude or len(alias) < 3:
             continue
-        pattern = rf"(?<![a-z0-9_-]){re.escape(alias)}(?:-(?P<suffix>[a-z0-9]+)(?![a-z0-9_-])|(?![a-z0-9_-]))"
+        pattern = rf"(?<![a-z0-9_.-]){re.escape(alias)}(?:-(?P<suffix>[a-z0-9]+)(?![a-z0-9_.-])|(?![a-z0-9_.-]))"
         for m in re.finditer(pattern, lowered):
             suffix = m.group("suffix")
             if suffix is None or (suffix in GENERIC_NAME_SUFFIXES and f"{alias}-{suffix}" not in aliases):
@@ -302,11 +312,11 @@ def _login_rejection(text: str, role: str | None) -> str | None:
 
 def classify_logs(components: dict[str, dict]) -> None:
     """Turn error-log samples that are still occurring into typed findings and cross-component pointers."""
-    aliases = _name_aliases(components)
     pointers: dict[str, dict[str, Counter]] = defaultdict(lambda: defaultdict(Counter))  # target -> source -> class
     examples: dict[tuple[str, str], str] = {}
     observability = {cid for cid, comp in components.items() if OBSERVABILITY_RE.search(comp["name"])}
     for cid, comp in components.items():
+        aliases = _name_aliases(components, comp["namespace"])
         for key in ("log_findings", "errors_point_to", "referenced_by_errors_from", "telemetry_error_lines"):
             comp.pop(key, None)
         role = backend_role(comp)
