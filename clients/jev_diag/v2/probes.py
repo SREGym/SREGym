@@ -12,8 +12,7 @@ Both uses are keyed by backend roles (derive.ROLE_SYNONYMS), not by any particul
 
 A command runs only when the target container has room for it: its memory limit minus its current usage must
 cover the tool's footprint. A second process in a container near its memory limit gets the container OOM-killed,
-which would break the system being diagnosed (a JVM command-line tool inside a memory-capped Kafka broker did
-exactly that), so heavy tools are skipped in capped containers.
+which would break the system being diagnosed, so heavy tools are skipped in capped containers.
 """
 
 from __future__ import annotations

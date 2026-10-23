@@ -34,7 +34,7 @@ from clients.jev_diag.timeutil import now, parse_time
 from clients.jev_diag.v2 import changes as change_log
 from clients.jev_diag.v2 import paths
 
-# Whole name tokens only: `otel` names the OpenTelemetry collector, not `hotel-reservation`.
+# Whole name tokens only: `otel` names the OpenTelemetry collector, not a name that merely contains those letters.
 OBSERVABILITY_RE = re.compile(
     r"(?<![a-z0-9])(grafana|jaeger|prometheus|otel|opentelemetry|opensearch|elasticsearch|kibana|loki|fluent\w*|"
     r"promtail|alertmanager|kube-state-metrics|node-exporter|tempo|zipkin|pushgateway|blackbox)(?![a-z])",
@@ -113,7 +113,8 @@ LOG_CLASSES: list[tuple[str, re.Pattern[str]]] = [
         "connectivity or timeout",
         re.compile(
             r"(?i)(connection refused|dial tcp|timed? ?out|deadline exceeded|\bUNAVAILABLE\b|reset by peer|"
-            r"broken pipe|no route to host|\bEOF\b|\b50[234]\b|i/o timeout|unreachable|ECONNREFUSED|ETIMEDOUT|"
+            r"broken pipe|no route to host|\bEOF\b|\b50[234]\b|i/o timeout|unreachable|\b(?:no|not) reachable\b|"
+            r"ECONNREFUSED|ETIMEDOUT|"
             r"ECONNRESET|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EPIPE|connect: |retry|circuit|"
             r"\bDEADLINE_EXCEEDED\b|\bDeadlineExceeded\b|\bCANCELLED\b|\bCanceled\b|" + _CONNECT_FAILURE + ")"
         ),
@@ -223,8 +224,7 @@ GENERIC_NAME_SUFFIXES = {
     "cluster",
     "proxy",
 }
-# Rejections that began within this window after a credential source was rewritten are attributed to it.
-REJECTION_CORRELATION_SECONDS = 300
+MAX_LOGIN_CANDIDATES = 3  # candidate clients listed for a server that rejects logins
 
 
 def _component_tokens(comp: dict) -> set[str]:
@@ -246,14 +246,19 @@ def backend_role(comp: dict) -> str | None:
 
 
 def _name_aliases(components: dict[str, dict]) -> dict[str, str]:
-    """Lowercased names that identify a component in log text: its own name, its Services' names, and, when
-    exactly one component in the application plays a backend role, the synonyms of that role."""
+    """Lowercased names that identify a component in log text: its own name, its Services' names and cluster IPs,
+    its pods' IPs (an address in an error line names its target exactly), and, when exactly one component in the
+    application plays a backend role, the synonyms of that role."""
     aliases: dict[str, str] = {}
     for cid, comp in components.items():
         aliases.setdefault(comp["name"].lower(), cid)
         for svc in comp.get("services") or []:
-            if svc.get("name"):
-                aliases.setdefault(svc["name"].lower(), cid)
+            for alias in (svc.get("name"), svc.get("cluster_ip")):
+                if alias:
+                    aliases.setdefault(alias.lower(), cid)
+        for pod in comp.get("pods") or []:
+            if pod.get("ip"):
+                aliases.setdefault(pod["ip"], cid)
     tokens = {cid: _component_tokens(comp) for cid, comp in components.items()}
     for group in ROLE_SYNONYMS:
         players = [cid for cid, toks in tokens.items() if toks & group]
@@ -264,7 +269,7 @@ def _name_aliases(components: dict[str, dict]) -> dict[str, str]:
 
 
 def _mentions(text: str, aliases: dict[str, str], exclude: str) -> set[str]:
-    """Components whose name appears in `text` as a whole token (so `cart` does not match `valkey-cart`).
+    """Components whose name appears in `text` as a whole token (so `api` does not match `edge-api`).
 
     A name followed by a generic word ("user-service-client") still counts, unless the longer name belongs to
     another component.
@@ -314,7 +319,8 @@ def classify_logs(components: dict[str, dict]) -> None:
             count = int(sig.get("count") or 1)
             text = sig.get("_text") or line  # classified whole; `line` is the shortened display text
             body = text.split(": ", 1)[1] if ": " in text[:40] else text  # drop the "container: " prefix
-            if bool(TELEMETRY_RE.search(body)) and cid not in observability:
+            sig["_telemetry"] = bool(TELEMETRY_RE.search(body))  # never dates the symptom onset (changes.py)
+            if sig["_telemetry"] and cid not in observability:
                 telemetry_lines += count
                 findings.append(
                     {"classes": ["telemetry export failure"], "count": count, "targets": [], "line": line[:200]}
@@ -376,14 +382,11 @@ def classify_logs(components: dict[str, dict]) -> None:
 def server_login_rejections(components: dict[str, dict], collected_at: datetime) -> None:
     """A server that rejects logins points at the clients that present the rejected credentials.
 
-    Candidate clients are scored. Strongest: a Secret or ConfigMap the client reads through env values was
-    rewritten shortly before the rejections began and after the client's containers started, so the running
-    client still holds the old value. A literal env value naming the rejected account identifies the client only
-    when no other client names it too; clients usually share an account. A client whose latest pod template
-    updated the env value holding the account, and whose pods all started after that update, runs with the new
-    value and is weakened. The client's env values addressing the server, or its env var names denoting a
-    database connection when the server is the application's only database, add a little. Secret values are
-    never read.
+    Candidates are the clients connected to the server: those whose env values address it or name a rejected
+    account, and, when it is the application's only database, those whose env var names denote a database
+    connection. They are ordered by what explains a rejected credential: first a client still holding the previous
+    values of a Secret or ConfigMap rewritten after its containers started and before the rejections began, then a
+    client naming the account, then the rest. Each is listed with those facts. Secret values are never read.
     """
     databases = [cid for cid, comp in components.items() if backend_role(comp) in DATABASE_ROLES]
     for sid, server in components.items():
@@ -406,79 +409,39 @@ def server_login_rejections(components: dict[str, dict], collected_at: datetime)
         server["rejected_accounts"] = dict(accounts)
         names = ", ".join(sorted(accounts))
         total = sum(accounts.values())
-        naming = {
-            cid
-            for cid, comp in components.items()
-            if cid != sid and any(acc in v for acc in accounts for v in comp.get("_env_values") or [])
-        }
         candidates = []
         for cid, comp in components.items():
             if cid == sid or comp.get("role") == "observability":
                 continue
-            reasons: list[str] = []
-            score = 0
-            if cid in naming:
-                if len(naming) == 1:
-                    reasons.append(f"it is the only client whose env values name the account {names}")
-                    score += 3
-                else:
-                    reasons.append(f"its env values name the account {names}, as do {len(naming) - 1} other client(s)")
-                    score += 1
-            tc = comp.get("template_changes") or {}
-            changed_at = parse_time(tc.get("changed_at"))
-            starts = [parse_time(p.get("started")) for p in comp.get("pods") or []]
-            refreshed = any(
-                " env " in ch and "->" in ch and any(acc in ch.split("->", 1)[1] for acc in accounts)
-                for ch in tc.get("changes") or []
-            )
-            if refreshed and changed_at and starts and all(t and t >= changed_at for t in starts):
-                reasons.append(
-                    "its latest pod template updated the env value holding that account and its pods started after the update"
-                )
-                score -= 2
-            if began is not None:
-                for ref, obj in (comp.get("config_objects") or {}).items():
-                    written = parse_time(obj.get("last_update"))
-                    fixed_read = any(
-                        "fixed when the container starts" in s and ref.split("/", 1)[1] in s
-                        for s in comp.get("signals") or []
-                    )
-                    if (
-                        written
-                        and fixed_read
-                        and 0 <= (began - written).total_seconds() <= REJECTION_CORRELATION_SECONDS
-                    ):
-                        reasons.append(
-                            f"{ref}, which it reads through env values, was rewritten "
-                            f"{int((began - written).total_seconds())}s before the rejections began and after its "
-                            "containers started"
-                        )
-                        score += 3
-                        break
+            stale = [
+                f"it still holds the previous values of {ref}, rewritten at {written} after its containers started"
+                for ref, written in sorted((comp.get("_holds_previous") or {}).items())
+                if (t := parse_time(written)) and (began is None or t <= began)
+            ][:1]
+            names_account = any(acc in v for acc in accounts for v in comp.get("_env_values") or [])
+            naming = [f"its env values name the account {names}"] if names_account else []
+            connected = []
             if sid in (comp.get("_calls") or []):
-                reasons.append(f"its env values address {server['name']}")
-                score += 1
+                connected.append(f"its env values address {server['name']}")
             elif databases == [sid]:
                 env_names = [n for c in comp.get("containers") or [] for n in c.get("env_names") or []]
                 db_vars = [n for n in env_names if set(n.lower().split("_")) & _DATABASE_ENV_TOKENS]
                 if db_vars:
-                    reasons.append(
+                    connected.append(
                         f"its env var {db_vars[0]} names a database connection and {server['name']} is the "
                         "application's only database"
                     )
-                    score += 1
-            if reasons and score > 0:
-                candidates.append((score, cid, reasons))
-        candidates.sort(key=lambda c: (-c[0], c[1]))
-        top = candidates[:3]
+            if naming or connected:
+                candidates.append((not stale, not naming, cid, stale + naming + connected))
+        top = sorted(candidates)[:MAX_LOGIN_CANDIDATES]
         if top:
-            server["login_candidates"] = [cid for _, cid, _ in top]
-        listed = "; ".join(f"{cid} ({', '.join(r)})" for _, cid, r in top)
+            server["login_candidates"] = [cid for *_, cid, _ in top]
+        listed = "; ".join(f"{cid} ({', '.join(r)})" for *_, cid, r in top)
         server["signals"].append(
             f"rejects logins for account {names} ({total} lines, still occurring); the rejected credentials come "
             f"from its clients" + (f": candidates {listed}" if top else "")
         )
-        for _, cid, reasons in top:
+        for *_, cid, reasons in top:
             components[cid]["signals"].append(
                 f"server {sid} rejects logins for account {names} ({total} lines, still occurring); this component "
                 f"may present those credentials: {'; '.join(reasons)}"
@@ -602,6 +565,23 @@ def retire_stale_events(components: dict[str, dict]) -> None:
             comp["signals"].append("warning events: " + ", ".join(f"{r} x{n}" for r, n in reasons.most_common(4)))
 
 
+def failed_reads(errors: list[str]) -> set[tuple[str, str | None]]:
+    """(resource, namespace) of every list read the collection recorded as failed (an error or a timeout); namespace
+    None for a cluster-wide or cluster-scoped read. An object missing from a failed read was not seen, which is not
+    the same as absent: a check must say "could not be read (not verified)", never "does not exist"."""
+    out = set()
+    for error in errors:
+        command = re.split(r" failed:| timed out", error, maxsplit=1)[0]
+        words = re.sub(r"[\[\]',]", " ", command).split()  # a timeout quotes the command as a list
+        if "get" not in words:
+            continue
+        at = words.index("get")
+        if words[at + 2 : at + 3] != ["-o"]:  # one named object, not a list
+            continue
+        out.add((words[at + 1], words[words.index("-n") + 1] if "-n" in words[:-1] else None))
+    return out
+
+
 def tag_roles(components: dict[str, dict]) -> None:
     for comp in components.values():
         if OBSERVABILITY_RE.search(comp["name"]):
@@ -633,7 +613,6 @@ SYMPTOM_MARKERS = (
     "were preempted to make room",
     "were evicted under node pressure",
 )
-RESTART_SIGNAL = "rolling restart"  # changes.describe_change for a restart-only revision
 CHANGE_MARKERS = ("spec modified", "was modified", "was written", "was created", "created ", "pod template changed")
 POINTED_MARKERS = ("errors logged by", "server ")
 OWN_LOG_MARKERS = ("logs report", "Kafka consumer group")
@@ -647,13 +626,10 @@ def classify_evidence(components: dict[str, dict]) -> None:
     pointed_at: other components' still-occurring errors name it, or a server rejects credentials it may present.
     own_failure_logs: its logs show authorization, data, memory, or filesystem failures, or its consumer stalls.
     symptoms: pod/replica/resource state only.
-    A rolling restart changes no setting and is no symptom: it adds no kind.
     """
     for comp in components.values():
         kinds: set[str] = set()
         for sig in comp.get("signals") or []:
-            if sig.startswith(RESTART_SIGNAL):
-                continue
             # prefixes first: pointer and log signals quote other text, which may contain change words
             if sig.startswith(POINTED_MARKERS):
                 kinds.add("pointed_at")
@@ -670,13 +646,49 @@ def classify_evidence(components: dict[str, dict]) -> None:
         comp["evidence_kinds"] = sorted(kinds)
 
 
+MIN_PLATFORM_WORKLOADS = 2  # workloads failing in one platform layer for the layer to be a finding of its own
+MAX_PLATFORM_NAMED = 4
+
+
+def platform_findings(components: dict[str, dict]) -> list[dict]:
+    """A platform layer (pod network, Pod Security admission, preemption, node pressure) whose failure the events of
+    several workloads state: one fault of the platform, not one of each workload, even when no platform object
+    changed. The finding acts on those workloads."""
+    from clients.jev_diag.v2.platform_events import PLATFORM_LAYERS
+
+    by_layer: dict[str, dict[str, int]] = {}
+    for cid, comp in components.items():
+        for layer, n in (comp.get("platform_failures") or {}).items():
+            by_layer.setdefault(layer, {})[cid] = n
+    out = []
+    for layer, hit in sorted(by_layer.items()):
+        if len(hit) < MIN_PLATFORM_WORKLOADS:
+            continue
+        names = sorted(hit, key=lambda c: -hit[c])
+        shown = ", ".join(names[:MAX_PLATFORM_NAMED]) + (
+            f" and {len(names) - MAX_PLATFORM_NAMED} more" if len(names) > MAX_PLATFORM_NAMED else ""
+        )
+        out.append(
+            {
+                "kind": "Platform",
+                "name": layer.replace("_", " "),
+                "signal": f"{PLATFORM_LAYERS[layer]}: the events of {len(names)} workloads state it ({shown}; "
+                f"{sum(hit.values())} events)",
+                "components": sorted(hit),
+                "platform": True,
+                "layer": layer,
+            }
+        )
+    return out
+
+
 def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict[str, dict]) -> list[dict]:
     """Cluster-scoped and namespace-scoped objects with a computed signal, for the `other` path.
 
     Each finding carries `components`: the workloads the object is known to act on (the pods a webhook
     rewrote, the pods a quota rejected, the workloads a policy selects or a role is bound to).
     """
-    out: list[dict] = []
+    out: list[dict] = platform_findings(components)
     for wh in cluster.get("admission_webhooks") or []:
         for sig in wh.get("signals") or []:
             out.append(
@@ -766,13 +778,19 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict
                 "components": obj.get("components") or [],
             }
         )
+    routine: dict[tuple, list[dict]] = {}
     for ch in ranked_changes:
         if _owned_by_targets(ch, components):
             continue
+        if ch.get("routine"):
+            routine.setdefault((ch["routine"], ch.get("writer"), ch["kind"]), []).append(ch)
+            continue
         text = change_log.describe_change(ch)
+        attribution = {"writer": ch.get("writer"), "change_set": ch.get("change_set")}
         existing = next((f for f in out if f.get("kind") == ch["kind"] and f.get("name") == ch["name"]), None)
         if existing is not None:
             existing["signal"] = f"{existing['signal']}; {text}"
+            existing.update({k: v for k, v in attribution.items() if v})
             continue
         out.append(
             {
@@ -781,6 +799,7 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict
                 "namespace": ch.get("namespace"),
                 "signal": text,
                 "components": ch.get("affects") or [],
+                **attribution,
             }
         )
     seen: set[tuple] = set()
@@ -790,7 +809,27 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict
         if key not in seen:
             seen.add(key)
             unique.append({k: v for k, v in f.items() if v not in (None, [])})
-    return unique
+    return unique + [routine_summary(*key, group) for key, group in routine.items()]
+
+
+MAX_ROUTINE_NAMES = 3
+
+
+def routine_summary(reason: str, writer: str | None, kind: str, changes: list[dict]) -> dict:
+    """One finding for a group of routine writes (changes.routine_reason) by one writer to one kind, last in the list:
+    the writes stay visible, as one line instead of one finding per object."""
+    names = [c["name"] for c in changes]
+    ages = sorted(c["seconds_ago"] for c in changes if c.get("seconds_ago") is not None)
+    when = (f" {ages[0]}s ago" if ages[0] == ages[-1] else f" {ages[0]}-{ages[-1]}s ago") if ages else ""
+    shown = ", ".join(n if len(n) <= 40 else n[:39] + "…" for n in names[:MAX_ROUTINE_NAMES])
+    more = f" and {len(names) - MAX_ROUTINE_NAMES} more" if len(names) > MAX_ROUTINE_NAMES else ""
+    return {
+        "kind": kind,
+        "name": names[0] if len(names) == 1 else f"{len(names)} objects",
+        "signal": f"routine, {reason}: {len(names)} {kind} object(s) written by {writer or 'an unrecorded writer'}"
+        f"{when}: {shown}{more}",
+        "routine": True,
+    }
 
 
 def _owned_by_targets(change: dict, components: dict[str, dict]) -> bool:

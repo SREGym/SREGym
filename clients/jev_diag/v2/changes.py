@@ -9,9 +9,13 @@ assumed deployment time:
 * a pod template that differs from the one current when the application was deployed (Deployment ReplicaSets,
   StatefulSet and DaemonSet ControllerRevisions), diffed field by field.
 
-Changes are then ranked by when they happened relative to the first active symptom, which is estimated from the
-symptoms themselves: errors that are still occurring, readiness loss, crash loops, Pending pods, current warning
-events, and firing alerts.
+Each change names its writer (the field manager of the write that dates it), and writes by one writer within a few
+seconds form a change set, the way kubectl and audit logs attribute a change.
+
+Changes are then ranked: first those that act on an abnormal component, then the rest, each group by when it
+happened relative to the start of the active symptom episode, which is estimated from the symptoms themselves
+(errors that are still occurring, readiness loss, crash loops, Pending pods, current warning events, and firing
+alerts). Routine platform writes (see `routine_reason`) are ranked last and summarized instead of listed.
 """
 
 from __future__ import annotations
@@ -32,6 +36,12 @@ MAX_RECENT_CHANGES = 10
 RESTART_ANNOTATION = "kubectl.kubernetes.io/restartedAt"  # written by a rollout restart; no setting changes
 POD_TEMPLATE_HASH = "pod-template-hash"  # the label a Deployment puts on each ReplicaSet's template; never a setting
 DEPLOY_TOLERANCE_SECONDS = 5  # a change this close to the application's creation still counts as after it
+SAME_CHANGE_SECONDS = 10  # writes by one writer this close together are one operation (a change set)
+MAX_SET_MEMBERS = 8
+# With Kubernetes' default probe timing (periodSeconds 10, failureThreshold 3) a failing liveness probe restarts a
+# container about 30 s after it starts failing, and the kubelet re-emits a warning while its condition holds. A pod
+# Ready this long without another crash, or an event series silent this long, has stopped.
+RECOVERED_SECONDS = 60
 
 _IGNORED_SUBRESOURCES = {"status", "scale"}
 # Managers that write a workload's scale on their own (autoscalers); a scale write by anyone else is a change.
@@ -134,23 +144,31 @@ def later_writes(meta: dict) -> list[dict]:
     return out
 
 
-# Package managers install software as a unit (a Helm release); an object only they wrote is part of an install.
-_PACKAGE_MANAGERS = re.compile(r"(?i)^(helm|helm-controller|kustomize-controller|argocd-.*|flux.*)$")
-# An install includes its hooks (a job that injects a webhook's CA bundle, for example), which write right after it.
-INSTALL_HOOK_SECONDS = 60
+# Kubernetes' own components reconcile objects toward what others asked for; their writes are not changes.
+_CORE_COMPONENTS = re.compile(
+    r"^(?:kube-controller-manager|kube-scheduler|kubelet|kube-apiserver|cloud-controller-manager|before-first-apply)$"
+)
 
 
-def _package_install(meta: dict) -> bool:
-    writes = spec_writes(meta)
-    installs = [parse_time(w["time"]) for w in writes if _PACKAGE_MANAGERS.match(w.get("manager") or "")]
-    if not installs:
-        return False
-    installed = max(installs)
-    return all(
-        _PACKAGE_MANAGERS.match(w.get("manager") or "")
-        or 0 <= seconds_between(parse_time(w["time"]), installed) <= INSTALL_HOOK_SECONDS
-        for w in writes
-    )
+def desired_state_writes(meta: dict) -> list[dict]:
+    """Spec and data writes that change what an object asks for, whoever made them (a person, a script, a package
+    manager, a GitOps controller): every spec write except those of Kubernetes' own components and of the object's
+    own controller (a manager that also writes the object's status reconciles it)."""
+    status_writers = {f.get("manager") for f in meta.get("managedFields") or [] if f.get("subresource") == "status"}
+    return [
+        w
+        for w in spec_writes(meta)
+        if not _CORE_COMPONENTS.match(w.get("manager") or "") and w.get("manager") not in status_writers
+    ]
+
+
+def change_writer(meta: dict, modified: bool) -> str | None:
+    """The field manager of the write that dates a change: the latest desired-state write for a modification, the
+    earliest (the creating one) for an object created late. None when no such write is recorded."""
+    writes = sorted(desired_state_writes(meta), key=lambda f: f.get("time") or "")
+    if not writes:
+        return None
+    return (writes[-1] if modified else writes[0]).get("manager")
 
 
 # --------------------------------------------------------------------------- values of a change
@@ -223,15 +241,39 @@ def changed_values(obj: dict, meta: dict) -> list[str]:
             old = value_at(applied, raw) if applied else _MISSING
             path = readable_path(raw)
             if old is not _MISSING and old != new:
-                if isinstance(old, str) and isinstance(new, str):  # long text: where it differs
+                if isinstance(old, str) and isinstance(new, str) and not (_encoded(old) or _encoded(new)):
+                    # long text: where it differs
                     was, now_ = _shown(old, new, VALUE_CHARS)
                     out.append(f"{path}: {was} -> {now_}")
                 else:
-                    shown_new = "(removed)" if new is _MISSING else json_short(new, VALUE_CHARS)
-                    out.append(f"{path}: {json_short(old, VALUE_CHARS)} -> {shown_new}")
+                    shown_new = "(removed)" if new is _MISSING else json_short(readable(new), VALUE_CHARS)
+                    out.append(f"{path}: {json_short(readable(old), VALUE_CHARS)} -> {shown_new}")
             elif new is not _MISSING:
-                out.append(f"{path} = {json_short(new, VALUE_CHARS)}")
+                out.append(f"{path} = {json_short(readable(new), VALUE_CHARS)}")
     return list(dict.fromkeys(out))[:MAX_CHANGED_VALUES]
+
+
+_BASE64 = re.compile(r"[A-Za-z0-9+/]{80,}={0,2}")
+
+
+def _encoded(text: str) -> bool:
+    """A certificate (PEM) or a base64 payload: no readable setting in it."""
+    if "-----BEGIN " in text:
+        return True
+    flat = text.replace("\n", "").replace("\r", "")
+    return bool(_BASE64.fullmatch(flat)) and any(c.isdigit() for c in flat)
+
+
+def readable(value):
+    """`value` with encoded data (a CA bundle, a certificate, a base64 payload) replaced by its size: it carries no
+    readable setting and would fill the space the settings need."""
+    if isinstance(value, dict):
+        return {k: readable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [readable(v) for v in value]
+    if isinstance(value, str) and _encoded(value):
+        return f"<{len(value)} characters of encoded data>"
+    return value
 
 
 def object_content(obj: dict) -> str | None:
@@ -239,11 +281,38 @@ def object_content(obj: dict) -> str | None:
     if obj.get("kind") == "Secret":
         keys = sorted((obj.get("data") or {}) | (obj.get("stringData") or {}))
         return f"keys {', '.join(keys)}" if keys else None
-    content = {k: obj[k] for k in _CONTENT_KEYS if k in obj}
+    content = {k: readable(obj[k]) for k in _CONTENT_KEYS if k in obj}
     return json_short(content, VALUE_CHARS * 2) if content else None
 
 
 # --------------------------------------------------------------------------- pod template revisions
+
+
+MAX_DRIFT_DIFFS = 4
+
+
+def live_revision_drift(comp: dict, revisions: list[dict]) -> list[str]:
+    """Pods that still run an older pod template than the workload's newest revision (a paused or stalled rollout, a
+    partition, pods not yet replaced), each older template with how it differs from the newest one."""
+    if len(revisions) < 2:
+        return []
+    newest = revisions[-1]
+    by_key = {key: rev for rev in revisions for key in (rev.get("hash"), rev.get("name")) if key}
+    stale: dict[int, list[str]] = {}
+    for pod in comp.get("pods") or []:
+        rev = by_key.get(pod.get("template_hash"))
+        if rev is not None and rev["revision"] < newest["revision"]:
+            stale.setdefault(rev["revision"], []).append(pod["name"])
+    out = []
+    for number, pods in sorted(stale.items()):
+        old = next(r for r in revisions if r["revision"] == number)
+        diff = [d for d in template_diff(old["template"], newest["template"]) if not d.startswith("pod label ")]
+        differs = "; ".join(diff[:MAX_DRIFT_DIFFS]) or "no compared setting differs"
+        out.append(
+            f"{len(pods)} pod(s) ({', '.join(pods[:3])}) still run pod template revision {number}, not the newest "
+            f"({newest['revision']}); revision {number} -> newest: {differs}"
+        )
+    return out
 
 
 def revision_templates(replicasets: list[dict], controllerrevisions: list[dict]) -> dict:
@@ -500,8 +569,6 @@ def object_change(
     With the object itself (`obj`), the record also says what changed: the values the later writes set (old -> new
     where the last applied configuration keeps the old one), or, for an object created late, what it contains.
     """
-    if _package_install(meta):
-        return None  # written only by a package manager: installed software, not a change to the running system
     created = meta.get("creationTimestamp")
     modified = modified_after_creation(meta)
     late = created_after(created, targets_created or [])
@@ -527,6 +594,8 @@ def object_change(
         "created": created,
         "at": at,
         "affects": sorted(set(affects or [])),
+        # a revision diff alone records no write of its own: its writer is unknown
+        "writer": change_writer(meta, modified is not None) if modified is not None or late is not None else None,
     }
     if modified is not None:
         record["modified_after_creation_s"] = modified
@@ -555,31 +624,59 @@ def object_change(
 def estimate_symptom_onset(
     components: dict[str, dict], cluster: dict, collected_at: datetime
 ) -> tuple[datetime | None, str | None]:
-    """The earliest start among abnormalities that are still active, outside telemetry components.
+    """The start of the active symptom episode: the earliest start among abnormalities that are still active, outside
+    telemetry components.
 
-    Nothing dated before the application was deployed counts (the fault came after it), and an alert counts only when
-    its namespace label is one of the application's (cluster-wide alerts from earlier problems linger).
+    Still active means: a pod that is not ready or Pending; an error-log signature still occurring (failures to
+    export telemetry excluded: they never break a request); a container crash, or a warning event about a pod, while
+    that pod has not stayed Ready for RECOVERED_SECONDS since; any other warning event series that recurred within
+    RECOVERED_SECONDS. A liveness-killed pod is Ready only between kills, so readiness counts only once it has lasted.
+    What ended before is an earlier episode, typically warm-up restarts of components that waited for their
+    dependencies and have been Ready since, or events about pods that were replaced; it does not date this one.
+
+    Nothing dated before the application was deployed counts, and an alert counts only when its namespace label is
+    one of the application's: the onset is the application's, and alerts about nodes or other namespaces can begin
+    and end independently of it.
     """
     candidates: list[tuple[datetime, str]] = []
     deployed = application_created(components)
     namespaces = {c["namespace"] for c in components.values()}
+
+    def recovered(pod: dict) -> bool:
+        since = parse_time(pod.get("ready_since"))
+        ready, _, total = (pod.get("ready") or "0/1").partition("/")
+        return (
+            since is not None
+            and ready == total
+            and pod.get("phase") == "Running"
+            and (collected_at - since).total_seconds() >= RECOVERED_SECONDS
+        )
+
     for cid, comp in components.items():
         if comp.get("role") == "observability":
             continue
         for sig in comp.get("log_signals") or []:
-            if sig.get("state") == "ongoing" and sig.get("first_seen_seconds_ago") is not None:
-                candidates.append((collected_at - timedelta(seconds=sig["first_seen_seconds_ago"]), f"errors in {cid}"))
-        for pod in comp.get("pods") or []:
-            for key, what in (("not_ready_since", "pod not ready"), ("last_crash_at", "container crash")):
-                moment = parse_time(pod.get(key))
-                if moment and (key != "last_crash_at" or not pod.get("settled")):
-                    candidates.append((moment, f"{what} in {cid}"))
+            started = sig.get("episode_start_seconds_ago", sig.get("first_seen_seconds_ago"))
+            if sig.get("state") == "ongoing" and started is not None and not sig.get("_telemetry"):
+                candidates.append((collected_at - timedelta(seconds=started), f"errors in {cid}"))
+        pods = {pod.get("name"): pod for pod in comp.get("pods") or []}
+        for pod in pods.values():
+            moment = parse_time(pod.get("not_ready_since"))
+            if moment and pod.get("phase") != "Succeeded":  # a completed pod is not ready by design
+                candidates.append((moment, f"pod not ready in {cid}"))
+            moment = parse_time(pod.get("last_crash_at"))
+            if moment and not recovered(pod):
+                candidates.append((moment, f"container crash in {cid}"))
             if pod.get("phase") == "Pending" and parse_time(pod.get("created")):
                 candidates.append((parse_time(pod["created"]), f"pod pending in {cid}"))
         for ev in comp.get("warning_events") or []:
-            moment = parse_time(ev.get("first_seen"))
-            if moment:
-                candidates.append((moment, f"{ev.get('reason')} events on {cid}"))
+            first = parse_time(ev.get("first_seen"))
+            last = parse_time(ev.get("last_seen")) or first
+            obj = ev.get("object") or ""
+            pod = pods.get(obj[4:]) if obj.startswith("pod/") else None
+            recurring = last is not None and (collected_at - last).total_seconds() < RECOVERED_SECONDS
+            if first and (recurring or (pod is not None and not recovered(pod))):
+                candidates.append((first, f"{ev.get('reason')} events on {cid}"))
     for alert in cluster.get("firing_alerts") or []:
         moment = parse_time(alert.get("active_since"))
         if moment and (alert.get("labels") or {}).get("namespace") in namespaces:
@@ -603,6 +700,7 @@ def _acts_on(kind: str) -> str:
         "LimitRange": "in its namespace",
         "Role": "bound to it",
         "ClusterRole": "bound to it",
+        "PersistentVolume": "that mount its claim",
     }.get(kind, "it calls")
 
 
@@ -611,19 +709,50 @@ def relative_to_symptoms(before: int | None) -> str:
         return ""
     if before >= 0:
         return f"; {before}s before the first active symptom"
+    if before >= -ONSET_TOLERANCE_SECONDS:  # finer than the onset estimate can tell
+        return "; at the first active symptom"
     return f"; {-before}s after the first active symptom"
 
 
+def workload_runs(comp: dict) -> str | None:
+    """What a workload runs: each container's command, args and image (without its digest)."""
+    parts = []
+    for c in comp.get("containers") or []:
+        what = []
+        if c.get("command"):
+            what.append(f"command {' '.join(map(str, c['command']))}")
+        if c.get("args"):
+            what.append(f"args {' '.join(map(str, c['args']))}")
+        what.append(f"image {(c.get('image') or '').split('@')[0]}")
+        parts.append(f"container {c.get('name')}{' (init)' if c.get('init') else ''}: {', '.join(what)}")
+    return json_short("; ".join(parts), VALUE_CHARS) if parts else None
+
+
+MAX_SET_NAMED = 4  # objects of a change set named in a change's signal
+
+
+def written_by(change: dict) -> str:
+    """ "; written by W" and, for a change set, the other objects W wrote in the same operation."""
+    if not change.get("writer"):
+        return ""
+    members = change.get("set_members") or []
+    if not members:
+        return f"; written by {change['writer']}"
+    more = (change.get("set_size") or len(members) + 1) - 1 - min(len(members), MAX_SET_NAMED)
+    named = ", ".join(members[:MAX_SET_NAMED]) + (f" and {more} more" if more > 0 else "")
+    return f"; written by {change['writer']} in one operation with {named}"
+
+
 def describe_change(change: dict, component_id: str | None = None) -> str:
-    """Signal text for a change, from the point of view of `component_id`."""
+    """Signal text for a change, from the point of view of `component_id`, ending with who wrote it and what else that
+    writer wrote in the same operation: a value written into a workload by an automation object created alongside
+    points at that object."""
     ago = change.get("seconds_ago")
-    rel = relative_to_symptoms(change.get("seconds_before_symptoms"))
+    rel = relative_to_symptoms(change.get("seconds_before_symptoms")) + written_by(change)
     fields = f" (fields: {', '.join(change['fields'][:4])})" if change.get("fields") else ""
     template = ""
     if change.get("template_changes"):
         template = f"; pod template changes: {'; '.join(change['template_changes'][:3])}"
-    if change.get("restart_only"):
-        return f"rolling restart {ago}s ago (only the restart annotation changed; no setting changed){rel}"
     if change["object"] == component_id and change.get("revision_changed"):
         return f"pod template changed {ago}s ago{template}{rel}"
     if change["object"] == component_id:
@@ -633,7 +762,8 @@ def describe_change(change: dict, component_id: str | None = None) -> str:
                 f"spec modified {ago}s ago, {change['modified_after_creation_s']}s after this object was created"
                 f"{fields}{own}{template}{rel}"
             )
-        return f"created {ago}s ago, {change['created_after_targets_s']}s after the workloads it calls{rel}"
+        runs = f"; it runs {change['content']}" if change.get("content") else ""
+        return f"created {ago}s ago, {change['created_after_targets_s']}s after the workloads it calls{runs}{rel}"
     what = f"{change['kind']} {change['name']}"
     values = f"; now {'; '.join(change['values'])}" if change.get("values") else ""
     content = f"; it holds {change['content']}" if change.get("content") else ""
@@ -657,23 +787,92 @@ def application_created(components: dict[str, dict]) -> datetime | None:
 
 
 def before_deploy(change: dict, deployed: datetime | None) -> bool:
-    """Whether a change was made before the application was deployed. One fault is injected after the application
-    is deployed, so such a write (left by an earlier problem or by cluster setup) cannot be it."""
+    """Whether a change was made before the application's workloads existed: such a write is part of the
+    environment the application was deployed into, not a change to the running application."""
     at = parse_time(change.get("at"))
     gap = seconds_between(deployed, at) if deployed and at else None
     return gap is not None and gap > DEPLOY_TOLERANCE_SECONDS
 
 
-def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datetime | None = None) -> list[dict]:
-    """Order recorded changes by their relation to the first active symptom and attach them as signals.
+def routine_reason(change: dict) -> str | None:
+    """Why a change is routine platform activity rather than a change to what the application is or runs, or None.
 
-    Changes made before the first symptom come first, nearest first; then the rest, most recent first. Without
-    an onset estimate the order is most recent first. Returns the full ranked list.
+    Writes the cluster's own records attribute to a controller carry `routine` from collection (a volume provisioned
+    for a claim, an object maintained by its owner's controller, a background writer's bulk bookkeeping; see
+    outside.change_radar). A rollout restart changes no setting, and a telemetry object carries no application
+    request: both are context, not candidates.
+    """
+    if change.get("routine"):
+        return change["routine"]
+    if change.get("restart_only"):
+        return "rollout restart, no setting changed"
+    if change.get("role") == "observability":
+        return "telemetry object"
+    return None
+
+
+def assign_change_sets(changes: list[dict]) -> None:
+    """Group changes into change sets: writes by one writer, each within SAME_CHANGE_SECONDS of the previous one, are
+    one operation (an apply of several manifests, one script, one release). Each member of a set of two or more
+    objects gets `change_set` (sets numbered by their first write), `set_members` (the other members' objects, at
+    most MAX_SET_MEMBERS) and `set_size`. Routine changes never join a set: a background writer's bookkeeping would
+    tie a real change to dozens of unrelated objects. A change with no known writer joins none."""
+    by_writer: dict[str, list[tuple[datetime, dict]]] = {}
+    for change in changes:
+        at = parse_time(change.get("at"))
+        if change.get("writer") and at and not change.get("routine"):
+            by_writer.setdefault(change["writer"], []).append((at, change))
+    sets: list[list[tuple[datetime, dict]]] = []
+    for writes in by_writer.values():
+        writes.sort(key=lambda w: w[0])
+        sets.append([writes[0]])
+        for previous, write in zip(writes, writes[1:], strict=False):
+            if (write[0] - previous[0]).total_seconds() <= SAME_CHANGE_SECONDS:
+                sets[-1].append(write)
+            else:
+                sets.append([write])
+    sets = sorted((s for s in sets if len({c["object"] for _, c in s}) > 1), key=lambda s: (s[0][0], s[0][1]["object"]))
+    for number, members in enumerate(sets, 1):
+        objects = list(dict.fromkeys(c["object"] for _, c in members))
+        for _, change in members:
+            change["change_set"] = f"cs{number}"
+            change["set_members"] = [o for o in objects if o != change["object"]][:MAX_SET_MEMBERS]
+            change["set_size"] = len(objects)
+
+
+_LISTED_KEYS = (
+    "object",
+    "kind",
+    "affects",
+    "at",
+    "seconds_ago",
+    "seconds_before_symptoms",
+    "fields",
+    "values",  # what the change wrote, so triage reads the value, not only the write
+    "content",
+    "writer",
+    "change_set",
+    "set_members",
+    "set_size",
+)
+
+
+def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datetime | None = None) -> list[dict]:
+    """Order recorded changes and attach each one that is not routine to the components it acts on, as a signal.
+    Returns the full ranked list.
+
+    Changes that act on an abnormal component (one with any signal or error logs) come first, then the rest: an
+    object that acts on no component in particular (a cluster-level setting, a node, a volume) can still be the
+    cause, so it is ranked lower, never dropped. Within each group, changes made before the first active symptom come
+    first, nearest first; then the rest, most recent first (most recent first throughout without an onset
+    estimate). Routine changes (`routine_reason`) come last and stay out of `recent_changes`: cluster_findings
+    summarizes them in a line per writer and kind.
     """
     collected_at = collected_at or now()
     onset, source = estimate_symptom_onset(components, cluster, collected_at)
     cluster["symptom_onset"] = onset.isoformat(timespec="seconds") if onset else None
     cluster["symptom_onset_source"] = source
+    abnormal = {cid for cid, comp in components.items() if comp.get("signals") or comp.get("log_error_lines")}
     ranked = []
     deployed = application_created(components)
     for raw in cluster.get("_changes") or []:
@@ -686,9 +885,10 @@ def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datet
         affected = [components[c] for c in change.get("affects") or [] if c in components]
         if affected and all(c.get("role") == "observability" for c in affected):
             change["role"] = "observability"
+        change["routine"] = routine_reason(change)
         ranked.append(change)
 
-    def order(change: dict) -> tuple:
+    def timing(change: dict) -> tuple:
         before = change.get("seconds_before_symptoms")
         if before is None:
             return (1, change.get("seconds_ago") or 0)
@@ -696,27 +896,16 @@ def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datet
             return (0, before)
         return (2, change.get("seconds_ago") or 0)
 
-    ranked.sort(key=order)
+    ranked.sort(key=lambda c: (bool(c["routine"]), not (abnormal & set(c.get("affects") or [])), *timing(c)))
+    assign_change_sets(ranked)
+    listed = [c for c in ranked if not c["routine"]]
     cluster["recent_changes"] = [
-        {
-            k: v
-            for k, v in c.items()
-            if k in ("object", "kind", "affects", "at", "seconds_ago", "seconds_before_symptoms", "fields", "role")
-            or k in ("values", "content")  # what the change set, so triage reads the value, not only the write
-            or k.endswith("_s")
-        }
-        for c in ranked[:MAX_RECENT_CHANGES]
+        {k: v for k, v in c.items() if (k in _LISTED_KEYS or k.endswith("_s")) and v is not None}
+        for c in listed[:MAX_RECENT_CHANGES]
     ]
     flag = "nearest_change_before_symptoms" if onset else "most_recent_change"
-    first = next(
-        (
-            c
-            for c in ranked
-            if c.get("role") != "observability" and not c.get("restart_only") and (not onset or order(c)[0] == 0)
-        ),
-        None,
-    )
-    for change in ranked:
+    first = next((c for c in listed if not onset or timing(c)[0] == 0), None)
+    for change in listed:  # a routine change is context for the cluster, not evidence about a component
         for cid in change.get("affects") or []:
             comp = components.get(cid)
             if comp is None:

@@ -1,13 +1,10 @@
 """Call paths whose calls time out while the callee shows no failure of its own.
 
-The facts are both sides' call settings: on the caller, timeouts, deadlines, retries and backoff for that callee
-(env names that carry the callee's name as whole words, or keys of the caller's own ConfigMaps); on the callee,
-the settings that cap how much work it takes (rate limits, queues, workers, concurrency). A setting is read by its
-name and needs a numeric value; telemetry and tracing settings are left out. No value is judged here.
-
-A path is marked a feedback loop when the caller has a retry and a timeout setting for the callee and the callee has
-a capacity setting. That is read from the settings alone; no request rate or latency is measured, so the text
-states only the settings.
+Observed: the caller's still-occurring timeout errors toward the callee. Stated with them: both sides' call settings,
+on the caller timeouts, deadlines, retries and backoff for that callee (env names that carry the callee's name as whole
+words, or keys of the caller's own ConfigMaps), on the callee the settings that cap how much work it takes (rate
+limits, queues, workers, concurrency). A setting is read by its name and needs a numeric value; telemetry and tracing
+settings are left out. No value is judged here: the settings are evidence, not a verdict.
 """
 
 from __future__ import annotations
@@ -15,8 +12,6 @@ from __future__ import annotations
 import re
 
 CALL_SETTING = re.compile(r"(?i)timeout|deadline|retr(?:y|ies)|attempts?|backoff")
-RETRY_SETTING = re.compile(r"(?i)retr(?:y|ies)|attempts?")
-WAIT_SETTING = re.compile(r"(?i)timeout|deadline")
 CAPACITY_SETTING = re.compile(
     r"(?i)qps|rps|rate_?limit|throttl|queue|concurren|workers?(?:$|_)|capacity|max_?(?:inflight|in_flight|requests|conn)"
 )
@@ -59,7 +54,7 @@ def _words(name: str) -> list[str]:
 
 
 def _carries_name(setting: str, component: str) -> bool:
-    """Whether a setting's name carries the component's name as whole words (`ad` is not in READ_TIMEOUT)."""
+    """Whether a setting's name carries the component's name as whole words (`tax` is not in SYNTAX_TIMEOUT)."""
     want, have = _words(component), _words(setting)
     return bool(want) and any(have[i : i + len(want)] == want for i in range(len(have) - len(want) + 1))
 
@@ -118,11 +113,6 @@ def call_paths(components: dict[str, dict]) -> list[dict]:
             ][:MAX_SETTINGS]
             if not caller_settings:
                 continue
-            loop = (
-                any(RETRY_SETTING.search(s.split("=")[0]) for s in caller_settings)
-                and any(WAIT_SETTING.search(s.split("=")[0]) for s in caller_settings)
-                and bool(callee_settings)
-            )
             path = {
                 "caller": caller_id,
                 "callee": callee_id,
@@ -130,7 +120,6 @@ def call_paths(components: dict[str, dict]) -> list[dict]:
                 "example": examples[callee_id][:160],
                 "caller_settings": caller_settings,
                 "callee_settings": callee_settings,
-                "feedback_loop": loop,
             }
             out.append(path)
             fact = describe(path, names)
@@ -147,10 +136,4 @@ def describe(path: dict, names: dict[str, str]) -> str:
     )
     if path["callee_settings"]:
         text += f"; {callee}'s capacity settings: {', '.join(path['callee_settings'])}"
-    if path["feedback_loop"]:
-        retry = next(s for s in path["caller_settings"] if RETRY_SETTING.search(s.split("=")[0]))
-        text += (
-            f"; {caller} retries a timed-out call ({retry}), adding requests to {callee}, which caps its throughput "
-            f"({path['callee_settings'][0]})"
-        )
     return text

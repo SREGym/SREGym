@@ -5,12 +5,15 @@ A dependency is known from any of three sources:
 * address: an env value or command addresses one of the component's Services (checks.resolve_env_hosts);
 * traces: the tracing backend observed calls from one to the other (`_observed_calls`, read at collection);
 * naming: a data store named after the one service it belongs to (`mongodb-orders` serves `orders`), the usual
-  database-per-service convention, taken only when exactly one service fits best.
+  database-per-service convention, taken only when exactly one service fits best. A naming edge is a hint: it is
+  shown, but evidence (an address or observed calls) is needed before a failure is attributed along it.
 
 From the graph, three facts are derived:
 
-* A server workload that no Service selects, while the application's other servers each have one, cannot be
-  reached by its clients: that is a fault of its own, even though its pods are healthy.
+* A server workload that no Service selects, while the application's other servers each have one and some client
+  addresses it or was seen calling it, cannot be reached by that client: a fault of its own, though its pods are
+  healthy. Without such a client, a component named for it that fails reaching its dependencies is named as the
+  likely client, as a hint.
 * An env value that addresses an in-namespace host no Service provides, in an application whose other addresses
   resolve, cannot reach anything: the address is wrong or the Service is gone (a workload of that name decides
   which, and becomes the caller's dependency).
@@ -101,6 +104,16 @@ def build_graph(components: dict[str, dict], observed: list[dict]) -> None:
                     components[cid].setdefault("_deps", {}).setdefault(dep, []).append(source)
 
 
+EVIDENCE_SOURCES = ("address", "traces")  # edges a failure may be attributed along; naming alone is a hint
+
+
+def clients_of(components: dict[str, dict], cid: str) -> list[str]:
+    """Components that address `cid` or were seen calling it."""
+    return sorted(
+        c for c, other in components.items() if set((other.get("_deps") or {}).get(cid) or []) & set(EVIDENCE_SOURCES)
+    )
+
+
 def own_signals(comp: dict) -> list[str]:
     """The component's signals about itself, not what other components say about it."""
     return [s for s in comp.get("signals") or [] if not s.startswith(POINTER_PREFIXES)]
@@ -121,14 +134,33 @@ def flag_unrouted_servers(components: dict[str, dict]) -> None:
             comp = components[cid]
             if comp.get("services"):
                 continue
+            clients = clients_of(components, cid)
             ports = sorted({p for c in comp.get("containers") or [] for p in c.get("ports") or []})
-            clients = sorted(c for c, other in components.items() if cid in (other.get("_deps") or {}))
-            comp["signals"].append(
-                f"its Service is missing (deleted or never created): no Service selects this workload, although its "
-                f"containers listen on {ports} and "
-                f"{len(routed)} of the application's {len(servers)} servers have one; clients that address it "
-                "through its Service cannot reach it" + (f" (clients: {', '.join(clients)})" if clients else "")
+            head = (
+                f"no Service selects this workload, although its containers listen on {ports} and {len(routed)} of "
+                f"the application's {len(servers)} servers have one"
             )
+            if clients:
+                comp["signals"].append(
+                    f"{head}, and {', '.join(clients)} address it or call it: they cannot reach it through a Service"
+                )
+                continue
+            # without an address or an observed call, a component named for it that fails reaching its
+            # dependencies is the client it most likely serves (nothing at all: a worker exposing metrics, for one)
+            hinted = [c for c in _naming_clients(components, cid) if _fails_dependencies(components[c])]
+            if hinted:
+                comp["signals"].append(
+                    f"{head}; {', '.join(hinted)}, named for it, fails reaching its dependencies and may reach this "
+                    "one through a Service it cannot find"
+                )
+
+
+def _naming_clients(components: dict[str, dict], cid: str) -> list[str]:
+    return sorted(c for c, other in components.items() if "naming" in ((other.get("_deps") or {}).get(cid) or []))
+
+
+def _fails_dependencies(comp: dict) -> bool:
+    return any(set(f.get("classes") or []) & DEPENDENCY_CLASSES for f in comp.get("log_findings") or [])
 
 
 def flag_dangling_addresses(components: dict[str, dict], namespaceless_services: list[dict]) -> None:
@@ -179,7 +211,7 @@ def link_unnamed_failures(components: dict[str, dict]) -> None:
             if not f.get("targets"):
                 for klass in set(f.get("classes") or []) & DEPENDENCY_CLASSES:
                     unnamed[klass] += int(f.get("count") or 1)
-        deps = comp.get("_deps") or {}
+        deps = {d: src for d, src in (comp.get("_deps") or {}).items() if set(src) & set(EVIDENCE_SOURCES)}
         broken = [d for d in sorted(deps) if own_signals(components[d]) or not components[d].get("pods")]
         if not unnamed or not broken or len(broken) > MAX_BROKEN_DEPENDENCIES:
             continue

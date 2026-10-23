@@ -1,43 +1,28 @@
-"""Feature flags as configuration: who a flag change acts on.
+"""Feature flags as configuration: what a flag write changed, and which failing workloads use the flags.
 
 Applications that evaluate feature flags (OpenFeature with flagd, or any provider fed the same JSON schema) keep
 their flag definitions in a ConfigMap: `{"flags": {"<key>": {"state": "ENABLED", "variants": {...},
-"defaultVariant": "<name>"}}}`. Flipping a flag changes no workload: only that ConfigMap is written, and the
-service that evaluates the flag starts misbehaving. The ConfigMap's owner (the flag server) shows the change but is
-not where the fault acts.
+"defaultVariant": "<name>"}}}`. Flipping a flag writes only that ConfigMap. The workload that reads it (the flag
+provider) shows the write, but the fault acts in the clients that evaluate the flag.
 
-So when a flag ConfigMap was written after the application was deployed, each flag that is on (its default variant
-selects a value that is true, non-zero, or a non-empty string other than "off") is attributed to the workloads its
-key names (by whole name tokens, as data-store naming is matched in deps.py) and becomes a change on them.
+When a flag ConfigMap was written after the application was deployed, the flags whose state, default variant or
+selected value changed are listed old -> new, from the last applied configuration. Without it the previous content is
+unknown, so only the flags that are on now are listed, and said to be on, not changed. The list goes, as a signal, on
+the provider's clients (workloads configured to call it) that are failing. Which client evaluates which flag is not
+visible in the cluster, and the signal says so: flags are never attributed by their key's wording.
 """
 
 from __future__ import annotations
 
 import json
-import re
 
-from clients.jev_diag.v2.derive import GENERIC_NAME_SUFFIXES
-
-# Words in flag keys that describe the switch, not the service it acts on.
-_FLAG_WORDS = {
-    "enable",
-    "enabled",
-    "disable",
-    "disabled",
-    "flag",
-    "feature",
-    "toggle",
-    "failure",
-    "fail",
-    "error",
-    "test",
-}
+LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration"
+MAX_FLAGS = 5
 _OFF = {"off", "false", "disabled", "none", "0", ""}
-MAX_FLAGS = 3
 
 
 def flag_definitions(configmap: dict) -> dict[str, dict]:
-    """The flags a ConfigMap defines in the flagd JSON schema, keyed by flag key (empty when it defines none)."""
+    """The flags a ConfigMap (or its `data`) defines in the flagd JSON schema, by key; empty when it defines none."""
     out: dict[str, dict] = {}
     for value in (configmap.get("data") or {}).values():
         try:
@@ -49,11 +34,24 @@ def flag_definitions(configmap: dict) -> dict[str, dict]:
     return out
 
 
+def previous_flags(configmap: dict) -> dict[str, dict] | None:
+    """The flags of the last applied configuration, or None when the ConfigMap keeps none."""
+    try:
+        applied = json.loads(((configmap.get("metadata") or {}).get("annotations") or {}).get(LAST_APPLIED) or "null")
+    except ValueError:
+        return None
+    return flag_definitions(applied) if isinstance(applied, dict) else None
+
+
+def selected(flag: dict) -> object:
+    return (flag.get("variants") or {}).get(flag.get("defaultVariant"))
+
+
 def is_on(flag: dict) -> bool:
     """Whether a flag is enabled and its default variant selects an `on` value."""
     if str(flag.get("state", "ENABLED")).upper() != "ENABLED":
         return False
-    value = (flag.get("variants") or {}).get(flag.get("defaultVariant"))
+    value = selected(flag)
     if isinstance(value, bool):
         return value
     if isinstance(value, int | float):
@@ -61,38 +59,60 @@ def is_on(flag: dict) -> bool:
     return isinstance(value, str) and value.strip().lower() not in _OFF
 
 
-def key_tokens(key: str) -> set[str]:
-    """Name tokens of a flag key (`paymentServiceFailure`, `ad-service-gc`), without switch words."""
-    words = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key)
-    tokens = {t.lower() for t in re.split(r"[\s_.\-]+", words) if t}
-    return {t for t in tokens if len(t) >= 2} - _FLAG_WORDS - GENERIC_NAME_SUFFIXES
+def describe_flag(flag: dict) -> str:
+    return (
+        f"{flag.get('state', 'ENABLED')}, defaultVariant {flag.get('defaultVariant')!r} = {json.dumps(selected(flag))}"
+    )
 
 
-def flag_targets(key: str, components: dict[str, dict]) -> list[str]:
-    """Workloads a flag key names: every non-generic token of some workload's name appears in the key."""
-    tokens = key_tokens(key)
+def flag_changes(old: dict[str, dict], new: dict[str, dict]) -> list[str]:
+    """Flags whose state, default variant or selected value differ, old -> new."""
     out = []
-    for cid, comp in components.items():
-        name = {t for t in re.split(r"[-_.]", comp["name"].lower()) if t} - GENERIC_NAME_SUFFIXES
-        if name and name <= tokens:
-            out.append(cid)
-    return sorted(out)
+    for key in sorted(set(old) | set(new)):
+        before, after = old.get(key), new.get(key)
+        if before is None:
+            out.append(f"flag {key} added ({describe_flag(after)})")
+        elif after is None:
+            out.append(f"flag {key} removed")
+        elif describe_flag(before) != describe_flag(after):
+            out.append(f"flag {key}: {describe_flag(before)} -> {describe_flag(after)}")
+    return out[:MAX_FLAGS]
+
+
+def _failing(comp: dict) -> bool:
+    replicas = comp.get("replicas") or {}
+    short = (replicas.get("ready") or 0) < (replicas.get("desired") or 0)
+    return bool(comp.get("log_findings") or comp.get("warning_events") or short)
 
 
 def attribute_flags(components: dict[str, dict], config_objects: dict, changed: set[str]) -> None:
-    """For each flag ConfigMap in `changed` (object ids written after deploy), the flags that are on become a change
-    on the workloads they name."""
+    """For each flag ConfigMap in `changed` (object ids written after deploy), what it changed goes on the failing
+    clients of the workloads that read it."""
     for (kind, ns, name), entry in config_objects.items():
         if kind != "ConfigMap" or f"configmap/{ns}/{name}" not in changed:
             continue
-        flags = flag_definitions(entry.get("_object") or {})
-        on = [k for k, f in flags.items() if is_on(f)][: MAX_FLAGS * 4]
-        for key in on:
-            for cid in flag_targets(key, components)[:MAX_FLAGS]:
-                text = (
-                    f"feature flag {key} is on (ConfigMap {name} was written after deploy; its default variant "
-                    f"{flags[key].get('defaultVariant')!r} selects {json.dumps((flags[key].get('variants') or {}).get(flags[key].get('defaultVariant')))}); "
-                    "the flag names this service, which evaluates it"
-                )
-                if text not in components[cid]["signals"]:
-                    components[cid]["signals"].append(text)
+        obj = entry.get("_object") or {}
+        now = flag_definitions(obj)
+        if not now:
+            continue
+        before = previous_flags(obj)
+        if before is not None:
+            lines, what = flag_changes(before, now), "changed"
+        else:
+            lines, what = [f"flag {k} ({describe_flag(f)})" for k, f in now.items() if is_on(f)][:MAX_FLAGS], "on now"
+        if not lines:
+            continue
+        providers = {
+            c
+            for c, comp in components.items()
+            if comp["namespace"] == ns and f"configmap/{name}" in (comp.get("config_objects") or {})
+        }
+        for cid, comp in components.items():
+            served_by = sorted(providers & set(comp.get("_calls") or []))
+            if cid in providers or not served_by or not _failing(comp):
+                continue
+            comp["signals"].append(
+                f"uses feature flags served by {', '.join(served_by)}, whose ConfigMap {name} was written after "
+                f"deploy; flags {what}: {'; '.join(lines)} (which of them this workload evaluates is not visible "
+                "in the cluster)"
+            )
