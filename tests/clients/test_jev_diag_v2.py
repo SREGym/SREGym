@@ -454,6 +454,37 @@ def _fake_cluster(monkeypatch, items: dict, related: list[str]) -> None:
     monkeypatch.setattr(v2_collector, "run_kubectl", no_cluster)
 
 
+@pytest.mark.parametrize("read_failed", [False, True])
+def test_failed_pod_list_is_not_a_verified_empty_list(monkeypatch, read_failed):
+    from clients.jev_diag.v2.investigate import dependency_state
+
+    _fake_cluster(monkeypatch, {("deployments", NS): [deployment("frontend")]}, [])
+    read = v2_collector.kubectl_items
+    attempts = []
+
+    def read_with_pod_failure(resource, namespace, errors, **kwargs):
+        if resource == "pods":
+            attempts.append(namespace)
+            if read_failed:
+                errors.append(f"kubectl get pods -o json -n {namespace} failed: Forbidden")
+                return []
+        return read(resource, namespace, errors, **kwargs)
+
+    monkeypatch.setattr(v2_collector, "kubectl_items", read_with_pod_failure)
+    monkeypatch.setattr(v2_collector, "APPLICATION_READ_PAUSE_SECONDS", 0)
+    snap = v2_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
+    comp = snap.components["deployment/frontend"]
+    detail = dependency_state(snap, "deployment/frontend", "deployment/client")
+    assert ("no pods exist for this workload" in comp["signals"]) is not read_failed
+    assert len(attempts) == (v2_collector.APPLICATION_READ_ATTEMPTS if read_failed else 1)
+    if read_failed:
+        assert comp["healthy"] is None and detail["pods_not_verified"]
+        assert "pods_ready" not in detail and "looks_healthy_on_its_own" not in detail
+        assert any("get pods" in error for error in snap.to_state()["collection_errors"])
+    else:
+        assert comp["healthy"] is False and detail["pods_ready"] == "0/0"
+
+
 def test_a_related_namespace_never_replaces_or_dates_the_application(monkeypatch):
     from clients.jev_diag.v2 import changes
 

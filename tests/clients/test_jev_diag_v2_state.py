@@ -311,6 +311,25 @@ def test_endpoints_that_could_not_be_read_are_unknown_not_zero():
     assert empty["deployment/web"]["signals"] == ["service web selects this component but has 0 ready endpoints"]
 
 
+def test_unread_pods_do_not_imply_quota_rejection_or_a_broken_dependency():
+    from clients.jev_diag.v2 import deps, derive
+
+    cache = _healthy("cache")
+    cache.update(pods=[], pods_not_verified="Pod listing failed", warning_events=[])
+    quota = {"kind": "ResourceQuota", "name": "capacity", "namespace": "ns", "hard": {"limits.cpu": "4"}}
+    derive.apply_quota_requirements({"deployment/cache": cache}, [quota])
+    assert cache["signals"] == [] and derive.component_health(cache) is None
+
+    api = _failing("api")
+    api["_deps"] = {"deployment/cache": ["address"]}
+    api["log_findings"] = [{"classes": ["connectivity or timeout"], "count": 3, "targets": []}]
+    deps.link_unnamed_failures({"deployment/api": api, "deployment/cache": cache})
+    assert not api.get("errors_point_to") and cache["signals"] == []
+
+    cache["signals"] = ["only 0 of 2 desired replicas are ready"]
+    assert derive.component_health(cache) is False  # independently observed failures still count
+
+
 def test_a_signature_that_returns_after_a_silence_dates_its_episode_from_the_return():
     from datetime import UTC, datetime, timedelta
 

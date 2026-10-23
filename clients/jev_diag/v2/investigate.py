@@ -603,19 +603,23 @@ def dependency_state(snapshot: ClusterSnapshot, dep: str, exclude: str) -> dict:
         s for s in comp.get("signals") or [] if not s.startswith(("errors logged by", "server ", "rejects logins"))
     ]
     pods = comp.get("pods") or []
+    pods_verified = not comp.get("pods_not_verified")
     ready = sum(1 for p in pods if p.get("ready") and p["ready"].split("/")[0] == p["ready"].split("/")[1] != "0")
     restarts = sum(int(p.get("restarts") or 0) for p in pods)
     kinds = [k for k in comp.get("evidence_kinds") or [] if k != "pointed_at"]
     return compact(
         {
             "kind": comp.get("kind"),
-            "pods_ready": f"{ready}/{len(pods)}",
-            "restarts": restarts,
+            "pods_ready": f"{ready}/{len(pods)}" if pods_verified else None,
+            "restarts": restarts if pods_verified else None,
+            "pods_not_verified": comp.get("pods_not_verified"),
             "own_evidence_kinds": kinds,
             "own_signals": own_signals[:4],
             "own_error_log_lines": comp.get("log_error_lines"),
             "last_spec_change": comp.get("modified") if comp.get("spec_changed_after_creation_s") else None,
-            "looks_healthy_on_its_own": not own_signals and not kinds and ready == len(pods) and restarts == 0,
+            "looks_healthy_on_its_own": (
+                not own_signals and not kinds and ready == len(pods) and restarts == 0 if pods_verified else None
+            ),
         }
     )
 

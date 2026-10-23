@@ -212,7 +212,12 @@ def link_unnamed_failures(components: dict[str, dict]) -> None:
                 for klass in set(f.get("classes") or []) & DEPENDENCY_CLASSES:
                     unnamed[klass] += int(f.get("count") or 1)
         deps = {d: src for d, src in (comp.get("_deps") or {}).items() if set(src) & set(EVIDENCE_SOURCES)}
-        broken = [d for d in sorted(deps) if own_signals(components[d]) or not components[d].get("pods")]
+        broken = [
+            d
+            for d in sorted(deps)
+            if own_signals(components[d])
+            or (not components[d].get("pods_not_verified") and not components[d].get("pods"))
+        ]
         if not unnamed or not broken or len(broken) > MAX_BROKEN_DEPENDENCIES:
             continue
         comp["errors_point_to"] = broken
