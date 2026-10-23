@@ -190,9 +190,9 @@ _BOUND_PORT_RE = re.compile(
 
 
 def command_ports(container: dict) -> set[int]:
-    """Ports a container's command and args bind (including commands it decodes from base64)."""
+    """Ports a container's command and args bind."""
     text = " ".join(str(part) for part in [*(container.get("command") or []), *(container.get("args") or [])])
-    return {int(m) for t in [text, *decoded_payloads(text)] for m in _BOUND_PORT_RE.findall(t) if 0 < int(m) < 65536}
+    return {int(m) for m in _BOUND_PORT_RE.findall(text or "") if 0 < int(m) < 65536}
 
 
 def pod_port_collisions(pod_spec: dict) -> list[str]:
@@ -217,26 +217,13 @@ def pod_port_collisions(pod_spec: dict) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-_B64_RE = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
 _HOST_TOKEN_RE = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
 
 
-def decoded_payloads(text: str) -> list[str]:
-    """Text payloads a command carries base64-encoded."""
-    out = []
-    for blob in _B64_RE.findall(text or ""):
-        try:
-            out.append(base64.b64decode(blob + "=" * (-len(blob) % 4)).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            continue
-    return out
-
-
 def command_host_candidates(text: str) -> set[str]:
-    """Host names a container command or argument could address, also inside base64 payloads it decodes. Only
-    names that match one of the application's Services are kept later (resolve_env_hosts)."""
-    texts = [text or "", *decoded_payloads(text)]
-    return {tok for t in texts for tok in _HOST_TOKEN_RE.findall(t.lower())}
+    """Host names a container command or argument could address. Only names that match one of the application's
+    Services are kept later (resolve_env_hosts)."""
+    return set(_HOST_TOKEN_RE.findall((text or "").lower()))
 
 
 def service_host_index(components: dict[str, dict]) -> dict[str, tuple[str, str]]:
@@ -690,53 +677,55 @@ def certificate_problems(secret: dict, at: datetime) -> list[str]:
     return []
 
 
-API_REQUEST_TIMEOUT_SECONDS = 30  # the API server gives up on a request after this long
-WEBHOOK_DEFAULT_TIMEOUT_SECONDS = 10
+WEBHOOK_DEFAULT_TIMEOUT_SECONDS = 10  # admissionregistration/v1 default for timeoutSeconds
+_DEADLINE_RE = re.compile(r"(?i)deadline exceeded|timed? ?out|timeout")
+_URL_RE = re.compile(r"\S+://\S+")  # a webhook's URL carries its own timeout as a query parameter, not an error
 
 
-def admission_budgets(
+def admission_chains(
     webhooks: list[dict], namespaces: list[str], namespace_labels: dict[str, dict], components: dict[str, dict]
 ) -> list[dict]:
-    """Namespaces where the admission webhooks that intercept pod creation take longer, together, than the API server
-    waits for a request. Webhooks are called one after another and each may use its full timeout, so even webhooks
-    that ignore their own failure (failurePolicy Ignore) make every pod creation fail when their timeouts add up past
-    API_REQUEST_TIMEOUT_SECONDS. Each such namespace becomes an outside object naming the webhooks."""
+    """Namespaces where pod creation fails with a deadline error while admission webhooks intercept it: the chain of
+    webhooks, each with its timeout and failure policy, and the sum of their timeouts, as an outside object acting on
+    the workloads whose pod creation fails. Webhooks are called one after another, so their timeouts add up; the
+    API server's own request deadline is a server setting and is not assumed: the deadline errors are the evidence."""
     out = []
     for ns in namespaces:
+        failing = {
+            c: ev.get("message")
+            for c, comp in components.items()
+            if comp["namespace"] == ns
+            for ev in comp.get("warning_events") or []
+            if ev.get("reason") == "FailedCreate" and _DEADLINE_RE.search(_URL_RE.sub("", ev.get("message") or ""))
+        }
+        if not failing:
+            continue
         labels = namespace_labels.get(ns) or {"kubernetes.io/metadata.name": ns}
         chain = [
             wh
             for wh in webhooks
             if rules_cover_pod_create(wh.get("_rules")) and label_selector_matches(wh.get("namespace_selector"), labels)
         ]
-        total = sum(wh.get("timeout_seconds") or WEBHOOK_DEFAULT_TIMEOUT_SECONDS for wh in chain)
-        if len(chain) < 2 or total <= API_REQUEST_TIMEOUT_SECONDS:
+        if not chain:
             continue
-        configs = list(dict.fromkeys(wh["configuration"] for wh in chain))
         each = ", ".join(
             f"{wh['webhook']} ({wh.get('timeout_seconds') or WEBHOOK_DEFAULT_TIMEOUT_SECONDS}s, "
             f"failurePolicy={wh.get('failure_policy')})"
             for wh in chain
         )
+        total = sum(wh.get("timeout_seconds") or WEBHOOK_DEFAULT_TIMEOUT_SECONDS for wh in chain)
         kinds = {wh["kind"] for wh in chain}
-        in_ns = [c for c, comp in components.items() if comp["namespace"] == ns]
-        # it acts on the workloads whose pods are seen failing to be created; on all of them while none is seen yet
-        failing = [
-            c
-            for c in in_ns
-            if any(ev.get("reason") == "FailedCreate" for ev in components[c].get("warning_events") or [])
-        ]
+        example = next(iter(failing.values()))
         out.append(
             {
                 "kind": kinds.pop() if len(kinds) == 1 else "admission webhooks",
-                "name": ", ".join(configs),
+                "name": ", ".join(dict.fromkeys(wh["configuration"] for wh in chain)),
                 "namespace": None,
                 "signals": [
-                    f"admission webhooks intercepting pod creation in namespace {ns}: {each}; their timeouts add up "
-                    f"to {total}s, more than the API server's {API_REQUEST_TIMEOUT_SECONDS}s request timeout, so pod "
-                    "creation times out even where each webhook ignores its own failure"
+                    f"pod creation in namespace {ns} fails with a deadline error ({example}); admission webhooks that "
+                    f"intercept it, called one after another: {each}; their timeouts add up to {total}s"
                 ],
-                "components": sorted(failing or in_ns),
+                "components": sorted(failing),
             }
         )
     return out

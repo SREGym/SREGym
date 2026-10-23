@@ -37,3 +37,16 @@ def test_no_v2_code_string_names_an_application_or_its_services():
                 if re.search(rf"(?i)(?<![a-z]){re.escape(name)}(?![a-z])", node.value):
                     found.append(f"{path.name}:{node.lineno} {name}")
     assert not found, found
+
+
+def test_no_v2_test_string_names_an_application_or_its_services():
+    """Tests use neutral names and values, so they check rules rather than restate a benchmark problem."""
+    found = []
+    for path in sorted(pathlib.Path(__file__).parent.glob("test_jev_diag_v2*.py")):
+        if path.name == pathlib.Path(__file__).name:
+            continue
+        for node in _code_strings(ast.parse(path.read_text())):
+            for name in APP_NAMES:
+                if re.search(rf"(?i)(?<![a-z]){re.escape(name)}(?![a-z])", node.value):
+                    found.append(f"{path.name}:{node.lineno} {name}")
+    assert not found, found

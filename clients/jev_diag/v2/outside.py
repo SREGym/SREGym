@@ -3,11 +3,12 @@ through its own configuration.
 
 * Ingresses whose backend is an application Service (missing backend, no ready endpoints, or a recent write).
 * PriorityClasses used by the application's pods, or set as the cluster default.
-* DaemonSets and CronJobs in kube-system (they run on every node or on a schedule and touch every workload).
 * Namespaces named in the application's own addresses (`name.other-ns.svc`), read like the application's own.
 * Any other object, of any kind and anywhere in the cluster, that an operator tool (kubectl, a client library) wrote
   after the application was deployed: the cluster's change log, read from each object's write history. Writes by
-  controllers, package installs, and the benchmark's own infrastructure are left out.
+  Kubernetes' own components and by an object's own controller are left out, and so are namespaces the run is
+  configured to ignore. Writes the cluster's own records attribute to a controller are kept but marked routine
+  (`routine_write`, `bulk_bookkeeping`): they are ranked last and summarized, not listed one by one.
 
 Each object is listed with the components it acts on. Only an abnormal signal (a missing backend, no ready
 endpoints) or a write made after the application was deployed makes it a cluster finding; its routes or settings
@@ -16,23 +17,21 @@ are context only. Earlier writes are dropped when changes are ranked.
 
 from __future__ import annotations
 
+import os
 import re
+from collections import Counter
 from datetime import datetime
 
 from clients.jev_diag.timeutil import parse_time
 from clients.jev_diag.v2 import changes as change_log
+from clients.jev_diag.v2.checks import label_selector_matches
 from clients.jev_diag.v2.collector import kubectl_items, run_kubectl
-from clients.jev_diag.v2.derive import OBSERVABILITY_RE
+from clients.jev_diag.v2.derive import OBSERVABILITY_RE, failed_reads
 
-# Namespaces of the cluster and of the benchmark's own infrastructure; never read as part of the application.
-INFRA_NAMESPACES = {"kube-system", "kube-public", "kube-node-lease", "local-path-storage", "chaos-mesh", "khaos"}
-# The benchmark's own tooling (fault injection, the agent's MCP server); the change log never reads it.
-HARNESS_NAMESPACES = {"chaos-mesh", "khaos", "sregym"}
-HARNESS_GROUPS = ("chaos-mesh.org",)
-_HARNESS_NAME = re.compile(r"(?i)(?:^|[-.])mcp(?:$|[-.])")
-# Tools people and scripts use to change a cluster. Controllers and package installs (helm) write under their own
-# names and are not changes someone made to the running system.
-_OPERATOR_MANAGER = re.compile(r"^(?:kubectl(?:-[a-z-]+)?|OpenAPI-Generator)$")
+# Kubernetes' own namespaces, and any the run is configured to leave out (JEV_DIAG_IGNORE_NAMESPACES, comma-separated:
+# tooling of the environment that is not part of the system being diagnosed).
+CONFIGURED_IGNORES = {ns.strip() for ns in os.environ.get("JEV_DIAG_IGNORE_NAMESPACES", "").split(",") if ns.strip()}
+IGNORED_NAMESPACES = {"kube-system", "kube-public", "kube-node-lease"} | CONFIGURED_IGNORES
 # Resources controllers rewrite constantly.
 _CHURN_RESOURCES = {
     "events",
@@ -56,6 +55,11 @@ _READ_IN_APP = {
     "cronjobs.batch",
     "jobs.batch",
 }
+# The Kubernetes CLI and the package manager record a person's (or a person's script's) intent; their writes are never
+# bookkeeping, however many objects one command writes.
+_INTENT_TOOLS = re.compile(r"^(?:kubectl|helm)(?:-|$)")
+BULK_OBJECTS = 3  # a background writer writing this many unreferenced objects of one kind is doing bookkeeping
+_PROVISIONED_BY = "pv.kubernetes.io/provisioned-by"  # set by a volume provisioner on the volume it created for a claim
 _SVC_HOST = re.compile(
     r"(?i)(?<![\w.-])(?P<svc>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.(?P<ns>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.svc\b"
 )
@@ -73,7 +77,7 @@ def related_namespaces(namespaces: list[str], errors: list[str]) -> list[str]:
                         for m in _SVC_HOST.finditer(str(e.get("value") or "")):
                             if not OBSERVABILITY_RE.search(m.group("svc")):
                                 found.add(m.group("ns"))
-    return sorted(found - set(namespaces) - INFRA_NAMESPACES)
+    return sorted(found - set(namespaces) - IGNORED_NAMESPACES)
 
 
 def _service_index(components: dict[str, dict]) -> dict[str, str]:
@@ -123,6 +127,7 @@ def collect_outside(
         for s in c.get("services") or []
     }
     out: list[dict] = []
+    unread = failed_reads(errors)
 
     for ing in kubectl_items("ingresses", None, errors):
         meta = ing.get("metadata") or {}
@@ -135,6 +140,8 @@ def collect_outside(
                 linked.add(services[key])
                 if ready.get(key) == 0:
                     signals.append(f"routes {route} to Service {svc}, which has 0 ready endpoints")
+            elif ns in namespaces and unread & {("services", ns), ("services", None)}:
+                signals.append(f"routes {route} to Service {svc}:{port}, which could not be read (not verified)")
             elif ns in namespaces:
                 signals.append(f"routes {route} to Service {svc}:{port}, which selects no workload or does not exist")
         for tls in (ing.get("spec") or {}).get("tls") or []:
@@ -168,11 +175,6 @@ def collect_outside(
         }
         out.append(_finding("Secret", name, ns, [f"TLS Secret {name}: {p}" for p in problems], users))
 
-    for resource, kind in (("daemonsets", "DaemonSet"), ("cronjobs", "CronJob")):
-        for obj in kubectl_items(resource, "kube-system", errors):
-            meta = obj.get("metadata") or {}
-            if _change(changes, kind, meta.get("name"), "kube-system", meta, set(), apps_created, deployed, obj):
-                out.append(_finding(kind, meta.get("name"), "kube-system", [f"kube-system {kind} written"], set()))
     return out
 
 
@@ -186,7 +188,11 @@ def change_radar(
     """Objects anywhere in the cluster that an operator tool wrote after the application was deployed, as findings
     with change records appended to `changes`. Only the operator's own writes count (a controller updating the same
     object later does not make it a change), and objects another collection already dates are skipped. A Node acts
-    on the components with pods on it; an object in an application namespace acts on that namespace's components."""
+    on the components its taints or cordon keep from scheduling (`kept_off`), and on those with pods on it only when
+    a taint evicts them (NoExecute).
+
+    Routine writes (`routine_write`, `bulk_bookkeeping`) and writes to telemetry objects keep their change record,
+    marked, but are no finding of their own: the change ranking summarizes them."""
     if deployed is None:
         return []
     try:
@@ -203,34 +209,192 @@ def change_radar(
     for cid, comp in components.items():
         for pod in comp.get("pods") or []:
             on_node.setdefault(pod.get("node") or "", set()).add(cid)
-    out: list[dict] = []
+    background: set[tuple[str, str]] = set()  # (writer, kind) seen writing that kind before the application existed
+    written: list[tuple[dict, dict]] = []  # (finding, change record) of each object written after the deploy
+    first_record = len(changes)
     for resource in resources:
-        if resource in _CHURN_RESOURCES or resource.endswith(HARNESS_GROUPS):
+        if resource in _CHURN_RESOURCES:
             continue
         for obj in kubectl_items(resource, None, errors):
             meta = obj.get("metadata") or {}
             ns, name = meta.get("namespace"), meta.get("name") or ""
-            if ns in HARNESS_NAMESPACES or _HARNESS_NAME.search(name) or OBSERVABILITY_RE.search(name):
+            if ns in CONFIGURED_IGNORES:
                 continue
             if ns in namespaces and resource in _READ_IN_APP:
                 continue
-            writes = [w for w in change_log.spec_writes(meta) if _OPERATOR_MANAGER.match(w.get("manager") or "")]
+            writes = change_log.desired_state_writes(meta)
             if not writes:
                 continue
             kind = obj.get("kind") or resource
+            background |= _wrote_before(kind, meta, writes, deployed)
             if (f"{kind.lower()}/{ns}/{name}" if ns else f"{kind.lower()}/{name}") in known:
                 continue  # read and dated by its own collection
             if kind == "Node":
-                affects = on_node.get(name, set())
-            else:  # a namespaced object acts on its namespace; a Namespace object on the namespace it is
-                scope = name if kind == "Namespace" else ns
-                affects = {c for c, comp in components.items() if comp["namespace"] == scope}
-            if _change(changes, kind, name, ns, {**meta, "managedFields": writes}, affects, apps_created, settled, obj):
-                managers = ", ".join(dict.fromkeys(w["manager"] for w in writes))
-                out.append(
-                    _finding(kind, name, ns, [f"written by {managers} after the application was deployed"], affects)
+                # a node's spec decides where new pods go; only a NoExecute taint reaches the pods already on it
+                taints = (obj.get("spec") or {}).get("taints") or []
+                evicts = any(t.get("effect") == "NoExecute" for t in taints)
+                affects = kept_off(obj, components) | (on_node.get(name, set()) if evicts else set())
+            else:
+                affects = acting_on(kind, name, ns, obj, components)
+            marks = {"routine": routine_write(kind, obj, writes)}
+            marks["role"] = "observability" if _telemetry(name, affects, components) else None
+            meta = {**meta, "managedFields": writes}
+            change = _change(changes, kind, name, ns, meta, affects, apps_created, settled, obj, marks)
+            if change:
+                after = [w for w in writes if (parse_time(w.get("time")) or settled) >= settled]
+                managers = ", ".join(dict.fromkeys(w["manager"] for w in after or writes))
+                finding = _finding(
+                    kind, name, ns, [f"written by {managers} after the application was deployed"], affects
                 )
+                written.append((finding, change))
+    bulk_bookkeeping(changes[first_record:], background)
+    return [f for f, change in written if not change.get("routine") and change.get("role") != "observability"]
+
+
+def routine_write(kind: str, obj: dict, writes: list[dict]) -> str | None:
+    """Why an object's writes are a controller doing its job, from the object's own records, or None. Only an object
+    nobody else wrote qualifies: a person's later edit makes it a change again.
+
+    * A PersistentVolume its provisioner created for a claim (`pv.kubernetes.io/provisioned-by`, `spec.claimRef`):
+      dynamic provisioning answering a PersistentVolumeClaim.
+    * An object with a controlling owner (`ownerReferences[].controller`): its owner's controller maintains it.
+    """
+    if len({w.get("manager") for w in writes}) != 1:
+        return None
+    meta = obj.get("metadata") or {}
+    if kind == "PersistentVolume" and _PROVISIONED_BY in (meta.get("annotations") or {}):
+        if (obj.get("spec") or {}).get("claimRef"):
+            return "volume provisioned for a claim"
+    if any(o.get("controller") for o in meta.get("ownerReferences") or []):
+        return "kept by its owner's controller"
+    return None
+
+
+def _wrote_before(kind: str, meta: dict, writes: list[dict], deployed: datetime) -> set[tuple[str, str]]:
+    """(writer, kind) for each writer this object shows writing objects of its kind before the application was
+    deployed: a write dated before it, or the object's only writer having created it before."""
+    out = {(w.get("manager"), kind) for w in writes if (t := parse_time(w.get("time"))) and t < deployed}
+    created = parse_time(meta.get("creationTimestamp"))
+    managers = {w.get("manager") for w in writes}
+    if len(managers) == 1 and created and created < deployed:
+        out.add((managers.pop(), kind))
     return out
+
+
+def bulk_bookkeeping(changes: list[dict], background: set[tuple[str, str]]) -> None:
+    """Mark as routine a background writer's bulk writes: objects that act on no component, of kinds their writer
+    already wrote before the application existed, when that writer wrote at least BULK_OBJECTS of them. That is a
+    controller keeping its own records as pods come and go (address allocations, for example), not a change to what
+    the application runs. Writes recorded by the Kubernetes CLI or the package manager express intent and never
+    qualify; neither does a writer new to the kind (a script creating several objects at once) or a single write of a
+    kind the writer had written before (a script that set up the cluster changing one of its objects)."""
+
+    def candidate(change: dict) -> bool:
+        writer = change.get("writer") or ""
+        return (
+            not change["affects"]
+            and not change.get("routine")
+            and (writer, change["kind"]) in background
+            and not _INTENT_TOOLS.match(writer)
+        )
+
+    counts = Counter(c["writer"] for c in changes if candidate(c))
+    for change in changes:
+        if candidate(change) and counts[change["writer"]] >= BULK_OBJECTS:
+            change["routine"] = "bulk bookkeeping by a writer that kept this kind before the application"
+
+
+def _telemetry(name: str, affects: set[str], components: dict[str, dict]) -> bool:
+    """A telemetry object, named as telemetry components are recognised: every component it acts on is one, or it
+    acts on none and carries a telemetry product's name itself."""
+    names = [components[c]["name"] for c in affects if c in components] or ([] if affects else [name])
+    return bool(names) and all(OBSERVABILITY_RE.search(n) for n in names)
+
+
+def kept_off(node: dict, components: dict[str, dict]) -> set[str]:
+    """Components whose pods the scheduler could not place because of this node: the scheduling failures (events
+    and pod conditions) name one of its taints or report cordoned nodes. A NoSchedule taint acts on those, not on
+    the pods already running on the node."""
+    spec = node.get("spec") or {}
+    marks = [f"taint {{{t.get('key')}:" for t in spec.get("taints") or [] if t.get("key")]
+    marks += ["were unschedulable"] if spec.get("unschedulable") else []
+    if not marks:
+        return set()
+    out = set()
+    for cid, comp in components.items():
+        texts = [
+            e.get("message") or "" for e in comp.get("warning_events") or [] if e.get("reason") == "FailedScheduling"
+        ]
+        texts += [
+            c for pod in comp.get("pods") or [] for c in pod.get("conditions") or [] if c.startswith("PodScheduled")
+        ]
+        if any(m in t for m in marks for t in texts):
+            out.add(cid)
+    return out
+
+
+# Kinds that apply to every workload of their namespace by definition.
+_NAMESPACE_WIDE = {"ResourceQuota", "LimitRange"}
+
+
+def acting_on(kind: str, name: str, ns: str | None, obj: dict, components: dict[str, dict]) -> set[str]:
+    """The workloads an object is known to act on, from references in either direction: its selectors that match a
+    workload's pod labels, its values that name a workload or one of its Services, and the workloads that mount,
+    read, or run as it (for a PersistentVolume, those that mount its claim). A Namespace acts on its workloads, and
+    so does a namespace policy. An object nothing references acts on no workload in particular: it is context, not a
+    change of every workload around it."""
+    if kind == "Namespace":
+        return {c for c, comp in components.items() if comp["namespace"] == name}
+    if kind == "PersistentVolume":  # a volume reaches the workloads that mount the claim bound to it
+        claim = (obj.get("spec") or {}).get("claimRef") or {}
+        return {
+            c
+            for c, comp in components.items()
+            if comp["namespace"] == claim.get("namespace")
+            and claim.get("name") in {v.get("pvc") for v in comp.get("volumes") or []}
+        }
+    in_ns = {c: comp for c, comp in components.items() if comp["namespace"] == ns}
+    if kind in _NAMESPACE_WIDE:
+        return set(in_ns)
+    body = {k: v for k, v in obj.items() if k not in ("apiVersion", "kind", "metadata", "status")}
+    selectors, values = list(_selectors(body)), set(_strings(body))
+    out = set()
+    for cid, comp in in_ns.items():
+        names = {comp["name"], *(svc.get("name") for svc in comp.get("services") or [])}
+        refs = config_names(comp) | {v.get("pvc") for v in comp.get("volumes") or []} | {comp.get("service_account")}
+        labels = comp.get("template_labels") or {}
+        if names & values or name in refs or any(label_selector_matches(sel, labels) for sel in selectors):
+            out.add(cid)
+    return out
+
+
+def config_names(comp: dict) -> set[str]:
+    refs = comp.get("config_refs") or {}
+    return set(refs.get("configmaps") or []) | set(refs.get("secrets") or [])
+
+
+def _selectors(node: object):
+    """Label selectors anywhere in an object's body, as LabelSelectors (a Service's plain map becomes matchLabels)."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("selector", "podSelector") and isinstance(value, dict) and value:
+                yield value if {"matchLabels", "matchExpressions"} & set(value) else {"matchLabels": value}
+            else:
+                yield from _selectors(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _selectors(item)
+
+
+def _strings(node: object):
+    if isinstance(node, dict):
+        for value in node.values():
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _strings(item)
+    elif isinstance(node, str):
+        yield node
 
 
 def _finding(kind: str, name: str, ns: str | None, signals: list[str], comps: set[str]) -> dict:
@@ -247,13 +411,14 @@ def _change(
     apps_created: list,
     deployed: datetime | None,
     obj: dict | None = None,
-) -> bool:
-    """Record the object's change, if any (with what it set, given the object); True when it was made after the
-    application was deployed."""
+    extra: dict | None = None,
+) -> dict | None:
+    """Record the object's change, if any (with what it set, given the object); the record when it was made after
+    the application was deployed."""
     obj_id = f"{kind.lower()}/{ns}/{name}" if ns else f"{kind.lower()}/{name}"
     change = change_log.object_change(
-        obj_id, kind, name, ns, meta, affects=sorted(affects), targets_created=apps_created, obj=obj
+        obj_id, kind, name, ns, meta, affects=sorted(affects), targets_created=apps_created, obj=obj, extra=extra
     )
     if change:
         changes.append(change)
-    return change is not None and not change_log.before_deploy(change, deployed)
+    return change if change is not None and not change_log.before_deploy(change, deployed) else None

@@ -13,6 +13,9 @@ logger = logging.getLogger("all.jev_diag.v2.telemetry")
 
 FAMILIES = ("cpu", "memory", "rpc")
 MAX_LINES_PER_SOURCE = 3
+# Saturation judged on its own scale, not only against a baseline that may already lie inside the fault (USE method).
+CPU_THROTTLED_SHARE = 0.25  # the threshold of kube-prometheus's CPUThrottlingHigh alert (share of CFS periods)
+MEMORY_LIMIT_SHARE = 0.9  # working set within a tenth of its limit
 _SKIP_PREFIXES = ("no ", "(pods started", "0 quer")
 _available: bool | None = None
 
@@ -74,6 +77,7 @@ def component_lines(snapshot, cid: str) -> list[str]:
         except Exception as exc:  # noqa: BLE001 - one family failing leaves the others
             logger.info("metrics %s for %s: %s", family, cid, exc)
             continue
+        lines += saturation(family, getattr(result, "raw", None) or {})  # before any cap: the most decisive fact
         kept = [line for line in result.lines if not line.startswith(_SKIP_PREFIXES)]
         lines += [f"{family} metrics: {line}" for line in kept[:MAX_LINES_PER_SOURCE]]
     try:
@@ -82,3 +86,24 @@ def component_lines(snapshot, cid: str) -> list[str]:
     except Exception as exc:  # noqa: BLE001
         logger.info("call edges for %s: %s", cid, exc)
     return lines
+
+
+def saturation(family: str, raw: dict) -> list[str]:
+    """Containers saturated on an absolute scale, from the summarized series: CPU-throttled in at least
+    CPU_THROTTLED_SHARE of CFS periods (throttling happens well below the limit on average), or a memory working
+    set that reached MEMORY_LIMIT_SHARE of its limit."""
+    out = []
+    if family == "cpu":
+        for s in raw.get("throttled") or []:
+            share = (s.get("summary") or {}).get("recent")
+            if share is not None and share >= CPU_THROTTLED_SHARE:
+                container = (s.get("labels") or {}).get("container")
+                out.append(f"saturation: container {container} is CPU-throttled in {share:.0%} of CFS periods")
+    elif family == "memory":
+        for s in raw.get("working_set") or []:
+            peak, limit = (s.get("summary") or {}).get("max"), s.get("limit")
+            if peak and limit and peak >= MEMORY_LIMIT_SHARE * limit:
+                out.append(
+                    f"saturation: container {s.get('container')} memory working set reached {peak / limit:.0%} of its limit"
+                )
+    return out

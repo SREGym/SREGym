@@ -15,16 +15,21 @@ from __future__ import annotations
 
 import ast
 import copy
+import errno
 import json
 import logging
 import math
+import os
 import re
 import statistics
+import time
 from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+from clients.jev_diag import collector as kubectl_runner
 
 # One kubectl runner for both pipelines: recording, replay and tracing are set up once by the driver.
 from clients.jev_diag.collector import (  # noqa: F401 - re-exported for the v2 modules
@@ -41,11 +46,16 @@ from clients.jev_diag.timeutil import now, parse_time
 from clients.jev_diag.v2 import changes as change_log
 from clients.jev_diag.v2 import checks, flags, paths, platform_events
 from clients.jev_diag.v2.checks import parse_cpu_millis, parse_memory_bytes  # noqa: F401 - re-exported
+from clients.jev_diag.v2.text import MAX_MESSAGE_CHARS, trim  # noqa: F401 - re-exported
 
 logger = logging.getLogger("all.jev_diag.v2.collector")
 
 WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job")
 KUBECTL_TIMEOUT = 45
+# Reads that define the application (its workloads and pods) are retried: an overloaded API server times them out,
+# and an empty answer there leaves nothing to diagnose.
+APPLICATION_READ_ATTEMPTS = 3
+APPLICATION_READ_PAUSE_SECONDS = 15
 LOG_TIMEOUT = 25
 DEFAULT_LOG_TAIL = 200
 MAX_LOG_PODS_PER_COMPONENT = 2
@@ -54,7 +64,6 @@ MAX_PREVIOUS_LOG_LINES = 15
 MAX_EVENTS_PER_COMPONENT = 6
 # Error lines logged this soon after a pod started are warm-up noise (dependencies not up yet), not evidence.
 WARMUP_SECONDS = 120
-MAX_MESSAGE_CHARS = 240
 CLASSIFY_CHARS = 2000  # log text kept (privately) for classification; only MAX_MESSAGE_CHARS is shown
 # An error signature is "stopped" when it has been silent longer than this floor and longer than CADENCE_FACTOR
 # times its own median gap; a signature seen once is stopped after SINGLE_OCCURRENCE_WINDOW seconds.
@@ -80,13 +89,25 @@ PRIVATE_NOT_SAVED = (
 _BENIGN_WAITING_REASONS = {"ContainerCreating", "PodInitializing"}
 _PRESSURE_CONDITIONS = {"MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"}
 
-_ERROR_LINE_RE = re.compile(
-    r"(?i)(\berror\b|\berr\b|\bfail(?:ed|ure|ing)?\b|exception|panic|fatal|traceback|refused|timed?\s?out|"
+_ERROR_WORDS = (
+    r"\berror\b|\berr\b|\bfail(?:ed|ure|ing)?\b|exception|panic|fatal|traceback|refused|timed?\s?out|"
     r"\btimeout\b|unavailable|denied|unauthorized|forbidden|not found|no such host|could not resolve|"
     r"\bEOF\b|\bOOM\b|out of memory|killed|crash|unhealthy|\b5\d\d\b|deadline exceeded|reset by peer|"
-    r"broken pipe|unreachable|no route to host|throttl|OutOfMemoryError|address already in use|EADDRINUSE|"
-    r"no space left|ENOSPC|too many open files|EMFILE|x509:|deadlock|lock wait timeout)"
+    r"broken pipe|unreachable|no route to host|throttl|\b(?:x509|tls|ssl):"
 )
+# Operating-system errors from the platform's own errno table (names such as ENOSPC and their messages such as "No
+# space left on device"), so every system error is recognised, not only those seen before.
+_ERRNO_NAMES = sorted(set(errno.errorcode.values()), key=len, reverse=True)
+_ERRNO_MESSAGES = sorted(
+    {os.strerror(code).lower() for code in errno.errorcode if not os.strerror(code).startswith("Unknown error")},
+    key=len,
+    reverse=True,
+)
+_ERROR_LINE_RE = re.compile(
+    rf"(?i:{_ERROR_WORDS})|[a-z](?:Error|Exception)\b|\b(?:{'|'.join(_ERRNO_NAMES)})\b|"
+    rf"(?i:{'|'.join(map(re.escape, _ERRNO_MESSAGES))})"
+)
+_ERROR_LEVELS = {"error", "err", "eror", "fatal", "critical", "crit", "panic", "alert", "emerg", "severe", "e", "f"}
 _BENIGN_LINE_RE = re.compile(r"(?i)\b(errors?[:=]\s*0|0 errors|failed[:=]\s*0|no errors?)\b")
 # Explicit failure outcomes can be logged at INFO. Require protocol/status context or an unsuccessful action,
 # rather than bare numbers or words like "malformed", "authentication", or "rate limit" in startup settings.
@@ -97,8 +118,6 @@ _FAILURE_OUTCOME_RE = re.compile(
     r"\bauth(?:entication|orization)?\s+(?:failed|rejected|denied)\b|\bauthentication required[.!]?\s*$|"
     r"\b(?:access denied|invalid credentials)\b|\brate[ _-]limit(?:ing)?\s+(?:exceeded|reached)\b|"
     r"\btoo many requests\b|"
-    r"\b(?:consumer|partition|processing|worker)\b(?:\s+\w+){0,4}\s+(?:paused|stalled|blocked|stuck)"
-    r"\s+(?:at|on)\s+(?:offset|record|message|input)\b|"
     r"\b(?:skipp(?:ing|ed)|reject(?:ing|ed)|dropp(?:ing|ed))\s+(?:an?\s+)?"
     r"(?:malformed|corrupt(?:ed)?|invalid|unparseable)\s+(?:record|message|payload|input|data|json|document)s?\b)"
 )
@@ -124,11 +143,17 @@ _QUIET_LEVELS = {"trace", "debug", "info", "notice", "trc", "dbg", "inf", "trce"
 _TIMESTAMP_RE = re.compile(r"^\[?\S*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s\]]*\]?\s*")
 _RFC3339_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
 _PREFIX_RE = re.compile(r"^\[pod/[^/\]]+/([^\]]+)\]\s?")
-_HEX_RE = re.compile(r"\b[0-9a-fA-F]{8,}\b")
+# Values that differ between occurrences of one message (see message_signature).
 _UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
-_ADDR_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
-_NUM_RE = re.compile(r"\d{3,}")
+_DURATION_RE = re.compile(r"(?<![\w.])(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+(?!\w)")
+_ID_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])(?=[A-Za-z]*[0-9])(?=[0-9]*[A-Za-z])[A-Za-z0-9]+(?![A-Za-z0-9])")
+_DIGITS_RE = re.compile(r"\d+")
 _WS_RE = re.compile(r"\s+")
+# Fields of a structured (JSON or logfmt) log line, by what they say.
+_MESSAGE_FIELDS = frozenset({"msg", "message"})
+_ERROR_FIELDS = frozenset({"error", "err", "errmsg", "error_message", "errormessage", "exception", "reason", "cause"})
+_TIME_FIELDS = frozenset({"t", "ts", "time", "timestamp", "@timestamp", "$date"})
+_LOGFMT_PAIR_RE = re.compile(r'(?<!\S)([\w.@$-]+)=("(?:[^"\\]|\\.)*"|[^\s"]*)')
 
 
 @dataclass
@@ -146,11 +171,13 @@ class ClusterSnapshot:
 
         Keys starting with "_" hold raw data used during collection and are left out. With include_private
         (used for the saved snapshot) the light private keys are kept so a replay can re-derive signals.
+        Components with any abnormality come first, so a reader meets the symptomatic ones before the healthy ones.
         """
+        ordered = sorted(self.components.items(), key=lambda item: bool(item[1].get("healthy")))
         return {
             "application": self.app,
             "cluster": _public(self.cluster, include_private),
-            "components": {cid: _public(c, include_private) for cid, c in self.components.items()},
+            "components": {cid: _public(c, include_private) for cid, c in ordered},
         }
 
 
@@ -167,11 +194,6 @@ def _public(obj, include_private: bool):
 
 
 # --------------------------------------------------------------------------- helpers
-
-
-def trim(text: str | None, limit: int = MAX_MESSAGE_CHARS) -> str:
-    text = _WS_RE.sub(" ", (text or "").strip())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def selector_matches(selector: dict | None, labels: dict | None) -> bool:
@@ -320,6 +342,7 @@ def summarize_workload(obj: dict) -> dict:
             "available": status.get("availableReplicas", status.get("currentReplicas", 0)),
             "updated": status.get("updatedReplicas", 0),
         }
+        signals += rollout_state(kind, spec, status)
 
     strategy = spec.get("strategy") or spec.get("updateStrategy")
     if strategy:
@@ -352,7 +375,14 @@ def summarize_workload(obj: dict) -> dict:
         if spec.get(key) is not None:
             extra.setdefault("rollout", {})[key] = spec[key]
 
-    config_refs: dict[str, set] = {"secrets": set(), "configmaps": set()}
+    config_refs: dict[str, set] = {"secrets": set(), "configmaps": set(), "optional": set()}
+
+    def ref(key: str, name: str | None, source: dict | None) -> None:
+        """A reference to a ConfigMap or Secret; one marked optional may be missing without breaking the pod."""
+        config_refs[key].add(name)
+        if (source or {}).get("optional"):
+            config_refs["optional"].add(f"{key}/{name}")
+
     containers = []
     env_hosts: set[str] = set()
     env_addresses: set[str] = set()
@@ -377,19 +407,19 @@ def summarize_workload(obj: dict) -> dict:
         for text in [*(c.get("command") or []), *(c.get("args") or [])]:
             env_hosts |= checks.command_host_candidates(str(text))
         env_from = []
-        for ref in c.get("envFrom", []) or []:
-            if ref.get("configMapRef"):
-                env_from.append({"configMap": ref["configMapRef"].get("name"), "prefix": ref.get("prefix")})
-                config_refs["configmaps"].add(ref["configMapRef"].get("name"))
-            if ref.get("secretRef"):
-                env_from.append({"secret": ref["secretRef"].get("name"), "prefix": ref.get("prefix")})
-                config_refs["secrets"].add(ref["secretRef"].get("name"))
+        for ref_ in c.get("envFrom", []) or []:
+            if ref_.get("configMapRef"):
+                env_from.append({"configMap": ref_["configMapRef"].get("name"), "prefix": ref_.get("prefix")})
+                ref("configmaps", ref_["configMapRef"].get("name"), ref_["configMapRef"])
+            if ref_.get("secretRef"):
+                env_from.append({"secret": ref_["secretRef"].get("name"), "prefix": ref_.get("prefix")})
+                ref("secrets", ref_["secretRef"].get("name"), ref_["secretRef"])
         for e in c.get("env", []) or []:
             vf = e.get("valueFrom") or {}
             if vf.get("secretKeyRef"):
-                config_refs["secrets"].add(vf["secretKeyRef"].get("name"))
+                ref("secrets", vf["secretKeyRef"].get("name"), vf["secretKeyRef"])
             if vf.get("configMapKeyRef"):
-                config_refs["configmaps"].add(vf["configMapKeyRef"].get("name"))
+                ref("configmaps", vf["configMapKeyRef"].get("name"), vf["configMapKeyRef"])
         ports = [p.get("containerPort") for p in c.get("ports", []) if p.get("containerPort")]
         host_ports = [p.get("hostPort") for p in c.get("ports", []) if p.get("hostPort")]
         probes = {}
@@ -457,10 +487,10 @@ def summarize_workload(obj: dict) -> dict:
             volumes.append({"name": v.get("name"), "pvc": v["persistentVolumeClaim"].get("claimName")})
         elif "configMap" in v:
             volumes.append({"name": v.get("name"), "configMap": v["configMap"].get("name")})
-            config_refs["configmaps"].add(v["configMap"].get("name"))
+            ref("configmaps", v["configMap"].get("name"), v["configMap"])
         elif "secret" in v:
             volumes.append({"name": v.get("name"), "secret": v["secret"].get("secretName")})
-            config_refs["secrets"].add(v["secret"].get("secretName"))
+            ref("secrets", v["secret"].get("secretName"), v["secret"])
         elif "projected" in v:
             sources = (v["projected"] or {}).get("sources") or []
             cms = [(src.get("configMap") or {}).get("name") for src in sources if src.get("configMap")]
@@ -510,6 +540,29 @@ def summarize_workload(obj: dict) -> dict:
         "alerts": [],
         "signals": signals,
     }
+
+
+def rollout_state(kind: str, spec: dict, status: dict) -> list[str]:
+    """A rollout that is paused or held back, so pods of more than one template run (a Deployment's spec.paused, a
+    StatefulSet whose update revision is not on every replica, a DaemonSet not updated on every node)."""
+    if kind == "Deployment" and spec.get("paused"):
+        return [
+            f"rollout paused (spec.paused): {status.get('updatedReplicas', 0)} of {spec.get('replicas', 1)} "
+            "replicas run the newest pod template"
+        ]
+    if kind == "StatefulSet" and status.get("updateRevision") not in (None, status.get("currentRevision")):
+        partition = ((spec.get("updateStrategy") or {}).get("rollingUpdate") or {}).get("partition")
+        held = f" (partition {partition})" if partition else ""
+        return [
+            f"rolling update incomplete{held}: {status.get('updatedReplicas', 0)} of {spec.get('replicas', 1)} "
+            "replicas run the update revision"
+        ]
+    if kind == "DaemonSet" and status.get("updatedNumberScheduled", 0) < status.get("desiredNumberScheduled", 0):
+        return [
+            f"{status.get('updatedNumberScheduled', 0)} of {status.get('desiredNumberScheduled', 0)} daemon pods run "
+            "the newest pod template"
+        ]
+    return []
 
 
 def replica_signals(comp: dict) -> list[str]:
@@ -741,6 +794,29 @@ def _event_time(ev: dict) -> str:
     )
 
 
+# Kubernetes' event recorder merges similar events into one and prefixes its message with this; `count` says so too.
+_COMBINED_EVENT_PREFIX = "(combined from similar events): "
+
+
+def event_message(ev: dict) -> str:
+    return (ev.get("message") or "").removeprefix(_COMBINED_EVENT_PREFIX)
+
+
+def add_signal(comp: dict, signal: str | None) -> None:
+    """Add a signal unless the component already states the same fact (equal up to ids, counts and times)."""
+    if signal and all(message_signature(s) != message_signature(signal) for s in comp["signals"]):
+        comp["signals"].append(signal)
+
+
+def count_platform_failure(comp: dict, reason: str | None, message: str, count: int | None) -> None:
+    """Count the events stating a platform layer's failure (platform_events.PLATFORM_LAYERS) under
+    `platform_failures`, typed, for platform findings across workloads (derive.cluster_findings)."""
+    layer = platform_events.platform_layer(reason, message)
+    if layer:
+        failures = comp.setdefault("platform_failures", {})
+        failures[layer] = failures.get(layer, 0) + int(count or 1)
+
+
 def summarize_event(ev: dict) -> dict:
     obj = ev.get("involvedObject") or {}
     count = ev.get("count") or (ev.get("series") or {}).get("count") or 1
@@ -750,7 +826,7 @@ def summarize_event(ev: dict) -> dict:
         "object": f"{(obj.get('kind') or '?').lower()}/{obj.get('name')}",
         "first_seen": ev.get("firstTimestamp") or ev.get("eventTime"),
         "last_seen": _event_time(ev),
-        "message": trim(ev.get("message")),
+        "message": trim(event_message(ev)),
     }
 
 
@@ -770,11 +846,14 @@ def attach_warning_events(
             cid = component_for_object(
                 obj.get("kind", ""), obj.get("name", ""), obj.get("namespace", ""), components, job_owner
             )
-            signal = platform_events.event_signal(ev.get("reason"), ev.get("message"))
-            if cid and signal and signal not in components[cid]["signals"]:
-                components[cid]["signals"].append(signal)
+            if cid:
+                add_signal(components[cid], platform_events.event_signal(ev.get("reason"), event_message(ev)))
+                count_platform_failure(components[cid], ev.get("reason"), event_message(ev), ev.get("count"))
     warnings = [e for e in events if e.get("type") == "Warning"]
     warnings.sort(key=_event_time, reverse=True)
+    kept: dict[str, list[dict]] = {}
+    facts: dict[tuple[str, str, str], dict] = {}
+    counts: dict[str, Counter[str]] = {}
     for ev in warnings:
         obj = ev.get("involvedObject") or {}
         cid = component_for_object(
@@ -793,19 +872,27 @@ def attach_warning_events(
                 if len(history) < 3:
                     history.append(record)
                 continue
-        platform_failure = platform_events.event_signal(record.get("reason"), ev.get("message"))
-        if platform_failure and platform_failure not in components[cid]["signals"]:
-            components[cid]["signals"].append(platform_failure)  # read before the cap below
-        bucket = components[cid]["warning_events"]
-        if len(bucket) < MAX_EVENTS_PER_COMPONENT:
-            bucket.append(record)
-    for comp in components.values():
-        if comp["warning_events"]:
-            reasons: Counter[str] = Counter()
-            for ev in comp["warning_events"]:
-                reasons[ev["reason"]] += int(ev.get("count") or 1)
-            summary = ", ".join(f"{r} x{n}" for r, n in reasons.most_common(4))
-            comp["signals"].append(f"warning events: {summary}")
+        add_signal(components[cid], platform_events.event_signal(record.get("reason"), event_message(ev)))
+        count_platform_failure(components[cid], record.get("reason"), event_message(ev), record.get("count"))
+        counts.setdefault(cid, Counter())[record["reason"]] += int(record.get("count") or 1)
+        # The same event about another pod or sandbox is one fact: one record with the counts added up.
+        fact = (cid, record["reason"], message_signature(record["message"]))
+        if fact in facts:
+            same = facts[fact]
+            same["count"] += record["count"]  # the kept record is the newest series: its first sighting stays
+            continue
+        facts[fact] = record
+        kept.setdefault(cid, []).append(record)
+    for cid, records in kept.items():  # ranked, then capped: the newest of each reason first, then the newest others
+        first, rest, seen = [], [], set()
+        for r in records:
+            (rest if r["reason"] in seen else first).append(r)
+            seen.add(r["reason"])
+        comp = components[cid]
+        comp["warning_events"] = (comp["warning_events"] + first + rest)[:MAX_EVENTS_PER_COMPONENT]
+        summary = ", ".join(f"{r} x{n}" for r, n in counts[cid].most_common(4))  # counted over every warning
+        comp["signals"] = [x for x in comp["signals"] if not x.startswith("warning events: ")]
+        comp["signals"].append(f"warning events: {summary}")
 
 
 # --------------------------------------------------------------------------- services / netpol
@@ -813,11 +900,13 @@ def attach_warning_events(
 
 def attach_services(
     services: list[dict],
-    endpoints: list[dict],
+    endpoints: list[dict] | None,
     components: dict[str, dict],
     changes: list[dict] | None = None,
 ) -> list[dict]:
     """Map services to the workloads they select and flag empty endpoints, dangling selectors, and policies.
+
+    `endpoints` is None when they could not be read: endpoint counts are then unknown, not zero.
 
     A Service that selects pods of several workloads keeps its selector and each workload's container ports, so
     the fan-out can be checked in code. When `changes` is given, a Service modified after creation, or created
@@ -825,7 +914,7 @@ def attach_services(
     """
     ready_by_name: dict[tuple[str, str], tuple[int, int]] = {}
     nodes_by_name: dict[tuple[str, str], list[str]] = {}
-    for ep in endpoints:
+    for ep in endpoints or []:
         meta = ep.get("metadata", {})
         ready = sum(len(s.get("addresses") or []) for s in ep.get("subsets") or [])
         not_ready = sum(len(s.get("notReadyAddresses") or []) for s in ep.get("subsets") or [])
@@ -840,7 +929,7 @@ def attach_services(
         if spec.get("type") == "ExternalName" or not spec.get("selector"):
             continue
         ns, name = meta.get("namespace"), meta.get("name")
-        ready, not_ready = ready_by_name.get((ns, name), (0, 0))
+        ready, not_ready = ready_by_name.get((ns, name), (0, 0)) if endpoints is not None else (None, None)
         record = {
             "name": name,
             "type": spec.get("type"),
@@ -850,6 +939,7 @@ def attach_services(
             "selector": spec["selector"],
             "ready_endpoints": ready,
             "not_ready_endpoints": not_ready,
+            **({"cluster_ip": spec["clusterIP"]} if spec.get("clusterIP") not in (None, "None", "") else {}),
         }
         policies = []
         if spec.get("internalTrafficPolicy") and spec["internalTrafficPolicy"] != "Cluster":
@@ -890,7 +980,7 @@ def attach_services(
                 changes.append(change)
         for cid in owners:
             components[cid]["services"].append(record)
-            if ready == 0:
+            if ready == 0:  # None when the endpoints could not be read
                 components[cid]["signals"].append(f"service {name} selects this component but has 0 ready endpoints")
             # A DaemonSet is node-local by design, so a Local traffic policy is idiomatic there.
             if components[cid]["kind"] != "DaemonSet":
@@ -1075,16 +1165,69 @@ def log_text(line: str) -> tuple[str | None, str]:
     return container, _TIMESTAMP_RE.sub("", text).strip()
 
 
-def normalize_log_line(line: str) -> tuple[str, str]:
-    """Return (dedupe_key, display_text) for a raw `kubectl logs --prefix` line."""
-    container, text = log_text(line)
-    display = trim(f"{container}: {text}" if container else text)
+def message_signature(text: str) -> str:
+    """What stays the same between occurrences of one message, so they count as one: UUIDs, durations, tokens that
+    mix letters and digits (ids, hashes, pod names) and every run of digits are replaced. That covers a timestamp in
+    any format anywhere in the line, a counter, a port, an address and an offset."""
     key = _UUID_RE.sub("<id>", text)
-    key = _HEX_RE.sub("<hex>", key)
-    key = _ADDR_RE.sub("<addr>", key)
-    key = _NUM_RE.sub("<n>", key)
-    key = _WS_RE.sub(" ", key).lower()
-    return (f"{container}|{key}" if container else key), display
+    key = _DURATION_RE.sub("<duration>", key)
+    key = _ID_TOKEN_RE.sub("<id>", key)
+    key = _DIGITS_RE.sub("<n>", key)
+    return _WS_RE.sub(" ", key).strip().lower()
+
+
+def _leaves(value, path: tuple[str, ...] = ()) -> Iterable[tuple[tuple[str, ...], object]]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _leaves(item, (*path, str(key)))
+    elif value not in (None, "", [], {}):
+        yield path, value
+
+
+def _structured_fields(text: str) -> tuple[str, list[tuple[tuple[str, ...], object]]] | None:
+    """(text before the fields, [(field path, value)]) of a line that ends in a JSON object or is a run of logfmt
+    pairs with a message or error field; None for any other line."""
+    start = text.find("{")
+    if start >= 0:
+        try:
+            obj, end = json.JSONDecoder().raw_decode(text, start)
+        except ValueError:
+            obj, end = None, start
+        if isinstance(obj, dict) and not text[end:].strip():
+            return text[:start].strip(), list(_leaves(obj))
+    pairs = _LOGFMT_PAIR_RE.findall(text)
+    if len(pairs) >= 3 and any(k.lower() in _MESSAGE_FIELDS | _ERROR_FIELDS for k, _ in pairs):
+        fields = [((k,), v[1:-1].replace('\\"', '"') if v.startswith('"') else v) for k, v in pairs]
+        return _LOGFMT_PAIR_RE.sub("", text).strip(), fields
+    return None
+
+
+def readable_log_text(text: str) -> str:
+    """A structured log line (a JSON object, or logfmt pairs) rewritten as its message, then its error fields, then
+    its other fields, without timestamps; any other line unchanged. Shortened afterwards, it still says what failed
+    and why instead of keeping only the timestamps and context that structured loggers write first."""
+    parsed = _structured_fields(text)
+    if parsed is None:
+        return text
+    head, fields = parsed
+
+    def rank(path: tuple[str, ...]) -> int:
+        if path[-1].lower() in _MESSAGE_FIELDS:
+            return 0
+        return 1 if any(p.lower() in _ERROR_FIELDS for p in path) else 2
+
+    parts = [head] if head else []
+    for path, value in sorted(fields, key=lambda f: rank(f[0])):
+        if path[-1].lower() not in _TIME_FIELDS:
+            shown = value if isinstance(value, str) else json.dumps(value)
+            parts.append(shown if rank(path) == 0 else f"{path[-1]}={shown}")
+    return "; ".join(parts)
+
+
+def display_log_line(container: str | None, text: str) -> str:
+    """The text shown for a log line: its message first when it is structured, shortened to keep head and tail."""
+    text = readable_log_text(text)
+    return trim(f"{container}: {text}" if container else text)
 
 
 def declared_level(line: str) -> str | None:
@@ -1112,14 +1255,19 @@ def is_error_line(line: str) -> bool:
     level = declared_level(text)
     if level in {"trace", "debug", "trc", "dbg", "trce", "dbug", "d"}:
         return False
+    if level in _ERROR_LEVELS:  # a line that declares itself an error is one, whatever its words
+        return True
     return bool(_FAILURE_OUTCOME_RE.search(text) or (level not in _QUIET_LEVELS and _ERROR_LINE_RE.search(text)))
 
 
 def signature_recency(times: list[datetime], at: datetime) -> dict:
-    """First and last sighting of an error signature, its median gap, and whether it is still occurring.
+    """First and last sighting of an error signature, its median gap, whether it is still occurring, and when its
+    current episode started.
 
     A signature is "stopped" once it has been silent longer than ONGOING_FLOOR_SECONDS and longer than
     CADENCE_FACTOR times its own median gap (a signature seen once: longer than SINGLE_OCCURRENCE_WINDOW). The
+    same silence inside the series ends an episode: the current one starts at the first sighting after the last
+    such silence, so a message that also appeared during warm-up dates from its return, not from warm-up. The
     judgment uses only the signature's own rhythm and the collection time.
     """
     if not times:
@@ -1134,7 +1282,11 @@ def signature_recency(times: list[datetime], at: datetime) -> dict:
     if gaps:
         gap = statistics.median(gaps)
         out["median_gap_seconds"] = round(gap, 1)
-        stopped = silent > max(ONGOING_FLOOR_SECONDS, CADENCE_FACTOR * gap)
+        quiet = max(ONGOING_FLOOR_SECONDS, CADENCE_FACTOR * gap)
+        stopped = silent > quiet
+        starts = [b for a, b in zip(times, times[1:], strict=False) if (b - a).total_seconds() > quiet]
+        if starts:
+            out["episode_start_seconds_ago"] = max(0, int((at - starts[-1]).total_seconds()))
     else:
         stopped = silent > SINGLE_OCCURRENCE_WINDOW
     out["state"] = "stopped" if stopped else "ongoing"
@@ -1161,11 +1313,11 @@ def extract_log_signals(
     for line in raw_logs:
         if not is_error_line(line):
             continue
-        key, display = normalize_log_line(line)
+        container, text = log_text(line)
+        key = f"{container}|{message_signature(text)}"
         counts[key] += 1
-        examples.setdefault(key, display)
-        if key not in full:
-            container, text = log_text(line)
+        if key not in examples:
+            examples[key] = display_log_line(container, text)
             full[key] = (f"{container}: {text}" if container else text)[:CLASSIFY_CHARS]
         prefix = _PREFIX_RE.match(line)
         if prefix:
@@ -1183,8 +1335,22 @@ def extract_log_signals(
             item["state"] = "ongoing"
             item["crash_loop"] = True
         out.append(item)
-    out.sort(key=lambda i: (i.get("state") == "stopped", -i["count"]))
-    return out[:limit]
+    return rank_signatures(out)[:limit]
+
+
+def rank_signatures(items: list[dict]) -> list[dict]:
+    """Still-occurring signatures first, alternating the most frequent and the newest (first seen most recently), so
+    a rare error that appeared with the fault is not crowded out by a frequent retry; stopped ones last, by count."""
+    ongoing = [i for i in items if i.get("state") != "stopped"]
+    by_count = sorted(ongoing, key=lambda i: -i["count"])
+    by_new = sorted(ongoing, key=lambda i: i.get("first_seen_seconds_ago", float("inf")))
+    ranked: list[dict] = []
+    for pair in zip(by_count, by_new, strict=True):
+        for item in pair:
+            if all(item is not r for r in ranked):
+                ranked.append(item)
+    stopped = sorted((i for i in items if i.get("state") == "stopped"), key=lambda i: -i["count"])
+    return ranked + stopped
 
 
 def warmup_cutoff(pod: dict) -> datetime | None:
@@ -1246,8 +1412,8 @@ def _fetch_previous_logs(pod: str, container: str, namespace: str) -> list[str]:
         ["logs", pod, "-n", namespace, "-c", container, "--previous", f"--tail={PREVIOUS_LOG_READ}"],
         timeout=LOG_TIMEOUT,
     )
-    lines = [trim(_TIMESTAMP_RE.sub("", strip_ansi(ln))) for ln in out.splitlines() if ln.strip()]
-    return crash_excerpt(lines, MAX_PREVIOUS_LOG_LINES)
+    lines = [_TIMESTAMP_RE.sub("", strip_ansi(ln)) for ln in out.splitlines() if ln.strip()]
+    return [display_log_line(None, ln) for ln in crash_excerpt(lines, MAX_PREVIOUS_LOG_LINES)]
 
 
 def attach_logs(
@@ -1467,7 +1633,9 @@ def summarize_namespace_constraints(limit_ranges: list[dict], quotas: list[dict]
                     continue
             else:
                 h, u = parse(hard_v), parse(used_v)
-            if h and u is not None and u >= 0.9 * h:
+            if h == 0:  # a hard limit of zero admits nothing of this resource
+                signals.append(f"quota {res}: hard limit {hard_v}, so nothing of it can be created")
+            elif h and u is not None and u >= 0.9 * h:
                 signals.append(f"quota {res}: used {used_v} of hard limit {hard_v}")
         out.append(
             {
@@ -1642,7 +1810,9 @@ def summarize_cluster_dns(errors: list[str]) -> dict:
             if not all(c.get("ready") for c in p.get("status", {}).get("containerStatuses") or [])
         ]
         out["pods"] = len(pods)
-        if not_ready:
+        if not pods:  # the configuration exists (read above), but nothing serves it
+            out.setdefault("signals", []).append("CoreDNS has no pods: cluster name resolution has no server")
+        elif not_ready:
             out.setdefault("signals", []).append(f"CoreDNS pods not ready: {', '.join(not_ready)}")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"coredns pods: {exc}")
@@ -1671,7 +1841,8 @@ def summarize_config_objects(secrets: list[dict], configmaps: list[dict]) -> dic
 
 
 def _stale_readers(comp: dict, kind: str, name: str, obj: dict) -> str | None:
-    """What a rewrite of a ConfigMap or Secret means for this workload's running containers, by read mode."""
+    """What a rewrite of a ConfigMap or Secret means for this workload's running containers, by read mode. An object
+    whose previous values running containers still hold is recorded in `_holds_previous` with its write time."""
     updated = parse_time(obj.get("last_update"))
     if updated is None:
         return None
@@ -1692,6 +1863,7 @@ def _stale_readers(comp: dict, kind: str, name: str, obj: dict) -> str | None:
         "containers of this workload started"
     )
     if fixed:
+        comp.setdefault("_holds_previous", {})[f"{kind.lower()}/{name}"] = obj.get("last_update")
         return (
             f"{head}; it is read through {', '.join(fixed)}, which are fixed when the container starts, so those "
             "containers still use the previous values"
@@ -1704,16 +1876,36 @@ def _stale_readers(comp: dict, kind: str, name: str, obj: dict) -> str | None:
     return head
 
 
+def application_items(resource: str, namespace: str, errors: list[str], **kwargs) -> list[dict]:
+    """`kubectl_items` for a read that defines the application, retried when it fails before it counts as empty."""
+    for attempt in range(APPLICATION_READ_ATTEMPTS):
+        failed: list[str] = []
+        items = kubectl_items(resource, namespace, failed, **kwargs)
+        if not failed:
+            return items
+        if attempt + 1 < APPLICATION_READ_ATTEMPTS and kubectl_runner._REPLAY is None:
+            time.sleep(APPLICATION_READ_PAUSE_SECONDS)
+    errors.extend(failed)
+    return items
+
+
 def attach_config_objects(
-    objects: dict[tuple[str, str, str], dict], components: dict[str, dict], changes: list[dict] | None = None
+    objects: dict[tuple[str, str, str], dict],
+    components: dict[str, dict],
+    changes: list[dict] | None = None,
+    unread: set[tuple[str, str]] | None = None,
 ) -> None:
     """Missing references, staleness by read mode, env shadowing, and recent writes, computed in code.
+
+    A reference is missing only when its namespace's objects of that kind were read; `unread` holds the (kind,
+    namespace) pairs whose read failed, and a reference there is reported as not verified, never as absent.
 
     How a workload reads an object decides what a rewrite means for its running pods: env values (valueFrom,
     envFrom) and subPath mounts are fixed when the container starts, so a container started before the rewrite
     still uses the previous values; a volume mount is updated in place, and the process sees the new content
     only if it re-reads the files.
     """
+    unread = unread or set()
     consumers: dict[tuple[str, str, str], list[str]] = {}
     for cid, comp in components.items():
         ns = comp["namespace"]
@@ -1722,12 +1914,18 @@ def attach_config_objects(
         for kind, key in (("Secret", "secrets"), ("ConfigMap", "configmaps")):
             for name in refs.get(key, []):
                 obj = objects.get((kind, ns, name))
+                if obj is None and (kind, ns) in unread:
+                    details[f"{kind.lower()}/{name}"] = {
+                        "not_verified": f"the read of {kind}s in namespace {ns} failed"
+                    }
+                    continue
                 if obj is None:
-                    comp["signals"].append(f"referenced {kind} {name} does not exist in namespace {ns}")
+                    if f"{key}/{name}" not in (refs.get("optional") or []):  # an optional one may be absent
+                        comp["signals"].append(f"referenced {kind} {name} does not exist in namespace {ns}")
                     continue
                 consumers.setdefault((kind, ns, name), []).append(cid)
-                for key, value in (obj.get("_settings") or {}).items():
-                    comp.setdefault("_call_settings", {})[f"{name}:{key}"] = value
+                for setting, value in (obj.get("_settings") or {}).items():
+                    comp.setdefault("_call_settings", {})[f"{name}:{setting}"] = value
                 details[f"{kind.lower()}/{name}"] = {"keys": obj["keys"][:20], "last_update": obj["last_update"]}
                 stale = _stale_readers(comp, kind, name, obj)
                 if stale:
@@ -1994,7 +2192,7 @@ def collect_snapshot(
 
     for ns in namespaces:
         for resource in ("deployments", "statefulsets", "daemonsets", "cronjobs"):
-            for obj in kubectl_items(resource, ns, errors):
+            for obj in application_items(resource, ns, errors):
                 comp = summarize_workload(obj)
                 add_workload(component_id(comp["kind"], comp["name"]), comp, ns)
                 deletable.append((comp["kind"], obj))
@@ -2035,7 +2233,7 @@ def collect_snapshot(
     change_log.attach_template_changes(components, revisions, deployed)
 
     for ns in namespaces:
-        raw_pods[ns] = kubectl_items("pods", ns, errors, managed_fields=False)
+        raw_pods[ns] = application_items("pods", ns, errors, managed_fields=False)
         for pod in raw_pods[ns]:
             summary = summarize_pod(pod)
             summary["_namespace"] = ns
@@ -2046,7 +2244,8 @@ def collect_snapshot(
                 if summary["signals"] and len(unassigned_pods) < 10:
                     unassigned_pods.append({k: v for k, v in summary.items() if k != "labels"})
                 continue
-            summary.pop("labels")
+            labels = summary.pop("labels") or {}
+            summary["template_hash"] = labels.get("pod-template-hash") or labels.get("controller-revision-hash")
             pods_by_component.setdefault(cid, []).append(summary)
             pod_to_component[summary["name"]] = cid
             pod_index[summary["name"]] = summary
@@ -2066,9 +2265,13 @@ def collect_snapshot(
                 comp.setdefault("startup_history", []).extend(f"pod {pod['name']}: {n}" for n in pod["startup_notes"])
         if comp["replicas"].get("desired", 0) and not pods:
             comp["signals"].append("no pods exist for this workload")
+        comp["signals"].extend(
+            change_log.live_revision_drift(comp, revisions.get((comp["namespace"], comp["kind"], comp["name"]), []))
+        )
 
     constraints: list[dict] = []
     config_objects: dict = {}
+    unread_config: set[tuple[str, str]] = set()  # (kind, namespace) whose ConfigMaps or Secrets could not be read
     # (namespace, TLS Secret name) -> what is wrong with its certificate
     cert_problems: dict[tuple[str, str], list[str]] = {}
     claim_modes: dict[tuple[str, str], list[str]] = {}
@@ -2077,9 +2280,10 @@ def collect_snapshot(
         attach_warning_events(raw_events[ns], components, unassigned_events, job_owner, pod_index)
         services = kubectl_items("services", ns, errors)
         deletable += [("Service", svc) for svc in services]
-        dangling_services += attach_services(
-            services, kubectl_items("endpoints", ns, errors, managed_fields=False), components, changes
-        )
+        failed: list[str] = []
+        endpoints = kubectl_items("endpoints", ns, failed, managed_fields=False)
+        errors.extend(failed)
+        dangling_services += attach_services(services, None if failed else endpoints, components, changes)
         all_policies += attach_network_policies(
             kubectl_items("networkpolicies", ns, errors), components, changes, deployed
         )
@@ -2090,7 +2294,14 @@ def collect_snapshot(
         constraints += summarize_namespace_constraints(
             kubectl_items("limitranges", ns, errors), kubectl_items("resourcequotas", ns, errors)
         )
-        secrets, configmaps = kubectl_items("secrets", ns, errors), kubectl_items("configmaps", ns, errors)
+        listed: dict[str, list[dict]] = {}
+        for kind, resource in (("Secret", "secrets"), ("ConfigMap", "configmaps")):
+            failed: list[str] = []
+            listed[kind] = kubectl_items(resource, ns, failed)
+            if failed:
+                errors.extend(failed)
+                unread_config.add((kind, ns))
+        secrets, configmaps = listed["Secret"], listed["ConfigMap"]
         deletable += [("Secret", o) for o in secrets] + [("ConfigMap", o) for o in configmaps]
         config_objects.update(summarize_config_objects(secrets, configmaps))
         for secret in secrets:
@@ -2104,9 +2315,8 @@ def collect_snapshot(
     for comp in components.values():
         comp["healthy_hint"] = not comp["signals"]
     attach_namespace_constraints(constraints, components)
-    attach_config_objects(config_objects, components, changes)
+    attach_config_objects(config_objects, components, changes, unread_config)
     changed_after_deploy = {c["object"] for c in changes if not change_log.before_deploy(c, deployed)}
-    flags.attribute_flags(components, config_objects, changed_after_deploy)
     for cid, comp in components.items():
         change = change_log.object_change(
             cid,
@@ -2126,6 +2336,8 @@ def collect_snapshot(
             ),
             revised_at=(comp.get("template_changes") or {}).get("changed_at"),
         )
+        if change and change.get("created_after_targets_s") is not None:
+            change["content"] = change_log.workload_runs(comp)  # a workload created late: say what it runs
         if change:
             changes.append(change)
     for c in constraints:
@@ -2197,7 +2409,7 @@ def collect_snapshot(
     outside_objects = outside.collect_outside(
         namespaces, components, pod_priority, errors, changes, deployed, cert_problems=cert_problems
     )
-    outside_objects += checks.admission_budgets(webhooks, namespaces, namespace_labels, components)
+    outside_objects += checks.admission_chains(webhooks, namespaces, namespace_labels, components)
     cluster_dns = summarize_cluster_dns(errors)
     dns_affected = coredns_service_overrides(cluster_dns, components)
     if dns_affected:
@@ -2236,6 +2448,8 @@ def collect_snapshot(
         except Exception as exc:  # noqa: BLE001 - alerts are optional evidence
             errors.append(f"alerts: {exc}")
         attach_alerts(alerts, components)
+    # after logs and alerts: what a flag write changed goes on the provider's clients that are failing
+    flags.attribute_flags(components, config_objects, changed_after_deploy)
 
     rbac = summarize_rbac(namespaces, components, errors, changes, deployed)
     stuck = checks.stuck_terminating(deletable)
@@ -2332,22 +2546,72 @@ def estimate_tokens(obj: object) -> int:
     return int(len(json.dumps(obj, separators=(",", ":"), default=str)) / CHARS_PER_TOKEN) + 1
 
 
+# Cluster-level entries shown in full once the state is over budget; the others are listed by kind and name.
+MAX_DETAILED_CLUSTER_ENTRIES = 12
+
+
 def _cap(comp: dict, key: str, n: int) -> None:
     if isinstance(comp.get(key), list) and len(comp[key]) > n:
         comp[key] = comp[key][:n]
 
 
-def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
-    """Ordered, increasingly aggressive reductions. Each mutates the state in place."""
+def roster_entry(comp: dict, symptomatic: set[str]) -> dict:
+    """A healthy component reduced to one roster entry: its kind, whether it runs, and its links to symptomatic
+    components (`symptomatic` holds their ids and their Services as "namespace/name"). It has no abnormality to judge,
+    so its pods, containers, Services and volumes are the first bulk triage can spare."""
+    run = {k: comp[k] for k in ("cronjob", "job") if comp.get(k)}
+    if not run:
+        replicas = comp.get("replicas") or {}
+        run = {"ready": f"{replicas.get('ready', 0)}/{replicas.get('desired', 0)}"}
+    links = {k: [x for x in comp.get(k) or [] if x in symptomatic] for k in ("clients", "calls_services")}
+    return {
+        "kind": comp.get("kind"),
+        **run,
+        **{k: comp[k] for k in ("role", "related") if comp.get(k)},
+        **{k: v for k, v in links.items() if v},
+        "healthy": True,
+    }
 
-    def for_components(fn: Callable[[dict], None], *, healthy_only: bool = False) -> Callable[[dict], None]:
+
+def by_relevance(items: list[dict], n: int, symptomatic: set[str]) -> tuple[list[dict], dict[str, list[str]]]:
+    """The `n` entries of a cluster-level list (findings, changes, outside objects) that stay in full, and the others
+    by kind and name. Entries acting on a symptomatic component come first; the list's own order decides the rest."""
+    order = sorted(
+        range(len(items)),
+        key=lambda i: not set(items[i].get("components") or items[i].get("affects") or []) & symptomatic,
+    )
+    keep = set(order[:n])
+    others: dict[str, list[str]] = {}
+    for i, x in enumerate(items):
+        if i not in keep:
+            others.setdefault(x.get("kind") or "other", []).append(x.get("name") or x.get("object"))
+    return [x for i, x in enumerate(items) if i in keep], others
+
+
+def repeated_by_findings(obj: dict, findings: list[dict]) -> bool:
+    """Whether the cluster findings already say everything an outside object says: findings are built from outside
+    objects, one per signal, with the same kind, name, namespace and components."""
+    same = [f for f in findings if all(f.get(k) == obj.get(k) for k in ("kind", "name", "namespace"))]
+    return (
+        bool(same)
+        and set(obj) <= {"kind", "name", "namespace", "signals", "components"}
+        and all(any(s in (f.get("signal") or "") for f in same) for s in obj.get("signals") or [])
+        and set(obj.get("components") or []) <= {c for f in same for c in f.get("components") or []}
+    )
+
+
+def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
+    """Ordered reductions, least informative first; each mutates the state in place and runs only while the state is
+    over budget. Repeated facts go first (nothing is lost); then healthy components shrink to a roster entry; then
+    the cluster-level context lists are capped, keeping what acts on symptomatic components; then the bulk of
+    symptomatic components that is not evidence; their logs and events last."""
+
+    def for_components(fn: Callable[[dict], None]) -> Callable[[dict], None]:
         def apply(state: dict) -> None:
             components = list(state.get("components", {}).values())
             if "component" in state:
                 components.append(state["component"])
             for comp in components:
-                if healthy_only and not comp.get("healthy"):
-                    continue
                 fn(comp)
 
         return apply
@@ -2369,7 +2633,8 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
 
     def cap_previous_logs(n: int) -> Callable[[dict], None]:
         def fn(comp: dict) -> None:
-            comp["previous_container_logs"] = {k: v[-n:] for k, v in comp.get("previous_container_logs", {}).items()}
+            if comp.get("previous_container_logs"):
+                comp["previous_container_logs"] = {k: v[-n:] for k, v in comp["previous_container_logs"].items()}
 
         return fn
 
@@ -2389,39 +2654,69 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
 
         return fn
 
-    return [
-        ("all: stopped log signatures to 2", for_components(drop_stopped_logs(2))),
-        (
-            "healthy: drop container command/args/env_from",
-            for_components(drop_container_keys("command", "args", "env_from"), healthy_only=True),
-        ),
-        (
-            "healthy: drop calls_services/clients/template_changes",
-            for_components(drop_keys("calls_services", "clients", "template_changes"), healthy_only=True),
-        ),
-        ("all: previous logs to 8 lines", for_components(cap_previous_logs(8))),
-        ("all: log_signals to 4", for_components(lambda c: _cap(c, "log_signals", 4))),
-        ("all: warning_events to 3", for_components(lambda c: _cap(c, "warning_events", 3))),
-        (
-            "healthy: drop pods/services/resource_usage/volumes/config",
-            for_components(
-                drop_keys(
-                    "pods",
-                    "services",
-                    "resource_usage",
-                    "volumes",
-                    "config_refs",
-                    "config_objects",
-                    "jobs",
-                    "startup_history",
-                    "startup_events",
-                    "log_findings",
-                    "errors_point_to",
+    def drop_repeated_outside_objects(state: dict) -> None:
+        cluster = state.get("cluster") or {}
+        if cluster.get("outside_objects"):
+            findings = cluster.get("findings") or []
+            kept = [o for o in cluster["outside_objects"] if not repeated_by_findings(o, findings)]
+            cluster["outside_objects"] = kept
+            if not kept:
+                cluster.pop("outside_objects")
+
+    def healthy_roster(state: dict) -> None:
+        components = state.get("components") or {}
+        sick = {cid: c for cid, c in components.items() if not c.get("healthy")}
+        symptomatic = set(sick) | {
+            f"{c.get('namespace')}/{s.get('name')}" for c in sick.values() for s in c.get("services") or []
+        }
+        for cid, comp in components.items():
+            if comp.get("healthy"):
+                components[cid] = roster_entry(comp, symptomatic)
+
+    def merge_log_findings(comp: dict) -> None:
+        """A log finding classifies one of the component's log signatures and repeats its line; its classes and
+        targets move onto that signature instead."""
+        unmatched = []
+        for finding in comp.get("log_findings") or []:
+            same = next(
+                (
+                    s
+                    for s in comp.get("log_signals") or []
+                    if "classes" not in s
+                    and s.get("count") == finding.get("count")
+                    and (s.get("line") or "").startswith(finding.get("line") or "")
                 ),
-                healthy_only=True,
-            ),
-        ),
-        ("healthy: drop env_names/ports", for_components(drop_container_keys("env_names", "ports"), healthy_only=True)),
+                None,
+            )
+            if same is None:
+                unmatched.append(finding)
+                continue
+            same["classes"] = finding.get("classes") or []
+            if finding.get("targets"):
+                same["targets"] = finding["targets"]
+        if unmatched:
+            comp["log_findings"] = unmatched
+        else:
+            comp.pop("log_findings", None)
+
+    def cap_cluster_lists(state: dict) -> None:
+        cluster = state.get("cluster") or {}
+        symptomatic = {cid for cid, c in (state.get("components") or {}).items() if not c.get("healthy")}
+        for key in ("findings", "recent_changes", "outside_objects"):
+            if len(cluster.get(key) or []) > MAX_DETAILED_CLUSTER_ENTRIES:
+                cluster[key], cluster[f"other_{key}"] = by_relevance(
+                    cluster[key], MAX_DETAILED_CLUSTER_ENTRIES, symptomatic
+                )
+
+    def drop_rule_bodies(comp: dict) -> None:
+        for policy in comp.get("network_policies") or []:
+            policy.pop("ingress_rules", None)
+            policy.pop("egress_rules", None)
+
+    return [
+        ("dedupe: drop outside objects the findings repeat", drop_repeated_outside_objects),
+        ("dedupe: log findings onto the log signatures they classify", for_components(merge_log_findings)),
+        ("healthy: roster entry (kind, ready, links to symptomatic components)", healthy_roster),
         (
             "cluster: alerts to 15, unattributed events to 5, webhooks to 12",
             lambda s: (
@@ -2430,28 +2725,36 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
                 cap_cluster("admission_webhooks", 12)(s),
             ),
         ),
-        ("all: drop container command/args", for_components(drop_container_keys("command", "args"))),
+        ("all: drop settled startup history", for_components(drop_keys("startup_history", "startup_events"))),
         (
-            "all: log_signals to 2, events to 2",
-            for_components(lambda c: (_cap(c, "log_signals", 2), _cap(c, "warning_events", 2))),
+            f"cluster: findings, changes and outside objects to {MAX_DETAILED_CLUSTER_ENTRIES} in full, the rest by name",
+            cap_cluster_lists,
         ),
-        ("healthy: drop log_signals", for_components(lambda c: c.pop("log_signals", None), healthy_only=True)),
-        ("all: drop env_names", for_components(drop_container_keys("env_names"))),
-        ("all: pods to 3", for_components(lambda c: _cap(c, "pods", 3))),
-        ("all: previous logs to 3 lines", for_components(cap_previous_logs(3))),
-        ("healthy: drop containers", for_components(drop_keys("containers"), healthy_only=True)),
-        ("cluster: drop network policy rule bodies", lambda s: s.get("cluster", {}).pop("network_policies", None)),
         (
-            "all: drop previous logs and resource_usage",
-            for_components(drop_keys("previous_container_logs", "resource_usage")),
+            "all: drop resource_usage, pods to 3",
+            for_components(lambda c: (c.pop("resource_usage", None), _cap(c, "pods", 3))),
         ),
+        ("all: drop container env_names", for_components(drop_container_keys("env_names"))),
+        ("all: drop network policy rule bodies", for_components(drop_rule_bodies)),
         (
             "all: pods to 1, drop container_states",
             for_components(
                 lambda c: (_cap(c, "pods", 1), [p.pop("container_states", None) for p in c.get("pods", [])])
             ),
         ),
+        ("all: previous logs to 8 lines", for_components(cap_previous_logs(8))),
+        ("all: stopped log signatures to 2", for_components(drop_stopped_logs(2))),
+        (
+            "all: log_signals to 4, warning_events to 3",
+            for_components(lambda c: (_cap(c, "log_signals", 4), _cap(c, "warning_events", 3))),
+        ),
+        ("all: previous logs to 3 lines", for_components(cap_previous_logs(3))),
+        (
+            "all: log_signals to 2, events to 2",
+            for_components(lambda c: (_cap(c, "log_signals", 2), _cap(c, "warning_events", 2))),
+        ),
         ("all: drop stopped log signatures", for_components(drop_stopped_logs(0))),
+        ("all: drop previous logs", for_components(drop_keys("previous_container_logs"))),
         ("all: drop log_signals", for_components(lambda c: c.pop("log_signals", None))),
     ]
 
@@ -2480,7 +2783,9 @@ def _detail_trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
 def _shrink_remaining(state: dict, max_tokens: int) -> bool:
     """Last resort for any state shape: halve the largest bulk fields, then diagnostic facts if necessary.
 
-    Keep list prefixes and stable evidence/finding ids so callers can still resolve the selected option.
+    Keep list prefixes and stable evidence/finding ids so callers can still resolve the selected option. The
+    components mapping loses only healthy components, never an unhealthy one: every component stays an answer option,
+    so dropping one by position could hide the origin from the question that asks for it.
     This runs only when the normal trim steps could not meet the budget.
     """
     keep = {
@@ -2496,7 +2801,6 @@ def _shrink_remaining(state: dict, max_tokens: int) -> bool:
         "probe_text",
         "repeated_failures",
         "failing_targets",
-        "input_candidates",
         "id",
         "kind",
         "name",
@@ -2505,6 +2809,11 @@ def _shrink_remaining(state: dict, max_tokens: int) -> bool:
     }
     keep_keys = keep | {"candidate", "detail", "logs"}
     choices = []
+
+    def removable(key: str | int, value: dict) -> list:
+        if key == "components":
+            return [k for k, v in value.items() if isinstance(v, dict) and v.get("healthy")]
+        return [k for k in value if k not in keep_keys]
 
     def visit(parent: dict | list, key: str | int, value: object, protected: bool = False) -> None:
         protected = protected or key in keep
@@ -2518,7 +2827,7 @@ def _shrink_remaining(state: dict, max_tokens: int) -> bool:
                 visit(value, i, item, protected)
         elif isinstance(value, dict):
             # Removing schema fields is more destructive than shortening their values.
-            if len(value) > 1 and any(k not in keep_keys for k in value):
+            if len(value) > 1 and removable(key, value):
                 choices.append((2 + priority, -estimate_tokens(value), parent, key, value))
             for k, item in value.items():
                 visit(value, k, item, protected)
@@ -2537,8 +2846,8 @@ def _shrink_remaining(state: dict, max_tokens: int) -> bool:
         elif isinstance(value, list):
             parent[key] = value[:n]
         else:
-            removable = [k for k in value if k not in keep_keys]
-            drop = set(removable[len(removable) // 2 :])
+            candidates = removable(key, value)
+            drop = set(candidates[len(candidates) // 2 :])
             parent[key] = {k: v for k, v in value.items() if k not in drop}
         changed = True
     return changed

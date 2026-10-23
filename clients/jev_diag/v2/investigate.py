@@ -71,8 +71,6 @@ _RBAC_RE = re.compile(
 _PREFIX_RE = re.compile(r"^\[pod/[^/\]]+/([^\]]+)\]\s?")
 _TS_PREFIX_RE = re.compile(r"^\S*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*\s")
 _VALUE_TOKEN_RE = re.compile(r"[\w./:=-]*\d[\w./:=-]*")
-_INPUT_VALUE_RE = re.compile(r"^[A-Za-z][\w.-]{1,62}$")
-_NOT_INPUT_VALUES = {"true", "false", "yes", "no", "on", "off", "none", "null", "info", "debug", "warn", "error"}
 
 
 def _get_json(args: list[str]) -> dict:
@@ -379,8 +377,8 @@ def log_detail(
                         ["logs", name, "-n", ns, "-c", cs["name"], "--previous", f"--tail={PREVIOUS_LOG_READ}"],
                         timeout=30,
                     )
-                    lines = [trim(rewrite(strip_ansi(ln)), 200) for ln in prev.splitlines() if ln.strip()]
-                    previous[f"{name}/{cs['name']}"] = crash_excerpt(lines, MAX_TAIL_LINES)
+                    prev_lines = [trim(rewrite(strip_ansi(ln)), 200) for ln in prev.splitlines() if ln.strip()]
+                    previous[f"{name}/{cs['name']}"] = crash_excerpt(prev_lines, MAX_TAIL_LINES)
                 except Exception:  # noqa: BLE001
                     pass
     all_error_lines = [ln for ln in lines if is_error_line(ln)]
@@ -444,7 +442,8 @@ def configmap_detail(names: list[str], ns: str) -> dict:
 def service_checks(
     comp: dict, workload: dict, pods: list[dict] | None = None, snapshot: ClusterSnapshot | None = None
 ) -> list[str]:
-    """Service-to-workload comparisons: ports, endpoints, traffic policy, and selectors spanning workloads.
+    """Service-to-workload comparisons: ports, traffic policy, and selectors spanning workloads. A Service with no
+    ready endpoints is a symptom (any crash causes it), recorded among the component's signals, not a mismatch here.
 
     A targetPort that no container declares only matters for traffic to a Running pod; while every pod is
     Pending or terminating the symptom is scheduling, not routing, so the comparison is skipped.
@@ -466,8 +465,6 @@ def service_checks(
                 checks.append(
                     f"service {svc['name']} targetPort name {target!r} matches no container port name {sorted(names)}"
                 )
-        if svc.get("ready_endpoints") == 0:
-            checks.append(f"service {svc['name']} has no ready endpoints")
         for gap in svc.get("local_policy_gaps") or []:
             checks.append(
                 f"service {svc['name']} has internalTrafficPolicy=Local and ready endpoints only on "
@@ -623,20 +620,6 @@ def dependency_state(snapshot: ClusterSnapshot, dep: str, exclude: str) -> dict:
     )
 
 
-def input_candidates(workload: dict) -> list[dict]:
-    """Env values that could name an input source (a queue, topic, stream, or table): short identifier-like values.
-
-    The model selects among them; code never guesses from variable names.
-    """
-    out = []
-    for c in workload.get("containers") or []:
-        for e in c.get("env") or []:
-            value = str(e.get("value") or "")
-            if _INPUT_VALUE_RE.match(value) and value.lower() not in _NOT_INPUT_VALUES and not value.isdigit():
-                out.append({"container": c.get("name"), "env": e.get("name"), "value": value})
-    return out[:16]
-
-
 MAX_REACHABILITY = 2
 
 
@@ -694,9 +677,6 @@ def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
     if _RBAC_RE.search(logs_text) or (sa and sa != "default") or roles:
         detail["rbac"] = rbac_detail(sa, ns)
         detail["rbac"]["roles"] = roles
-    candidates = input_candidates(detail["workload"])
-    if candidates:
-        detail["input_candidates"] = candidates
     # dependency edges: env values naming other components, the error pointers and the dependency graph (deps.py)
     aliases = _name_aliases(snapshot.components)
     calls = set(comp.get("errors_point_to") or []) | set(comp.get("_deps") or {})
