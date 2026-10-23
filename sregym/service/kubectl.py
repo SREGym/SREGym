@@ -24,6 +24,8 @@ from kubernetes.client.rest import ApiException  # noqa: E402
 from logger import console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
+NAMESPACE_GRACEFUL_DELETE_TIMEOUT = int(os.getenv("NAMESPACE_GRACEFUL_DELETE_TIMEOUT", "180"))
+NAMESPACE_FORCE_DELETE_TIMEOUT = int(os.getenv("NAMESPACE_FORCE_DELETE_TIMEOUT", "120"))
 PLATFORM_ERROR_MARKERS = (
     "exec format error",
     "no matching manifest for",
@@ -34,6 +36,10 @@ PLATFORM_ERROR_MARKERS = (
 
 class ContainerPlatformError(RuntimeError):
     """A container image or executable cannot run on the selected node."""
+
+
+class PodReadinessTimeout(RuntimeError):
+    """A workload did not become ready before its bounded startup deadline."""
 
 
 class KubeCtl:
@@ -162,6 +168,47 @@ class KubeCtl:
             return False
         return any(owner.kind == "Job" for owner in (pod.metadata.owner_references or []))
 
+    @staticmethod
+    def _pod_readiness_summary(pod) -> str:
+        """Return compact, actionable state for a pod that blocked readiness."""
+        metadata = pod.metadata
+        status = pod.status
+        name = metadata.name or "<unnamed>"
+        node = getattr(getattr(pod, "spec", None), "node_name", None) or "unscheduled"
+        details = [f"phase={status.phase or 'Unknown'}", f"node={node}"]
+
+        for condition in status.conditions or []:
+            if condition.status != "True":
+                message = f": {condition.message}" if condition.message else ""
+                details.append(f"condition={condition.type}/{condition.reason or 'Unknown'}{message}")
+
+        for prefix, container_status in (
+            *(("init", item) for item in (status.init_container_statuses or [])),
+            *(("container", item) for item in (status.container_statuses or [])),
+        ):
+            state = container_status.state
+            if state and state.waiting:
+                message = f": {state.waiting.message}" if state.waiting.message else ""
+                details.append(f"{prefix}/{container_status.name}=waiting/{state.waiting.reason or 'Unknown'}{message}")
+            elif state and state.terminated and not container_status.ready:
+                message = f": {state.terminated.message}" if state.terminated.message else ""
+                details.append(
+                    f"{prefix}/{container_status.name}=terminated/{state.terminated.reason or 'Unknown'}{message}"
+                )
+            elif not container_status.ready:
+                details.append(f"{prefix}/{container_status.name}=not-ready")
+
+        if metadata.deletion_timestamp:
+            details.append(f"deleting={metadata.deletion_timestamp}")
+        return f"{name} ({'; '.join(details)})"
+
+    @classmethod
+    def _readiness_timeout_message(cls, display_name: str, max_wait: int, pods: list) -> str:
+        message = f"Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
+        if pods:
+            message += " Blocking pods: " + " | ".join(cls._pod_readiness_summary(pod) for pod in pods)
+        return message
+
     def wait_for_ready(
         self,
         namespace: str,
@@ -205,6 +252,7 @@ class KubeCtl:
 
         deadline = time.monotonic() + max_wait
         platform_log_retry_at = {}
+        last_pods = []
 
         while time.monotonic() < deadline:
             try:
@@ -221,6 +269,7 @@ class KubeCtl:
                         all_pods.extend(pod_list.items)
                 else:
                     all_pods = self.list_pods(namespace, timeout=max(0.001, deadline - time.monotonic())).items or []
+                last_pods = all_pods
 
                 if all_pods:
                     for pod in all_pods:
@@ -254,9 +303,7 @@ class KubeCtl:
             if remaining > 0:
                 time.sleep(min(sleep, remaining))
 
-        raise Exception(
-            f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
-        )
+        raise PodReadinessTimeout(self._readiness_timeout_message(display_name, max_wait, last_pods))
 
     @staticmethod
     def _check_container_platform(pod, namespace: str):
@@ -345,9 +392,13 @@ class KubeCtl:
         while wait < max_wait:
             try:
                 self.core_v1_api.read_namespace(name=namespace)
-            except Exception:
-                console.log(f"[bold green]Namespace '{namespace}' has been deleted.")
-                return
+            except ApiException as exc:
+                if exc.status == 404:
+                    console.log(f"[bold green]Namespace '{namespace}' has been deleted.")
+                    return
+                console.log(f"[red]Error checking namespace deletion: {exc}")
+            except Exception as exc:
+                console.log(f"[red]Error checking namespace deletion: {exc}")
 
             time.sleep(sleep)
             wait += sleep
@@ -597,17 +648,62 @@ class KubeCtl:
             logger.error(f"Error deleting K8S configs: {e}")
             logger.error(f"Command output: {e.output}")
 
+    def force_delete_namespace_pods(self, namespace: str) -> int:
+        """Force-delete pods only after a requested benchmark namespace deletion stalls."""
+        try:
+            pods = self.list_pods(namespace).items or []
+        except ApiException as exc:
+            if exc.status == 404:
+                return 0
+            raise
+
+        deleted = 0
+        for pod in pods:
+            name = pod.metadata.name
+            if not name:
+                continue
+            try:
+                self.core_v1_api.delete_namespaced_pod(
+                    name=name,
+                    namespace=namespace,
+                    grace_period_seconds=0,
+                    propagation_policy="Background",
+                    body=client.V1DeleteOptions(grace_period_seconds=0),
+                    _request_timeout=10,
+                )
+                deleted += 1
+            except ApiException as exc:
+                if exc.status != 404:
+                    logger.warning("Failed to force-delete pod %s/%s: %s", namespace, name, exc)
+        return deleted
+
     def delete_namespace(self, namespace: str):
-        """Delete a specified namespace."""
+        """Delete a namespace, force-removing stuck pods only after graceful teardown stalls."""
         try:
             self.core_v1_api.delete_namespace(name=namespace)
-            self.wait_for_namespace_deletion(namespace)
-            logger.info(f"Namespace '{namespace}' deleted successfully.")
         except ApiException as e:
             if e.status == 404:
                 logger.debug(f"Namespace '{namespace}' not found.")
+                return
             else:
                 logger.error(f"Error deleting namespace '{namespace}': {e}")
+                return
+
+        try:
+            self.wait_for_namespace_deletion(namespace, max_wait=NAMESPACE_GRACEFUL_DELETE_TIMEOUT)
+        except Exception as exc:
+            forced = self.force_delete_namespace_pods(namespace)
+            logger.warning(
+                "Namespace %r did not terminate gracefully (%s); force-deleted %d pod(s)",
+                namespace,
+                exc,
+                forced,
+            )
+            # No remaining pods can mean deletion just completed, or another
+            # resource's finalizer is still finishing. Both need the final check.
+            self.wait_for_namespace_deletion(namespace, max_wait=NAMESPACE_FORCE_DELETE_TIMEOUT)
+
+        logger.info(f"Namespace '{namespace}' deleted successfully.")
 
     def gc_orphan_localpv_dirs(
         self,
