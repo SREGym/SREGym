@@ -335,16 +335,18 @@ _REACH_SCRIPT = (
 )
 
 
-def dependency_address(dep: dict) -> tuple[str, int] | None:
+def dependency_address(dep: dict, caller_namespace: str | None = None) -> tuple[str, int] | None:
     """The address a client uses for a dependency: its first Service's name and port, else its own name and first
-    container port (a client addresses a Service by name, so this shows whether that name answers)."""
+    container port. Qualify dependencies outside the caller's namespace so DNS does not target a local namesake."""
+    namespace = dep.get("namespace")
+    suffix = f".{namespace}.svc" if namespace and namespace != caller_namespace else ""
     for svc in dep.get("services") or []:
         for spec in svc.get("ports") or []:
             front = spec.split("->")[0]
             if svc.get("name") and front.isdigit():
-                return svc["name"], int(front)
+                return svc["name"] + suffix, int(front)
     ports = [p for c in dep.get("containers") or [] if not c.get("init") for p in c.get("ports") or []]
-    return (dep["name"], ports[0]) if ports else None
+    return (dep["name"] + suffix, ports[0]) if ports else None
 
 
 def reach_meaning(resolved: str, connected: str) -> str | None:
@@ -363,7 +365,7 @@ def reach_meaning(resolved: str, connected: str) -> str | None:
 def reachability(snapshot: ClusterSnapshot, cid: str, dep_cid: str) -> dict | None:
     """Resolve and connect to a dependency from inside the client's pod; None when no shell or tool can run."""
     comp, dep = snapshot.components.get(cid) or {}, snapshot.components.get(dep_cid) or {}
-    address = dependency_address(dep)
+    address = dependency_address(dep, comp.get("namespace"))
     pod, container = _pick_pod(comp)
     if not address or not pod:
         return None

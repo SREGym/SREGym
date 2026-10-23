@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from clients.jev_diag.v2 import deps
 from clients.jev_diag.v2.collector import ClusterSnapshot
 
@@ -185,6 +187,32 @@ def test_reachability_says_where_the_path_from_a_client_breaks(monkeypatch):
 
     monkeypatch.setattr(probes, "run_in_pod", lambda *a: (127, "sh: not found"))
     assert probes.reachability(snap, "deployment/orders", "deployment/mongodb-orders") is None
+
+
+@pytest.mark.parametrize("dependency_namespace", [NS, "data", None])
+@pytest.mark.parametrize("has_service", [False, True])
+def test_reachability_targets_the_dependency_namespace(monkeypatch, dependency_namespace, has_service):
+    from clients.jev_diag.v2 import probes
+
+    client = _server("orders", pods=[{"name": "orders-1", "phase": "Running", "ready": "1/1"}])
+    dependency = _server("mongodb-orders", service=has_service, namespace=dependency_namespace)
+    if has_service:
+        dependency["services"][0]["ports"] = ["8080->8080/TCP"]
+    snap = ClusterSnapshot(
+        app={"namespaces": [NS]}, components={"deployment/orders": client, "deployment/db": dependency}, cluster={}
+    )
+    expected = "mongodb-orders.data.svc" if dependency_namespace == "data" else "mongodb-orders"
+    calls = []
+
+    def execute(namespace, pod, container, command):
+        calls.append((namespace, command[-2:]))
+        return (0, "resolve 10.0.0.42\nconnect ok") if command[-2] == expected else (0, "resolve none")
+
+    monkeypatch.setattr(probes, "run_in_pod", execute)
+    result = probes.reachability(snap, "deployment/orders", "deployment/db")
+    assert calls == [(NS, [expected, "8080"])]
+    assert result["address"] == f"{expected}:8080"
+    assert "port accepts connections" in result["meaning"]
 
 
 def test_containers_of_one_pod_that_listen_on_the_same_port_are_flagged():
