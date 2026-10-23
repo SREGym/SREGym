@@ -85,6 +85,14 @@ K3S_UNSUPPORTED = {
         "needs NetworkPolicy to drop the API server's webhook calls, as Calico does; "
         "k3s's kube-router rejects them at once, so they never time out"
     ),
+    "missing_stale_cache_fallback_astronomy_shop": (
+        "injects its fault with Chaos Mesh, whose chaos-daemon bind-mounts the node's /sys; "
+        "the unprivileged cluster forbids that mount"
+    ),
+    "missing_stale_cache_fallback_long_delay_astronomy_shop": (
+        "injects its fault with Chaos Mesh, whose chaos-daemon bind-mounts the node's /sys; "
+        "the unprivileged cluster forbids that mount"
+    ),
 }
 
 
