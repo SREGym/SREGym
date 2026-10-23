@@ -15,6 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
+from clients.jev_diag.config import ENV_VARS as JEV_DIAG_ENV_VARS
 from sregym.service.docker_egress import DEFAULT_EGRESS_PROXY_IMAGE, DockerEgress
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.provider_endpoints import provider_endpoint_rules
@@ -465,14 +466,8 @@ class ContainerRunner:
         if self.config.forward_host_credentials and os.environ.get("AGENT_JEV_MODEL"):
             env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])
             env_vars.setdefault("TYPESAFE_API_KEY", os.environ.get("TYPESAFE_API_KEY", ""))
-            # OpenAI Decisions backend for jev_diag (clients/jev_diag/decisions_client.py)
             for name in (
-                "JEV_DIAG_BACKEND",
-                "DECISIONS_OPENAI_API_KEY",
-                "DECISIONS_OPENROUTER_API_KEY",
-                "DECISIONS_MODEL",
-                "DECISIONS_URL",
-                "JEV_DIAG_EXEC_PROBES",
+                *JEV_DIAG_ENV_VARS,
                 # jev_agent: clients/jev_agent/config.py ENV_VARS (a test keeps the two lists equal)
                 "JEV_AGENT_MAX_STEPS",
                 "JEV_AGENT_MIN_STEPS",
