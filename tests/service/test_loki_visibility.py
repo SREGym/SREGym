@@ -1,4 +1,5 @@
 from mcp_server import loki_server
+from sregym.service.agent_visibility_policy import HIDDEN_NAMESPACES, visible_log_value
 
 
 class FakeResponse:
@@ -49,3 +50,46 @@ def test_loki_tools_hide_chaos_streams_and_label_values(monkeypatch):
     assert "chaos-mesh" not in logs
     assert "chaos-mesh" not in values
     assert "astronomy-shop" in values
+
+
+def test_loki_tools_hide_cluster_logs_that_name_hidden_objects(monkeypatch):
+    class FakeClient:
+        def __init__(self, _url):
+            pass
+
+        def make_request(self, _method, url, **_kwargs):
+            if url.endswith("query_range"):
+                return FakeResponse(
+                    {
+                        "status": "success",
+                        "data": {
+                            "result": [
+                                {
+                                    "stream": {"namespace": "kube-system", "pod": "kube-controller-manager"},
+                                    "values": [
+                                        ["1000000000", 'Error syncing deployment key="khaos/pg-lock-holder"'],
+                                        ["2000000000", 'Error syncing deployment key="astronomy-shop/checkout"'],
+                                    ],
+                                },
+                            ]
+                        },
+                    }
+                )
+            return FakeResponse({"status": "success", "data": ["khaos/pg-lock-holder", "astronomy-shop/checkout"]})
+
+    monkeypatch.setattr(loki_server, "ObservabilityClient", FakeClient)
+
+    logs = loki_server.get_logs.fn('{namespace="kube-system"}')
+    values = loki_server.get_label_values.fn("job")
+
+    assert "astronomy-shop/checkout" in logs
+    assert "khaos" not in logs
+    assert "astronomy-shop/checkout" in values
+    assert "khaos" not in values
+
+
+def test_object_references_into_hidden_namespaces_are_not_visible():
+    for namespace in HIDDEN_NAMESPACES:
+        assert not visible_log_value(f'Error syncing pod key="{namespace}/helper-7d9f"')
+    assert visible_log_value('Error syncing pod key="astronomy-shop/checkout-7d9f"')
+    assert visible_log_value("dial tcp: lookup transit.khaos.svc: no such host")

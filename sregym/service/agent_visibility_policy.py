@@ -161,8 +161,13 @@ def filter_openapi_document(data: dict, version: str) -> dict:
     return data
 
 
+def names_hidden_object(value: str) -> bool:
+    """Return whether text names an object in a hidden namespace, as cluster components log namespace/name."""
+    return any(f"{namespace}/" in value for namespace in HIDDEN_NAMESPACES)
+
+
 def visible_log_value(value: str) -> bool:
-    return value not in HIDDEN_NAMESPACES and not mentions_chaos_mesh(value)
+    return value not in HIDDEN_NAMESPACES and not mentions_chaos_mesh(value) and not names_hidden_object(value)
 
 
 def visible_observability_record(value: object) -> bool:

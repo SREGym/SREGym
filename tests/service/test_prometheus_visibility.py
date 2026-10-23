@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -78,3 +79,12 @@ def test_observability_collectors_use_the_shared_hidden_namespaces():
     )
     assert namespace_rule["action"] == "drop"
     assert set(namespace_rule["regex"].split("|")) == HIDDEN_NAMESPACES
+
+    stages = promtail_values["config"]["snippets"]["pipelineStages"]
+    assert {"cri": {}} in stages
+    expression = next(stage["drop"]["expression"] for stage in stages if "drop" in stage)
+    alternatives = re.fullmatch(r"\((.+)\)/", expression)
+    assert alternatives is not None
+    assert set(alternatives.group(1).split("|")) == HIDDEN_NAMESPACES
+    assert re.search(expression, 'key="khaos/pg-lock-holder"')
+    assert not re.search(expression, 'key="astronomy-shop/checkout"')

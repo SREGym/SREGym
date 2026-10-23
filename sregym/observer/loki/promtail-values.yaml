@@ -3,6 +3,12 @@ config:
   clients:
     - url: http://loki-gateway/loki/api/v1/push
   snippets:
+    pipelineStages:
+      # The chart's default parsing.
+      - cri: {}
+      # Controllers and the CNI log noise-controller objects as namespace/name.
+      - drop:
+          expression: "(chaos-mesh|khaos)/"
     extraRelabelConfigs:
       # Keep noise-controller logs out of Loki, including direct API queries.
       - action: drop
