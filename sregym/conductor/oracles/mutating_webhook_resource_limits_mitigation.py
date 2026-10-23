@@ -221,7 +221,7 @@ class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
             self.problem.kubectl.core_v1_api.delete_namespaced_pod(
                 name=target.metadata.name,
                 namespace=namespace,
-                body=client.V1DeleteOptions(grace_period_seconds=0),
+                body=client.V1DeleteOptions(),
             )
             print(f"Deleted current pod '{target.metadata.name}' to verify admission-time resources")
 

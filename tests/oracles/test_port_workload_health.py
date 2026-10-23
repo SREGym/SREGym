@@ -87,10 +87,20 @@ def test_capture_requires_a_healthy_complete_baseline(state):
 
 def test_incorrect_baseline_stops_before_injection(state):
     oracle, workload, _ = state
+    oracle.BASELINE_TIMEOUT_S = 0
     workload.summary.return_value = summary(correct=False)
     with pytest.raises(RuntimeError, match="baseline is not healthy"):
         oracle.capture_baseline()
     assert oracle.baseline is None
+
+
+def test_transient_startup_errors_must_clear_before_baseline_is_accepted(state):
+    oracle, workload, _ = state
+    workload.status.side_effect = [{"episode_id": "one", "latest_sent_s": value} for value in [200, 260, 270, 330]]
+    workload.summary.side_effect = [summary(critical_broken=True), summary()]
+    oracle.capture_baseline()
+    assert oracle.baseline["failures"] == 0
+    assert workload.summary.call_count == 2
 
 
 def test_intermittent_file_download_is_not_required_in_every_window(state):

@@ -147,7 +147,12 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         header = f"--header 'Host: {host_header}' " if host_header else ""
         script = (
             "set -eu; "
-            f"wget -q {header}-T {request_timeout} -t 1 -O /tmp/crafted '{crafted_url}'; "
+            f"if wget -q -S {header}-T {request_timeout} -t 1 -O /tmp/crafted '{crafted_url}' "
+            "2>/tmp/crafted-headers; then :; "
+            # Blocking malformed or oversized input is a valid repair. BusyBox
+            # wget exits immediately on these HTTP errors, before reading a body.
+            "elif ! grep -Eq '^[[:space:]]*HTTP/[0-9.]+ (400|403|413|414) ' /tmp/crafted-headers; "
+            "then cat /tmp/crafted-headers; exit 1; fi; "
             "echo CRAFTED_OK; "
             f"wget -q {header}-T {request_timeout} -t 1 -O /tmp/normal '{base_url}{normal_path}'; "
             "test -s /tmp/normal; "
@@ -250,5 +255,5 @@ class EdgeRequestFilterMitigationOracle(Oracle):
             print(f"[FAIL] Error checking edge request filter mitigation: {exc}")
             return self.fail_from_exception(exc)
 
-        print("[PASS] The edge accepts crafted and normal requests within the deadline")
+        print("[PASS] The edge handles crafted input and serves normal requests within the deadline")
         return {"success": True}
