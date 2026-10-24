@@ -179,6 +179,122 @@ def test_export_errors_alone_do_not_define_an_incident_but_pending_telemetry_doe
     ]
 
 
+def _healthy_backend():
+    return _comp("backend", signals=[], healthy=True, pods=[{"phase": "Running", "ready": "1/1"}])
+
+
+def _probe_result():
+    return {"command": "protocol-health", "output": "authentication required", "meaning": "login rejected"}
+
+
+def test_collected_failed_calls_allow_a_probe_before_a_client_verdict_and_are_cached():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    calls = []
+    backend = _healthy_backend()
+    parent = "Namespace shop was modified; now spec = finalizers=kubernetes"
+    backend.update(signals=[parent], change_evidence=[{"text": parent, "context": True}])
+    snap = _snap(
+        {"deployment/backend": backend, "deployment/client": _comp("client", errors_point_to=["deployment/backend"])}
+    )
+    diagnoser = IterativeDiagnoser(
+        fetch_detail=lambda *args: {}, probe=lambda s, c, client: calls.append((c, client)) or _probe_result()
+    )
+    for investigated in ({}, {"deployment/client": {"victim_p": 0.9, "failing_targets": ["deployment/backend"]}}):
+        detail = {}
+        diagnoser._maybe_probe(snap, "deployment/backend", detail, investigated)
+        assert detail["probe"]["meaning"] == "login rejected"
+    assert calls == [("deployment/backend", "deployment/client")]
+
+
+def test_a_new_failure_relationship_reopens_a_backend_within_the_step_budget():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    class Model(Scripted):
+        def system_one(self, state, questions, **kwargs):
+            candidate = state.get("candidate") or {}
+            if candidate.get("id") == "deployment/backend" and candidate.get("detail", {}).get("probe"):
+                self.verdicts["deployment/backend"] = {"origin": 0.99, "unrelated": 0.01}
+            if candidate:
+                self.labels.append(candidate["id"])
+            return super().system_one(state, questions, **kwargs)
+
+    for budget in (2, 3):
+        calls = []
+        model = Model(
+            {"deployment/backend": 0.6, "deployment/client": 0.4},
+            {"deployment/backend": {"unrelated": 1}, "deployment/client": {"victim": 1}},
+            {"next_component": "deployment/backend"},
+        )
+
+        def detail(snapshot, cid):
+            return {"failing_targets": ["deployment/backend"]} if cid == "deployment/client" else {}
+
+        diagnoser = IterativeDiagnoser(
+            model,
+            fetch_detail=detail,
+            max_steps=budget,
+            probe=lambda s, c, client, calls=calls: calls.append((c, client)) or _probe_result(),
+        )
+        d = diagnoser.diagnose(_snap({"deployment/backend": _healthy_backend(), "deployment/client": _comp("client")}))
+        assert len(d.investigation["steps"]) <= budget
+        if budget == 3:
+            assert model.labels == ["deployment/backend", "deployment/client", "deployment/backend"]
+            assert calls == [("deployment/backend", "deployment/client")]
+            assert d.component == "deployment/backend"
+        else:
+            assert model.labels == ["deployment/backend", "deployment/client"]
+            assert calls == []
+
+
+def test_an_unavailable_probe_is_not_retried_for_the_same_pair():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    calls = []
+    snap = _snap(
+        {
+            "deployment/backend": _healthy_backend(),
+            "deployment/client": _comp("client", errors_point_to=["deployment/backend"]),
+        }
+    )
+
+    def unavailable(*args):
+        calls.append(args)
+        raise RuntimeError("tool unavailable")
+
+    diagnoser = IterativeDiagnoser(fetch_detail=lambda *args: {}, probe=unavailable)
+    for _ in range(2):
+        detail = {}
+        diagnoser._maybe_probe(snap, "deployment/backend", detail, {})
+        assert "probe" not in detail
+    assert len(calls) == 1
+
+
+def test_unverified_or_nonrunning_backends_are_not_probed_as_healthy():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    for extra in (
+        {"pods_not_verified": True},
+        {"pods": []},
+        {"pods": [{"phase": "Pending", "ready": "0/1"}]},
+        {"pods": [{"phase": "Running", "ready": "0/0"}]},
+    ):
+        backend = {**_healthy_backend(), **extra}
+        calls = []
+        snap = _snap(
+            {
+                "deployment/backend": backend,
+                "deployment/client": _comp("client", errors_point_to=["deployment/backend"]),
+            }
+        )
+        diagnoser = IterativeDiagnoser(
+            fetch_detail=lambda *args: {}, probe=lambda *args, calls=calls: calls.append(args) or _probe_result()
+        )
+        detail = {}
+        diagnoser._maybe_probe(snap, "deployment/backend", detail, {})
+        assert calls == [] and "probe" not in detail
+
+
 def test_objects_written_in_one_operation_with_a_hypothesis_become_hypotheses():
     from clients.jev_diag.v2.tree import OTHER_OPTION, written_together
 

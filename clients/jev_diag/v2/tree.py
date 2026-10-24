@@ -50,6 +50,7 @@ from clients.jev_diag.v2.classifier import (
     select_fault_object,
 )
 from clients.jev_diag.v2.collector import ClusterSnapshot, estimate_tokens, fit_state_to_budget
+from clients.jev_diag.v2.deps import own_signals
 from clients.jev_diag.v2.report import build_report, state_of
 
 logger = logging.getLogger("all.jev_diag.v2.tree")
@@ -611,6 +612,7 @@ class IterativeDiagnoser(JevDiagnoser):
         self.max_steps = max_steps
         self.probe = probe
         self.detail_token_budget = detail_token_budget
+        self._probe_cache: dict[tuple[str, str], dict | None] = {}
 
     # ------------------------------------------------------------------ nodes
 
@@ -802,29 +804,54 @@ class IterativeDiagnoser(JevDiagnoser):
             "detail_tokens": estimate_tokens(fitted),
         }
 
-    def _maybe_probe(self, snapshot: ClusterSnapshot, cid: str, detail: dict, investigated: dict) -> None:
-        """Run a health command inside a healthy-looking component that an investigated victim's errors name."""
+    def _probe_clients(self, snapshot: ClusterSnapshot, cid: str, investigated: dict) -> list[str]:
+        """Clients with active failed calls to a backend, from collection or later investigation."""
         if self.probe is None:
-            return
-        clients = [
+            return []
+        clients = {
             c
             for c, r in investigated.items()
             if r["victim_p"] >= MIN_VICTIM_PROBABILITY and cid in (r.get("failing_targets") or [])
-        ]
+        }
+        observed = {c for c, comp in snapshot.components.items() if cid in (comp.get("errors_point_to") or [])}
         comp = snapshot.components[cid]
-        own = [s for s in comp.get("signals") or [] if not s.startswith(("errors logged by", "server "))]
         pods = comp.get("pods") or []
-        healthy = bool(pods) and all(
-            p.get("ready", "0/0").split("/")[0] == p.get("ready", "0/0").split("/")[1] for p in pods
+        healthy = (
+            not comp.get("pods_not_verified")
+            and bool(pods)
+            and all(
+                p.get("phase") == "Running"
+                and p.get("ready")
+                and p["ready"].split("/")[0] == p["ready"].split("/")[1] != "0"
+                for p in pods
+            )
         )
-        if not clients or own or not healthy:
+        if own_signals(comp) or not healthy:
+            return []
+        return sorted(clients - {cid}) + sorted(observed - clients - {cid})
+
+    def _has_new_probe(self, snapshot: ClusterSnapshot, cid: str, investigated: dict) -> bool:
+        return any(
+            (cid, client) not in self._probe_cache for client in self._probe_clients(snapshot, cid, investigated)
+        )
+
+    def _maybe_probe(self, snapshot: ClusterSnapshot, cid: str, detail: dict, investigated: dict) -> None:
+        """Probe each relevant client/backend pair once, reusing observations on re-examination."""
+        clients = self._probe_clients(snapshot, cid, investigated)
+        if not clients:
             return
-        try:
-            result = self.probe(snapshot, cid, clients[0])
-        except Exception as exc:  # noqa: BLE001 - a probe never stops the diagnosis
-            self._trace("collect", "probe", component=cid, error=f"{type(exc).__name__}: {exc}")
-            return
-        self._trace("collect", "probe", component=cid, client=clients[0], result=result)
+        client = next((c for c in clients if (cid, c) not in self._probe_cache), clients[0])
+        key = (cid, client)
+        if key not in self._probe_cache:
+            try:
+                result = self.probe(snapshot, cid, client)
+            except Exception as exc:  # noqa: BLE001 - a probe never stops the diagnosis
+                self._probe_cache[key] = None
+                self._trace("collect", "probe", component=cid, client=client, error=f"{type(exc).__name__}: {exc}")
+                return
+            self._probe_cache[key] = result
+            self._trace("collect", "probe", component=cid, client=client, result=result)
+        result = self._probe_cache[key]
         if result:
             from clients.jev_diag.v2.probes import describe_probe_result
 
@@ -959,6 +986,7 @@ class IterativeDiagnoser(JevDiagnoser):
         """The decision tree; when the decision model cannot be reached (credit, outage), a report from code alone."""
         if not snapshot.components:
             raise ValueError("No workloads found in the application namespaces; nothing to classify.")
+        self._probe_cache.clear()
         self._progress: dict = {}
         try:
             return self._diagnose(snapshot)
@@ -1073,11 +1101,15 @@ class IterativeDiagnoser(JevDiagnoser):
                 if cluster_lead and cluster_p >= MIN_ORIGIN_PROBABILITY:
                     cluster_pick = cluster_lead
                 continue
-            if cid not in snapshot.components or cid in investigated:
+            if cid not in snapshot.components:
+                continue
+            if cid in investigated and not self._has_new_probe(snapshot, cid, investigated):
                 continue
             remaining = [c for c in snapshot.components if c != cid and c not in investigated]
-            result = self.investigate(snapshot, cid, component, investigated, remaining)
+            prior = {c: r for c, r in investigated.items() if c != cid}
+            result = self.investigate(snapshot, cid, component, prior, remaining)
             investigated[cid] = result
+            confirmed.pop(cid, None)
             step = self._step(len(steps) + 1, cid, result)
             steps.append(step)
             self._trace("decide", "step", **step)
@@ -1115,6 +1147,16 @@ class IterativeDiagnoser(JevDiagnoser):
                 backups = [c for c in result["failing_targets"] if c in snapshot.components]
                 insert_at = 1 if queue and queue[0] == nxt else 0
                 for c in backups:
+                    if c in investigated and self._has_new_probe(snapshot, c, investigated):
+                        # A newly discovered failing client changes the backend's
+                        # evidence. Reopen that hypothesis within the same step budget.
+                        examined.discard(c)
+                        if c not in hypotheses:
+                            hypotheses.append(c)
+                        if c in queue:
+                            queue.remove(c)
+                        queue.insert(0, c)
+                        continue
                     if c not in investigated and c not in queue:
                         queue.insert(insert_at, c)
                         insert_at += 1
