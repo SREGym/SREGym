@@ -123,7 +123,7 @@ def test_without_any_examined_candidate_triage_decides():
     diagnoser = IterativeDiagnoser(None, fetch_detail=lambda s, c: {})
     assert diagnoser.decide(snap, triage, {}, None, 0.0) == (
         "deployment/b",
-        "triage top-1",
+        "triage top-1 eligible candidate",
     )
 
 
@@ -137,7 +137,19 @@ def test_an_examination_sees_the_incident_it_has_to_explain():
             log_findings=[{"count": 7, "classes": ["connectivity or timeout"]}],
         ),
         "deployment/quiet": _comp("quiet", signals=[], healthy=True, replicas={"desired": 1, "ready": 1}),
-        "deployment/collector": _comp("collector", role="observability", replicas={"desired": 1, "ready": 0}),
+        # a telemetry component counts by its own state, not by its (export) log lines
+        "deployment/collector": _comp(
+            "collector",
+            role="observability",
+            replicas={"desired": 1, "ready": 0},
+            log_findings=[{"count": 40, "classes": ["connectivity or timeout"]}],
+        ),
+        "deployment/exporter": _comp(
+            "exporter",
+            role="observability",
+            replicas={"desired": 1, "ready": 1},
+            log_findings=[{"count": 40, "classes": ["connectivity or timeout"]}],
+        ),
     }
     assert incident(_snap(comps)) == [
         {"component": "deployment/web", "symptoms": "0/2 replicas ready, connectivity or timeout errors (7 lines)"},
@@ -322,3 +334,213 @@ def test_a_platform_layer_failing_for_several_workloads_is_a_finding_and_a_hypot
     assert finding["kind"] == "Platform" and finding["name"] == "pod network" and finding["platform"]
     assert finding["components"] == ["deployment/a", "deployment/b"]
     assert "the events of 2 workloads state it" in finding["signal"]
+
+
+class PositionBiased(Scripted):
+    """Picks the side listed first in every comparison, more strongly the second time."""
+
+    shares = (0.8, 0.9)
+
+    def system_one(self, state, questions, **kwargs):
+        if "fault_start" not in questions:
+            return super().system_one(state, questions, **kwargs)
+        from typesafe_sdk import ChoiceAnswer
+
+        first, second = list(questions["fault_start"].criteria)
+        share = self.shares[sum(label.startswith("tiebreak") for label in self.labels) > 1]
+        probs = {first: share, second: 1 - share}
+        answer = ChoiceAnswer(choice=first, confidence=share, probabilities=probs)
+        return SimpleNamespace(model="fake", usage=None, choices={"fault_start": answer}, nouls={}, answers={})
+
+
+def test_a_comparison_whose_orders_disagree_keeps_the_better_examined_side():
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    comps = {"deployment/a": _comp("a"), "deployment/b": _comp("b")}
+    verdicts = {"deployment/a": {"origin": 0.62, "victim": 0.38}, "deployment/b": {"origin": 0.59, "victim": 0.41}}
+    model = PositionBiased({"deployment/a": 0.6, "deployment/b": 0.4, "other": 0.0}, verdicts)
+    diagnoser = IterativeDiagnoser(model, fetch_detail=lambda s, c: {})
+    diagnoser.requests = []
+    original = diagnoser._ask
+
+    def ask(label, state, questions):
+        model.labels.append(label)
+        return original(label, state, questions)
+
+    diagnoser._ask = ask
+    # averaged, b would win (0.55 against 0.45) only because each order preferred the side it listed first
+    assert diagnoser.diagnose(_snap(comps)).component == "deployment/a"
+
+
+def test_for_a_permission_fault_the_role_with_the_rules_is_named_before_its_binding():
+    from clients.jev_diag.v2.classifier import ChoiceResult, select_fault_object
+
+    snap = _snap({"deployment/worker": _comp("worker")})
+    snap.cluster["findings"] = [
+        {"kind": "ClusterRoleBinding", "name": "worker", "signal": "ClusterRoleBinding worker was created 60s ago",
+         "components": ["deployment/worker"]},
+        {"kind": "ClusterRole", "name": "worker", "signal": "ClusterRole worker was created 60s ago",
+         "components": ["deployment/worker"]},
+    ]  # fmt: skip
+    kind = ChoiceResult(choice="rbac", confidence=1.0, probabilities={"rbac": 1.0})
+    assert select_fault_object(snap, "deployment/worker", kind)["kind"] == "ClusterRole"
+
+
+def test_a_backend_that_answers_a_client_set_up_the_same_way_is_no_finding():
+    from clients.jev_diag.v2.probes import agrees_with_client
+
+    none = "sets no credential variable and reads no Secret"
+    assert agrees_with_client({"meaning": "the server answers without authentication", "client_credentials": none})
+    assert not agrees_with_client(
+        {"meaning": "the server answers without authentication", "client_credentials": "sets credential variables PASS"}
+    )
+    assert not agrees_with_client({"meaning": "the server requires authentication for this command", "client": "c"})
+    assert agrees_with_client({"meaning": "the server accepts connections"})
+
+
+def test_a_client_holding_a_value_its_own_secret_replaced_is_the_origin_not_the_server():
+    from clients.jev_diag.v2.tree import VERDICTS
+
+    assert "keeps the value it had when the container started" in VERDICTS["origin"]["what"]
+    assert "a server that rejects a credential a client still holds" in VERDICTS["origin"]["not_for"]
+
+
+def test_a_pointer_does_not_lift_a_dependency_judged_unrelated_that_shows_nothing_of_its_own():
+    comps = {
+        "deployment/web": _comp("web"),
+        "deployment/store": _comp("store", signals=[], healthy=True),
+        "deployment/tracing": _comp("tracing", replicas={"desired": 2, "ready": 1}),
+    }
+    verdicts = {
+        "deployment/tracing": {"origin": 0.3, "unrelated": 0.7},
+        "deployment/web": {"victim": 0.95, "origin": 0.05},
+        "deployment/store": {"unrelated": 0.9, "origin": 0.1},
+    }
+    detail = {"deployment/web": {"failing_targets": ["deployment/store"]}}
+    triage = {"deployment/tracing": 0.6, "deployment/web": 0.3, "deployment/store": 0.1}
+    d, _ = _run(comps, triage, verdicts, {"next_component": "deployment/store"}, detail)
+    # nothing in the store changed or shows a fault, and its own examination cleared it: the pointer does not win
+    assert d.component == "deployment/tracing"
+    # the same store, rejecting logins, is still found through its client's failing calls
+    comps["deployment/store"] = _comp("store", signals=["rejects logins for account app (5 lines)"], healthy=True)
+    d, _ = _run(comps, triage, verdicts, {"next_component": "deployment/store"}, detail)
+    assert d.component == "deployment/store"
+
+
+def test_examinations_and_comparisons_carry_the_rules_that_decide_ownership():
+    from clients.jev_diag.v2.tree import VERDICTS, build_tiebreak_questions
+
+    assert "judged like any other component" in VERDICTS["unrelated"]["not_for"]
+    steps = " ".join(
+        build_tiebreak_questions(["deployment/a", "deployment/b"])["fault_start"].instructions["how_to_decide"]
+    )
+    assert (
+        "Adoption alone does not establish correctness" in steps
+        and "keeps the value it had when the container started" in steps
+    )
+
+
+def _biased_diagnosis(comps, verdicts, detail=None):
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    model = PositionBiased({c: p for c, p in zip(comps, (0.7, 0.3), strict=True)}, verdicts)
+    diagnoser = IterativeDiagnoser(model, fetch_detail=lambda s, c: dict((detail or {}).get(c) or {}))
+    original = diagnoser._ask
+
+    def ask(label, state, questions):
+        model.labels.append(label)
+        return original(label, state, questions)
+
+    diagnoser._ask = ask
+    return diagnoser.diagnose(_snap(comps))
+
+
+def test_disagreement_between_weak_non_origins_is_reported_as_unresolved():
+    comps = {"deployment/gateway": _comp("gateway"), "deployment/catalog": _comp("catalog")}
+    verdicts = {
+        "deployment/gateway": {"origin": 0.23, "victim": 0.65, "undetermined": 0.12},
+        "deployment/catalog": {"origin": 0.14, "unrelated": 0.76, "undetermined": 0.10},
+    }
+    diagnosis = _biased_diagnosis(comps, verdicts)
+    assert diagnosis.text.startswith("Root cause: unresolved.")
+    assert "Fault type:" not in diagnosis.text and "Mechanism:" not in diagnosis.text
+
+
+def test_an_unresolved_comparison_keeps_a_verified_failed_service_reference():
+    comps = {"deployment/gateway": _comp("gateway"), "deployment/catalog": _comp("catalog")}
+    verdicts = {
+        "deployment/gateway": {"origin": 0.23, "victim": 0.65, "undetermined": 0.12},
+        "deployment/catalog": {"origin": 0.14, "unrelated": 0.76, "undetermined": 0.10},
+    }
+    reference = {
+        "kind": "Service",
+        "name": "catalog",
+        "namespace": NS,
+        "client": "deployment/gateway",
+        "dependency": "deployment/catalog",
+        "port": 8080,
+    }
+    diagnosis = _biased_diagnosis(comps, verdicts, {"deployment/gateway": {"missing_references": [reference]}})
+    assert diagnosis.component == "deployment/catalog"
+    assert diagnosis.text.startswith("Root cause: Service `catalog` (missing)")
+    assert "cannot resolve catalog:8080" in diagnosis.text
+    assert "Fault type: missing object" in diagnosis.text
+
+
+def test_a_telemetry_own_failure_is_examined_and_can_win_below_the_triage_cutoff():
+    comps = {
+        "deployment/web": _comp("web"),
+        "deployment/traces": _comp("traces", role="observability", signals=[], replicas={"desired": 2, "ready": 1}),
+    }
+    verdicts = {"deployment/web": {"origin": 0.7, "victim": 0.3}, "deployment/traces": {"origin": 0.99, "victim": 0.01}}
+    diagnosis, labels = _run(comps, {"deployment/web": 0.96, "deployment/traces": 0.04}, verdicts)
+    assert "investigate:deployment/traces" in labels
+    assert diagnosis.component == "deployment/traces"
+
+
+def test_telemetry_own_failure_is_eligible_for_links_support_and_fallback():
+    from clients.jev_diag.v2.classifier import ChoiceResult
+    from clients.jev_diag.v2.tree import IterativeDiagnoser, linked_components
+
+    snap = _snap(
+        {
+            "deployment/web": _comp("web"),
+            "deployment/traces": _comp("traces", role="observability", signals=[], replicas={"desired": 2, "ready": 1}),
+        }
+    )
+    assert linked_components(snap, "deployment/web", {"calls": {"deployment/traces": {}}}) == ["deployment/traces"]
+    triage = ChoiceResult(
+        choice="deployment/web", confidence=0.8, probabilities={"deployment/web": 0.8, "deployment/traces": 0.2}
+    )
+    diagnoser = IterativeDiagnoser(None, fetch_detail=lambda s, c: {})
+    result = {"verdict": "origin", "origin_p": 0.9, "next": "none"}
+    assert diagnoser.support(snap, triage, {"deployment/traces": result}) == {"deployment/traces": (0.9, None)}
+    only = ChoiceResult(choice="deployment/traces", confidence=0.9, probabilities={"deployment/traces": 0.9})
+    assert diagnoser.fallback(snap, only)[0] == "deployment/traces"
+    snap.components["deployment/traces"]["replicas"]["ready"] = 2
+    assert linked_components(snap, "deployment/web", {"calls": {"deployment/traces": {}}}) == []
+    assert "deployment/traces" not in diagnoser.support(snap, triage, {"deployment/traces": result})
+
+
+def test_comparison_carries_adoption_facts_without_clearing_the_updated_side():
+    from clients.jev_diag.v2.classifier import ChoiceResult
+    from clients.jev_diag.v2.tree import IterativeDiagnoser, build_tiebreak_questions
+
+    comp = _comp("reader", _holds_previous={"secret/connection": "2026-01-01T12:00:00Z"})
+    result = {
+        "verdict": "origin",
+        "category": ChoiceResult("credentials_or_auth", 0.9, {"credentials_or_auth": 0.9}),
+        "key_evidence": None,
+        "spec_checks": [],
+        "evidence": [{"text": "unrelated detail"}] * 12,
+    }
+    side = IterativeDiagnoser.side(
+        _snap({"deployment/reader": comp}), "deployment/reader", {"deployment/reader": result}
+    )
+    adoption = side.get("configuration_adoption")
+    assert adoption and adoption[0]["source"] == "secret/connection"
+    assert adoption[0]["updated_at"] == "2026-01-01T12:00:00Z"
+    instructions = " ".join(build_tiebreak_questions(["a", "b"])["fault_start"].instructions["how_to_decide"])
+    assert "write time alone does not prove" in instructions
+    assert "Adoption alone does not establish correctness" in instructions
+    assert "did not start the fault: undoing it would break" not in instructions

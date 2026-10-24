@@ -2184,6 +2184,7 @@ def collect_snapshot(
     unassigned_events: list[dict] = []
     unassigned_pods: list[dict] = []
     dangling_services: list[dict] = []
+    service_inventory: dict[str, list[str]] = {}
     all_policies: list[dict] = []
     changes: list[dict] = []
     raw_pods: dict[str, list[dict]] = {}
@@ -2294,7 +2295,11 @@ def collect_snapshot(
         raw_events[ns] = kubectl_items("events", ns, errors, managed_fields=False)
         namespace_pods = {name: pod for (pod_ns, name), pod in pod_index.items() if pod_ns == ns}
         attach_warning_events(raw_events[ns], components, unassigned_events, job_owner, namespace_pods)
-        services = kubectl_items("services", ns, errors)
+        service_errors: list[str] = []
+        services = kubectl_items("services", ns, service_errors)
+        errors.extend(service_errors)
+        if not service_errors:
+            service_inventory[ns] = [s["metadata"]["name"] for s in services]
         deletable += [("Service", svc) for svc in services]
         failed: list[str] = []
         endpoints = kubectl_items("endpoints", ns, failed, managed_fields=False)
@@ -2531,6 +2536,7 @@ def collect_snapshot(
         "namespaces": namespaces,
     }
     snapshot = ClusterSnapshot(app=app, components=components, cluster=compact(cluster), errors=errors)
+    snapshot.cluster["_service_inventory"] = service_inventory  # an empty successful list still proves absence
     snapshot.cluster.setdefault("_changes", [])
     from clients.jev_diag.v2.derive import post_process
 

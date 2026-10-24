@@ -364,3 +364,53 @@ def test_documents_read_as_path_value_pairs_and_changes_read_as_old_to_new():
     assert clean(
         "spec modified 20s ago, 3s after it was created; pod template changes: container app image: a -> b"
     ) == ("container app image: a -> b")
+
+
+def test_a_chosen_setting_too_long_to_state_stays_the_fact_instead_of_another_change():
+    from clients.jev_diag.v2.report import value_text
+
+    cut = 'pod template changed in revision 2: container proxy args: null -> ["serve --rule ^([a-z]+)*$ ' + "x" * 300
+    web = _comp(
+        "proxy",
+        template_changes={
+            "changed_at": "2026-01-01T00:00:00Z",
+            "changes": ["template annotation team/ticket added: T-1", cut.split(": ", 1)[1]],
+        },
+    )
+    d = _diag("deployment/proxy", [cut, "container proxy args: serve --rule ^([a-z]+)*$ --port 8080"])
+    assert value_text(cut, d, web) is None  # the chosen item itself cannot be stated
+    root = _line(build_report(_snap({"deployment/proxy": web}), d), "Root cause")
+    assert "container proxy args" in root and "annotation" not in root
+
+
+def test_a_container_using_its_whole_cpu_limit_is_a_symptom():
+    from clients.jev_diag.v2.report import state_of
+
+    usage = [
+        {"container": "app", "cpu": "98m", "cpu_limit": "100m"},
+        {"container": "side", "cpu": "5m", "cpu_limit": "1"},
+    ]
+    assert state_of(_comp("web", resource_usage=usage)) == "container app near its CPU limit 100m"
+    assert state_of(_comp("web", resource_usage=[{"container": "app", "cpu": "40m", "cpu_limit": "100m"}])) == ""
+
+
+def test_shortening_a_long_change_keeps_the_changed_literal():
+    prefix, suffix = "startup " * 35, " finish" * 35
+    old, new = prefix + "--rule=^[ab]+$" + suffix, prefix + "--rule=^([ab]+)*$" + suffix
+    fact = f"container proxy args: {old} -> {new}"
+    short = cut_change(fact, 160)
+    assert "--rule=^([ab]+)*$" in short and len(short) <= 160
+    text = build_report(_snap({"deployment/proxy": _comp("proxy")}), _diag("deployment/proxy", [fact]))
+    assert "--rule=^([ab]+)*$" in _line(text, "Root cause")
+
+
+def test_a_selected_cpu_limit_does_not_invent_measured_throttling():
+    web = _comp("web", resource_usage=[{"container": "app", "cpu": "98m", "cpu_limit": "100m"}])
+    d = _diag("deployment/web", ["container app limits.cpu: 200m -> 100m"], "resource_limits")
+    text = build_report(_snap({"deployment/web": web}), d)
+    assert "throttl" not in text.lower() and "CFS" not in text
+    assert "100m" in _line(text, "Root cause")
+    # Actual measured throttling remains evidence; no generic inference is needed.
+    d.evidence.append({"id": "E2", "text": "saturation: container app is CPU-throttled in 40% of CFS periods"})
+    d.evidence_result.probabilities["E2"] = 0.8
+    assert "CPU-throttled in 40%" in build_report(_snap({"deployment/web": web}), d)

@@ -248,6 +248,8 @@ class Diagnosis:
     trims: dict[str, list[str]] = field(default_factory=dict)
     investigation: dict | None = None  # decision-tree mode: steps, conclusion, fallback
     text: str = ""
+    unresolved: bool = False
+    failed_reference: dict | None = None
     second: Diagnosis | None = None  # a second, independent cause, when the investigation found one
 
     def to_dict(self) -> dict:
@@ -570,6 +572,8 @@ def select_fault_object(
                     "overrides name resolution",
                 )
             ),
+            # a permission is defined by a role's rules; a binding only says whose rules apply
+            f.get("kind") in ("Role", "ClusterRole"),
             "modified" in sig or "created" in sig,
         )
 

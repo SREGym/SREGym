@@ -310,6 +310,19 @@ def backend_probe(snapshot: ClusterSnapshot, cid: str, client_cid: str | None = 
     return None
 
 
+_ANSWERS = ("the server answers without authentication", "the server accepts connections", "the server answers a ping")
+
+
+def agrees_with_client(result: dict) -> bool:
+    """The backend answers normally and its client is set up the same way: a server that needs no authentication and
+    a client that sends none (by variable name or Secret). Such a probe shows a healthy pair, not a finding."""
+    if result.get("meaning") not in _ANSWERS:
+        return False
+    if result.get("meaning") != _ANSWERS[0]:
+        return True
+    return result.get("client_credentials") == "sets no credential variable and reads no Secret"
+
+
 def describe_probe_result(cid: str, result: dict) -> str:
     text = f"probe inside {cid}: `{result['command']}` returned '{result['output']}': {result['meaning']}"
     if result.get("client"):
@@ -382,7 +395,30 @@ def reachability(snapshot: ClusterSnapshot, cid: str, dep_cid: str) -> dict | No
     meaning = reach_meaning(resolved, connected.removeprefix("fail").strip() or connected)
     if meaning is None:
         return None
+    inventory = snapshot.cluster.get("_service_inventory") or {}
+    namespace = dep.get("namespace")
+    service_name = host.split(".", 1)[0]
+    missing = (
+        resolved == "none"
+        and namespace in inventory
+        and service_name not in inventory[namespace]
+        and service_name == dep.get("name")
+    )
     return {
+        **(
+            {
+                "missing_reference": {
+                    "kind": "Service",
+                    "name": service_name,
+                    "namespace": namespace,
+                    "client": cid,
+                    "dependency": dep_cid,
+                    "port": port,
+                }
+            }
+            if missing
+            else {}
+        ),
         "client": cid,
         "dependency": dep_cid,
         "address": f"{host}:{port}",

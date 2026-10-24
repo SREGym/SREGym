@@ -28,6 +28,7 @@ own block.
 from __future__ import annotations
 
 import ast
+import difflib
 import json
 import re
 from collections import Counter
@@ -35,6 +36,7 @@ from dataclasses import dataclass, field
 
 from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2 import checks
+from clients.jev_diag.v2.checks import parse_cpu_millis
 from clients.jev_diag.v2.classifier import OTHER_OPTION, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot, is_error_line
 from clients.jev_diag.v2.derive import TELEMETRY_RE, diagnostic_signals, object_key
@@ -45,6 +47,7 @@ MAX_EVIDENCE = 5
 MAX_IMPACT = 5
 MAX_CHANGED = 400
 VALUE_CHARS = 160  # a setting longer than this is file content or a script, not a value to state
+CPU_SATURATED = 0.9  # near the CPU limit; usage alone is not a measurement of throttling
 QUOTE_CHARS = 160
 # An evidence item with at least this share of the key item's support is stated next to it.
 COMPARABLE_SUPPORT = 0.5
@@ -254,7 +257,6 @@ SETTING_RESPONSES = (
         "a workload with 0 replicas runs no pods, so its Services have no endpoints",
     ),
     (r"defines env var \S+ \d+ times", "when a container defines an env var more than once, the last definition wins"),
-    (r"limits\.cpu", "a container that uses its whole CPU limit is throttled by the kernel's CFS quota"),
     (
         r"podSelector",
         "pods a NetworkPolicy selects accept only the traffic its rules allow; a listed policy type "
@@ -369,6 +371,21 @@ def cut_change(text: str, limit: int) -> str:
     if len(text) <= limit or not m:
         return cut(text, limit)
     head, old, new = m.groups()
+    if len(head) + len(new) + 4 > limit:
+        before, after = old.split(), new.split()
+        changes = [
+            op for op in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes() if op[0] != "equal"
+        ]
+        if changes:
+            old_excerpt = " … ".join(
+                " ".join(before[max(0, i - 1) : min(len(before), j + 1)]) for _, i, j, _, _ in changes
+            )
+            new_excerpt = " … ".join(
+                " ".join(after[max(0, i - 1) : min(len(after), j + 1)]) for _, _, _, i, j in changes
+            )
+            excerpt = f"{head}… {old_excerpt} -> … {new_excerpt}"
+            if len(excerpt) < len(text):
+                return cut(excerpt, limit)
     room = limit - len(head) - len(new) - 4 - (len(rest) + 2 if rest else 0)
     return cut(f"{head}{cut(old, room) if room >= 12 else '…'} -> {new}" + (f"; {rest}" if rest else ""), limit)
 
@@ -542,6 +559,22 @@ def key_fact(d: Diagnosis) -> str | None:
     return next((e["text"] for e in d.evidence if e["id"] == d.evidence_result.choice and not e.get("context")), None)
 
 
+def same_setting(d: Diagnosis, item: str | None) -> list[str]:
+    """When the chosen fact names a setting (`container c args`) whose value cannot be stated as written (a cut-off
+    JSON list, a script), the other evidence items about the same setting, then the setting by name: the fact stays
+    on the setting the decision chose instead of moving to an unrelated change."""
+    setting = _setting_of(item)
+    if not setting:
+        return []
+    same = [e["text"] for e in d.evidence if e["text"] != item and _setting_of(e["text"]) == setting]
+    return [*sorted(same, key=len), f"{setting} (selected evidence; value too long to state)"]
+
+
+def _setting_of(item: str | None) -> str | None:
+    found = _SETTING_KEY.match(_FRAMING.sub("", (item or "").strip()))
+    return found.group(1) if found else None
+
+
 def supporting_facts(d: Diagnosis) -> list[str]:
     """The other evidence items the key-evidence question ranked next to the chosen one, most supported first."""
     r = d.evidence_result
@@ -621,6 +654,15 @@ class Subject:
 
 def subject_of(snapshot: ClusterSnapshot, d: Diagnosis) -> Subject:
     comp = snapshot.components.get(d.component) or {}
+    if d.failed_reference:
+        ref = d.failed_reference
+        return Subject(
+            phrase=f"Service `{ref['name']}` (missing) in namespace `{ref['namespace']}`",
+            cid=d.component,
+            fact=f"{ref['client']} cannot resolve {ref['name']}:{ref['port']}; the Service inventory confirms it is absent",
+            kind_type="missing_object",
+            related=[ref["client"]],
+        )
     found = (comp and missing_subject(snapshot, d, comp)) or (d.fault_object and fault_object_subject(snapshot, d))
     if found:
         return found
@@ -943,7 +985,7 @@ def fact_of(snapshot: ClusterSnapshot, d: Diagnosis, subject: Subject) -> str | 
     the key evidence, the pod template changes and the failed spec checks."""
     comp = snapshot.components.get(subject.cid or "") or {}
     key = key_fact(d)
-    candidates = [subject.fact, key]
+    candidates = [subject.fact, key, *same_setting(d, key)]
     sources = ([key] if key and is_symptom(key) else []) + symptom_sources(snapshot, d, subject)
     response = platform_response(sources, None)
     if response:
@@ -1146,9 +1188,10 @@ def changed(snapshot: ClusterSnapshot, subject: Subject) -> str | None:
 
 
 def state_of(comp: dict) -> str:
-    """A component's symptoms from its typed state: replicas, pod phases and container states, restarts, Services
-    without endpoints, failing calls by class (telemetry export left out), jobs that do not complete, an autoscaler
-    that cannot scale, else its still-occurring error log lines. Empty when it shows none."""
+    """A component's symptoms from its typed state: replicas, pod phases and container states, restarts, a container
+    near its CPU limit (usage alone does not establish throttling), Services without endpoints, failing
+    calls by class (telemetry export left out), jobs that do not complete, an autoscaler that cannot scale, else its
+    still-occurring error log lines. Empty when it shows none."""
     out = []
     r = comp.get("replicas") if comp.get("kind") in ("Deployment", "StatefulSet", "ReplicaSet", "DaemonSet") else None
     r = r or {}
@@ -1168,6 +1211,14 @@ def state_of(comp: dict) -> str:
     restarts = sum(p.get("restarts") or 0 for p in comp.get("pods") or [])
     if restarts:
         out.append(f"{restarts} restarts")
+    out += sorted(
+        {
+            f"container {u['container']} near its CPU limit {u['cpu_limit']}"
+            for u in comp.get("resource_usage") or []
+            if (parse_cpu_millis(u.get("cpu_limit")) or 0) > 0
+            and (parse_cpu_millis(u.get("cpu")) or 0) >= CPU_SATURATED * parse_cpu_millis(u.get("cpu_limit"))
+        }
+    )
     out += [
         f"Service {s['name']} has no ready endpoints"
         for s in comp.get("services") or []
@@ -1388,6 +1439,12 @@ def build_report(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
 
 
 def cause_block(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
+    if d.unresolved:
+        candidates = [step["component"] for step in (d.investigation or {}).get("steps", []) if step.get("component")]
+        return (
+            "Root cause: unresolved. The two comparison orders disagree, and no candidate has independent "
+            "origin support." + (f"\nExamined: {', '.join(dict.fromkeys(candidates))}." if candidates else "")
+        )
     subject = subject_of(snapshot, d)
     comp = snapshot.components.get(subject.cid or "") or snapshot.components.get(d.component) or {}
     fact = fact_of(snapshot, d, subject)

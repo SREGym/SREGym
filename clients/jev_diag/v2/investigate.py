@@ -627,7 +627,9 @@ def dependency_state(snapshot: ClusterSnapshot, dep: str, exclude: str) -> dict:
 MAX_REACHABILITY = 2
 
 
-def reachability_lines(snapshot: ClusterSnapshot, cid: str, failing: list[str]) -> list[str]:
+def reachability_lines(
+    snapshot: ClusterSnapshot, cid: str, failing: list[str], missing_references: list[dict] | None = None
+) -> list[str]:
     """From inside a component that still fails calling its dependencies, whether each of them answers: the ones its
     errors name first, then those abnormal on their own (at most MAX_REACHABILITY; off with JEV_DIAG_V2_PROBES=0)."""
     from clients.jev_diag.v2 import probes
@@ -647,6 +649,8 @@ def reachability_lines(snapshot: ClusterSnapshot, cid: str, failing: list[str]) 
             continue
         if result:
             lines.append(probes.describe_reachability(result))
+            if missing_references is not None and dep in failing and result.get("missing_reference"):
+                missing_references.append(result["missing_reference"])
     return lines
 
 
@@ -693,7 +697,8 @@ def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
     }
     detail["called_by_with_errors"] = comp.get("referenced_by_errors_from") or {}
     detail["failing_targets"] = failing_targets(snapshot, cid, calls, detail["logs"].get("error_samples") or [])
-    reach = reachability_lines(snapshot, cid, detail["failing_targets"])
+    detail["missing_references"] = []
+    reach = reachability_lines(snapshot, cid, detail["failing_targets"], detail["missing_references"])
     if reach:
         detail["reachability"] = reach
     from clients.jev_diag.v2 import telemetry

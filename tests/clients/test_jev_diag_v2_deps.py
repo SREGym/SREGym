@@ -520,3 +520,28 @@ def test_login_candidates_are_ordered_by_what_explains_a_rejected_credential():
         "deployment/billing",
         "deployment/reports",
     ]
+
+
+def test_failed_dns_keeps_a_missing_service_only_when_its_inventory_was_read(monkeypatch):
+    from clients.jev_diag.v2 import probes
+
+    comps = _app(**{"deployment/mongodb-orders": _server("mongodb-orders", service=False)})
+    comps["deployment/orders"]["pods"] = [{"name": "orders-1", "ready": "1/1", "phase": "Running"}]
+    snap = ClusterSnapshot(app={"namespaces": [NS]}, components=comps, cluster={"_service_inventory": {NS: ["orders"]}})
+    monkeypatch.setattr(probes, "run_in_pod", lambda *a: (0, "resolve none\nconnect fail bad address"))
+    result = probes.reachability(snap, "deployment/orders", "deployment/mongodb-orders")
+    assert result.get("missing_reference") == {
+        "kind": "Service",
+        "name": "mongodb-orders",
+        "namespace": NS,
+        "client": "deployment/orders",
+        "dependency": "deployment/mongodb-orders",
+        "port": 8080,
+    }
+    # A failed/unavailable inventory or a Service that exists makes this DNS failure, not proven absence.
+    for inventory in ({}, {NS: ["mongodb-orders"]}):
+        snap.cluster["_service_inventory"] = inventory
+        assert "missing_reference" not in probes.reachability(snap, "deployment/orders", "deployment/mongodb-orders")
+    snap.cluster["_service_inventory"] = {NS: []}
+    monkeypatch.setattr(probes, "run_in_pod", lambda *a: (0, "resolve 10.0.0.1\nconnect fail refused"))
+    assert "missing_reference" not in probes.reachability(snap, "deployment/orders", "deployment/mongodb-orders")

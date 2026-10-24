@@ -925,7 +925,7 @@ def test_two_confirmed_origins_that_share_a_config_object_are_never_two_causes()
     assert [s["component"] for s in d.investigation["steps"]][:2] == ["deployment/a", "deployment/b"]
 
 
-def test_queue_puts_the_top_workload_before_the_cluster_node_and_telemetry_last():
+def test_queue_keeps_the_top_workload_and_cluster_but_excludes_incidental_telemetry_changes():
     from clients.jev_diag.v2.classifier import ChoiceResult
     from clients.jev_diag.v2.tree import OTHER_OPTION, IterativeDiagnoser
 
@@ -942,7 +942,7 @@ def test_queue_puts_the_top_workload_before_the_cluster_node_and_telemetry_last(
     )
     kind = ChoiceResult(choice="node_or_cluster", confidence=0.6, probabilities={"node_or_cluster": 0.6})
     queue = IterativeDiagnoser(_Answers([], {}), fetch_detail=lambda s, c: {}).initial_queue(snap, triage, kind)
-    assert queue == ["deployment/front", OTHER_OPTION, "deployment/otel"]
+    assert queue == ["deployment/front", OTHER_OPTION]
 
 
 def test_a_crashed_containers_quote_is_its_last_error_line_not_a_startup_notice():

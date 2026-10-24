@@ -51,7 +51,8 @@ from clients.jev_diag.v2.classifier import (
 )
 from clients.jev_diag.v2.collector import ClusterSnapshot, estimate_tokens, fit_state_to_budget
 from clients.jev_diag.v2.deps import own_signals
-from clients.jev_diag.v2.report import build_report, state_of
+from clients.jev_diag.v2.derive import diagnostic_signals
+from clients.jev_diag.v2.report import build_report, changed_values, state_of
 
 logger = logging.getLogger("all.jev_diag.v2.tree")
 
@@ -63,8 +64,8 @@ TIEBREAK_QUESTION = "fault_start"
 NONE_OPTION = "none"
 
 DEFAULT_MAX_STEPS = 18
-# An origin this sure ends the search once every hypothesis is examined. It steers how far the search goes, never the
-# answer: the answer is the ranking of every examined candidate's support (see decide).
+# An origin this sure ends the search once every hypothesis is examined. It also supplies independent support
+# when opposite-order comparisons cannot agree; a weak origin probability alone cannot resolve that disagreement.
 MIN_ORIGIN_PROBABILITY = 0.6
 # Two candidates whose support differs by less than this are compared side by side: one examination's probability
 # varies by about +-0.08 between identical asks, so a smaller difference is not a decision.
@@ -104,29 +105,36 @@ _ADMISSION_FIELDS = {
 
 VERDICTS: dict[str, dict[str, str]] = {
     "origin": {
-        "what": "The failures listed in `incident` are explained by `candidate` itself or by a configuration object "
-        "that applies to it: its own spec, environment, probes, resources, image, the content of a ConfigMap or "
+        "what": "The application's failures (those in `incident`, and requests misrouted, dropped, or slowed without "
+        "leaving a state) start at `candidate` itself or at a configuration object that applies to it: its own "
+        "spec, environment, probes, resources, image, the content of a ConfigMap or "
         "Secret it reads, a Service, traffic policy, NetworkPolicy, quota, admission webhook, or DNS rule that "
         "targets it, its job definition, its permissions, or its own processing of its inputs (bad data, "
-        "permission denials).",
+        "permission denials). This includes a client that still holds a value its own Secret or ConfigMap has "
+        "since replaced: an environment variable keeps the value it had when the container started.",
         "not_for": "A component whose only problems are failed calls to another component; a value written into "
-        "its spec by another workload, a scheduled job, or a controller (that writer is the origin); and trouble "
-        "of its own that does not account for the failures in `incident`, such as a limit that merely looks small "
-        "or one restart or OOM kill while the application's failures are elsewhere.",
+        "its spec by another workload, a scheduled job, or a controller (that writer is the origin); a server that "
+        "rejects a credential a client still holds after the client's own Secret replaced it, when that source and "
+        "working peers agree with the server and the client's failures match its stale value (that client is the "
+        "origin); and trouble of its own that does not account for "
+        "the failures in `incident`, such as a limit that merely looks small or one restart or OOM kill while the "
+        "application's failures are elsewhere.",
     },
     "victim": {
         "what": "`candidate` misbehaves only because of another component: something it calls is failing or "
         "refusing it (its still-occurring errors name another component, a Service name, an address, or a backend "
         "role such as a database, cache, or queue), or another workload, scheduled job, or controller acts on it "
         "(writes its spec or objects, sends it load, preempts or displaces its pods). The other component may look "
-        "healthy itself: a server whose password, ACL, or config changed shows the failure on its clients.",
+        "healthy itself: a server whose password, ACL, or config changed shows the failure on its clients, unless "
+        "those clients' own sources carry the change and a client still holds the old value.",
         "not_for": "A component whose own configuration or referenced config content changed or is abnormal in a "
         "way that explains its errors, even when those errors name a dependency.",
     },
     "unrelated": {
         "what": "`candidate` is healthy, or its abnormalities are stopped errors, settled deploy-time churn, or "
-        "telemetry noise with no link to the application's fault.",
-        "not_for": "Any component with an unexplained abnormal signal of its own.",
+        "telemetry noise (trace, metric, or log export errors) with no link to the application's fault.",
+        "not_for": "Any component with an unexplained abnormal signal of its own. A telemetry component whose own "
+        "replicas are not ready, Pending, or crash looping is judged like any other component.",
     },
     "undetermined": {
         "what": "The evidence does not allow deciding between origin and victim; more of the application must "
@@ -294,16 +302,37 @@ def _unique(items: list[str]) -> list[str]:
     return list(dict.fromkeys(i for i in items if i))
 
 
+def own_failure(comp: dict) -> bool:
+    """A typed failure or configuration mismatch, excluding incidental export log lines and bare writes."""
+    kinds = set(comp.get("evidence_kinds") or []) & {"symptoms", "own_failure_logs", "configuration"}
+    return bool(kinds or state_of({**comp, "log_findings": [], "log_signals": []}))
+
+
+def eligible(comp: dict, *, triage_first: bool = False) -> bool:
+    """Own failures are investigated regardless of role; incidental export noise alone is not a hypothesis."""
+    return bool(comp) and (comp.get("role") != "observability" or triage_first or own_failure(comp))
+
+
+def failed_reference(investigated: dict, subjects: set[str]) -> dict | None:
+    """One verified absent object on a subject's failed call, whether the subject is its client or dependency."""
+    references = {}
+    for result in investigated.values():
+        for ref in result.get("missing_references") or []:
+            if subjects & {ref["client"], ref["dependency"]}:
+                references.setdefault((ref["kind"], ref["namespace"], ref["name"]), ref)
+    return next(iter(references.values())) if len(references) == 1 else None
+
+
 def linked_components(snapshot: ClusterSnapshot, cid: str, detail: dict) -> list[str]:
     """Components connected to `cid`: those it calls, those that call it or whose errors name it, and those that
-    share a Service with it. Component role does not remove a real dependency."""
+    share a Service with it. Components with only incidental export noise are left out."""
     comp = snapshot.components[cid]
     linked = set(detail.get("calls") or {}) | set(detail.get("called_by_with_errors") or {})
     linked |= set(detail.get("failing_targets") or []) | set(comp.get("clients") or []) | set(comp.get("_calls") or [])
     for svc in comp.get("services") or []:
         linked |= set(svc.get("selects_multiple_workloads") or [])
     linked.discard(cid)
-    return sorted(c for c in linked if c in snapshot.components)
+    return sorted(c for c in linked if eligible(snapshot.components.get(c) or {}))
 
 
 def build_investigation_questions(
@@ -324,15 +353,19 @@ def build_investigation_questions(
                 "question": f"Is `candidate` ({comp['kind']} `{comp['name']}`) the origin of the fault, a "
                 "victim of another component, unrelated, or undetermined?",
                 "how_to_decide": [
-                    "`incident` lists the application's failing components and how each fails. The origin is where "
-                    "these failures start: judge whether `candidate`'s own state explains them, not only whether "
-                    "`candidate` has trouble of its own.",
+                    "`incident` lists the application's components that show a failure in their state and how each "
+                    "fails. The origin is where the application's failures start: judge whether `candidate`'s own "
+                    "state explains them, not only whether `candidate` has trouble of its own. `incident` is not "
+                    "complete and not all of it is this fault: requests that a misconfigured proxy, Service, or "
+                    "client sends to the wrong place, drops, or slows can leave no state on any component, and an "
+                    "OOM kill, restart, or start-up error elsewhere may be unrelated background.",
                     "Decide in this order. First, `candidate.detail.spec_checks` and `candidate.detail.service_checks` "
                     "are mismatches code found inside this component's own spec or between its spec and the "
                     "Services it addresses (probe target versus container port, env address versus Service port, "
                     "Service targetPort or selector versus the workloads, a Local traffic policy versus where its "
-                    "clients run). A mismatch that explains the component's symptom makes it the `origin`, whatever "
-                    "its logs say about dependencies.",
+                    "clients run). A mismatch that explains the component's symptom, or the failure of the requests "
+                    "it serves or sends (which may show no state anywhere), makes it the `origin`, whatever its logs "
+                    "say about dependencies.",
                     "Second, look for the mechanism in `candidate.detail`: `template_changes` (fields that changed "
                     "in the latest pod template revision), `admission_changes` (values in the running pod that its "
                     "template does not have), env values, probe targets, args, ConfigMap content, RBAC bindings, "
@@ -458,6 +491,14 @@ def build_tiebreak_questions(ids: list[str]) -> dict[str, Choice]:
                 "how_to_decide": [
                     "For each side ask: if this side's change or abnormal setting were undone, would the other "
                     "sides' abnormal signals go away? The fault started at the side for which the answer is yes.",
+                    "For a configuration mismatch, compare the source's relevant value and update time with each "
+                    "client's read mode, container start, and evidence of which value it uses. An environment variable "
+                    "keeps the value it had when the container started. When a client's own source now agrees with "
+                    "the server and working peers, but that client still uses the previous value and its failures "
+                    "match the mismatch, the stale client is the origin. A source write time alone does not prove "
+                    "its relevant value changed. Adoption alone does not establish correctness: a new value already "
+                    "adopted by several components may itself be faulty. Do not clear a server merely because peers "
+                    "adopted its change.",
                     "A side that acts on another (writes its spec or objects, admits or rewrites it, schedules or "
                     "preempts it, sends it load) started the fault when that action explains the other side's "
                     "state, even though the abnormal value or state shows on the other side.",
@@ -469,6 +510,18 @@ def build_tiebreak_questions(ids: list[str]) -> dict[str, Choice]:
             criteria=criteria,
         )
     }
+
+
+def shows_own_state(snapshot: ClusterSnapshot, cid: str, result: dict) -> bool:
+    """Whether a dependency a victim points at can be where the fault started: its own examination did not find it
+    unrelated, or it shows something of its own (a signal such as rejected logins, a pod template change, a recorded
+    change, a probe finding). A dependency judged unrelated that shows nothing changed in it that could fail its
+    clients."""
+    if result.get("verdict") != "unrelated":
+        return True
+    comp = snapshot.components.get(cid) or {}
+    legacy_change = comp.get("most_recent_change") and not comp.get("change_evidence")
+    return bool(diagnostic_signals(comp) or changed_values(comp) or legacy_change or result.get("probe"))
 
 
 def _change_time(comp: dict):
@@ -576,6 +629,7 @@ def written_together(snapshot: ClusterSnapshot, hypotheses: list[str]) -> list[s
         if ch.get("change_set") in in_sets
         and ch.get("object") in snapshot.components
         and ch["object"] not in hypotheses
+        and eligible(snapshot.components[ch["object"]])
     ]
     return out + others[:MAX_TOGETHER]
 
@@ -585,9 +639,12 @@ MAX_INCIDENT = 12  # failing components listed for an examination
 
 def incident(snapshot: ClusterSnapshot) -> list[dict]:
     """The application's failing components and how each fails, from their typed state (report.state_of): what an
-    origin has to explain. Component role does not hide concrete failures."""
+    origin has to explain. A telemetry component counts by its own state (replicas, pods, restarts), not by its
+    log lines, which are mostly export noise; components with more symptoms come first."""
     rows = []
     for cid, comp in snapshot.components.items():
+        if comp.get("role") == "observability":
+            comp = {**comp, "log_findings": [], "log_signals": []}
         symptoms = state_of(comp)
         if symptoms:
             rows.append({"component": cid, "symptoms": symptoms})
@@ -664,10 +721,8 @@ class IterativeDiagnoser(JevDiagnoser):
     ) -> list[str]:
         """Plausible triage candidates in triage order, with two adjustments.
 
-        A telemetry component (tracing, metrics, log shipping) whose only evidence is a change or error logs is
-        investigated after every application candidate in the shortlist: platform tooling and operators write to those
-        objects routinely, and export errors rarely explain an application fault. A telemetry component with
-        symptoms of its own (Pending or failing pods) keeps its triage position. When triage puts at least
+        A telemetry component with only a write or export error is eligible only when triage put it first; an own
+        typed failure is eligible at any rank and can extend the shortlist. When triage puts at least
         CLUSTER_KIND_MASS of its fault-kind probability on cluster-level objects, the cluster node is examined
         right after the first candidate.
         """
@@ -676,7 +731,10 @@ class IterativeDiagnoser(JevDiagnoser):
         for cid, p in component.ranked():
             if len(shortlist) >= MAX_QUEUE:
                 break
-            if cid == OTHER_OPTION and not findings:
+            if cid == OTHER_OPTION:
+                if not findings:
+                    continue
+            elif not eligible(snapshot.components.get(cid) or {}, triage_first=cid == component.choice):
                 continue
             if p < MIN_QUEUE_PROBABILITY and shortlist:
                 break
@@ -687,20 +745,14 @@ class IterativeDiagnoser(JevDiagnoser):
         extra = []
         for cid, comp in snapshot.components.items():
             kinds = set(comp.get("evidence_kinds") or [])
-            if cid not in shortlist and kinds & set(priority):
-                rank = min(priority[k] for k in kinds if k in priority)
+            if cid not in shortlist and eligible(comp) and (kinds & set(priority) or own_failure(comp)):
+                rank = min((priority[k] for k in kinds if k in priority), default=priority["symptoms"])
                 extra.append((rank, -component.probabilities.get(cid, 0.0), cid))
         for _, _, cid in sorted(extra)[: max(0, MAX_QUEUE + QUEUE_EXTENSION - len(shortlist))]:
             shortlist.append(cid)
 
         def demote(cid: str) -> bool:
-            comp = snapshot.components.get(cid) or {}
-            kinds = set(comp.get("evidence_kinds") or [])
-            return (
-                comp.get("role") == "observability"
-                and not state_of(comp)
-                and not kinds & {"symptoms", "own_failure_logs", "configuration", "pointed_at"}
-            )
+            return not eligible(snapshot.components.get(cid) or {})
 
         demoted = [c for c in shortlist if demote(c)]
         queue = [c for c in shortlist if c not in demoted] + demoted
@@ -724,7 +776,7 @@ class IterativeDiagnoser(JevDiagnoser):
             for other, _ in triage.ranked():
                 if len(options) >= 4:
                     break
-                if other in remaining and other not in options:
+                if other in remaining and other not in options and eligible(snapshot.components[other]):
                     options.append(other)
         state = {
             "application": snapshot.app,
@@ -800,6 +852,7 @@ class IterativeDiagnoser(JevDiagnoser):
             "key_evidence": key,
             "blocked_input": blocked,
             "probe": detail.get("probe"),
+            "missing_references": detail.get("missing_references") or [],
             "evidence": evidence,
             "detail_tokens": estimate_tokens(fitted),
         }
@@ -846,17 +899,20 @@ class IterativeDiagnoser(JevDiagnoser):
             try:
                 result = self.probe(snapshot, cid, client)
             except Exception as exc:  # noqa: BLE001 - a probe never stops the diagnosis
-                self._probe_cache[key] = None
+                result = None
                 self._trace("collect", "probe", component=cid, client=client, error=f"{type(exc).__name__}: {exc}")
-                return
             self._probe_cache[key] = result
             self._trace("collect", "probe", component=cid, client=client, result=result)
-        result = self._probe_cache[key]
-        if result:
-            from clients.jev_diag.v2.probes import describe_probe_result
+        from clients.jev_diag.v2.probes import agrees_with_client, describe_probe_result
 
-            detail["probe"] = result
-            detail["probe_text"] = describe_probe_result(cid, result)
+        findings = [
+            result
+            for (backend, _), result in self._probe_cache.items()
+            if backend == cid and result and not agrees_with_client(result)
+        ]
+        if findings:  # a healthy or unavailable later pair does not erase an earlier failed pair
+            detail["probe"] = findings[0]
+            detail["probe_text"] = "\n".join(dict.fromkeys(describe_probe_result(cid, r) for r in findings))
 
     def cluster_node(self, snapshot: ClusterSnapshot) -> dict | None:
         findings = snapshot.cluster.get("findings") or []
@@ -865,7 +921,7 @@ class IterativeDiagnoser(JevDiagnoser):
         affected = {
             cid: {"signals": c.get("signals"), "warning_events": (c.get("warning_events") or [])[:3]}
             for cid, c in snapshot.components.items()
-            if c.get("signals")
+            if c.get("signals") and eligible(c)
         }
         state = {
             "application": snapshot.app,
@@ -909,6 +965,15 @@ class IterativeDiagnoser(JevDiagnoser):
             "abnormal_evidence": [e["text"] for e in r["evidence"] if not e.get("context")][:MAX_SIDE_EVIDENCE],
             "signals": (comp.get("signals") or [])[:12],
             "config_objects": comp.get("config_objects"),
+            "configuration_adoption": [
+                {
+                    "source": source,
+                    "updated_at": at,
+                    "read_mode": "fixed at container start",
+                    "observation": "at least one running container started before this source update; check whether its relevant value changed",
+                }
+                for source, at in (comp.get("_holds_previous") or {}).items()
+            ],
         }
 
     def compare_origins(
@@ -919,10 +984,8 @@ class IterativeDiagnoser(JevDiagnoser):
         reason: str,
         *,
         cluster_pick: dict | None = None,
-    ) -> str:
-        """Candidates (component ids, or `other` for the cluster object) compared side by side, asked in both orders
-        so a preference for the side listed first cancels out. The side with the higher averaged support wins; on a
-        tie, the one whose own examination supported it most."""
+    ) -> str | None:
+        """Both orders must agree. Disagreement contributes no origin evidence of its own."""
         ids = sorted(hypotheses, key=lambda c: -hypotheses[c])
         workloads = [c for c in ids if c != OTHER_OPTION]
         links: list[str] = []
@@ -945,8 +1008,11 @@ class IterativeDiagnoser(JevDiagnoser):
             answers.append(ChoiceResult.from_answer(response.choices[TIEBREAK_QUESTION]))
         support = {c: sum(a.probabilities.get(c, 0.0) for a in answers) / len(answers) for c in ids}
         ranked = sorted(support.items(), key=lambda kv: -kv[1])  # stable: a tie keeps the examinations' order
-        winner = ranked[0][0] if ranked[0][1] > ranked[1][1] else ids[0]
-        self._trace("decide", "tiebreak", sides=ids, reason=reason, links=links, ranked=ranked, winner=winner)
+        agreed = len({a.choice for a in answers}) == 1
+        winner = ranked[0][0] if agreed and ranked[0][1] > ranked[1][1] else None
+        self._trace(
+            "decide", "tiebreak", sides=ids, reason=reason, links=links, ranked=ranked, agreed=agreed, winner=winner
+        )
         return winner
 
     def other_side(self, snapshot: ClusterSnapshot, cid: str, result: dict) -> list[tuple[str, str]]:
@@ -1058,15 +1124,24 @@ class IterativeDiagnoser(JevDiagnoser):
         # examined before anything is concluded, so a confirmed first pick never hides a better second.
         ranked = component.ranked()
 
-        def admissible(c: str) -> bool:
+        def admissible(c: str, rank: int) -> bool:
             if c == OTHER_OPTION:
                 return bool(snapshot.cluster.get("findings"))
-            return c in snapshot.components
+            return eligible(snapshot.components.get(c) or {}, triage_first=rank == 0)
 
         # triage's top candidates: triage is often sure of a wrong first pick while the true cause ranks just below
-        admitted = [c for c, p in ranked[:TOP_HYPOTHESES] if p >= MIN_QUEUE_PROBABILITY and admissible(c)]
-        picks = [c for c in getattr(self, "triage_picks", []) if admissible(c) and c != OTHER_OPTION]
-        hypotheses = list(dict.fromkeys([*admitted, *picks]))
+        admitted = [
+            c
+            for rank, (c, p) in enumerate(ranked[:TOP_HYPOTHESES])
+            if p >= MIN_QUEUE_PROBABILITY and admissible(c, rank)
+        ]
+        picks = [c for c in getattr(self, "triage_picks", []) if admissible(c, 0) and c != OTHER_OPTION]
+        own_failures = [
+            c
+            for c in queue
+            if c in snapshot.components and own_failure(snapshot.components[c]) and eligible(snapshot.components[c])
+        ]
+        hypotheses = list(dict.fromkeys([*admitted, *picks, *own_failures]))
         if OTHER_OPTION not in hypotheses and platform_change_first(snapshot):
             hypotheses.append(OTHER_OPTION)  # the change nearest the symptoms is outside the workloads: a suspect
         if OTHER_OPTION not in hypotheses and any(f.get("platform") for f in snapshot.cluster.get("findings") or []):
@@ -1133,7 +1208,7 @@ class IterativeDiagnoser(JevDiagnoser):
                 continue
             nxt = result["next"]
             is_victim = result["victim_p"] >= MIN_VICTIM_PROBABILITY
-            usable = nxt != NONE_OPTION and nxt in snapshot.components and nxt not in investigated
+            usable = nxt != NONE_OPTION and nxt not in investigated and eligible(snapshot.components.get(nxt) or {})
             if is_victim and usable and result["next_p"] >= MIN_NEXT_PROBABILITY:
                 if nxt in queue:
                     queue.remove(nxt)
@@ -1147,6 +1222,8 @@ class IterativeDiagnoser(JevDiagnoser):
                 backups = [c for c in result["failing_targets"] if c in snapshot.components]
                 insert_at = 1 if queue and queue[0] == nxt else 0
                 for c in backups:
+                    if not eligible(snapshot.components[c]):
+                        continue
                     if c in investigated and self._has_new_probe(snapshot, c, investigated):
                         # A newly discovered failing client changes the backend's
                         # evidence. Reopen that hypothesis within the same step budget.
@@ -1225,7 +1302,14 @@ class IterativeDiagnoser(JevDiagnoser):
                 and category.choice in ("data_or_traffic", "code_bug")
             ):
                 blocked = chosen_result["blocked_input"]
+        reference = None
+        if fallback_reason == "verified failed Service reference" or (
+            category is not None and category.choice in ("missing_object", "dns_resolution")
+        ):
+            reference = failed_reference(investigated, {concluded})
         return {
+            "unresolved": (fallback_reason or "").startswith("unresolved comparison:"),
+            "failed_reference": reference,
             "category": category,
             "key": key,
             "evidence": evidence,
@@ -1251,6 +1335,8 @@ class IterativeDiagnoser(JevDiagnoser):
             fault_object=info["fault_object"],
             blocked_input=info["blocked"],
             trims={},
+            unresolved=info.get("unresolved", False),
+            failed_reference=info.get("failed_reference"),
         )
 
     @staticmethod
@@ -1364,15 +1450,21 @@ class IterativeDiagnoser(JevDiagnoser):
         A candidate's support is its own examination's origin probability. A dependency that a victim's
         still-occurring errors name, and that was not itself judged a victim, gets the victim's certainty times its
         certainty about that dependency when that is higher: a server whose state changed fails its clients while
-        looking healthy. Component role never discards an examination's evidence.
+        looking healthy. The same eligibility rule applies here as in the candidate queue.
         """
-        out: dict[str, tuple[float, str | None]] = {cid: (r["origin_p"], None) for cid, r in investigated.items()}
+        top = component.ranked()[0][0] if component.probabilities else None
+        out: dict[str, tuple[float, str | None]] = {}
+        for cid, r in investigated.items():
+            if eligible(snapshot.components[cid], triage_first=cid == top):
+                out[cid] = (r["origin_p"], None)
         for cid, r in investigated.items():
             dep = r["next"]
             if r["verdict"] != "victim" or dep not in out or dep not in (r.get("failing_targets") or []):
                 continue
             pointer = r["victim_p"] * r["next_p"]
-            if investigated[dep]["verdict"] != "victim" and pointer > out[dep][0]:
+            if investigated[dep]["verdict"] == "victim" or not shows_own_state(snapshot, dep, investigated[dep]):
+                continue
+            if pointer > out[dep][0]:
                 out[dep] = (pointer, f"end of a victim chain: {cid} fails calling {dep}")
         return out
 
@@ -1397,6 +1489,11 @@ class IterativeDiagnoser(JevDiagnoser):
         if not ranked:
             return self.fallback(snapshot, component)
         leader, (p1, how1) = ranked[0]
+        if (investigated.get(leader) or {}).get("verdict") == "victim":
+            # A relative probability gap does not turn a victim into a cause. Prefer a unique,
+            # independently verified failed reference from the examinations when one exists.
+            if ref := failed_reference(investigated, set(investigated)):
+                return ref["dependency"], "verified failed Service reference"
         if len(ranked) == 1:
             return leader, how1
         runner, (p2, how2) = ranked[1]
@@ -1415,11 +1512,19 @@ class IterativeDiagnoser(JevDiagnoser):
         winner = self.compare_origins(
             snapshot, {leader: p1, runner: p2}, investigated, reason, cluster_pick=cluster_lead
         )
+        if winner is None:
+            if ref := failed_reference(investigated, pair):
+                return ref["dependency"], "verified failed Service reference"
+            origin = investigated.get(leader) or {}
+            independent = (
+                origin.get("verdict") == "origin" and origin.get("origin_p", 0) >= MIN_ORIGIN_PROBABILITY
+            ) or (leader == OTHER_OPTION and cluster_p >= MIN_ORIGIN_PROBABILITY)
+            return leader, how1 if independent else "unresolved comparison: no independently supported origin"
         return winner, (how1 if winner == leader else how2)
 
     def fallback(self, snapshot: ClusterSnapshot, component: ChoiceResult) -> tuple[str, str]:
         """No candidate was examined: `other` when triage chose it and cluster findings exist, else the highest-ranked
-        known triage candidate. Role only affects investigation priority, not eligibility."""
+        eligible triage candidate."""
         if component.choice == OTHER_OPTION and snapshot.cluster.get("findings"):
             return OTHER_OPTION, "triage chose other"
         for cid, _ in component.ranked():
@@ -1427,8 +1532,8 @@ class IterativeDiagnoser(JevDiagnoser):
                 if snapshot.cluster.get("findings"):
                     return cid, "triage top-1"
                 continue
-            if cid in snapshot.components:
-                return cid, "triage top-1"
+            if eligible(snapshot.components.get(cid) or {}, triage_first=cid == component.choice):
+                return cid, "triage top-1 eligible candidate"
         return component.choice, "triage top-1"
 
     def fault_object(
@@ -1480,11 +1585,11 @@ def code_only_diagnosis(snapshot: ClusterSnapshot, reason: str) -> Diagnosis:
         cid, comp = item
         kinds = set(comp.get("evidence_kinds") or [])
         return (
-            comp.get("role") == "observability",
+            not eligible(comp),
             not (comp.get("nearest_change_before_symptoms") or comp.get("most_recent_change")),
             "change" not in kinds,
             "configuration" not in kinds,
-            comp.get("healthy", True),
+            {False: 0, None: 1, True: 2}[comp.get("healthy", True)],
             -len(comp.get("signals") or []),
             cid,
         )
