@@ -37,7 +37,7 @@ from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2 import checks
 from clients.jev_diag.v2.classifier import OTHER_OPTION, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot, is_error_line
-from clients.jev_diag.v2.derive import TELEMETRY_RE
+from clients.jev_diag.v2.derive import TELEMETRY_RE, object_key
 
 MAX_TOTAL = 1600  # characters of one cause's block
 MAX_ROOT = 300  # characters of the Root cause line
@@ -716,7 +716,6 @@ def fault_object_subject(snapshot: ClusterSnapshot, d: Diagnosis) -> Subject:
     is named with that workload; a Service with the workloads it selects; any other object with the workload it acts
     on."""
     fo = d.fault_object or {}
-    comp = snapshot.components.get(d.component) or {}
     kind, ns = fo["kind"], fo.get("namespace")
     names = [n for n in (fo.get("name") or "").split(", ") if n]
     listed = ", ".join(f"`{n}`" for n in names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
@@ -727,8 +726,9 @@ def fault_object_subject(snapshot: ClusterSnapshot, d: Diagnosis) -> Subject:
     )
     objects = [(kind, n, ns) for n in names]
     users = users_of(snapshot, fo)
+    comp = (snapshot.components.get(d.component) or {}) if d.component in users else {}
     record = change_record(snapshot, kind, fo.get("name"), ns)
-    target = d.component if comp else next(iter(users or acted_on(snapshot, record)), None)
+    target = d.component if comp else next(iter(users), None)
     where = describe(snapshot.components[target]["kind"], snapshot.components[target]["name"], None) if target else ""
     subject = Subject(phrase=phrase, cid=target, fact=fault_object_fact(snapshot, fo), objects=objects)
     subject.kind_type = KIND_TYPES.get(kind)
@@ -763,7 +763,7 @@ def fault_object_subject(snapshot: ClusterSnapshot, d: Diagnosis) -> Subject:
             subject.phrase += f", selecting {', '.join(short_name(snapshot, u) for u in selected[:3])}"
     elif where:
         subject.phrase += f", acting on {where}"
-    if target and record and target in acted_on(snapshot, record):  # its own change belongs to the same change set
+    if target and record and target in users:
         t = snapshot.components[target]
         subject.objects.append((t["kind"], t["name"], t["namespace"]))
     return subject
@@ -800,9 +800,27 @@ def fault_object_fact(snapshot: ClusterSnapshot, fo: dict) -> str | None:
 
 
 def users_of(snapshot: ClusterSnapshot, fo: dict) -> list[str]:
-    """The components a fault object acts on, those with symptoms first."""
-    users = [c for c in fo.get("components") or [] if c in snapshot.components]
-    return sorted(users, key=lambda c: "symptoms" not in (snapshot.components[c].get("evidence_kinds") or []))
+    """Resolve explicit relationships across all facts about an object; never infer them from timing."""
+    records = [fo]
+    for collection in ("findings", "rbac", "outside_objects", "namespace_constraints", "stuck_terminating"):
+        records.extend(snapshot.cluster.get(collection) or [])
+    users = {
+        c
+        for record in records
+        if object_key(record) == object_key(fo)
+        for c in record.get("components") or []
+        if c in snapshot.components
+    }
+    kind, ns, name = fo["kind"], fo.get("namespace"), fo.get("name")
+    for cid, comp in snapshot.components.items():
+        if (kind, name, ns) in config_objects(comp):
+            users.add(cid)
+        if comp.get("namespace") == ns:
+            if kind == "Service" and any(s.get("name") == name for s in comp.get("services") or []):
+                users.add(cid)
+            if kind == "PersistentVolumeClaim" and any(v.get("pvc") == name for v in comp.get("volumes") or []):
+                users.add(cid)
+    return sorted(users, key=lambda c: ("symptoms" not in (snapshot.components[c].get("evidence_kinds") or []), c))
 
 
 def change_record(snapshot: ClusterSnapshot, kind: str, name: str | None, namespace: str | None) -> dict | None:
@@ -810,17 +828,6 @@ def change_record(snapshot: ClusterSnapshot, kind: str, name: str | None, namesp
         if ch.get("kind") == kind and ch.get("name") == name and ch.get("namespace") in (namespace, None):
             return ch
     return None
-
-
-def acted_on(snapshot: ClusterSnapshot, record: dict | None) -> list[str]:
-    """Workloads whose pod template changed within the same few seconds as `record`: one change set."""
-    at = parse_time((record or {}).get("at"))
-    out = []
-    for cid, comp in snapshot.components.items():
-        changed = parse_time((comp.get("template_changes") or {}).get("changed_at"))
-        if at and changed and changed_values(comp) and abs(seconds_between(changed, at)) <= SAME_CHANGE_SECONDS:
-            out.append(cid)
-    return sorted(out)
 
 
 def recurring_reader(snapshot: ClusterSnapshot, fo: dict) -> dict | None:

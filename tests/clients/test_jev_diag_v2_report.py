@@ -107,7 +107,8 @@ def test_a_cronjob_reading_the_written_config_is_the_subject_and_its_target_is_n
     ]  # fmt: skip
     outside = [{"kind": "CronJob", "name": "patcher", "namespace": "ops",
                 "signals": ["written by script-client after the application was deployed"]}]  # fmt: skip
-    fo = {"kind": "ConfigMap", "name": "patch-policy", "namespace": "ops", "signal": "written by script-client"}
+    fo = {"kind": "ConfigMap", "name": "patch-policy", "namespace": "ops", "signal": "written by script-client",
+          "components": ["deployment/web"]}  # fmt: skip
     snap = _snap(
         {"deployment/web": web}, _changes=changes, outside_objects=outside, symptom_onset="2026-01-01T00:11:00Z"
     )
@@ -120,6 +121,37 @@ def test_a_cronjob_reading_the_written_config_is_the_subject_and_its_target_is_n
     changed = _line(text, "Changed")
     assert "CronJob patcher created at 2026-01-01T00:10:00Z by script-client, 60s before the first symptom" in changed
     assert "data.TARGET=web" in changed and "limits.memory: unset -> 4Mi" in changed
+
+
+def test_rbac_relationship_is_resolved_across_findings_not_nearby_changes():
+    for name in ("reconciler", "background-worker"):
+        cid = f"deployment/{name}"
+        role = {"kind": "ClusterRole", "name": "permissions", "signal": "written by operator"}
+        rbac = {**role, "components": [cid], "rules": ["configmaps: get,list,watch"]}
+        unrelated = _comp(
+            "unrelated",
+            template_changes={"changed_at": "2026-01-01T00:00:05Z", "changes": ["container app image: old -> new"]},
+        )
+        snap = _snap(
+            {cid: _comp(name), "deployment/unrelated": unrelated},
+            findings=[role, rbac],
+            rbac=[rbac],
+            _changes=[{"kind": "ClusterRole", "name": "permissions", "at": "2026-01-01T00:00:00Z"}],
+        )
+        for findings in ([role, rbac], [rbac, role]):
+            snap.cluster["findings"] = findings
+            text = build_report(snap, _diag(OTHER, fault_object=role))
+            assert f"acting on Deployment `{name}`" in _line(text, "Root cause")
+            assert "unrelated" not in text
+
+
+def test_nearby_change_alone_does_not_establish_an_object_relationship():
+    web = _comp(
+        "web", template_changes={"changed_at": "2026-01-01T00:00:00Z", "changes": ["container app image: old -> new"]}
+    )
+    role = {"kind": "ClusterRole", "name": "unbound", "signal": "rules: configmaps get"}
+    snap = _snap({"deployment/web": web}, _changes=[{**role, "at": "2026-01-01T00:00:00Z"}])
+    assert "acting on" not in _line(build_report(snap, _diag(OTHER, fault_object=role)), "Root cause")
 
 
 OTHER = "other"

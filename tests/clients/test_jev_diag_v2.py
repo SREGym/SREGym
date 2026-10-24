@@ -314,7 +314,8 @@ def test_report_names_the_owning_component_through_its_configmap_and_an_outside_
     assert text.startswith("Root cause: Deployment `db` in namespace `shop`, through its ConfigMap `db`:")
     caller = {**_comp("user", "t"), "referenced_by_errors_from": {"deployment/api": {"dns resolution failure": 27}}}
     api = _comp("api", "t")
-    dns = {"kind": "ConfigMap", "name": "coredns", "namespace": "kube-system", "signal": "rule answers NXDOMAIN"}
+    dns = {"kind": "ConfigMap", "name": "coredns", "namespace": "kube-system", "signal": "rule answers NXDOMAIN",
+           "components": ["deployment/user"]}  # fmt: skip
     text = build_report(
         _snap({"deployment/user": caller, "deployment/api": api}), _diag("deployment/user", fault_object=dns)
     )

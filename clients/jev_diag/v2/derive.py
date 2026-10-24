@@ -696,6 +696,29 @@ def platform_findings(components: dict[str, dict]) -> list[dict]:
     return out
 
 
+def object_key(obj: dict) -> tuple[str, str | None, str | None]:
+    """Identity of a Kubernetes object, independent of how many findings describe it."""
+    return ((obj.get("kind") or "").lower(), obj.get("namespace") or None, obj.get("name"))
+
+
+def merge_findings(findings: list[dict]) -> list[dict]:
+    """Combine facts and explicit workload relationships about the same object."""
+    merged: dict[tuple, dict] = {}
+    for finding in findings:
+        key = object_key(finding)
+        if key not in merged:
+            merged[key] = dict(finding)
+        else:
+            current = merged[key]
+            current["signal"] = "; ".join(dict.fromkeys(s for s in (current.get("signal"), finding.get("signal")) if s))
+            for field, value in finding.items():
+                if field not in current or current[field] is None:
+                    current[field] = value
+        current = merged[key]
+        current["components"] = sorted(set(current.get("components") or []) | set(finding.get("components") or []))
+    return [{k: v for k, v in f.items() if v not in (None, [])} for f in merged.values()]
+
+
 def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict[str, dict]) -> list[dict]:
     """Cluster-scoped and namespace-scoped objects with a computed signal, for the `other` path.
 
@@ -751,6 +774,7 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict
             {
                 "kind": "Service",
                 "name": svc.get("name"),
+                "namespace": svc.get("namespace"),
                 "signal": f"selector {svc.get('selector')} matches no workload",
             }
         )
@@ -801,7 +825,7 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict
             continue
         text = change_log.describe_change(ch)
         attribution = {"writer": ch.get("writer"), "change_set": ch.get("change_set")}
-        existing = next((f for f in out if f.get("kind") == ch["kind"] and f.get("name") == ch["name"]), None)
+        existing = next((f for f in out if object_key(f) == object_key(ch)), None)
         if existing is not None:
             existing["signal"] = f"{existing['signal']}; {text}"
             existing.update({k: v for k, v in attribution.items() if v})
@@ -816,14 +840,7 @@ def cluster_findings(cluster: dict, ranked_changes: list[dict], components: dict
                 **attribution,
             }
         )
-    seen: set[tuple] = set()
-    unique: list[dict] = []
-    for f in out:
-        key = (f.get("kind"), f.get("name"), f.get("namespace"), f.get("signal"))
-        if key not in seen:
-            seen.add(key)
-            unique.append({k: v for k, v in f.items() if v not in (None, [])})
-    return unique + [routine_summary(*key, group) for key, group in routine.items()]
+    return merge_findings(out) + [routine_summary(*key, group) for key, group in routine.items()]
 
 
 MAX_ROUTINE_NAMES = 3

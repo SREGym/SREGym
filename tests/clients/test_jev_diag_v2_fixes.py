@@ -6,6 +6,18 @@ from clients.jev_diag.timeutil import parse_time
 from clients.jev_diag.v2 import changes, checks, collector, derive, investigate
 
 
+def test_object_findings_merge_relationships_without_crossing_namespaces():
+    first = {"kind": "Role", "name": "reader", "namespace": "a", "signal": "changed"}
+    bound = {**first, "signal": "denied", "components": ["deployment/a/worker"]}
+    other = {**bound, "namespace": "b", "components": ["deployment/b/worker"]}
+    for records in ([first, bound, other], [other, bound, first]):
+        merged = derive.merge_findings(records)
+        assert len(merged) == 2
+        a = next(f for f in merged if f["namespace"] == "a")
+        assert a["components"] == ["deployment/a/worker"]
+        assert "changed" in a["signal"] and "denied" in a["signal"]
+
+
 def test_telemetry_names_are_whole_tokens():
     assert derive.OBSERVABILITY_RE.search("otel-collector")
     assert derive.OBSERVABILITY_RE.search("prometheus-server")
