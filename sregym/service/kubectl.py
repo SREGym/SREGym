@@ -381,13 +381,18 @@ class KubeCtl:
                     raise self._container_platform_error(pod, namespace, status, line[:512])
 
     def wait_for_namespace_deletion(self, namespace, sleep=2, max_wait=300):
-        """Wait for a namespace to be fully deleted before proceeding."""
+        """Wait for a namespace to be fully deleted before proceeding.
+
+        max_wait bounds wall-clock time. The loop checks a monotonic deadline
+        on every iteration. Time spent in the API call counts, and the loop
+        exits even when sleep is 0.
+        """
 
         console.log("[bold yellow]Waiting for namespace deletion...")
 
-        wait = 0
+        deadline = time.monotonic() + max_wait
 
-        while wait < max_wait:
+        while time.monotonic() < deadline:
             try:
                 self.core_v1_api.read_namespace(name=namespace)
             except ApiException as exc:
@@ -398,8 +403,9 @@ class KubeCtl:
             except Exception as exc:
                 console.log(f"[red]Error checking namespace deletion: {exc}")
 
-            time.sleep(sleep)
-            wait += sleep
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(sleep, remaining))
 
         raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
 
@@ -429,11 +435,16 @@ class KubeCtl:
         return False
 
     def wait_for_stable(self, namespace: str, sleep: int = 2, max_wait: int = 300):
+        """Wait until every pod in the namespace is ready or has settled.
+
+        max_wait bounds wall-clock time with a monotonic deadline, as in
+        wait_for_namespace_deletion.
+        """
         console.log(f"[bold yellow]Waiting for namespace '{namespace}' to be stable...")
 
-        wait = 0
+        deadline = time.monotonic() + max_wait
 
-        while wait < max_wait:
+        while time.monotonic() < deadline:
             try:
                 pod_list = self.list_pods(namespace)
 
@@ -444,8 +455,9 @@ class KubeCtl:
             except Exception as e:
                 console.log(f"[red]Error checking pod statuses: {e}")
 
-            time.sleep(sleep)
-            wait += sleep
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(sleep, remaining))
 
         raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
 
