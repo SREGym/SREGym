@@ -73,3 +73,17 @@ def test_kind_setup_accepts_dind_config_and_node_image(shell_environment, tmp_pa
     )
     assert result.returncode == 0, result.stderr
     assert calls[0] == f"kind create cluster --config {config} --image sregym-kind:local --retain"
+
+
+def test_kind_setup_clears_baseline_in_default_cache_dir(shell_environment):
+    result, calls = shell_environment("setup_kind_cluster.sh")
+    assert result.returncode == 0, result.stderr
+    home = os.environ["HOME"]
+    assert f"rm -f {home}/cache_dir/cluster_baseline_state.json" in calls
+
+
+def test_kind_setup_clears_baseline_in_sregym_cache_dir(shell_environment, tmp_path):
+    cache_dir = tmp_path / "cache"
+    result, calls = shell_environment("setup_kind_cluster.sh", extra_env={"SREGYM_CACHE_DIR": str(cache_dir)})
+    assert result.returncode == 0, result.stderr
+    assert f"rm -f {cache_dir}/cluster_baseline_state.json" in calls

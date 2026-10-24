@@ -114,7 +114,8 @@ fi
 echo "==> Step 4: Delete SREGym cluster baseline cache"
 # SREGym caches the cluster baseline state after first deployment.
 # Deleting it forces SREGym to capture a fresh baseline with Calico installed.
-rm -f ~/cache_dir/cluster_baseline_state.json
+# The cache lives under SREGYM_CACHE_DIR when that is set (see sregym/paths.py).
+rm -f "${SREGYM_CACHE_DIR:-$HOME/cache_dir}/cluster_baseline_state.json"
 
 echo ""
 echo "✅ Cluster setup complete!"
