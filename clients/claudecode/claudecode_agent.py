@@ -243,6 +243,9 @@ class ClaudeCodeAgent:
         env["CLAUDE_CONFIG_DIR"] = str(self.sessions_dir)
         env["FORCE_AUTO_BACKGROUND_TASKS"] = "1"
         env["ENABLE_BACKGROUND_TASKS"] = "1"
+        # The agent runs as root in SREGym's isolated, capability-dropped
+        # container; Claude Code only bypasses permissions as root in a sandbox.
+        env["IS_SANDBOX"] = "1"
 
         # Set API key if available
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -289,6 +292,11 @@ class ClaudeCodeAgent:
         ]
         if reasoning_effort:
             command.extend(["--effort", reasoning_effort])
+        # Headless runs otherwise go through Claude Code's permission
+        # classifier, which refuses cluster-scoped fixes (e.g. CoreDNS in
+        # kube-system) and even mitigation submissions, scoring the problem
+        # rather than the model. The container is the security boundary.
+        command.extend(["--permission-mode", "bypassPermissions"])
         command.extend(["--allowedTools", *self.allowed_tools()])
 
         logger.info(f"Executing command: {' '.join(command)}")
