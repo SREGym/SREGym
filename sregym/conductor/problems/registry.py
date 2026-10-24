@@ -4,13 +4,9 @@ from pathlib import Path
 
 import yaml
 
-from sregym.conductor.problems.ad_service_failure import AdServiceFailure
-from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
-from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from sregym.conductor.problems.calico_route_reflector_label_drift import (
     CalicoRouteReflectorLabelDriftHotelReservation,
 )
-from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.cpu_throttling import CpuThrottling
 from sregym.conductor.problems.cronjob_sidecar_blocks_completion import (
     CronJobSidecarBlocksCompletionHotelReservation,
@@ -87,10 +83,6 @@ class ProblemRegistry:
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAuditProblem(scale_tier="replicated"),
             "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
-            "astronomy_shop_ad_service_failure": AdServiceFailure,
-            "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
-            "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
-            "astronomy_shop_cart_service_failure": CartServiceFailure,
             # ==================== TRAIN TICKET FAULT INJECTOR ====================
             # ==================== HARDWARE FAULT INJECTOR ====================
             # ----- Hardware-failure compound problems (Tier A) -----
@@ -312,3 +304,11 @@ class ProblemRegistry:
 #   wrong_dns_policy_social_network
 #   wrong_service_selector_astronomy_shop
 #   wrong_service_selector_hotel_reservation
+# OpenTelemetry demo feature-flag faults, deprecated by maintainer judgment at 1-2/3:
+# the remaining failures (alerts still firing after the 300 s AlertOracle grace)
+# are attributed to the app not reliably picking up the reverted flag, so they no longer
+# measure the agent, and the demo's flag faults are already well understood.
+#   astronomy_shop_ad_service_failure
+#   astronomy_shop_ad_service_high_cpu
+#   astronomy_shop_ad_service_manual_gc
+#   astronomy_shop_cart_service_failure
