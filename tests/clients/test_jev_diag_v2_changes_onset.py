@@ -109,10 +109,11 @@ def test_bulk_writes_are_routine_only_from_a_background_writer_that_is_not_a_per
     assert {f["kind"] for f in found} == {"Gadget", "ConfigMap", "Setting"}
 
 
-def test_a_telemetry_object_is_marked_and_is_no_finding_of_its_own(monkeypatch):
+def test_an_operator_write_to_telemetry_is_marked_but_not_hidden(monkeypatch):
     items = {"services": [_obj("Service", "zipkin-collector", NS, ("kubectl-create", "2026-10-19T08:05:00Z"))]}
     found, recorded = _radar(monkeypatch, items, {"deployment/app": _comp("app")})
-    assert found == [] and recorded["zipkin-collector"]["role"] == "observability"
+    assert [f["name"] for f in found] == ["zipkin-collector"]
+    assert recorded["zipkin-collector"]["role"] == "observability"
 
 
 def _change(name: str, at: str, affects=(), **extra) -> dict:

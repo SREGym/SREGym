@@ -123,7 +123,7 @@ def test_without_any_examined_candidate_triage_decides():
     diagnoser = IterativeDiagnoser(None, fetch_detail=lambda s, c: {})
     assert diagnoser.decide(snap, triage, {}, None, 0.0) == (
         "deployment/b",
-        "triage top-1 (telemetry components skipped)",
+        "triage top-1",
     )
 
 
@@ -140,7 +140,42 @@ def test_an_examination_sees_the_incident_it_has_to_explain():
         "deployment/collector": _comp("collector", role="observability", replicas={"desired": 1, "ready": 0}),
     }
     assert incident(_snap(comps)) == [
-        {"component": "deployment/web", "symptoms": "0/2 replicas ready, connectivity or timeout errors (7 lines)"}
+        {"component": "deployment/web", "symptoms": "0/2 replicas ready, connectivity or timeout errors (7 lines)"},
+        {"component": "deployment/collector", "symptoms": "0/1 replicas ready"},
+    ]
+
+
+def test_role_does_not_remove_a_nonleading_fault_candidate_or_its_support():
+    for role in ("application", "observability"):
+        comps = {
+            "deployment/web": _comp("web"),
+            "deployment/backend": _comp(
+                "backend", role=role, replicas={"desired": 2, "ready": 1}, pods=[{"phase": "Pending"}]
+            ),
+        }
+        verdicts = {
+            "deployment/web": {"origin": 0.7, "undetermined": 0.3},
+            "deployment/backend": {"origin": 0.99, "unrelated": 0.01},
+        }
+        d, labels = _run(comps, {"deployment/web": 0.65, "deployment/backend": 0.35}, verdicts)
+        assert "investigate:deployment/backend" in labels
+        assert d.component == "deployment/backend"
+
+
+def test_export_errors_alone_do_not_define_an_incident_but_pending_telemetry_does():
+    from clients.jev_diag.v2.tree import incident
+
+    comp = _comp(
+        "collector",
+        role="observability",
+        signals=[],
+        replicas={"desired": 1, "ready": 1},
+        log_signals=[{"line": "failed to export traces: context deadline exceeded", "state": "ongoing"}],
+    )
+    assert incident(_snap({"deployment/collector": comp})) == []
+    comp["pods"] = [{"phase": "Pending"}]
+    assert incident(_snap({"deployment/collector": comp})) == [
+        {"component": "deployment/collector", "symptoms": "Pending"}
     ]
 
 
