@@ -27,10 +27,11 @@ trajectory = convert("path/to/session.jsonl", agent="codex")
 | Codex | The rollout/session `.jsonl` file under `$CODEX_HOME/sessions/` |
 | Copilot CLI | The structured `copilot-cli.jsonl` produced with `--output-format json` |
 | Gemini CLI | A native `session-*.json` or newer `session-*.jsonl` file |
+| Jev diagnosis | The combined `*_jev_diag_agent_trajectory.jsonl` file under `trajectory/` |
 | OpenCode | The `session-*.json` produced by `opencode export` |
 | Stratus | The combined `*_stratus_agent_trajectory.jsonl` file |
 
-Supported explicit agent names are `claudecode`, `codex`, `copilot`, `gemini`,
+Supported explicit agent names are `claudecode`, `codex`, `copilot`, `gemini`, `jev_diag`,
 `opencode`, and `stratus`.
 
 Missing paths raise `FileNotFoundError`. Unknown formats and failed conversions
