@@ -216,8 +216,10 @@ def traffic(kind, size=200):
         for i, oid in enumerate(orders):
             if i % len(skus) >= 64 and i % 2 == 0:
                 record(request("cancel-service", {"Order": oid}), phase)
+    # The deadline covers the whole workload, including request generation and intermediate waits.
     limit = size / 40 if kind == "capacity" else 90
-    done = settled(phase, max(0.01, limit - (time.monotonic() - start)))
+    remaining = limit - (time.monotonic() - start)
+    done = remaining > 0 and settled(phase, remaining) and time.monotonic() - start <= limit
     elapsed = time.monotonic() - start
     with suppress(Exception):  # A capture timeout cannot change the workload's settlement verdict.
         capture_events()
@@ -363,10 +365,14 @@ def payment_check(resolve=False):
         initial = {r[0] for r in j.execute("SELECT id FROM provider_initial")}
         events = [json.loads(r[0]) for r in j.execute("SELECT body FROM events")]
         credits = [dict(r) for r in ledger.execute("SELECT * FROM refunds")]
-    original = defaultdict(set)
+    original, unresolved = defaultdict(set), set()
     for event in events:
-        if "Version" in event and (event["Kind"] == "create" or event["Kind"] == "cancel"):
+        if "Version" not in event:
+            unresolved.add(event["Order"])
+        elif event["Kind"] == "create" or event["Kind"] == "cancel":
             original[event["Order"]].add(event["Version"])
+    # Without resolve, an event recorded after the last capture has no revision to check yet.
+    unchecked = set() if resolve else unresolved
     active = defaultdict(list)
     for row in credits:
         if row["adjustment_id"] is None:
@@ -380,7 +386,11 @@ def payment_check(resolve=False):
         if oid not in states:
             failures.append((oid, "provider stray"))
         for row in rows:
-            if row["id"] not in initial and row["key"] not in {f"refund:{v}" for v in original[oid]}:
+            if (
+                row["id"] not in initial
+                and oid not in unchecked
+                and row["key"] not in {f"refund:{v}" for v in original[oid]}
+            ):
                 failures.append((oid, "provider key"))
     return {
         "success": not failures,
@@ -449,6 +459,9 @@ def replay():
     if producer.flush(30) or errors:
         raise RuntimeError(f"replay failed: {errors}")
     drain()
+    # Replayed IDs are already applied, so drain() returns before the pipeline has consumed
+    # the replay. Give it time before the state is checked; this is a settle, not a barrier.
+    time.sleep(15)
 
 
 def drain(timeout=120):
@@ -555,6 +568,8 @@ class Warehouse(BaseHTTPRequestHandler):
         if self.path != "/summary":
             return self.respond({}, 404)
         try:
+            with suppress(Exception):  # A Kafka hiccup only leaves new revisions unchecked.
+                capture_events()
             result = check()
             payments = payment_check()
             self.respond(
@@ -774,11 +789,14 @@ def freeze():
 def start_probe():
     if not (DATA / "probe-targets.json").exists():
         raise RuntimeError("Live probe targets are unavailable")
-    with journal() as j:
-        j.execute("DELETE FROM probes")
-    (DATA / "probe.stop").unlink(missing_ok=True)
-    (DATA / "probe.start").write_text(str(time.time()))
-    (DATA / "live").touch()
+    # Holding the lock keeps a probe request from before the reset out of the new window.
+    with (DATA / "live.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        with journal() as j:
+            j.execute("DELETE FROM probes")
+        (DATA / "probe.stop").unlink(missing_ok=True)
+        (DATA / "probe.start").write_text(str(time.time()))
+        (DATA / "live").touch()
 
 
 def pause():
@@ -800,8 +818,7 @@ def payment_wait():
         time.sleep(1)
 
 
-def payment_result():
-    wait = "--wait" in sys.argv
+def payment_result(wait=False):
     result = payment_check(resolve=wait)
     if wait:
         deadline = time.monotonic() + 10
@@ -814,6 +831,63 @@ def payment_result():
 def provider_fault():
     provider.disruption()
     return {"started": True}
+
+
+def ambiguous_since(started):
+    with provider.ledger() as ledger:
+        return [r[0] for r in ledger.execute("SELECT order_id FROM ambiguous WHERE created>=?", (started,))]
+
+
+def challenge_start(paid=3, unpaid=2):
+    """Answer new refunds with 503s, some paid and some not. The oracle then restarts refund-worker."""
+    started = time.time()
+    provider.disruption(seconds=600, count=paid + unpaid, unpaid=unpaid)
+    workload = traffic("cancellation", 90)
+    due = time.time()  # every refund of the workload exists once its commands have applied
+    deadline = time.monotonic() + 60
+    while len(ambiguous_since(started)) < paid + unpaid and time.monotonic() < deadline:
+        time.sleep(0.5)
+    challenge = {"started": started, "due": due, "expected": paid + unpaid, "workload": workload}
+    (DATA / "challenge.json").write_text(json.dumps(challenge))
+    return {"ambiguous_responses": len(ambiguous_since(started)), **challenge}
+
+
+def challenge_finish():
+    """Every refund, each ambiguous one included, settles exactly once within 2 minutes.
+
+    A refund counts as settled when the shop records its provider credit. Waiting for that
+    record, instead of a fixed time, also catches retries scheduled after any fixed wait.
+    """
+    challenge = json.loads((DATA / "challenge.json").read_text())
+    with provider.ledger() as ledger:
+        ledger.execute("UPDATE disruptions SET remaining=0")
+    responses = ambiguous_since(challenge["started"])
+    orders = sorted(set(responses))
+    while True:
+        with database() as db:
+            recorded = db.execute(
+                "SELECT count(*) FROM shop.refund_outbox WHERE order_id=ANY(%s) AND provider_id IS NOT NULL", (orders,)
+            ).fetchone()[0]
+        payments = payment_check(resolve=True)
+        if (recorded == len(orders) and payments["success"]) or time.time() >= challenge["due"] + 120:
+            break
+        time.sleep(2)
+    state = check()
+    return {
+        "success": bool(
+            challenge["workload"]["settled"]
+            and len(responses) == challenge["expected"]
+            and recorded == len(orders)
+            and payments["success"]
+            and state["success"]
+        ),
+        "ambiguous_responses": len(responses),
+        "ambiguous_orders": len(orders),
+        "recorded_settled": recorded,
+        "workload": challenge["workload"],
+        "payments": payments,
+        "history": {key: state[key] for key in ("success", "failure_count", "failures", "reasons")},
+    }
 
 
 def main():
@@ -830,7 +904,9 @@ def main():
         "probe-stop": stop_probe,
         "pause": pause,
         "check": check,
-        "payment-check": payment_result,
+        "payment-check": lambda: payment_result("--wait" in sys.argv),
+        "challenge-start": challenge_start,
+        "challenge-finish": challenge_finish,
         "payment-wait": payment_wait,
         "retire": retire,
         "replay": replay,

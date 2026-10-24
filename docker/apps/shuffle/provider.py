@@ -52,14 +52,18 @@ def initialize():
         CREATE TABLE IF NOT EXISTS requests(scope TEXT,key TEXT,status INT,body TEXT,expires REAL,
             PRIMARY KEY(scope,key));
         CREATE TABLE IF NOT EXISTS adjustments(id TEXT PRIMARY KEY,refund_id TEXT UNIQUE,key TEXT,created REAL);
-        CREATE TABLE IF NOT EXISTS disruptions(start REAL,end REAL,remaining INT);
+        CREATE TABLE IF NOT EXISTS disruptions(start REAL,end REAL,remaining INT,unpaid INT NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS ambiguous(order_id TEXT,key TEXT,paid INT,created REAL);
         """)
 
 
-def disruption(seconds=10, count=3):
+def disruption(seconds=10, count=3, unpaid=0):
+    """Answer the next count real refunds with 503; the last unpaid of them are not credited."""
     now = time.time()
     with ledger() as db:
-        db.execute("INSERT INTO disruptions VALUES (?,?,?)", (now, now + seconds, count))
+        db.execute(
+            "INSERT INTO disruptions(start,end,remaining,unpaid) VALUES (?,?,?,?)", (now, now + seconds, count, unpaid)
+        )
 
 
 def post(path, payload, key, now=None):
@@ -93,12 +97,16 @@ def post(path, payload, key, now=None):
                     (refund_id, payload["order_id"], 100, payload["revision"], key, now),
                 )
                 window = db.execute(
-                    "SELECT rowid,remaining FROM disruptions WHERE start<=? AND end>? "
+                    "SELECT rowid,remaining,unpaid FROM disruptions WHERE start<=? AND end>? "
                     "AND remaining>0 ORDER BY start DESC LIMIT 1",
                     (now, now),
                 ).fetchone()
                 if window:
+                    paid = window["remaining"] > window["unpaid"]
+                    if not paid:
+                        db.execute("DELETE FROM refunds WHERE id=?", (refund_id,))
                     db.execute("UPDATE disruptions SET remaining=remaining-1 WHERE rowid=?", (window["rowid"],))
+                    db.execute("INSERT INTO ambiguous VALUES (?,?,?,?)", (payload["order_id"], key, paid, now))
                     status, body = 503, {"error": "provider temporarily unavailable"}
         elif path == "/adjustments":
             if payload.get("sandbox"):

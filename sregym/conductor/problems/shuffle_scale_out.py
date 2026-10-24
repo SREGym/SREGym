@@ -4,7 +4,8 @@ Large JSON revisions, retry state surviving rollback, and expiring payment keys
 combine into a finance mismatch. The producer archive and Kafka retain original
 commands; the provider exposes its ledger and a sandbox at /docs. Diagnosis uses
 the multi-cause judge on main. Mitigation checks live service, history,
-provider settlement, independent-SKU concurrency, replay and persistence.
+provider settlement, independent-SKU concurrency, replay, persistence and a
+repeated provider outage.
 
 Build from docker/apps/shuffle with ``docker build --target runtime -t
 ghcr.io/sregym/shuffle-orders:20261013.1 .`` and ``docker build --target helper -t
@@ -19,6 +20,7 @@ import os
 import secrets
 import shlex
 import time
+from contextlib import suppress
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
@@ -64,7 +66,9 @@ must remain available during a live repair; there is no maintenance window. Each
 must apply within 30 seconds, and no 20-second interval with arriving commands may pass without an
 applied commit. New commands can revisit orders and SKUs that historical reconciliation is
 repairing. The ingress replay window is bounded; closed offset ranges are archived before
-retirement. The finance-reconcile job reports settlement discrepancies. The external payment
+retirement. Every refund must settle with the provider, and be recorded as settled, within 2
+minutes, including after an ambiguous provider response. The finance-reconcile job reports
+settlement discrepancies. The external payment
 provider documents its API at http://payment-provider:8080/docs. Refund dispatch uses the globally
 unique original producer revision as the idempotency key refund:<revision>; local refund rows are
 acknowledgements, not proof that a provider credit settled. Provider adjustments reverse duplicate
@@ -306,8 +310,11 @@ class OrderShop(AstronomyShop):
                 "schedule": "*/2 * * * *",
                 "concurrencyPolicy": "Forbid",
                 "successfulJobsHistoryLimit": 2,
+                # A failed attempt pod would linger and fail the shared readiness check.
+                "failedJobsHistoryLimit": 0,
                 "jobTemplate": {
                     "spec": {
+                        "backoffLimit": 0,
                         "template": {
                             "spec": {
                                 "restartPolicy": "Never",
@@ -315,11 +322,17 @@ class OrderShop(AstronomyShop):
                                     {
                                         "name": "finance",
                                         "image": "curlimages/curl:8.14.1",
-                                        "args": ["-fsS", "http://warehouse:8080/summary"],
+                                        "args": [
+                                            "-fsS",
+                                            "--retry",
+                                            "5",
+                                            "--retry-all-errors",
+                                            "http://warehouse:8080/summary",
+                                        ],
                                     }
                                 ],
                             }
-                        }
+                        },
                     }
                 },
             },
@@ -339,6 +352,8 @@ class OrderShop(AstronomyShop):
 class ShuffleDiagnosis(LLMAsAJudgeOracle):
     def evaluate(self, solution, duration=None):
         result = super().evaluate(solution, duration)
+        # Injection starts the live probe for mitigation-only runs; restart its window so
+        # full runs also measure the mitigation stage, not diagnosis.
         try:
             self.problem.app.helper("probe-start")
         except Exception as exc:
@@ -347,8 +362,19 @@ class ShuffleDiagnosis(LLMAsAJudgeOracle):
 
 
 class ShuffleMitigation(MitigationOracle):
+    # The phases run in sequence with their own deadlines: up to 90 s per bulk workload,
+    # 2 min for the provider challenge, plus restarts. The runner's default is 5 min.
+    evaluation_timeout_seconds = 1200
+
     def evaluate(self):
         app, phases = self.problem.app, {}
+        # A finance-reconcile pod that is still starting would read as an unready workload.
+        with suppress(Exception):
+            app.run('patch cronjob/finance-reconcile -p \'{"spec":{"suspend":true}}\'')
+            app.run("wait --for=condition=complete job --all --timeout=60s")
+        base = super().evaluate()
+        if not base.get("success"):
+            return base
 
         # The CI lifecycle calls this oracle again after recover_fault resets
         # the fixture. That clean baseline has no incident probe or history;
@@ -419,6 +445,15 @@ class ShuffleMitigation(MitigationOracle):
             }
 
         grade("persistence", persistence)
+
+        def provider_retry():
+            started = app.helper("challenge-start")
+            # Restart while the ambiguous refunds are still unresolved, so their recovery
+            # must survive a restart too.
+            app.restart("refund-worker")
+            return {**app.helper("challenge-finish"), "challenge": started}
+
+        grade("provider_retry", provider_retry)
         grade("provider", lambda: app.helper("payment-check", "--wait"))
         return {"success": all(phase["success"] for phase in phases.values()), "phases": phases}
 
@@ -529,6 +564,8 @@ class ShuffleScaleOut(Problem):
         self.app.helper("payment-wait")
         self.app.helper("freeze")
         self.app.run("create job --from=cronjob/finance-reconcile finance-initial")
+        # Start here so mitigation-only runs measure the live SLO for the whole repair.
+        self.app.helper("probe-start")
 
     @mark_fault_injected(strict=True)
     def recover_fault(self):

@@ -2,11 +2,13 @@
 
 import hashlib
 import hmac
+import itertools
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,8 +16,9 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.conductor.problems.shuffle_scale_out import OrderShop, ShuffleMitigation, ShuffleScaleOut
+from sregym.conductor.problems.shuffle_scale_out import OrderShop, ShuffleDiagnosis, ShuffleMitigation, ShuffleScaleOut
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "docker" / "apps" / "shuffle"))
 os.environ.setdefault("DATABASE_URL", "postgresql://unused/unused")
@@ -88,10 +91,59 @@ def test_lifecycle_baseline_check_does_not_change_incident_grading():
         {"success": True},
     ]
     oracle = ShuffleMitigation(problem)
-    report = oracle.evaluate()
+    with patch.object(MitigationOracle, "evaluate", return_value={"success": True}):
+        report = oracle.evaluate()
     assert report["success"] is True
     assert set(report["phases"]) == {"baseline_traffic", "baseline_history", "baseline_provider"}
     assert problem.app.helper.call_args_list[0].args == ("traffic", "baseline", "128")
+
+
+@pytest.mark.parametrize("recovered", [False, True])
+def test_shared_deployment_checks_run_first(recovered):
+    problem = SimpleNamespace(_recovered_baseline=recovered, app=MagicMock())
+    failure = {"success": False, "failure_type": "required_deployment_scaled_to_zero"}
+    with patch.object(MitigationOracle, "evaluate", return_value=failure):
+        assert ShuffleMitigation(problem).evaluate() == failure
+    problem.app.helper.assert_not_called()
+
+
+def test_injection_starts_live_probe_for_mitigation_only_runs():
+    problem = object.__new__(ShuffleScaleOut)
+    problem.app = MagicMock()
+    problem.app.helper.return_value = {
+        "success": True,
+        "settled": True,
+        "overbooked_units": 1,
+        "reasons": {"cancellation": 1},
+        "history_interactions": [{"excess_after_cancellation": 1}],
+    }
+    with patch("sregym.conductor.problems.shuffle_scale_out.time.sleep"):
+        problem.inject_fault()
+    assert problem.app.helper.call_args_list[-1].args == ("probe-start",)
+
+
+def test_diagnosis_grading_restarts_live_probe_window():
+    oracle = object.__new__(ShuffleDiagnosis)
+    oracle.problem = SimpleNamespace(app=MagicMock())
+    with patch.object(LLMAsAJudgeOracle, "evaluate", return_value={"success": True}):
+        assert oracle.evaluate("answer") == {"success": True}
+    oracle.problem.app.helper.assert_called_once_with("probe-start")
+
+
+def test_finance_summary_counts_after_capturing_versions():
+    calls = Mock()
+    calls.check.return_value = {"failure_count": 0, "orders": 1}
+    calls.payment_check.return_value = {"failure_count": 0}
+    handler = object.__new__(harness.Warehouse)
+    handler.path, handler.respond = "/summary", Mock()
+    with (
+        patch.object(harness, "capture_events", calls.capture_events),
+        patch.object(harness, "check", calls.check),
+        patch.object(harness, "payment_check", calls.payment_check),
+    ):
+        handler.do_GET()
+    assert [name for name, *_ in calls.mock_calls] == ["capture_events", "check", "payment_check"]
+    handler.respond.assert_called_once_with({"reconciliation_discrepancies": 0, "reviewed_orders": 1})
 
 
 def test_drain_uses_business_application_not_consumer_group():
@@ -185,6 +237,71 @@ def test_provider_key_expires_and_ambiguous_503_duplicates(provider_db):
     assert provider.post("/refunds", first, "refund:2", now=200 + provider.RETENTION + 1)[0] == 200
 
 
+def test_provider_outage_can_leave_a_503_unpaid(provider_db):
+    with patch.object(provider.time, "time", return_value=200):
+        provider.disruption(seconds=10, count=2, unpaid=1)
+    first = {"order_id": "one", "cents": 100, "revision": 5}
+    second = {"order_id": "two", "cents": 100, "revision": 6}
+    assert provider.post("/refunds", first, "refund:5", now=200)[0] == 503
+    assert provider.post("/refunds", second, "refund:6", now=201)[0] == 503
+    with provider.ledger() as db:
+        assert [r[0] for r in db.execute("SELECT order_id FROM refunds")] == ["one"]
+        assert [tuple(r) for r in db.execute("SELECT order_id,paid FROM ambiguous")] == [("one", 1), ("two", 0)]
+
+
+@pytest.mark.parametrize(
+    "responses,recorded,payments_ok,passes",
+    [
+        (["0", "1", "2", "3", "4"], 5, True, True),
+        (["0", "1", "2", "3", "3"], 4, True, True),  # one refund met two outages
+        (["0", "1", "2", "3", "4"], 5, False, False),
+        (["0", "1", "2", "3", "4"], 3, True, False),
+        (["0", "1", "2", "3"], 4, True, False),
+    ],
+)
+def test_provider_challenge_needs_every_ambiguous_refund_settled(
+    provider_db, tmp_path, responses, recorded, payments_ok, passes
+):
+    def traffic(kind, size):
+        for order in responses:
+            with provider.ledger() as db:
+                db.execute("INSERT INTO ambiguous VALUES (?,?,?,?)", (order, f"refund:{order}", 1, time.time()))
+        return {"settled": True}
+
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.execute.return_value.fetchone.return_value = (recorded,)
+    state = {"success": True, "failure_count": 0, "failures": [], "reasons": {}}
+    with (
+        patch.object(harness, "DATA", tmp_path),
+        patch.object(harness, "traffic", side_effect=traffic),
+        patch.object(harness, "database", return_value=db),
+        patch.object(harness, "payment_check", return_value={"success": payments_ok}),
+        patch.object(harness, "check", return_value=state),
+        patch.object(harness.time, "sleep"),
+        patch.object(harness.time, "monotonic", side_effect=itertools.count(0, 100)),
+    ):
+        started = harness.challenge_start()
+        with patch.object(harness.time, "time", return_value=started["due"] + 121):
+            result = harness.challenge_finish()
+    assert result["ambiguous_responses"] == len(responses)
+    assert result["success"] is passes
+    with provider.ledger() as ledger:
+        assert ledger.execute("SELECT max(remaining) FROM disruptions").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("clock", [[0, 95, 95], [0, 10, 95, 95]])
+def test_workload_deadline_includes_generation_and_the_last_poll(clock):
+    with (
+        patch.object(harness, "inventory", return_value=["sku"]),
+        patch.object(harness, "create", return_value="order"),
+        patch.object(harness, "settled", return_value=True),
+        patch.object(harness, "capture_events"),
+        patch.object(harness.time, "monotonic", side_effect=clock),
+    ):
+        assert harness.traffic("cancellation", 3)["settled"] is False
+
+
 def test_adjustment_exactly_once(provider_db):
     row = provider.post("/refunds", {"order_id": "one", "cents": 100, "revision": 1}, "refund:1", now=100)[1]
     body = {"refund_id": row["id"]}
@@ -263,7 +380,8 @@ def test_replay_catches_a_non_idempotent_repair():
         return good_helper(*args)
 
     oracle, _ = mitigation(helper)
-    result = oracle.evaluate()
+    with patch.object(MitigationOracle, "evaluate", return_value={"success": True}):
+        result = oracle.evaluate()
     assert result["phases"]["history"]["success"]
     assert not result["phases"]["replay"]["success"]
     assert result["phases"]["persistence"]["success"]
