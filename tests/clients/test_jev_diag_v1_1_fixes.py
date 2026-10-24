@@ -1,9 +1,9 @@
-"""jev_diag v2: evidence that must not be lost or misread (collection, change records, evidence kinds)."""
+"""jev_diag v1.1: evidence that must not be lost or misread (collection, change records, evidence kinds)."""
 
 from __future__ import annotations
 
 from clients.jev_diag.timeutil import parse_time
-from clients.jev_diag.v2 import changes, checks, collector, derive, investigate
+from clients.jev_diag.v1_1 import changes, checks, collector, derive, investigate
 
 
 def test_object_findings_merge_relationships_without_crossing_namespaces():
@@ -19,7 +19,7 @@ def test_object_findings_merge_relationships_without_crossing_namespaces():
 
 
 def test_parent_change_provenance_survives_evidence_collection_without_becoming_own_failure():
-    from clients.jev_diag.v2 import deps, tree
+    from clients.jev_diag.v1_1 import deps, tree
 
     cid = "deployment/shop/web"
     comp = {"kind": "Deployment", "name": "web", "namespace": "shop", "signals": [], "created": "2026-01-01T00:00:00Z"}
@@ -47,7 +47,7 @@ def test_parent_change_provenance_survives_evidence_collection_without_becoming_
 
 
 def test_config_and_role_evidence_retain_their_source_objects():
-    from clients.jev_diag.v2.tree import detail_evidence
+    from clients.jev_diag.v1_1.tree import detail_evidence
 
     comp = {"kind": "Deployment", "name": "web", "namespace": "shop", "signals": []}
     detail = {
@@ -299,7 +299,7 @@ def test_an_object_created_after_the_application_states_what_it_holds():
 def test_a_flag_write_lists_what_changed_on_the_failing_clients_of_its_provider_only():
     import json
 
-    from clients.jev_diag.v2 import flags
+    from clients.jev_diag.v1_1 import flags
 
     def flag(variant):
         return {"state": "ENABLED", "variants": {"on": True, "off": False}, "defaultVariant": variant}
@@ -510,7 +510,7 @@ def test_encoded_data_is_shown_as_its_size_so_the_settings_fit():
 
 
 def test_a_read_that_defines_the_application_is_retried_before_it_counts_as_empty(monkeypatch):
-    from clients.jev_diag.v2 import collector as v2c
+    from clients.jev_diag.v1_1 import collector as v1_1c
 
     answers = {"deployments": [None, [{"metadata": {"name": "web"}}]], "pods": [None, None, None]}
 
@@ -521,11 +521,11 @@ def test_a_read_that_defines_the_application_is_retried_before_it_counts_as_empt
             return []
         return item
 
-    monkeypatch.setattr(v2c, "kubectl_items", flaky)
-    monkeypatch.setattr(v2c, "APPLICATION_READ_PAUSE_SECONDS", 0)
+    monkeypatch.setattr(v1_1c, "kubectl_items", flaky)
+    monkeypatch.setattr(v1_1c, "APPLICATION_READ_PAUSE_SECONDS", 0)
     errors: list[str] = []
-    assert v2c.application_items("deployments", "ns", errors) == [{"metadata": {"name": "web"}}] and errors == []
-    assert v2c.application_items("pods", "ns", errors) is None and errors == ["kubectl get pods timed out after 45s"]
+    assert v1_1c.application_items("deployments", "ns", errors) == [{"metadata": {"name": "web"}}] and errors == []
+    assert v1_1c.application_items("pods", "ns", errors) is None and errors == ["kubectl get pods timed out after 45s"]
 
 
 def test_a_workload_created_late_says_what_it_runs():
@@ -549,7 +549,7 @@ def test_a_workload_created_late_says_what_it_runs():
 def test_a_crash_looping_container_keeps_the_current_logs_of_every_pod(monkeypatch):
     import json
 
-    from clients.jev_diag.v2 import investigate
+    from clients.jev_diag.v1_1 import investigate
 
     current = {
         "web-a": "2026-10-19T08:00:00Z [pod/web-a/app] ERROR first pod fails to reach db\n",
@@ -573,7 +573,7 @@ def test_a_crash_looping_container_keeps_the_current_logs_of_every_pod(monkeypat
 
 
 def test_a_rollout_that_is_paused_or_held_back_is_a_signal():
-    from clients.jev_diag.v2.collector import rollout_state
+    from clients.jev_diag.v1_1.collector import rollout_state
 
     paused = rollout_state("Deployment", {"paused": True, "replicas": 2}, {"updatedReplicas": 1})
     assert paused == ["rollout paused (spec.paused): 1 of 2 replicas run the newest pod template"]
@@ -608,7 +608,7 @@ def test_pods_on_an_older_template_are_reported_with_how_that_template_differs()
 
 
 def test_saturation_is_judged_on_its_own_scale_not_only_against_a_baseline():
-    from clients.jev_diag.v2.telemetry import saturation
+    from clients.jev_diag.v1_1.telemetry import saturation
 
     throttled = {"throttled": [{"labels": {"container": "app"}, "summary": {"recent": 0.4, "baseline": 0.4}}]}
     assert saturation("cpu", throttled) == ["saturation: container app is CPU-throttled in 40% of CFS periods"]
@@ -619,7 +619,7 @@ def test_saturation_is_judged_on_its_own_scale_not_only_against_a_baseline():
 
 
 def test_a_service_without_ready_endpoints_is_a_symptom_not_a_configuration_mismatch():
-    from clients.jev_diag.v2.investigate import service_checks
+    from clients.jev_diag.v1_1.investigate import service_checks
 
     comp = {"services": [{"name": "web", "ports": ["80->8080/TCP"], "ready_endpoints": 0}]}
     workload = {"containers": [{"ports": [{"port": 8080}]}]}
@@ -629,7 +629,7 @@ def test_a_service_without_ready_endpoints_is_a_symptom_not_a_configuration_mism
 def test_a_zero_quota_and_a_cluster_dns_without_pods_are_signals(monkeypatch):
     import json
 
-    from clients.jev_diag.v2 import collector
+    from clients.jev_diag.v1_1 import collector
 
     quota = {"metadata": {"name": "q", "namespace": "ns"}, "status": {"hard": {"pods": "0"}, "used": {"pods": "0"}}}
     (summary,) = collector.summarize_namespace_constraints([], [quota])
@@ -643,7 +643,7 @@ def test_a_zero_quota_and_a_cluster_dns_without_pods_are_signals(monkeypatch):
 
 
 def test_warning_events_are_counted_in_full_and_every_reason_is_kept_before_the_cap():
-    from clients.jev_diag.v2 import collector
+    from clients.jev_diag.v1_1 import collector
 
     def ev(reason, minute):
         return {
@@ -666,7 +666,7 @@ def test_warning_events_are_counted_in_full_and_every_reason_is_kept_before_the_
 
 
 def test_a_rare_new_error_is_ranked_beside_the_most_frequent_ones():
-    from clients.jev_diag.v2.collector import rank_signatures
+    from clients.jev_diag.v1_1.collector import rank_signatures
 
     retries = [
         {"line": f"retry {i}", "count": 500 - i, "first_seen_seconds_ago": 900, "state": "ongoing"} for i in range(9)
@@ -691,7 +691,7 @@ def test_an_address_in_an_error_line_names_the_component_that_owns_it():
 
 
 def test_a_missing_optional_reference_is_not_reported_and_a_required_one_is():
-    from clients.jev_diag.v2.collector import attach_config_objects
+    from clients.jev_diag.v1_1.collector import attach_config_objects
 
     comp = {
         "namespace": "ns",
@@ -703,7 +703,7 @@ def test_a_missing_optional_reference_is_not_reported_and_a_required_one_is():
 
 
 def test_error_lines_are_recognised_by_standard_shapes_not_a_list_of_past_failures():
-    from clients.jev_diag.v2.collector import is_error_line
+    from clients.jev_diag.v1_1.collector import is_error_line
 
     for line in (
         "write /data/x: no space left on device",  # errno message

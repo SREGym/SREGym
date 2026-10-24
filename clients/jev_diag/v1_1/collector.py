@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from clients.jev_diag import collector as kubectl_runner
 
 # One kubectl runner for both pipelines: recording, replay and tracing are set up once by the driver.
-from clients.jev_diag.collector import (  # noqa: F401 - re-exported for the v2 modules
+from clients.jev_diag.collector import (  # noqa: F401 - re-exported for the v1.1 modules
     RawRecorder,
     kubectl_items,
     recording_paused,
@@ -43,12 +43,12 @@ from clients.jev_diag.collector import (  # noqa: F401 - re-exported for the v2 
     set_kubectl_replay,
 )
 from clients.jev_diag.timeutil import now, parse_time
-from clients.jev_diag.v2 import changes as change_log
-from clients.jev_diag.v2 import checks, flags, paths, platform_events
-from clients.jev_diag.v2.checks import parse_cpu_millis, parse_memory_bytes  # noqa: F401 - re-exported
-from clients.jev_diag.v2.text import MAX_MESSAGE_CHARS, trim  # noqa: F401 - re-exported
+from clients.jev_diag.v1_1 import changes as change_log
+from clients.jev_diag.v1_1 import checks, flags, paths, platform_events
+from clients.jev_diag.v1_1.checks import parse_cpu_millis, parse_memory_bytes  # noqa: F401 - re-exported
+from clients.jev_diag.v1_1.text import MAX_MESSAGE_CHARS, trim  # noqa: F401 - re-exported
 
-logger = logging.getLogger("all.jev_diag.v2.collector")
+logger = logging.getLogger("all.jev_diag.v1_1.collector")
 
 WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job")
 KUBECTL_TIMEOUT = 45
@@ -2170,7 +2170,7 @@ def collect_snapshot(
 
     With `trend_baseline` (an earlier trend.collect_sample), growth since that sample is attached as signals.
     """
-    from clients.jev_diag.v2 import outside, trend
+    from clients.jev_diag.v1_1 import outside, trend
 
     errors: list[str] = []
     namespaces = list(app_info.get("namespaces") or [app_info.get("namespace")])
@@ -2488,7 +2488,7 @@ def collect_snapshot(
     if trend_baseline is not None:
         trend_summary = trend.apply_trend(components, trend_baseline, trend.sample_from_objects(raw_pods, raw_events))
 
-    from clients.jev_diag.v2.derive import component_health
+    from clients.jev_diag.v1_1.derive import component_health
 
     for cid in list(components):
         comp = components[cid]
@@ -2538,7 +2538,7 @@ def collect_snapshot(
     snapshot = ClusterSnapshot(app=app, components=components, cluster=compact(cluster), errors=errors)
     snapshot.cluster["_service_inventory"] = service_inventory  # an empty successful list still proves absence
     snapshot.cluster.setdefault("_changes", [])
-    from clients.jev_diag.v2.derive import post_process
+    from clients.jev_diag.v1_1.derive import post_process
 
     post_process(snapshot)
     for comp in components.values():

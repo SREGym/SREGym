@@ -4,7 +4,7 @@ failed reads. Neutral synthetic fixtures; each test states a rule, not a recorde
 import pytest
 
 from clients.jev_diag.timeutil import parse_time, set_now
-from clients.jev_diag.v2 import changes, derive, outside
+from clients.jev_diag.v1_1 import changes, derive, outside
 
 NS = "shop"
 DEPLOYED = "2026-10-19T08:00:00Z"

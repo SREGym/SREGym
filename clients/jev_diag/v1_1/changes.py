@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timedelta
 
 from clients.jev_diag.timeutil import now, parse_time, seconds_ago, seconds_between
-from clients.jev_diag.v2.checks import describe_probe, json_short
+from clients.jev_diag.v1_1.checks import describe_probe, json_short
 
 MIN_CHANGE_SECONDS = 10  # written this long after creation, or created this long after its targets: a separate change
 CHANGE_HORIZON_SECONDS = 3600  # changes older than this are not listed

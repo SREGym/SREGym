@@ -25,8 +25,8 @@ from collections.abc import Callable
 from typing import Any
 
 from clients.jev_diag.timeutil import now
-from clients.jev_diag.v2.checks import describe_probe
-from clients.jev_diag.v2.collector import (
+from clients.jev_diag.v1_1.checks import describe_probe
+from clients.jev_diag.v1_1.collector import (
     PREVIOUS_LOG_READ,
     WARMUP_SECONDS,
     ClusterSnapshot,
@@ -41,7 +41,7 @@ from clients.jev_diag.v2.collector import (
     strip_ansi,
     trim,
 )
-from clients.jev_diag.v2.derive import (
+from clients.jev_diag.v1_1.derive import (
     DEPENDENCY_CLASSES,
     LOG_CLASSES,
     ROLE_SYNONYMS,
@@ -51,7 +51,7 @@ from clients.jev_diag.v2.derive import (
     diagnostic_signals,
 )
 
-logger = logging.getLogger("all.jev_diag.v2.investigate")
+logger = logging.getLogger("all.jev_diag.v1_1.investigate")
 
 DETAIL_LOG_TAIL = 300
 MAX_ERROR_LINES = 15
@@ -631,13 +631,13 @@ def reachability_lines(
     snapshot: ClusterSnapshot, cid: str, failing: list[str], missing_references: list[dict] | None = None
 ) -> list[str]:
     """From inside a component that still fails calling its dependencies, whether each of them answers: the ones its
-    errors name first, then those abnormal on their own (at most MAX_REACHABILITY; off with JEV_DIAG_V2_PROBES=0)."""
-    from clients.jev_diag.v2 import probes
-    from clients.jev_diag.v2.deps import own_signals
+    errors name first, then those abnormal on their own (at most MAX_REACHABILITY; off with JEV_DIAG_V1_1_PROBES=0)."""
+    from clients.jev_diag.v1_1 import probes
+    from clients.jev_diag.v1_1.deps import own_signals
 
     comp = snapshot.components[cid]
     calling = any(set(f.get("classes") or []) & DEPENDENCY_CLASSES for f in comp.get("log_findings") or [])
-    if not calling or os.environ.get("JEV_DIAG_V2_PROBES", "1") == "0":
+    if not calling or os.environ.get("JEV_DIAG_V1_1_PROBES", "1") == "0":
         return []
     broken = [d for d in sorted(comp.get("_deps") or {}) if own_signals(snapshot.components[d])]
     lines = []
@@ -701,7 +701,7 @@ def collect_component_detail(snapshot: ClusterSnapshot, cid: str) -> dict:
     reach = reachability_lines(snapshot, cid, detail["failing_targets"], detail["missing_references"])
     if reach:
         detail["reachability"] = reach
-    from clients.jev_diag.v2 import telemetry
+    from clients.jev_diag.v1_1 import telemetry
 
     lines = telemetry.component_lines(snapshot, cid)
     if lines:

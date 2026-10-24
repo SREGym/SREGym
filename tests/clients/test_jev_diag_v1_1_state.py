@@ -1,4 +1,4 @@
-"""jev_diag v2: the state the model reads. Budget fitting cuts the least informative content first, log lines are
+"""jev_diag v1.1: the state the model reads. Budget fitting cuts the least informative content first, log lines are
 counted by what they say and shown with their cause, and a failed read is never reported as an absence."""
 
 from __future__ import annotations
@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 from clients.jev_diag.timeutil import parse_time
-from clients.jev_diag.v2 import collector
+from clients.jev_diag.v1_1 import collector
 
 NOW = parse_time("2026-01-05T10:00:00Z")
 
@@ -250,7 +250,7 @@ def test_a_reference_whose_namespace_could_not_be_read_is_not_verified_rather_th
 
 
 def test_a_platform_event_signal_keeps_the_cause_at_the_end_of_a_long_message():
-    from clients.jev_diag.v2.platform_events import event_signal
+    from clients.jev_diag.v1_1.platform_events import event_signal
 
     message = (
         "Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup network for sandbox "
@@ -262,7 +262,7 @@ def test_a_platform_event_signal_keeps_the_cause_at_the_end_of_a_long_message():
 
 
 def test_a_webhook_url_with_a_timeout_parameter_is_not_a_deadline_error():
-    from clients.jev_diag.v2.checks import admission_chains
+    from clients.jev_diag.v1_1.checks import admission_chains
 
     webhook = {
         "webhook": "check.example",
@@ -287,7 +287,7 @@ def test_a_webhook_url_with_a_timeout_parameter_is_not_a_deadline_error():
 
 
 def test_endpoints_that_could_not_be_read_are_unknown_not_zero():
-    from clients.jev_diag.v2.collector import attach_services
+    from clients.jev_diag.v1_1.collector import attach_services
 
     def comps():
         return {
@@ -312,7 +312,7 @@ def test_endpoints_that_could_not_be_read_are_unknown_not_zero():
 
 
 def test_unread_pods_do_not_imply_quota_rejection_or_a_broken_dependency():
-    from clients.jev_diag.v2 import deps, derive
+    from clients.jev_diag.v1_1 import deps, derive
 
     cache = _healthy("cache")
     cache.update(pods=[], pods_not_verified="Pod listing failed", warning_events=[])

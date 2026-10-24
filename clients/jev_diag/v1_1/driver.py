@@ -1,5 +1,5 @@
-"""v2 run: the same stages as v1's driver (wait for the diagnosis stage, collect, diagnose, submit), on the v2
-modules. v1's driver hands over here for ``--mode v2`` and passes itself as ``host`` for the shared plumbing
+"""v1.1 run: the same stages as v1's driver (wait for the diagnosis stage, collect, diagnose, submit), on the v1.1
+modules. v1's driver hands over here for ``--mode v1.1`` and passes itself as ``host`` for the shared plumbing
 (stage wait, app info, submission, artifact writing)."""
 
 from __future__ import annotations
@@ -12,18 +12,18 @@ from pathlib import Path
 from types import ModuleType
 
 from clients.jev_diag.trace import DecisionTrace
-from clients.jev_diag.v2.classifier import build_component_questions, fit_state_to_budget
-from clients.jev_diag.v2.collector import collect_snapshot, estimate_tokens, fetch_alerts_via_mcp
-from clients.jev_diag.v2.investigate import collect_component_detail
-from clients.jev_diag.v2.tree import IterativeDiagnoser
+from clients.jev_diag.v1_1.classifier import build_component_questions, fit_state_to_budget
+from clients.jev_diag.v1_1.collector import collect_snapshot, estimate_tokens, fetch_alerts_via_mcp
+from clients.jev_diag.v1_1.investigate import collect_component_detail
+from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
-logger = logging.getLogger("all.jev_diag.v2.driver")
+logger = logging.getLogger("all.jev_diag.v1_1.driver")
 
 
 def run(
     args: argparse.Namespace, trace: DecisionTrace, prefix: Path, results: dict, started: float, host: ModuleType
 ) -> str:
-    """The v2 agent proper. Returns the run status recorded in the trace."""
+    """The v1.1 agent proper. Returns the run status recorded in the trace."""
     standalone = bool(args.namespace)
     if standalone:
         app_info = {
@@ -114,7 +114,7 @@ def run(
 
 
 def collect(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standalone: bool, host: ModuleType):
-    """Wait for the fault to surface, then read the cluster into a snapshot (v2's collection)."""
+    """Wait for the fault to surface, then read the cluster into a snapshot (v1.1's collection)."""
     baseline = wait(args, app_info, trace, standalone, host)
     return read_cluster(args, app_info, trace, standalone, baseline)
 
@@ -146,8 +146,8 @@ def wait(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standal
     show only in logs (pods stay healthy) wait the full delay. The polls are not recorded, so an offline replay
     serves the snapshot's own reads.
     """
-    from clients.jev_diag.v2 import trend
-    from clients.jev_diag.v2.collector import recording_paused
+    from clients.jev_diag.v1_1 import trend
+    from clients.jev_diag.v1_1.collector import recording_paused
 
     delay = 0.0 if standalone else max(0.0, args.start_delay)
     if delay <= 0:
@@ -174,7 +174,7 @@ def wait(args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standal
 def read_cluster(
     args: argparse.Namespace, app_info: dict, trace: DecisionTrace, standalone: bool, baseline: dict | None
 ):
-    """Read the cluster once into v2's snapshot (no waiting)."""
+    """Read the cluster once into v1.1's snapshot (no waiting)."""
     with trace.timed("collect", "snapshot", include_logs=not args.no_logs, log_tail=args.log_tail):
         snapshot = collect_snapshot(
             app_info,
@@ -183,8 +183,8 @@ def read_cluster(
             include_logs=not args.no_logs,
             trend_baseline=baseline,
         )
-    from clients.jev_diag.v2 import telemetry
-    from clients.jev_diag.v2.derive import post_process
+    from clients.jev_diag.v1_1 import telemetry
+    from clients.jev_diag.v1_1.derive import post_process
 
     rederive = False
     if not standalone:
@@ -193,7 +193,7 @@ def read_cluster(
             info["edges"] = len(snapshot.cluster["_observed_calls"])
         rederive = bool(snapshot.cluster["_observed_calls"])
     if args.exec_probes:
-        from clients.jev_diag.v2 import probes
+        from clients.jev_diag.v1_1 import probes
 
         with trace.timed("collect", "broker_progress") as info:
             skipped: dict = {}
@@ -207,12 +207,12 @@ def read_cluster(
 
 
 def make_diagnoser(args: argparse.Namespace, trace: DecisionTrace, client=None) -> IterativeDiagnoser:
-    """v2's diagnoser; `client` overrides the decision model client (one per arm in experiments)."""
+    """v1.1's diagnoser; `client` overrides the decision model client (one per arm in experiments)."""
     probe = None
-    if args.exec_probes or os.environ.get("JEV_DIAG_V2_PROBES", "1") != "0":
+    if args.exec_probes or os.environ.get("JEV_DIAG_V1_1_PROBES", "1") != "0":
         # v1's read-only health command inside a healthy-looking data store that a victim's errors name (native
-        # tools only, after a memory headroom check); on by default in v2
-        from clients.jev_diag.v2.probes import backend_probe as probe
+        # tools only, after a memory headroom check); on by default in v1.1
+        from clients.jev_diag.v1_1.probes import backend_probe as probe
     return IterativeDiagnoser(
         client,
         fetch_detail=collect_component_detail,

@@ -18,13 +18,13 @@ def test_every_diagnosis_setting_is_declared_for_container_forwarding():
     assert names <= set(config.ENV_VARS)
 
 
-@pytest.mark.parametrize("mode", ["tree", "oneshot", "v2"])
+@pytest.mark.parametrize("mode", ["tree", "oneshot", "v1.1"])
 def test_container_launch_preserves_mode_and_v2_disable_switches(monkeypatch, mode):
     monkeypatch.setenv("AGENT_JEV_MODEL", "jev-test")
     settings = {
         "JEV_DIAG_MODE": mode,
-        "JEV_DIAG_V2_PROBES": "0",
-        "JEV_DIAG_V2_TELEMETRY": "0",
+        "JEV_DIAG_V1_1_PROBES": "0",
+        "JEV_DIAG_V1_1_TELEMETRY": "0",
         "JEV_DIAG_IGNORE_NAMESPACES": "unrelated,monitoring",
         "JEV_DIAG_START_DELAY": "0",
     }
@@ -49,7 +49,7 @@ def test_forwarded_settings_keep_explicit_container_overrides(monkeypatch):
 
 def test_diagnosis_settings_are_not_added_to_non_jev_runs(monkeypatch):
     monkeypatch.delenv("AGENT_JEV_MODEL", raising=False)
-    monkeypatch.setenv("JEV_DIAG_MODE", "v2")
-    monkeypatch.setenv("JEV_DIAG_V2_PROBES", "0")
+    monkeypatch.setenv("JEV_DIAG_MODE", "v1.1")
+    monkeypatch.setenv("JEV_DIAG_V1_1_PROBES", "0")
     env = ContainerRunner(ContainerConfig())._build_env_vars()
-    assert "JEV_DIAG_MODE" not in env and "JEV_DIAG_V2_PROBES" not in env
+    assert "JEV_DIAG_MODE" not in env and "JEV_DIAG_V1_1_PROBES" not in env

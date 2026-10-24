@@ -175,10 +175,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-characterize", action="store_true", help="Skip the second (fault category) request")
     parser.add_argument(
         "--mode",
-        choices=("tree", "oneshot", "v2"),
+        choices=("tree", "oneshot", "v1.1"),
         default=os.environ.get("JEV_DIAG_MODE", "tree"),
         help="tree: iterative decision tree that investigates candidates (default); oneshot: two fixed requests; "
-        "v2: the next version of the pipeline (clients/jev_diag/v2)",
+        "v1.1: the next version of the pipeline (clients/jev_diag/v1_1)",
     )
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS, help="tree mode: investigation step budget")
     parser.add_argument(
@@ -262,10 +262,10 @@ def main() -> None:
 
 def run(args: argparse.Namespace, trace: DecisionTrace, prefix: Path, results: dict, started: float) -> str:
     """The agent proper. Returns the run status recorded in the trace."""
-    if args.mode == "v2":
-        from clients.jev_diag.v2.driver import run as run_v2
+    if args.mode == "v1.1":
+        from clients.jev_diag.v1_1.driver import run as run_v1_1
 
-        return run_v2(args, trace, prefix, results, started, host=sys.modules[__name__])
+        return run_v1_1(args, trace, prefix, results, started, host=sys.modules[__name__])
     standalone = bool(args.namespace)
     if standalone:
         app_info = {

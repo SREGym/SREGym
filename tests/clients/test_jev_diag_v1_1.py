@@ -1,4 +1,4 @@
-"""jev_diag v2: shared plumbing with v1, and the driver hand-over."""
+"""jev_diag v1.1: shared plumbing with v1, and the driver hand-over."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ import pytest
 from clients.jev_diag import collector as v1_collector
 from clients.jev_diag import driver as v1_driver
 from clients.jev_diag.classifier import build_component_questions as v1_questions
-from clients.jev_diag.v2 import collector as v2_collector
-from clients.jev_diag.v2 import driver as v2_driver
-from clients.jev_diag.v2 import probes
-from clients.jev_diag.v2.classifier import build_component_questions as v2_questions
+from clients.jev_diag.v1_1 import collector as v1_1_collector
+from clients.jev_diag.v1_1 import driver as v1_1_driver
+from clients.jev_diag.v1_1 import probes
+from clients.jev_diag.v1_1.classifier import build_component_questions as v1_1_questions
 
 NS = "shop"
 
@@ -49,14 +49,14 @@ def snapshot(module) -> object:
 
 
 def test_v2_reads_the_cluster_through_v1s_single_kubectl_runner():
-    # recording, replay and tracing are set up once by the driver and must cover v2's reads too
-    assert v2_collector.run_kubectl is v1_collector.run_kubectl
-    assert v2_collector.set_kubectl_replay is v1_collector.set_kubectl_replay
+    # recording, replay and tracing are set up once by the driver and must cover v1.1's reads too
+    assert v1_1_collector.run_kubectl is v1_collector.run_kubectl
+    assert v1_1_collector.set_kubectl_replay is v1_collector.set_kubectl_replay
 
 
 def test_v2_triage_offers_v1_s_candidates_states_no_benchmark_premise_and_lets_a_no_change_fault_win():
     a = {k: msgspec.to_builtins(q) for k, q in v1_questions(snapshot(v1_collector)).items()}
-    b = {k: msgspec.to_builtins(q) for k, q in v2_questions(snapshot(v2_collector)).items()}
+    b = {k: msgspec.to_builtins(q) for k, q in v1_1_questions(snapshot(v1_1_collector)).items()}
     va, vb = a["root_cause_component"]["criteria"], b["root_cause_component"]["criteria"]
     assert va.keys() == vb.keys()
     assert {k: v for k, v in va.items() if k != "other"} == {k: v for k, v in vb.items() if k != "other"}
@@ -73,8 +73,8 @@ def test_driver_hands_mode_v2_to_the_v2_run(monkeypatch):
         seen["host"] = host
         return "ok"
 
-    monkeypatch.setattr(v2_driver, "run", fake_run)
-    args = argparse.Namespace(mode="v2")
+    monkeypatch.setattr(v1_1_driver, "run", fake_run)
+    args = argparse.Namespace(mode="v1.1")
     assert v1_driver.run(args, None, Path("/tmp/x"), {}, 0.0) == "ok"
     assert seen["host"].submit_diagnosis is v1_driver.submit_diagnosis
 
@@ -85,7 +85,7 @@ def _comp(name: str, created: str, **extra) -> dict:
 
 def test_revision_diff_without_a_spec_write_is_a_change_and_a_restart_is_not():
     from clients.jev_diag.timeutil import set_now
-    from clients.jev_diag.v2 import changes
+    from clients.jev_diag.v1_1 import changes
 
     set_now(changes.parse_time("2026-10-19T08:00:00Z"))
     try:
@@ -130,7 +130,7 @@ def test_revision_diff_without_a_spec_write_is_a_change_and_a_restart_is_not():
     assert comps["deployment/frontend"].get("most_recent_change") and not comps["daemonset/agent"].get(
         "most_recent_change"
     )
-    from clients.jev_diag.v2.derive import classify_evidence
+    from clients.jev_diag.v1_1.derive import classify_evidence
 
     classify_evidence(comps)  # a restart is neither a change nor a symptom nor a configuration
     assert comps["daemonset/agent"]["evidence_kinds"] == [] and comps["deployment/frontend"]["evidence_kinds"] == [
@@ -139,7 +139,7 @@ def test_revision_diff_without_a_spec_write_is_a_change_and_a_restart_is_not():
 
 
 def test_template_changes_are_diffed_against_the_revision_current_at_deploy():
-    from clients.jev_diag.v2 import changes
+    from clients.jev_diag.v1_1 import changes
 
     def rev(n: int, at: str, value: str, restarted: str | None = None) -> dict:
         meta = {"labels": {"app": "a", "pod-template-hash": f"h{n}"}}
@@ -170,7 +170,7 @@ def test_template_changes_are_diffed_against_the_revision_current_at_deploy():
 
 def test_a_change_made_before_the_application_existed_is_dropped():
     from clients.jev_diag.timeutil import set_now
-    from clients.jev_diag.v2 import changes
+    from clients.jev_diag.v1_1 import changes
 
     set_now(changes.parse_time("2026-10-19T08:00:00Z"))
     try:
@@ -193,7 +193,7 @@ def test_a_change_made_before_the_application_existed_is_dropped():
 
 def test_a_write_made_before_the_deploy_sets_no_changed_flag_and_no_finding(monkeypatch):
     from clients.jev_diag.timeutil import set_now
-    from clients.jev_diag.v2 import changes, outside
+    from clients.jev_diag.v1_1 import changes, outside
 
     def written(name: str, ns: str, at: str) -> dict:
         created = {"manager": "a", "time": "2026-10-19T07:00:00Z", "fieldsV1": {"f:spec": {}}}
@@ -213,7 +213,7 @@ def test_a_write_made_before_the_deploy_sets_no_changed_flag_and_no_finding(monk
         recorded: list[dict] = []
         found = outside.change_radar([NS], comps, [], recorded, deployed)
         policies = [written("early", NS, before), written("late", NS, after)]
-        early, late = v2_collector.attach_network_policies(policies, comps, [], deployed)
+        early, late = v1_1_collector.attach_network_policies(policies, comps, [], deployed)
     finally:
         set_now(None)
     assert [f["name"] for f in found] == ["late"] and len(recorded) == 2  # ranking drops the early record
@@ -221,7 +221,7 @@ def test_a_write_made_before_the_deploy_sets_no_changed_flag_and_no_finding(monk
 
 
 def test_probe_description_carries_timing_with_defaults_for_unset_fields():
-    from clients.jev_diag.v2.checks import describe_probe
+    from clients.jev_diag.v1_1.checks import describe_probe
 
     text = describe_probe({"httpGet": {"path": "/health", "port": 8080}, "periodSeconds": 1, "failureThreshold": 1})
     assert text.startswith("httpGet HTTP :8080/health")
@@ -230,7 +230,7 @@ def test_probe_description_carries_timing_with_defaults_for_unset_fields():
 
 
 def test_evidence_cap_keeps_some_logs_events_and_dependencies():
-    from clients.jev_diag.v2.tree import MAX_EVIDENCE, cap_evidence
+    from clients.jev_diag.v1_1.tree import MAX_EVIDENCE, cap_evidence
 
     head = [f"setting {i}" for i in range(40)]
     logs = [f"log {i}" for i in range(10)]
@@ -245,7 +245,7 @@ def test_evidence_cap_keeps_some_logs_events_and_dependencies():
 
 
 def test_an_error_line_naming_several_components_points_at_each_of_them():
-    from clients.jev_diag.v2.derive import classify_logs
+    from clients.jev_diag.v1_1.derive import classify_logs
 
     line = {"line": "web: ledger sync failure: failed POST to notifier service", "state": "ongoing", "count": 3}
     comps = {f"deployment/{n}": _comp(n, "t") for n in ("ledger", "notifier")}
@@ -255,7 +255,7 @@ def test_an_error_line_naming_several_components_points_at_each_of_them():
 
 
 def _diag(component: str, fact: str | None = None, **kw):
-    from clients.jev_diag.v2.classifier import ChoiceResult, Diagnosis
+    from clients.jev_diag.v1_1.classifier import ChoiceResult, Diagnosis
 
     return Diagnosis(
         component=component,
@@ -273,12 +273,12 @@ def _diag(component: str, fact: str | None = None, **kw):
 
 
 def _snap(comps: dict):
-    return v2_collector.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster={})
+    return v1_1_collector.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster={})
 
 
 def test_report_leads_with_the_changed_workload_and_states_the_fault_type():
-    from clients.jev_diag.v2.classifier import ChoiceResult
-    from clients.jev_diag.v2.report import build_report
+    from clients.jev_diag.v1_1.classifier import ChoiceResult
+    from clients.jev_diag.v1_1.report import build_report
 
     comp = {
         **_comp("frontend", "t"),
@@ -298,7 +298,7 @@ def test_report_leads_with_the_changed_workload_and_states_the_fault_type():
 
 
 def test_report_names_the_owning_component_through_its_configmap_and_an_outside_object_first():
-    from clients.jev_diag.v2.report import build_report
+    from clients.jev_diag.v1_1.report import build_report
 
     db = {**_comp("db", "t"), "services": [{"name": "db"}], "signals": []}
     fo = {
@@ -324,7 +324,7 @@ def test_report_names_the_owning_component_through_its_configmap_and_an_outside_
 
 
 def test_without_the_decision_model_v2_still_reports_from_code():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     class Down:
         model = "m"
@@ -354,15 +354,15 @@ class _Trace:
 
 
 def _run_wait(monkeypatch, samples):
-    from clients.jev_diag.v2 import trend
+    from clients.jev_diag.v1_1 import trend
 
     clock = {"t": 0.0}
-    monkeypatch.setattr(v2_driver.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
-    monkeypatch.setattr(v2_driver.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(v1_1_driver.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+    monkeypatch.setattr(v1_1_driver.time, "monotonic", lambda: clock["t"])
     seq = iter(samples)
     monkeypatch.setattr(trend, "collect_sample", lambda ns: next(seq))
     args = argparse.Namespace(start_delay=120.0)
-    v2_driver.wait(args, {"namespaces": [NS]}, _Trace(), False, None)
+    v1_1_driver.wait(args, {"namespaces": [NS]}, _Trace(), False, None)
     return clock["t"]
 
 
@@ -377,8 +377,8 @@ def test_adaptive_wait_reads_early_once_the_same_pods_stay_abnormal(monkeypatch)
 
 
 def test_outside_objects_link_to_the_components_they_act_on(monkeypatch):
-    from clients.jev_diag.v2 import outside
-    from clients.jev_diag.v2.derive import cluster_findings
+    from clients.jev_diag.v1_1 import outside
+    from clients.jev_diag.v1_1.derive import cluster_findings
 
     ingress = {
         "metadata": {"name": "web", "namespace": NS, "creationTimestamp": "2026-10-19T07:50:00Z"},
@@ -441,7 +441,7 @@ def _fake_cluster(monkeypatch, items: dict, related: list[str]) -> None:
     """kubectl reads served from `items` ({(resource, namespace): [objects]}); every other read fails."""
     import copy
 
-    from clients.jev_diag.v2 import outside
+    from clients.jev_diag.v1_1 import outside
 
     def read(resource, namespace, errors, **kwargs):
         return copy.deepcopy(items.get((resource, namespace), []))
@@ -449,19 +449,19 @@ def _fake_cluster(monkeypatch, items: dict, related: list[str]) -> None:
     def no_cluster(*args, **kwargs):
         raise RuntimeError("no cluster")
 
-    monkeypatch.setattr(v2_collector, "kubectl_items", read)
+    monkeypatch.setattr(v1_1_collector, "kubectl_items", read)
     monkeypatch.setattr(outside, "kubectl_items", read)
     monkeypatch.setattr(outside, "related_namespaces", lambda namespaces, errors: related)
-    monkeypatch.setattr(v2_collector, "run_kubectl", no_cluster)
+    monkeypatch.setattr(v1_1_collector, "run_kubectl", no_cluster)
     monkeypatch.setattr(outside, "run_kubectl", no_cluster)
 
 
 @pytest.mark.parametrize("read_failed", [False, True])
 def test_failed_pod_list_is_not_a_verified_empty_list(monkeypatch, read_failed):
-    from clients.jev_diag.v2.investigate import dependency_state
+    from clients.jev_diag.v1_1.investigate import dependency_state
 
     _fake_cluster(monkeypatch, {("deployments", NS): [deployment("frontend")]}, [])
-    read = v2_collector.kubectl_items
+    read = v1_1_collector.kubectl_items
     attempts = []
 
     def read_with_pod_failure(resource, namespace, errors, **kwargs):
@@ -472,13 +472,13 @@ def test_failed_pod_list_is_not_a_verified_empty_list(monkeypatch, read_failed):
                 return []
         return read(resource, namespace, errors, **kwargs)
 
-    monkeypatch.setattr(v2_collector, "kubectl_items", read_with_pod_failure)
-    monkeypatch.setattr(v2_collector, "APPLICATION_READ_PAUSE_SECONDS", 0)
-    snap = v2_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
+    monkeypatch.setattr(v1_1_collector, "kubectl_items", read_with_pod_failure)
+    monkeypatch.setattr(v1_1_collector, "APPLICATION_READ_PAUSE_SECONDS", 0)
+    snap = v1_1_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
     comp = snap.components[f"deployment/{NS}/frontend"]
     detail = dependency_state(snap, f"deployment/{NS}/frontend", "deployment/client")
     assert ("no pods exist for this workload" in comp["signals"]) is not read_failed
-    assert len(attempts) == (v2_collector.APPLICATION_READ_ATTEMPTS if read_failed else 1)
+    assert len(attempts) == (v1_1_collector.APPLICATION_READ_ATTEMPTS if read_failed else 1)
     if read_failed:
         assert comp["healthy"] is None and detail["pods_not_verified"]
         assert "pods_ready" not in detail and "looks_healthy_on_its_own" not in detail
@@ -488,7 +488,7 @@ def test_failed_pod_list_is_not_a_verified_empty_list(monkeypatch, read_failed):
 
 
 def test_a_related_namespace_never_replaces_or_dates_the_application(monkeypatch):
-    from clients.jev_diag.v2 import changes
+    from clients.jev_diag.v1_1 import changes
 
     def dep(name: str, ns: str, created: str) -> dict:
         obj = deployment(name)
@@ -512,7 +512,7 @@ def test_a_related_namespace_never_replaces_or_dates_the_application(monkeypatch
         ("pods", "data"): [pending],
     }
     _fake_cluster(monkeypatch, items, ["data"])
-    snap = v2_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
+    snap = v1_1_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
     front = snap.components[f"deployment/{NS}/frontend"]
     assert front["namespace"] == NS and not front.get("related") and not front.get("pods")  # the Pending pod is not its
     assert snap.components["deployment/data/db"]["related"]
@@ -569,8 +569,8 @@ def test_same_named_workloads_keep_their_own_pods_services_events_and_metrics(mo
             return "cache-rs-shared cache 5m 8Mi"
         raise RuntimeError("no cluster")
 
-    monkeypatch.setattr(v2_collector, "run_kubectl", top)
-    snap = v2_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
+    monkeypatch.setattr(v1_1_collector, "run_kubectl", top)
+    snap = v1_1_collector.collect_snapshot({"namespaces": [NS]}, alerts_fetcher=None, include_logs=False)
     assert set(snap.components) == {f"deployment/{NS}/cache", "deployment/data/cache"}
     for ns, ip in ((NS, "10.0.0.1"), ("data", "10.0.0.2")):
         comp = snap.components[f"deployment/{ns}/cache"]
@@ -582,7 +582,7 @@ def test_same_named_workloads_keep_their_own_pods_services_events_and_metrics(mo
 
 
 def test_namespaces_the_app_addresses_are_read_too(monkeypatch):
-    from clients.jev_diag.v2 import outside
+    from clients.jev_diag.v1_1 import outside
 
     dep = {
         "spec": {
@@ -607,7 +607,7 @@ def test_namespaces_the_app_addresses_are_read_too(monkeypatch):
 
 
 def test_a_revision_made_while_deploying_is_not_a_change():
-    from clients.jev_diag.v2 import changes
+    from clients.jev_diag.v1_1 import changes
 
     meta = {"creationTimestamp": "2026-10-19T05:34:07Z"}
     assert changes.object_change("d/x", "Deployment", "x", NS, meta, revised_at="2026-10-19T05:34:10Z") is None
@@ -616,7 +616,7 @@ def test_a_revision_made_while_deploying_is_not_a_change():
 
 
 def test_one_change_on_several_workloads_is_reported_as_one_cause():
-    from clients.jev_diag.v2.report import build_report
+    from clients.jev_diag.v1_1.report import build_report
 
     def db(name: str) -> dict:
         return {
@@ -644,7 +644,7 @@ class _Answers:
     def system_one(self, state, questions, **kwargs):
         from typesafe_sdk import Choice, ChoiceAnswer, NoulAnswer
 
-        from clients.jev_diag.v2.classifier import COMPONENT_QUESTION
+        from clients.jev_diag.v1_1.classifier import COMPONENT_QUESTION
 
         answers = {}
         for name, q in questions.items():
@@ -671,7 +671,7 @@ class _Answers:
 
 
 def test_when_the_two_triage_asks_disagree_both_picks_are_examined_and_the_stronger_origin_wins():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b", "c")}
     triage = [
@@ -695,10 +695,10 @@ def test_telemetry_lines_come_from_the_team_tools_and_skip_empty_results(monkeyp
 
     from clients.jev_agent import metrics
     from clients.jev_agent.tools import call_edges
-    from clients.jev_diag.v2 import telemetry
+    from clients.jev_diag.v1_1 import telemetry
 
     monkeypatch.setattr(telemetry, "_available", True)
-    monkeypatch.setenv("JEV_DIAG_V2_TELEMETRY", "1")
+    monkeypatch.setenv("JEV_DIAG_V1_1_TELEMETRY", "1")
     by_family = {"cpu": ["cpu 0.95 cores of a 1.0 limit (95%)"], "memory": ["no memory series found for x"], "rpc": []}
     monkeypatch.setattr(metrics, "metric_lines", lambda ctx, cid, fam: SimpleNamespace(lines=by_family[fam]))
     monkeypatch.setattr(
@@ -706,12 +706,12 @@ def test_telemetry_lines_come_from_the_team_tools_and_skip_empty_results(monkeyp
     )
     lines = telemetry.component_lines(_snap({"deployment/cart": _comp("cart", "t")}), "deployment/cart")
     assert lines == ["cpu metrics: cpu 0.95 cores of a 1.0 limit (95%)", "observed calls: frontend -> cart 40% errors"]
-    monkeypatch.setenv("JEV_DIAG_V2_TELEMETRY", "0")
+    monkeypatch.setenv("JEV_DIAG_V1_1_TELEMETRY", "0")
     assert telemetry.component_lines(_snap({}), "deployment/cart") == []
 
 
 def test_timing_out_calls_into_a_healthy_callee_are_stated_with_both_sides_settings_and_no_verdict():
-    from clients.jev_diag.v2 import paths, report
+    from clients.jev_diag.v1_1 import paths, report
 
     line = "b-svc: request failed dependency=b code=DeadlineExceeded"
     caller = {
@@ -739,7 +739,7 @@ def test_timing_out_calls_into_a_healthy_callee_are_stated_with_both_sides_setti
 
 
 def test_call_settings_need_a_number_and_the_callee_named_as_a_whole_word():
-    from clients.jev_diag.v2 import paths
+    from clients.jev_diag.v1_1 import paths
 
     assert paths.setting_pairs({"QUEUE_NAME": "orders", "TAX_TIMEOUT_MS": "300"}) == {"TAX_TIMEOUT_MS": "300"}
     line = "request to tax failed: context deadline exceeded"
@@ -756,7 +756,7 @@ def test_call_settings_need_a_number_and_the_callee_named_as_a_whole_word():
 
 def test_a_callee_with_its_own_recent_change_is_no_timing_out_call_path():
     from clients.jev_diag.timeutil import set_now
-    from clients.jev_diag.v2 import changes, derive
+    from clients.jev_diag.v1_1 import changes, derive
 
     set_now(changes.parse_time("2026-10-19T08:00:00Z"))
     try:
@@ -795,7 +795,7 @@ def _two_faults(link: bool):
 
 
 def test_report_states_only_what_the_facts_show_for_a_job_that_never_completes():
-    from clients.jev_diag.v2.report import build_report
+    from clients.jev_diag.v1_1.report import build_report
 
     comp = {
         **_comp("archiver", "t"),
@@ -814,7 +814,7 @@ def test_report_states_only_what_the_facts_show_for_a_job_that_never_completes()
 
 
 def test_the_concluded_component_is_the_subject_and_a_blocked_input_is_its_mechanism():
-    from clients.jev_diag.v2.report import build_report
+    from clients.jev_diag.v1_1.report import build_report
 
     job = {**_comp("filler", "t"), "kind": "Job", "signals": ["job has 1 active pod(s) and has not completed"]}
     job["_calls"] = ["deployment/store-b"]
@@ -833,7 +833,7 @@ def test_the_concluded_component_is_the_subject_and_a_blocked_input_is_its_mecha
 
 
 def test_a_decided_client_server_pair_is_not_reported_as_two_causes():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     server = {
         **_comp("db", "t"),
@@ -852,7 +852,7 @@ def test_a_decided_client_server_pair_is_not_reported_as_two_causes():
 
 
 def test_an_origin_left_waiting_on_its_other_side_is_compared_with_the_other_confirmed_origins():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     server = {
         **_comp("db", "t"),
@@ -875,7 +875,7 @@ def test_an_origin_left_waiting_on_its_other_side_is_compared_with_the_other_con
 
 
 def test_a_model_failure_after_an_origin_is_confirmed_keeps_that_origin():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     class FailsAfter(_Answers):  # the decision model stops answering after triage (2 asks) and one examination
         calls = 0
@@ -897,7 +897,7 @@ def test_a_model_failure_after_an_origin_is_confirmed_keeps_that_origin():
 
 
 def test_telemetry_lines_never_push_the_dependency_facts_out_of_the_evidence():
-    from clients.jev_diag.v2.tree import detail_evidence
+    from clients.jev_diag.v1_1.tree import detail_evidence
 
     comp = {**_comp("cart", "t"), "signals": [f"signal {i}" for i in range(30)]}  # a long list of settings/signals
     detail = {
@@ -911,7 +911,7 @@ def test_telemetry_lines_never_push_the_dependency_facts_out_of_the_evidence():
 
 
 def test_two_confirmed_origins_that_share_a_config_object_are_never_two_causes():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     snap = _two_faults(link=False)
     for cid in ("deployment/a", "deployment/b"):
@@ -926,8 +926,8 @@ def test_two_confirmed_origins_that_share_a_config_object_are_never_two_causes()
 
 
 def test_queue_keeps_the_top_workload_and_cluster_but_excludes_incidental_telemetry_changes():
-    from clients.jev_diag.v2.classifier import ChoiceResult
-    from clients.jev_diag.v2.tree import OTHER_OPTION, IterativeDiagnoser
+    from clients.jev_diag.v1_1.classifier import ChoiceResult
+    from clients.jev_diag.v1_1.tree import OTHER_OPTION, IterativeDiagnoser
 
     comps = {
         "deployment/otel": {**_comp("otel", "t"), "role": "observability", "evidence_kinds": ["change"]},
@@ -946,7 +946,7 @@ def test_queue_keeps_the_top_workload_and_cluster_but_excludes_incidental_teleme
 
 
 def test_a_crashed_containers_quote_is_its_last_error_line_not_a_startup_notice():
-    from clients.jev_diag.v2.report import revision_quote
+    from clients.jev_diag.v1_1.report import revision_quote
 
     logs = ["starting server", "FATAL: data files are incompatible with this version", "We suggest setting x to 0"]
     assert (
@@ -957,7 +957,7 @@ def test_a_crashed_containers_quote_is_its_last_error_line_not_a_startup_notice(
 
 
 def test_the_other_side_of_a_login_failure_is_examined_and_compared_when_close():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     # a server that rejects the client's logins is confirmed; the client is examined as the other side, and as the
     # two are close, the side-by-side question decides which side holds the stale value
@@ -980,7 +980,7 @@ def test_the_other_side_of_a_login_failure_is_examined_and_compared_when_close()
 def test_choice_questions_fit_what_a_decision_model_accepts():
     from typesafe_sdk import Choice
 
-    from clients.jev_diag.v2.classifier import fit_choices
+    from clients.jev_diag.v1_1.classifier import fit_choices
 
     one = {"key": Choice(instructions={"question": "q"}, criteria={"E1": "a"})}
     assert list(fit_choices(one, None, [])["key"].criteria) == ["E1", "none"]
@@ -992,7 +992,7 @@ def test_choice_questions_fit_what_a_decision_model_accepts():
 
 
 def test_a_caller_configured_to_call_the_cause_and_failing_is_listed_as_affected():
-    from clients.jev_diag.v2.report import build_report
+    from clients.jev_diag.v1_1.report import build_report
 
     db = {**_comp("db", "t"), "signals": ["only 0 of 1 desired replicas are ready"]}
     line = "app: error: No suitable servers found"  # the caller's error line does not name the database
@@ -1009,7 +1009,7 @@ def test_a_caller_configured_to_call_the_cause_and_failing_is_listed_as_affected
 
 
 def test_a_confirmed_top_pick_is_compared_with_the_other_hypotheses_before_it_is_concluded():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b", "c")}
     triage = [{"deployment/a": 0.86, "deployment/b": 0.08, "deployment/c": 0.06, "other": 0.0}] * 2
@@ -1021,8 +1021,8 @@ def test_a_confirmed_top_pick_is_compared_with_the_other_hypotheses_before_it_is
 
 
 def test_a_cluster_object_competes_as_a_hypothesis_instead_of_ending_the_search():
-    from clients.jev_diag.v2 import collector as v2c
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1 import collector as v1_1c
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b")}
     finding = {
@@ -1031,7 +1031,9 @@ def test_a_cluster_object_competes_as_a_hypothesis_instead_of_ending_the_search(
         "signal": "rewrites pods",
         "components": ["deployment/a"],
     }
-    snap = v2c.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster={"findings": [finding]})
+    snap = v1_1c.ClusterSnapshot(
+        app={"name": "a", "namespaces": [NS]}, components=comps, cluster={"findings": [finding]}
+    )
     triage = [{"other": 0.5, "deployment/a": 0.45, "deployment/b": 0.05}] * 2
     client = _Answers(triage, {"deployment/a": 0.9}, picks={"cluster_object": "F1", "fault_start": "other"})
     d = IterativeDiagnoser(client, fetch_detail=lambda s, c: {}).diagnose(snap)
@@ -1040,8 +1042,8 @@ def test_a_cluster_object_competes_as_a_hypothesis_instead_of_ending_the_search(
 
 
 def test_an_unconfirmed_conclusion_outside_the_workloads_names_the_object_the_cluster_question_ranked_first():
-    from clients.jev_diag.v2 import collector as v2c
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1 import collector as v1_1c
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     comps = {"deployment/a": {**_comp("a", "t"), "signals": ["x"], "healthy": False}}
     findings = [
@@ -1053,7 +1055,9 @@ def test_an_unconfirmed_conclusion_outside_the_workloads_names_the_object_the_cl
             "components": ["deployment/a"],
         },
     ]
-    snap = v2c.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster={"findings": findings})
+    snap = v1_1c.ClusterSnapshot(
+        app={"name": "a", "namespaces": [NS]}, components=comps, cluster={"findings": findings}
+    )
     triage = [{"other": 0.6, "deployment/a": 0.4}] * 2
     lead = {"F2": 0.5, "none": 0.3, "F1": 0.2}  # first, but not sure enough to confirm
     client = _Answers(triage, {"deployment/a": 0.1}, picks={"cluster_object": lead})
@@ -1062,7 +1066,7 @@ def test_an_unconfirmed_conclusion_outside_the_workloads_names_the_object_the_cl
 
 
 def test_the_final_comparison_counts_a_preference_only_when_it_holds_in_both_orders():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b")}
     triage = [{"deployment/a": 0.6, "deployment/b": 0.4, "other": 0.0}] * 2
@@ -1077,7 +1081,7 @@ def test_the_final_comparison_counts_a_preference_only_when_it_holds_in_both_ord
 
 
 def test_triages_top_three_are_examined_first():
-    from clients.jev_diag.v2.tree import TOP_HYPOTHESES, IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import TOP_HYPOTHESES, IterativeDiagnoser
 
     names = ("a", "b", "c", "d", "e", "f")
     comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in names}
@@ -1090,7 +1094,7 @@ def test_triages_top_three_are_examined_first():
 
 
 def test_undecided_candidates_are_compared_side_by_side_not_by_their_separate_probabilities():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b")}
     triage = [{"deployment/a": 0.6, "deployment/b": 0.4, "other": 0.0}] * 2
@@ -1101,7 +1105,7 @@ def test_undecided_candidates_are_compared_side_by_side_not_by_their_separate_pr
 
 
 def test_an_investigation_never_shows_triage_probabilities():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b")}
     seen = []
@@ -1121,8 +1125,8 @@ def test_an_investigation_never_shows_triage_probabilities():
 
 
 def test_a_platform_change_just_before_the_symptoms_is_examined_whatever_triage_weighted_it():
-    from clients.jev_diag.v2 import collector as v2c
-    from clients.jev_diag.v2.tree import IterativeDiagnoser, platform_change_first
+    from clients.jev_diag.v1_1 import collector as v1_1c
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser, platform_change_first
 
     comps = {f"deployment/{n}": {**_comp(n, "t"), "signals": ["x"], "healthy": False} for n in ("a", "b", "c")}
     finding = {
@@ -1132,7 +1136,7 @@ def test_a_platform_change_just_before_the_symptoms_is_examined_whatever_triage_
     }
     change = {"object": "ippool/default", "kind": "IPPool", "affects": [], "seconds_before_symptoms": 40}
     cluster = {"findings": [finding], "recent_changes": [change]}
-    snap = v2c.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster=cluster)
+    snap = v1_1c.ClusterSnapshot(app={"name": "a", "namespaces": [NS]}, components=comps, cluster=cluster)
     assert platform_change_first(snap)
     triage = [{"deployment/a": 0.9, "deployment/b": 0.06, "deployment/c": 0.04, "other": 0.0}] * 2
     client = _Answers(triage, {"deployment/a": 0.9}, picks={"cluster_object": "F1", "fault_start": "other"})
@@ -1145,8 +1149,8 @@ def test_a_platform_change_just_before_the_symptoms_is_examined_whatever_triage_
 
 
 def test_evidence_options_show_a_bounded_excerpt_and_other_options_reference_state():
-    from clients.jev_diag.v2 import tree
-    from clients.jev_diag.v2.classifier import EVIDENCE_QUESTION
+    from clients.jev_diag.v1_1 import tree
+    from clients.jev_diag.v1_1.classifier import EVIDENCE_QUESTION
 
     snap = _snap({"deployment/web": {**_comp("web", "t"), "signals": ["x"]}})
 
@@ -1165,7 +1169,7 @@ def test_evidence_options_show_a_bounded_excerpt_and_other_options_reference_sta
 
 
 def test_links_tell_a_configured_call_from_a_failing_one():
-    from clients.jev_diag.v2.tree import link_facts
+    from clients.jev_diag.v1_1.tree import link_facts
 
     web = {**_comp("web", "t"), "_calls": ["deployment/api"]}
     snap = _snap({"deployment/web": web, "deployment/api": _comp("api", "t")})
@@ -1180,7 +1184,7 @@ def test_links_tell_a_configured_call_from_a_failing_one():
 
 def test_a_node_taint_acts_on_the_pods_it_keeps_off_and_on_running_pods_only_when_it_evicts(monkeypatch):
     from clients.jev_diag.timeutil import set_now
-    from clients.jev_diag.v2 import changes, outside
+    from clients.jev_diag.v1_1 import changes, outside
 
     def node(effect: str) -> dict:
         created = {"manager": "kubeadm", "time": "2026-10-19T07:00:00Z", "fieldsV1": {"f:spec": {}}}

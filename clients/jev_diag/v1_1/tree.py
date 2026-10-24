@@ -32,9 +32,9 @@ from typing import Any
 
 from typesafe_sdk import Choice, Noul
 
-from clients.jev_diag.v2.changes import ONSET_TOLERANCE_SECONDS
-from clients.jev_diag.v2.checks import describe_probe
-from clients.jev_diag.v2.classifier import (
+from clients.jev_diag.v1_1.changes import ONSET_TOLERANCE_SECONDS
+from clients.jev_diag.v1_1.checks import describe_probe
+from clients.jev_diag.v1_1.classifier import (
     CATEGORY_QUESTION,
     CLUSTER_LEVEL_KINDS,
     COMPONENT_QUESTION,
@@ -49,12 +49,12 @@ from clients.jev_diag.v2.classifier import (
     finding_linked,
     select_fault_object,
 )
-from clients.jev_diag.v2.collector import ClusterSnapshot, estimate_tokens, fit_state_to_budget
-from clients.jev_diag.v2.deps import own_signals
-from clients.jev_diag.v2.derive import diagnostic_signals
-from clients.jev_diag.v2.report import build_report, changed_values, state_of
+from clients.jev_diag.v1_1.collector import ClusterSnapshot, estimate_tokens, fit_state_to_budget
+from clients.jev_diag.v1_1.deps import own_signals
+from clients.jev_diag.v1_1.derive import diagnostic_signals
+from clients.jev_diag.v1_1.report import build_report, changed_values, state_of
 
-logger = logging.getLogger("all.jev_diag.v2.tree")
+logger = logging.getLogger("all.jev_diag.v1_1.tree")
 
 VERDICT_QUESTION = "verdict"
 NEXT_QUESTION = "next_component"
@@ -535,7 +535,7 @@ def link_facts(snapshot: ClusterSnapshot, a: str, b: str, investigated: dict | N
     as it): error lines naming the other, logins one rejects from the other, addresses one calls, examined calls
     and failing targets, timing-out call paths, shared config objects, and changes made within the same seconds."""
     from clients.jev_diag.timeutil import seconds_between
-    from clients.jev_diag.v2.report import SAME_CHANGE_SECONDS, same_change
+    from clients.jev_diag.v1_1.report import SAME_CHANGE_SECONDS, same_change
 
     investigated = investigated or {}
     side_a, side_b = {a, *same_change(snapshot, a)}, {b, *same_change(snapshot, b)}
@@ -571,7 +571,7 @@ def explained_by(snapshot: ClusterSnapshot, cid: str | None, fault_object: dict 
     """Components whose failures one cause accounts for: the cause, the same change on other workloads, the users of
     its fault object, and, transitively, every component whose errors name an explained one, that calls one, or that
     rejects logins from one."""
-    from clients.jev_diag.v2.report import same_change
+    from clients.jev_diag.v1_1.report import same_change
 
     out = set((fault_object or {}).get("components") or [])
     if cid in snapshot.components:
@@ -703,7 +703,7 @@ class IterativeDiagnoser(JevDiagnoser):
         picks = [a.choices[COMPONENT_QUESTION].choice for a in answers]
         self.triage_picks = list(dict.fromkeys(picks))
         if len(self.triage_picks) == 2:
-            from clients.jev_diag.v2.report import same_change
+            from clients.jev_diag.v1_1.report import same_change
 
             if self.triage_picks[1] in same_change(snapshot, self.triage_picks[0]):
                 self.triage_picks = self.triage_picks[:1]  # the same change on both: the asks agree
@@ -903,7 +903,7 @@ class IterativeDiagnoser(JevDiagnoser):
                 self._trace("collect", "probe", component=cid, client=client, error=f"{type(exc).__name__}: {exc}")
             self._probe_cache[key] = result
             self._trace("collect", "probe", component=cid, client=client, result=result)
-        from clients.jev_diag.v2.probes import agrees_with_client, describe_probe_result
+        from clients.jev_diag.v1_1.probes import agrees_with_client, describe_probe_result
 
         findings = [
             result
@@ -1480,7 +1480,7 @@ class IterativeDiagnoser(JevDiagnoser):
         probability). The two leaders are compared side by side when their support differs by less than
         NEAR_TIE_MARGIN, or when one is the cluster object and acts on the other; never when both carry the same
         change, which the report states as one cause. Without an examined candidate, triage decides."""
-        from clients.jev_diag.v2.report import same_change
+        from clients.jev_diag.v1_1.report import same_change
 
         support = self.support(snapshot, component, investigated)
         if cluster_lead is not None:

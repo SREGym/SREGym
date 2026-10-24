@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
-logger = logging.getLogger("all.jev_diag.v2.telemetry")
+logger = logging.getLogger("all.jev_diag.v1_1.telemetry")
 
 FAMILIES = ("cpu", "memory", "rpc")
 MAX_LINES_PER_SOURCE = 3
@@ -22,7 +22,7 @@ _available: bool | None = None
 
 def enabled() -> bool:
     global _available
-    if os.environ.get("JEV_DIAG_V2_TELEMETRY", "1") == "0":
+    if os.environ.get("JEV_DIAG_V1_1_TELEMETRY", "1") == "0":
         return False
     if _available is None:
         try:

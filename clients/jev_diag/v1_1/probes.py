@@ -22,11 +22,11 @@ import re
 import time
 
 from clients.jev_diag.timeutil import now, parse_time, seconds_between
-from clients.jev_diag.v2.checks import parse_memory_bytes
-from clients.jev_diag.v2.collector import ClusterSnapshot, run_kubectl_capture, trim
-from clients.jev_diag.v2.derive import _component_tokens, backend_role
+from clients.jev_diag.v1_1.checks import parse_memory_bytes
+from clients.jev_diag.v1_1.collector import ClusterSnapshot, run_kubectl_capture, trim
+from clients.jev_diag.v1_1.derive import _component_tokens, backend_role
 
-logger = logging.getLogger("all.jev_diag.v2.probes")
+logger = logging.getLogger("all.jev_diag.v1_1.probes")
 
 EXEC_TIMEOUT = 20
 DEFAULT_BROKER_INTERVAL = 15

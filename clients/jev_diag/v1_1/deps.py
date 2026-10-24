@@ -26,8 +26,8 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from clients.jev_diag.v2.checks import service_host_index
-from clients.jev_diag.v2.derive import (
+from clients.jev_diag.v1_1.checks import service_host_index
+from clients.jev_diag.v1_1.derive import (
     DEPENDENCY_CLASSES,
     GENERIC_NAME_SUFFIXES,
     OBSERVABILITY_RE,

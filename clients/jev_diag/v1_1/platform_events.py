@@ -19,7 +19,7 @@ import re
 from datetime import datetime
 
 from clients.jev_diag.timeutil import parse_time
-from clients.jev_diag.v2.text import trim
+from clients.jev_diag.v1_1.text import trim
 
 _NETWORK_SETUP = re.compile(
     r"(?i)failed to (?:set ?up|setup|create) (?:pod )?(?:network|sandbox)|failed to allocate (?:for range|ip|an ip)|"

@@ -26,13 +26,13 @@ from typesafe_sdk import Choice, RetryPolicy, TypeSafeClient
 from clients.jev_diag import decisions_client
 from clients.jev_diag.config import jev_model
 from clients.jev_diag.trace import DecisionTrace
-from clients.jev_diag.v2.collector import (  # noqa: F401 - re-exported
+from clients.jev_diag.v1_1.collector import (  # noqa: F401 - re-exported
     ClusterSnapshot,
     estimate_tokens,
     fit_state_to_budget,
 )
 
-logger = logging.getLogger("all.jev_diag.v2.classifier")
+logger = logging.getLogger("all.jev_diag.v1_1.classifier")
 
 # Jev 1.13 limits: 64k tokens for state + all questions, 32k for state + longest question.
 DEFAULT_STATE_TOKEN_BUDGET = int(os.getenv("JEV_DIAG_STATE_TOKEN_BUDGET", "24000"))

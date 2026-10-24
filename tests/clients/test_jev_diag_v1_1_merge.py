@@ -2,9 +2,9 @@
 
 import pytest
 
-from clients.jev_diag.v2.classifier import ChoiceResult
-from clients.jev_diag.v2.collector import ClusterSnapshot
-from clients.jev_diag.v2.tree import IterativeDiagnoser, code_only_diagnosis
+from clients.jev_diag.v1_1.classifier import ChoiceResult
+from clients.jev_diag.v1_1.collector import ClusterSnapshot
+from clients.jev_diag.v1_1.tree import IterativeDiagnoser, code_only_diagnosis
 
 
 def component(name, **extra):
@@ -16,7 +16,7 @@ def snapshot(components, **cluster):
 
 
 def test_missing_service_uses_the_probed_namespace_not_a_local_namesake(monkeypatch):
-    from clients.jev_diag.v2 import probes
+    from clients.jev_diag.v1_1 import probes
 
     client, backend = "deployment/shop/api", "deployment/data/cache"
     snap = snapshot(
@@ -124,7 +124,7 @@ def test_export_noise_cannot_outvote_an_origin_but_telemetry_own_failure_can():
 
 
 def test_a_shared_write_does_not_bypass_telemetry_eligibility():
-    from clients.jev_diag.v2.tree import written_together
+    from clients.jev_diag.v1_1.tree import written_together
 
     real, telemetry = "deployment/api", "deployment/collector"
     comp = component("collector", role="observability", replicas={"desired": 1, "ready": 1})
@@ -165,7 +165,7 @@ def test_a_failed_reference_is_kept_when_only_its_client_is_in_the_comparison(mo
 
 @pytest.mark.parametrize("category", ["missing_object", "dns_resolution"])
 def test_a_client_conclusion_reports_its_verified_missing_service(category):
-    from clients.jev_diag.v2.report import build_report
+    from clients.jev_diag.v1_1.report import build_report
 
     client, backend = "deployment/api", "deployment/cache"
     snap = snapshot({client: component("api"), backend: component("cache")})

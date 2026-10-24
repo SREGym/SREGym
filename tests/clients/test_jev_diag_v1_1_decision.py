@@ -1,10 +1,10 @@
-"""jev_diag v2 decision step (tree.py): what is concluded from the examinations, and which questions are asked."""
+"""jev_diag v1.1 decision step (tree.py): what is concluded from the examinations, and which questions are asked."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from clients.jev_diag.v2.collector import ClusterSnapshot
+from clients.jev_diag.v1_1.collector import ClusterSnapshot
 
 NS = "shop"
 
@@ -27,7 +27,7 @@ class Scripted:
     def system_one(self, state, questions, **kwargs):
         from typesafe_sdk import Choice, ChoiceAnswer, NoulAnswer
 
-        from clients.jev_diag.v2.classifier import COMPONENT_QUESTION
+        from clients.jev_diag.v1_1.classifier import COMPONENT_QUESTION
 
         answers = {}
         for name, q in questions.items():
@@ -51,7 +51,7 @@ class Scripted:
 
 
 def _run(comps, triage, verdicts, picks=None, detail=None):
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     model = Scripted({**triage, "other": 0.0}, verdicts, picks)
     diagnoser = IterativeDiagnoser(model, fetch_detail=lambda s, c: dict((detail or {}).get(c) or {}))
@@ -67,7 +67,7 @@ def _run(comps, triage, verdicts, picks=None, detail=None):
 
 
 def test_triage_asks_for_the_component_and_the_fault_object_kind_only():
-    from clients.jev_diag.v2.classifier import build_component_questions
+    from clients.jev_diag.v1_1.classifier import build_component_questions
 
     questions = build_component_questions(_snap({"deployment/a": _comp("a")}))
     assert set(questions) == {"root_cause_component", "fault_object_kind"}
@@ -113,8 +113,8 @@ def test_a_victims_pointer_supports_the_dependency_it_names():
 
 
 def test_without_any_examined_candidate_triage_decides():
-    from clients.jev_diag.v2.classifier import ChoiceResult
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.classifier import ChoiceResult
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     snap = _snap({"deployment/a": _comp("a"), "deployment/b": _comp("b")})
     triage = ChoiceResult(
@@ -128,7 +128,7 @@ def test_without_any_examined_candidate_triage_decides():
 
 
 def test_an_examination_sees_the_incident_it_has_to_explain():
-    from clients.jev_diag.v2.tree import incident
+    from clients.jev_diag.v1_1.tree import incident
 
     comps = {
         "deployment/web": _comp(
@@ -175,7 +175,7 @@ def test_role_does_not_remove_a_nonleading_fault_candidate_or_its_support():
 
 
 def test_export_errors_alone_do_not_define_an_incident_but_pending_telemetry_does():
-    from clients.jev_diag.v2.tree import incident
+    from clients.jev_diag.v1_1.tree import incident
 
     comp = _comp(
         "collector",
@@ -200,7 +200,7 @@ def _probe_result():
 
 
 def test_collected_failed_calls_allow_a_probe_before_a_client_verdict_and_are_cached():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     calls = []
     backend = _healthy_backend()
@@ -220,7 +220,7 @@ def test_collected_failed_calls_allow_a_probe_before_a_client_verdict_and_are_ca
 
 
 def test_a_new_failure_relationship_reopens_a_backend_within_the_step_budget():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     class Model(Scripted):
         def system_one(self, state, questions, **kwargs):
@@ -260,7 +260,7 @@ def test_a_new_failure_relationship_reopens_a_backend_within_the_step_budget():
 
 
 def test_an_unavailable_probe_is_not_retried_for_the_same_pair():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     calls = []
     snap = _snap(
@@ -283,7 +283,7 @@ def test_an_unavailable_probe_is_not_retried_for_the_same_pair():
 
 
 def test_unverified_or_nonrunning_backends_are_not_probed_as_healthy():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     for extra in (
         {"pods_not_verified": True},
@@ -308,7 +308,7 @@ def test_unverified_or_nonrunning_backends_are_not_probed_as_healthy():
 
 
 def test_objects_written_in_one_operation_with_a_hypothesis_become_hypotheses():
-    from clients.jev_diag.v2.tree import OTHER_OPTION, written_together
+    from clients.jev_diag.v1_1.tree import OTHER_OPTION, written_together
 
     snap = _snap({"deployment/a": _comp("a"), "deployment/b": _comp("b"), "deployment/c": _comp("c")})
     snap.cluster["recent_changes"] = [
@@ -323,7 +323,7 @@ def test_objects_written_in_one_operation_with_a_hypothesis_become_hypotheses():
 
 
 def test_a_platform_layer_failing_for_several_workloads_is_a_finding_and_a_hypothesis():
-    from clients.jev_diag.v2.derive import platform_findings
+    from clients.jev_diag.v1_1.derive import platform_findings
 
     comps = {
         "deployment/a": _comp("a", platform_failures={"pod_network": 6}),
@@ -354,7 +354,7 @@ class PositionBiased(Scripted):
 
 
 def test_a_comparison_whose_orders_disagree_keeps_the_better_examined_side():
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     comps = {"deployment/a": _comp("a"), "deployment/b": _comp("b")}
     verdicts = {"deployment/a": {"origin": 0.62, "victim": 0.38}, "deployment/b": {"origin": 0.59, "victim": 0.41}}
@@ -373,7 +373,7 @@ def test_a_comparison_whose_orders_disagree_keeps_the_better_examined_side():
 
 
 def test_for_a_permission_fault_the_role_with_the_rules_is_named_before_its_binding():
-    from clients.jev_diag.v2.classifier import ChoiceResult, select_fault_object
+    from clients.jev_diag.v1_1.classifier import ChoiceResult, select_fault_object
 
     snap = _snap({"deployment/worker": _comp("worker")})
     snap.cluster["findings"] = [
@@ -387,7 +387,7 @@ def test_for_a_permission_fault_the_role_with_the_rules_is_named_before_its_bind
 
 
 def test_a_backend_that_answers_a_client_set_up_the_same_way_is_no_finding():
-    from clients.jev_diag.v2.probes import agrees_with_client
+    from clients.jev_diag.v1_1.probes import agrees_with_client
 
     none = "sets no credential variable and reads no Secret"
     assert agrees_with_client({"meaning": "the server answers without authentication", "client_credentials": none})
@@ -399,7 +399,7 @@ def test_a_backend_that_answers_a_client_set_up_the_same_way_is_no_finding():
 
 
 def test_a_client_holding_a_value_its_own_secret_replaced_is_the_origin_not_the_server():
-    from clients.jev_diag.v2.tree import VERDICTS
+    from clients.jev_diag.v1_1.tree import VERDICTS
 
     assert "keeps the value it had when the container started" in VERDICTS["origin"]["what"]
     assert "a server that rejects a credential a client still holds" in VERDICTS["origin"]["not_for"]
@@ -428,7 +428,7 @@ def test_a_pointer_does_not_lift_a_dependency_judged_unrelated_that_shows_nothin
 
 
 def test_examinations_and_comparisons_carry_the_rules_that_decide_ownership():
-    from clients.jev_diag.v2.tree import VERDICTS, build_tiebreak_questions
+    from clients.jev_diag.v1_1.tree import VERDICTS, build_tiebreak_questions
 
     assert "judged like any other component" in VERDICTS["unrelated"]["not_for"]
     steps = " ".join(
@@ -441,7 +441,7 @@ def test_examinations_and_comparisons_carry_the_rules_that_decide_ownership():
 
 
 def _biased_diagnosis(comps, verdicts, detail=None):
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     model = PositionBiased({c: p for c, p in zip(comps, (0.7, 0.3), strict=True)}, verdicts)
     diagnoser = IterativeDiagnoser(model, fetch_detail=lambda s, c: dict((detail or {}).get(c) or {}))
@@ -499,8 +499,8 @@ def test_a_telemetry_own_failure_is_examined_and_can_win_below_the_triage_cutoff
 
 
 def test_telemetry_own_failure_is_eligible_for_links_support_and_fallback():
-    from clients.jev_diag.v2.classifier import ChoiceResult
-    from clients.jev_diag.v2.tree import IterativeDiagnoser, linked_components
+    from clients.jev_diag.v1_1.classifier import ChoiceResult
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser, linked_components
 
     snap = _snap(
         {
@@ -523,8 +523,8 @@ def test_telemetry_own_failure_is_eligible_for_links_support_and_fallback():
 
 
 def test_comparison_carries_adoption_facts_without_clearing_the_updated_side():
-    from clients.jev_diag.v2.classifier import ChoiceResult
-    from clients.jev_diag.v2.tree import IterativeDiagnoser, build_tiebreak_questions
+    from clients.jev_diag.v1_1.classifier import ChoiceResult
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser, build_tiebreak_questions
 
     comp = _comp("reader", _holds_previous={"secret/connection": "2026-01-01T12:00:00Z"})
     result = {

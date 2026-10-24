@@ -1,10 +1,10 @@
-"""The v2 report states one subject with its faulty setting as field = value, what Kubernetes does with it, the fault
+"""The v1.1 report states one subject with its faulty setting as field = value, what Kubernetes does with it, the fault
 type, the change (old -> new), the impact the cause explains and the other party, within fixed limits and without
 raw documents, encoded data, scripts or timings as facts. Neutral fixtures; each test checks a rule, not a case."""
 
-from clients.jev_diag.v2.classifier import ChoiceResult, Diagnosis
-from clients.jev_diag.v2.collector import ClusterSnapshot
-from clients.jev_diag.v2.report import (
+from clients.jev_diag.v1_1.classifier import ChoiceResult, Diagnosis
+from clients.jev_diag.v1_1.collector import ClusterSnapshot
+from clients.jev_diag.v1_1.report import (
     MAX_ROOT,
     MAX_TOTAL,
     build_report,
@@ -179,7 +179,7 @@ def test_chain_characterization_preserves_fact_ownership_and_context():
 
     from typesafe_sdk import ChoiceAnswer
 
-    from clients.jev_diag.v2.tree import IterativeDiagnoser
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
 
     recorded = []
 
@@ -367,7 +367,7 @@ def test_documents_read_as_path_value_pairs_and_changes_read_as_old_to_new():
 
 
 def test_a_chosen_setting_too_long_to_state_stays_the_fact_instead_of_another_change():
-    from clients.jev_diag.v2.report import value_text
+    from clients.jev_diag.v1_1.report import value_text
 
     cut = 'pod template changed in revision 2: container proxy args: null -> ["serve --rule ^([a-z]+)*$ ' + "x" * 300
     web = _comp(
@@ -384,7 +384,7 @@ def test_a_chosen_setting_too_long_to_state_stays_the_fact_instead_of_another_ch
 
 
 def test_a_container_using_its_whole_cpu_limit_is_a_symptom():
-    from clients.jev_diag.v2.report import state_of
+    from clients.jev_diag.v1_1.report import state_of
 
     usage = [
         {"container": "app", "cpu": "98m", "cpu_limit": "100m"},

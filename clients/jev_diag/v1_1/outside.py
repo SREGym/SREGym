@@ -23,10 +23,10 @@ from collections import Counter
 from datetime import datetime
 
 from clients.jev_diag.timeutil import parse_time
-from clients.jev_diag.v2 import changes as change_log
-from clients.jev_diag.v2.checks import label_selector_matches
-from clients.jev_diag.v2.collector import kubectl_items, run_kubectl
-from clients.jev_diag.v2.derive import OBSERVABILITY_RE, failed_reads
+from clients.jev_diag.v1_1 import changes as change_log
+from clients.jev_diag.v1_1.checks import label_selector_matches
+from clients.jev_diag.v1_1.collector import kubectl_items, run_kubectl
+from clients.jev_diag.v1_1.derive import OBSERVABILITY_RE, failed_reads
 
 # Kubernetes' own namespaces, and any the run is configured to leave out (JEV_DIAG_IGNORE_NAMESPACES, comma-separated:
 # tooling of the environment that is not part of the system being diagnosed).

@@ -1,11 +1,11 @@
-"""jev_diag v2 deps.py: the dependency graph and what follows from it."""
+"""jev_diag v1.1 deps.py: the dependency graph and what follows from it."""
 
 from __future__ import annotations
 
 import pytest
 
-from clients.jev_diag.v2 import deps
-from clients.jev_diag.v2.collector import ClusterSnapshot
+from clients.jev_diag.v1_1 import deps
+from clients.jev_diag.v1_1.collector import ClusterSnapshot
 
 NS = "shop"
 
@@ -51,8 +51,8 @@ def test_traced_calls_and_addresses_join_the_graph_with_their_sources():
 
 
 def test_duplicate_names_resolve_with_the_callers_namespace_or_a_qualified_name():
-    from clients.jev_diag.v2.checks import resolve_env_hosts
-    from clients.jev_diag.v2.derive import _mentions, _name_aliases
+    from clients.jev_diag.v1_1.checks import resolve_env_hosts
+    from clients.jev_diag.v1_1.derive import _mentions, _name_aliases
 
     comps = {
         f"deployment/{ns}/{name}": {**_server(name), "namespace": ns}
@@ -155,13 +155,13 @@ def test_addresses_are_not_judged_in_an_application_that_does_not_address_by_ser
 
 
 def test_env_addresses_take_urls_and_host_ports_but_never_bare_words():
-    from clients.jev_diag.v2.checks import env_addresses
+    from clients.jev_diag.v1_1.checks import env_addresses
 
     assert env_addresses("http://cart:7070/api, redis:6379 info $(HOST):1") == {"cart", "redis"}
 
 
 def test_reachability_says_where_the_path_from_a_client_breaks(monkeypatch):
-    from clients.jev_diag.v2 import probes
+    from clients.jev_diag.v1_1 import probes
 
     comps = _app(**{"deployment/mongodb-orders": _server("mongodb-orders", service=False)})
     comps["deployment/orders"]["pods"] = [{"name": "orders-1", "ready": "1/1", "phase": "Running"}]
@@ -192,7 +192,7 @@ def test_reachability_says_where_the_path_from_a_client_breaks(monkeypatch):
 @pytest.mark.parametrize("dependency_namespace", [NS, "data", None])
 @pytest.mark.parametrize("has_service", [False, True])
 def test_reachability_targets_the_dependency_namespace(monkeypatch, dependency_namespace, has_service):
-    from clients.jev_diag.v2 import probes
+    from clients.jev_diag.v1_1 import probes
 
     client = _server("orders", pods=[{"name": "orders-1", "phase": "Running", "ready": "1/1"}])
     dependency = _server("mongodb-orders", service=has_service, namespace=dependency_namespace)
@@ -216,7 +216,7 @@ def test_reachability_targets_the_dependency_namespace(monkeypatch, dependency_n
 
 
 def test_containers_of_one_pod_that_listen_on_the_same_port_are_flagged():
-    from clients.jev_diag.v2.checks import command_ports, pod_port_collisions
+    from clients.jev_diag.v1_1.checks import command_ports, pod_port_collisions
 
     assert command_ports({"command": ["sh", "-c", "exec server --port 5000"]}) == {5000}
     assert command_ports({"args": ["--port=8080", "--listen-addr", "0.0.0.0:9090"]}) == {8080, 9090}
@@ -236,7 +236,7 @@ def test_containers_of_one_pod_that_listen_on_the_same_port_are_flagged():
 
 
 def test_a_host_port_another_workload_binds_is_flagged():
-    from clients.jev_diag.v2.checks import host_port_clashes
+    from clients.jev_diag.v1_1.checks import host_port_clashes
 
     comps = _app()
     comps["deployment/frontend"]["containers"][0]["host_ports"] = [9100]
@@ -253,8 +253,8 @@ def test_a_host_port_another_workload_binds_is_flagged():
 
 
 def test_the_report_states_the_evidence_ranked_next_to_the_key_fact():
-    from clients.jev_diag.v2.classifier import ChoiceResult, Diagnosis
-    from clients.jev_diag.v2.report import build_report
+    from clients.jev_diag.v1_1.classifier import ChoiceResult, Diagnosis
+    from clients.jev_diag.v1_1.report import build_report
 
     probe = "container frontend liveness probe: httpGet /health:8080 (initialDelaySeconds=0, periodSeconds=1)"
     image = "container frontend image registry.local/frontend:1.0 resources {}"
@@ -284,7 +284,7 @@ def test_the_report_states_the_evidence_ranked_next_to_the_key_fact():
 
 def test_the_change_log_keeps_every_writer_but_core_components_and_an_objects_own_controller(monkeypatch):
     from clients.jev_diag.timeutil import parse_time, set_now
-    from clients.jev_diag.v2 import outside
+    from clients.jev_diag.v1_1 import outside
 
     def obj(kind, name, ns=None, *writes):
         fields = [
@@ -351,8 +351,8 @@ def test_the_change_log_keeps_every_writer_but_core_components_and_an_objects_ow
 
 
 def test_a_policy_cause_is_reported_with_its_scope():
-    from clients.jev_diag.v2.classifier import ChoiceResult, Diagnosis
-    from clients.jev_diag.v2.report import scope
+    from clients.jev_diag.v1_1.classifier import ChoiceResult, Diagnosis
+    from clients.jev_diag.v1_1.report import scope
 
     def diagnosis(fault_object: dict) -> Diagnosis:
         return Diagnosis(
@@ -395,7 +395,7 @@ def test_a_policy_cause_is_reported_with_its_scope():
 
 
 def test_platform_failures_are_read_from_event_messages():
-    from clients.jev_diag.v2.platform_events import event_signal
+    from clients.jev_diag.v1_1.platform_events import event_signal
 
     webhook = event_signal(
         "FailedCreate",
@@ -425,7 +425,7 @@ def test_platform_failures_are_read_from_event_messages():
 
 def test_node_events_since_deploy_become_node_problems_linked_to_its_workloads():
     from clients.jev_diag.timeutil import parse_time
-    from clients.jev_diag.v2.platform_events import node_problems
+    from clients.jev_diag.v1_1.platform_events import node_problems
 
     comps = _app()
     comps["deployment/orders"]["pods"] = [{"name": "orders-1", "node": "worker2"}]
@@ -453,7 +453,7 @@ def test_node_events_since_deploy_become_node_problems_linked_to_its_workloads()
 
 
 def test_a_tls_failure_in_logs_is_a_failed_call():
-    from clients.jev_diag.v2.derive import DEPENDENCY_CLASSES, LOG_CLASSES
+    from clients.jev_diag.v1_1.derive import DEPENDENCY_CLASSES, LOG_CLASSES
 
     line = "Get https://cart:8443/items: x509: certificate has expired or is not yet valid"
     classes = [name for name, rx in LOG_CLASSES if rx.search(line)]
@@ -461,7 +461,7 @@ def test_a_tls_failure_in_logs_is_a_failed_call():
 
 
 def test_an_outside_change_acts_on_the_workloads_that_reference_it_not_on_its_whole_namespace():
-    from clients.jev_diag.v2.outside import acting_on
+    from clients.jev_diag.v1_1.outside import acting_on
 
     comps = {
         "deployment/web": {
@@ -493,7 +493,7 @@ def test_an_outside_change_acts_on_the_workloads_that_reference_it_not_on_its_wh
 def test_login_candidates_are_ordered_by_what_explains_a_rejected_credential():
     from datetime import UTC, datetime
 
-    from clients.jev_diag.v2.derive import server_login_rejections
+    from clients.jev_diag.v1_1.derive import server_login_rejections
 
     rejected = 'FATAL:  password authentication failed for user "app"'
     comps = {
@@ -523,7 +523,7 @@ def test_login_candidates_are_ordered_by_what_explains_a_rejected_credential():
 
 
 def test_failed_dns_keeps_a_missing_service_only_when_its_inventory_was_read(monkeypatch):
-    from clients.jev_diag.v2 import probes
+    from clients.jev_diag.v1_1 import probes
 
     comps = _app(**{"deployment/mongodb-orders": _server("mongodb-orders", service=False)})
     comps["deployment/orders"]["pods"] = [{"name": "orders-1", "ready": "1/1", "phase": "Running"}]

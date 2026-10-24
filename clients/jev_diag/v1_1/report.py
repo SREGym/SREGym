@@ -35,11 +35,11 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from clients.jev_diag.timeutil import parse_time, seconds_between
-from clients.jev_diag.v2 import checks
-from clients.jev_diag.v2.checks import parse_cpu_millis
-from clients.jev_diag.v2.classifier import OTHER_OPTION, Diagnosis
-from clients.jev_diag.v2.collector import ClusterSnapshot, is_error_line
-from clients.jev_diag.v2.derive import TELEMETRY_RE, diagnostic_signals, object_key
+from clients.jev_diag.v1_1 import checks
+from clients.jev_diag.v1_1.checks import parse_cpu_millis
+from clients.jev_diag.v1_1.classifier import OTHER_OPTION, Diagnosis
+from clients.jev_diag.v1_1.collector import ClusterSnapshot, is_error_line
+from clients.jev_diag.v1_1.derive import TELEMETRY_RE, diagnostic_signals, object_key
 
 MAX_TOTAL = 1600  # characters of one cause's block
 MAX_ROOT = 300  # characters of the Root cause line
@@ -775,7 +775,7 @@ def fault_object_subject(snapshot: ClusterSnapshot, d: Diagnosis) -> Subject:
     subject = Subject(phrase=phrase, cid=target, fact=fault_object_fact(snapshot, fo), objects=objects)
     subject.kind_type = KIND_TYPES.get(kind)
     if fo.get("platform"):  # a platform layer failing for several workloads: no single object or workload is it
-        from clients.jev_diag.v2.platform_events import PLATFORM_LAYERS
+        from clients.jev_diag.v1_1.platform_events import PLATFORM_LAYERS
 
         n = len(users)
         subject.phrase = f"the cluster platform's {fo['name']}, failing for {n} workload{'s' if n != 1 else ''}"
@@ -1247,7 +1247,7 @@ def state_of(comp: dict) -> str:
 def impact(snapshot: ClusterSnapshot, d: Diagnosis, subject: Subject) -> list[str]:
     """The subject's state, then the failing components the cause accounts for, those with symptoms of their own
     first."""
-    from clients.jev_diag.v2.tree import explained_by  # tree imports this module
+    from clients.jev_diag.v1_1.tree import explained_by  # tree imports this module
 
     out = []
     own = snapshot.components.get(subject.cid or "")

@@ -1,11 +1,11 @@
-"""v2's knowledge stays general: no code string names a benchmark application, one of its services, or a fault's
+"""v1.1's knowledge stays general: no code string names a benchmark application, one of its services, or a fault's
 own objects. Kubernetes kinds, symptom classes and technologies (a database, a cache, a broker) are allowed."""
 
 import ast
 import pathlib
 import re
 
-V2 = pathlib.Path(__file__).resolve().parents[2] / "clients" / "jev_diag" / "v2"
+V1_1 = pathlib.Path(__file__).resolve().parents[2] / "clients" / "jev_diag" / "v1_1"
 APP_NAMES = (
     "hotel", "reservation", "social-network", "socialnetwork", "astronomy", "otel-demo", "product-catalog",
     "compose-post", "home-timeline", "social-graph", "user-timeline", "fraud-detection", "valkey-cart", "mongodb-geo",
@@ -31,7 +31,7 @@ def _code_strings(tree: ast.AST):
 
 def test_no_v2_code_string_names_an_application_or_its_services():
     found = []
-    for path in sorted(V2.glob("*.py")):
+    for path in sorted(V1_1.glob("*.py")):
         for node in _code_strings(ast.parse(path.read_text())):
             for name in APP_NAMES:
                 if re.search(rf"(?i)(?<![a-z]){re.escape(name)}(?![a-z])", node.value):
@@ -42,7 +42,7 @@ def test_no_v2_code_string_names_an_application_or_its_services():
 def test_no_v2_test_string_names_an_application_or_its_services():
     """Tests use neutral names and values, so they check rules rather than restate a benchmark problem."""
     found = []
-    for path in sorted(pathlib.Path(__file__).parent.glob("test_jev_diag_v2*.py")):
+    for path in sorted(pathlib.Path(__file__).parent.glob("test_jev_diag_v1_1*.py")):
         if path.name == pathlib.Path(__file__).name:
             continue
         for node in _code_strings(ast.parse(path.read_text())):

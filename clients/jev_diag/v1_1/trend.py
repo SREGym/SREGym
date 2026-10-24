@@ -35,7 +35,7 @@ def sample_from_objects(pods: dict[str, list[dict]], events: dict[str, list[dict
 
 def collect_sample(namespaces: list[str]) -> dict:
     """The first sample: one pod list and one event list per namespace."""
-    from clients.jev_diag.v2.collector import kubectl_items
+    from clients.jev_diag.v1_1.collector import kubectl_items
 
     errors: list[str] = []
     pods = {ns: kubectl_items("pods", ns, errors, managed_fields=False) for ns in namespaces}

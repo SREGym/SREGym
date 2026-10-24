@@ -31,8 +31,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from clients.jev_diag.timeutil import now, parse_time
-from clients.jev_diag.v2 import changes as change_log
-from clients.jev_diag.v2 import paths
+from clients.jev_diag.v1_1 import changes as change_log
+from clients.jev_diag.v1_1 import paths
 
 # Whole name tokens only: `otel` names the OpenTelemetry collector, not a name that merely contains those letters.
 OBSERVABILITY_RE = re.compile(
@@ -674,7 +674,7 @@ def platform_findings(components: dict[str, dict]) -> list[dict]:
     """A platform layer (pod network, Pod Security admission, preemption, node pressure) whose failure the events of
     several workloads state: one fault of the platform, not one of each workload, even when no platform object
     changed. The finding acts on those workloads."""
-    from clients.jev_diag.v2.platform_events import PLATFORM_LAYERS
+    from clients.jev_diag.v1_1.platform_events import PLATFORM_LAYERS
 
     by_layer: dict[str, dict[str, int]] = {}
     for cid, comp in components.items():
@@ -925,7 +925,7 @@ def post_process(snapshot) -> None:
     tag_roles(components)
     classify_logs(components)
     server_login_rejections(components, collected_at)
-    from clients.jev_diag.v2 import deps  # deps builds on this module's log classes
+    from clients.jev_diag.v1_1 import deps  # deps builds on this module's log classes
 
     deps.apply(snapshot)
     ranked = change_log.rank_changes(components, snapshot.cluster, collected_at)

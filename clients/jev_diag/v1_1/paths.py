@@ -61,7 +61,7 @@ def _carries_name(setting: str, component: str) -> bool:
 
 def _own_settings(comp: dict) -> dict[str, str]:
     """The component's call and capacity settings, without telemetry and tracing settings."""
-    from clients.jev_diag.v2.derive import TELEMETRY_RE  # derive imports this module
+    from clients.jev_diag.v1_1.derive import TELEMETRY_RE  # derive imports this module
 
     return {k: v for k, v in (comp.get("_call_settings") or {}).items() if not TELEMETRY_RE.search(k)}
 
