@@ -38,7 +38,7 @@ jobs:
       # ── Cluster tooling ───────────────────────────────────────────────
       - name: Install Kind
         run: |
-          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.28.0/kind-linux-amd64
           chmod +x /tmp/kind
           sudo mv /tmp/kind /usr/local/bin/kind
           kind version
@@ -46,13 +46,18 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v4
 
-      - name: Pre-pull kind node image
-        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
+      - name: Build kind node image with fixed containerd
+        run: |
+          docker build -t sregym-kind:smoke \
+            --build-arg KIND_NODE_IMAGE=kindest/node:v1.32.5@sha256:36187f6c542fa9b78d2d499de4c857249c5a0ac8cc2241bef2ccd92729a7a259 \
+            -f kind/Dockerfile kind
 
       - name: Prepare /run/udev for OpenEBS NDM
         run: sudo mkdir -p /run/udev
 
       - name: Create kind cluster with Calico
+        env:
+          KIND_NODE_IMAGE: sregym-kind:smoke
         run: bash kind/setup_kind_cluster.sh x86
 
       # ── Python environment ────────────────────────────────────────────
