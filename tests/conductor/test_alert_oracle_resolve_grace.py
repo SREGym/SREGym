@@ -1,8 +1,7 @@
-"""AlertOracle waits for a fault's alerts to resolve before failing (SREGym#1116).
+"""Allow alerts to resolve after a correct repair (SREGym#1116).
 
-After a correct fix, the fault's own alert keeps firing until the rule's look-back
-window clears and Prometheus evaluates the rule again. Failing at the first firing
-alert therefore rejected correct fixes, and more often the faster the fix was.
+Rule lookback windows can keep alerts firing after recovery. Passing still
+requires a complete silence window after the last firing poll.
 """
 
 from types import SimpleNamespace
@@ -45,16 +44,16 @@ def _oracle(monkeypatch, firing_per_poll, **kwargs):
 
 
 def test_alerts_that_clear_within_grace_pass(monkeypatch):
-    # The fault's alert is still draining for the first 9 polls after the fix.
+    # The alert persists for nine polls after recovery.
     oracle, clock, polls = _oracle(monkeypatch, [True] * 9 + [False])
 
     assert oracle.evaluate() == {"success": True}
-    # The silence window starts at the first clear poll.
+    # Time spent waiting for resolution must not count as silence.
     assert clock.now - polls[9] == 120
 
 
 def test_alerts_that_persist_fail_after_grace(monkeypatch):
-    oracle, clock, polls = _oracle(monkeypatch, [True])
+    oracle, _, polls = _oracle(monkeypatch, [True])
 
     verdict = oracle.evaluate()
 
@@ -64,8 +63,7 @@ def test_alerts_that_persist_fail_after_grace(monkeypatch):
 
 
 def test_refiring_alert_restarts_silence_window(monkeypatch):
-    # Silent for 50 s, one more firing poll, then silent: the pass needs a full
-    # silence window after the re-fire.
+    # An alert after 50 seconds of silence must restart the quiet period.
     oracle, clock, polls = _oracle(monkeypatch, [False] * 5 + [True] + [False])
 
     assert oracle.evaluate()["success"] is True
@@ -73,16 +71,15 @@ def test_refiring_alert_restarts_silence_window(monkeypatch):
 
 
 def test_zero_grace_fails_on_the_first_firing_poll(monkeypatch):
-    oracle, clock, polls = _oracle(monkeypatch, [True], resolve_grace_seconds=0)
+    oracle, _, polls = _oracle(monkeypatch, [True], resolve_grace_seconds=0)
 
     assert oracle.evaluate()["reason"] == "alerts_still_firing"
     assert len(polls) == 1
 
 
 def test_evaluation_timeout_covers_the_longest_evaluation(monkeypatch):
-    # Alerts fire until just before the grace window ends, then a full silence
-    # window follows.
-    oracle, clock, polls = _oracle(monkeypatch, [True] * 30 + [False])
+    # Clearing at the grace boundary still requires a full silence window.
+    oracle, clock, _ = _oracle(monkeypatch, [True] * 30 + [False])
     begin = clock.now
 
     assert oracle.evaluate()["success"] is True

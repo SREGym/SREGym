@@ -14,39 +14,29 @@ _PROMETHEUS_URL = "http://localhost:9090"
 # How long to monitor for sustained alert silence.
 _SUSTAINED_SILENCE_SECONDS = 120
 _POLL_INTERVAL_SECONDS = 10
-# Grace period before starting to check (let alerts resolve).
+# Initial delay before polling; the resolve grace starts after this buffer.
 _BUFFER_SECONDS = 30
-# Prometheus evaluates rules once per minute and the error-rate rules look back
-# 2 minutes, so a fault's own alert can keep firing for minutes after a correct
-# fix (SREGym#1116). Keep polling that long before calling the alerts
-# persistent, as the Stratus weak AlertOracle does.
+# Rules look back 2 minutes and run once per minute, so alerts can keep firing
+# after a correct repair. Allow them to resolve before grading (SREGym#1116).
 _RESOLVE_GRACE_SECONDS = 300
-# Room for the last poll and Prometheus query on top of the waiting windows.
+# Allow time for the final poll and query.
 _EVALUATION_MARGIN_SECONDS = 60
 
 
 class AlertOracle(Oracle):
-    """Mitigation oracle that passes when no Prometheus alerts are firing.
+    """Require sustained silence from new alerts in the problem's namespace.
 
-    Queries the Prometheus alerts API for firing alerts scoped to the
-    problem's namespace.  Because alerts can be flaky, the oracle waits
-    for a sustained silence window before declaring success.  An alert
-    that is still firing fails the check only after
-    ``resolve_grace_seconds`` of polling, because a fault's own alert can
-    keep firing for minutes after a correct fix.
+    After an initial buffer, allow firing alerts to resolve within the grace
+    period. Pass only after a continuous silence window; each firing poll
+    resets that window.
     """
 
     importance = 1.0
 
-    # An alert still firing here is treated as the agent's failure, not as
-    # ambiguous, because everything this oracle does exists to make that call
-    # decisive: ``capture_baseline`` removes alerts that were already firing
-    # before injection (SREGym#745), ``exclude_alerts`` removes known-chronic
-    # ones, and the verdict requires a *sustained* silence window rather than an
-    # instant. What survives all three is a new, persistent alert in the
-    # problem's namespace. The residual risk -- an alert triggered by unrelated
-    # cluster degradation mid-run -- is what the environment-health precondition
-    # is for, not something to hedge by calling every failure ambiguous.
+    # Baseline capture removes pre-existing alert instances (SREGym#745), and
+    # exclude_alerts removes configured exceptions. New alerts that persist
+    # beyond the grace period are graded as agent errors. Unrelated cluster
+    # degradation during an attempt can still affect this verdict.
     FAILURE_CLASSES = {
         "alerts_still_firing": FailureClass.AGENT_ERROR,
     }
@@ -66,9 +56,8 @@ class AlertOracle(Oracle):
         self.buffer_seconds = buffer_seconds
         self.exclude_alerts = set(exclude_alerts or [])
         self.resolve_grace_seconds = resolve_grace_seconds
-        # The longest evaluation: the buffer, alerts that keep firing for the
-        # whole grace window, then a full silence window. The conductor's
-        # default wait for a submitted evaluation is shorter than that.
+        # A late resolution still needs a full silence window. Advertise that
+        # budget so the conductor does not stop grading before it completes.
         self.evaluation_timeout_seconds = (
             buffer_seconds + resolve_grace_seconds + sustained_silence_seconds + _EVALUATION_MARGIN_SECONDS
         )
@@ -222,12 +211,11 @@ class AlertOracle(Oracle):
 
         namespace = self.problem.namespace
 
-        # Buffer: give alerts time to resolve after mitigation.
+        # Give monitoring time to reflect the repair before polling.
         print(f"⏳ Waiting {self.buffer_seconds}s buffer before checking alerts…")
         time.sleep(self.buffer_seconds)
 
-        # Poll for sustained silence. A firing alert restarts the silence window,
-        # and fails the check once it has outlasted the resolve grace window.
+        # The grace deadline is fixed; only the silence window restarts.
         start = time.monotonic()
         silence_start = None
         last_log_second = -1
@@ -236,15 +224,9 @@ class AlertOracle(Oracle):
             try:
                 firing = self._query_firing_alerts(namespace)
             except RuntimeError as exc:
-                # Prometheus is the instrument we grade *with*, not the thing
-                # under test. If it is unreachable we have no evidence either
-                # way, and that is the cluster's problem rather than the
-                # agent's. Letting this propagate would reach the conductor's
-                # exception handler and be recorded as a harness error, which
-                # would be wrong twice over: it blames our code, and it hides a
-                # real infrastructure failure behind a bare stack trace. This
-                # oracle backs 23 problems, so that misattribution would be the
-                # single largest source of miscounted failures.
+                # Without Prometheus, the repair cannot be measured. Return an
+                # environment failure explicitly; an escaping exception would be
+                # recorded by the conductor as a harness error instead.
                 print(f"❌ Cannot reach Prometheus to check alerts in {namespace}: {exc}")
                 return self.fail("prometheus_unreachable", namespace=namespace, error=str(exc))
 
