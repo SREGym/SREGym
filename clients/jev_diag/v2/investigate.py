@@ -44,7 +44,6 @@ from clients.jev_diag.v2.collector import (
 from clients.jev_diag.v2.derive import (
     DEPENDENCY_CLASSES,
     LOG_CLASSES,
-    OBSERVABILITY_RE,
     ROLE_SYNONYMS,
     TELEMETRY_RE,
     _mentions,
@@ -590,7 +589,7 @@ def failing_targets(snapshot: ClusterSnapshot, cid: str, calls: set[str], error_
         return []
     hits = []
     for dep in sorted(calls):
-        if dep not in snapshot.components or dep == cid or OBSERVABILITY_RE.search(snapshot.components[dep]["name"]):
+        if dep not in snapshot.components or dep == cid:
             continue
         if any(re.search(rf"(?<![a-z0-9]){re.escape(tok)}(?![a-z0-9])", text) for tok in _role_tokens(snapshot, dep)):
             hits.append(dep)

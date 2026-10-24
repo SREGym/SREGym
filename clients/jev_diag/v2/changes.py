@@ -653,8 +653,6 @@ def estimate_symptom_onset(
         )
 
     for cid, comp in components.items():
-        if comp.get("role") == "observability":
-            continue
         for sig in comp.get("log_signals") or []:
             started = sig.get("episode_start_seconds_ago", sig.get("first_seen_seconds_ago"))
             if sig.get("state") == "ongoing" and started is not None and not sig.get("_telemetry"):
@@ -799,15 +797,12 @@ def routine_reason(change: dict) -> str | None:
 
     Writes the cluster's own records attribute to a controller carry `routine` from collection (a volume provisioned
     for a claim, an object maintained by its owner's controller, a background writer's bulk bookkeeping; see
-    outside.change_radar). A rollout restart changes no setting, and a telemetry object carries no application
-    request: both are context, not candidates.
+    outside.change_radar). A rollout restart changes no setting and is context, not a candidate.
     """
     if change.get("routine"):
         return change["routine"]
     if change.get("restart_only"):
         return "rollout restart, no setting changed"
-    if change.get("role") == "observability":
-        return "telemetry object"
     return None
 
 

@@ -295,16 +295,14 @@ def _unique(items: list[str]) -> list[str]:
 
 def linked_components(snapshot: ClusterSnapshot, cid: str, detail: dict) -> list[str]:
     """Components connected to `cid`: those it calls, those that call it or whose errors name it, and those that
-    share a Service with it. Telemetry components are left out."""
+    share a Service with it. Component role does not remove a real dependency."""
     comp = snapshot.components[cid]
     linked = set(detail.get("calls") or {}) | set(detail.get("called_by_with_errors") or {})
     linked |= set(detail.get("failing_targets") or []) | set(comp.get("clients") or []) | set(comp.get("_calls") or [])
     for svc in comp.get("services") or []:
         linked |= set(svc.get("selects_multiple_workloads") or [])
     linked.discard(cid)
-    return sorted(
-        c for c in linked if c in snapshot.components and snapshot.components[c].get("role") != "observability"
-    )
+    return sorted(c for c in linked if c in snapshot.components)
 
 
 def build_investigation_questions(
@@ -543,7 +541,7 @@ def platform_change_first(snapshot: ClusterSnapshot) -> bool:
     suspect, however unremarkable its object looks, and no single workload hypothesis stands for it."""
     changes = snapshot.cluster.get("recent_changes") or []
     first = changes[0] if changes else None
-    if not first or not snapshot.cluster.get("findings") or first.get("role") == "observability":
+    if not first or not snapshot.cluster.get("findings"):
         return False
     before = first.get("seconds_before_symptoms")
     near = before is None or before >= -ONSET_TOLERANCE_SECONDS
@@ -586,10 +584,10 @@ MAX_INCIDENT = 12  # failing components listed for an examination
 
 def incident(snapshot: ClusterSnapshot) -> list[dict]:
     """The application's failing components and how each fails, from their typed state (report.state_of): what an
-    origin has to explain. Telemetry components are left out; components with more symptoms come first."""
+    origin has to explain. Component role does not hide concrete failures."""
     rows = []
     for cid, comp in snapshot.components.items():
-        symptoms = state_of(comp) if comp.get("role") != "observability" else ""
+        symptoms = state_of(comp)
         if symptoms:
             rows.append({"component": cid, "symptoms": symptoms})
     return sorted(rows, key=lambda r: -r["symptoms"].count(","))[:MAX_INCIDENT]
@@ -687,7 +685,7 @@ class IterativeDiagnoser(JevDiagnoser):
         extra = []
         for cid, comp in snapshot.components.items():
             kinds = set(comp.get("evidence_kinds") or [])
-            if cid not in shortlist and comp.get("role") != "observability" and kinds & set(priority):
+            if cid not in shortlist and kinds & set(priority):
                 rank = min(priority[k] for k in kinds if k in priority)
                 extra.append((rank, -component.probabilities.get(cid, 0.0), cid))
         for _, _, cid in sorted(extra)[: max(0, MAX_QUEUE + QUEUE_EXTENSION - len(shortlist))]:
@@ -696,7 +694,11 @@ class IterativeDiagnoser(JevDiagnoser):
         def demote(cid: str) -> bool:
             comp = snapshot.components.get(cid) or {}
             kinds = set(comp.get("evidence_kinds") or [])
-            return comp.get("role") == "observability" and not kinds & {"symptoms", "own_failure_logs", "configuration"}
+            return (
+                comp.get("role") == "observability"
+                and not state_of(comp)
+                and not kinds & {"symptoms", "own_failure_logs", "configuration", "pointed_at"}
+            )
 
         demoted = [c for c in shortlist if demote(c)]
         queue = [c for c in shortlist if c not in demoted] + demoted
@@ -720,11 +722,7 @@ class IterativeDiagnoser(JevDiagnoser):
             for other, _ in triage.ranked():
                 if len(options) >= 4:
                     break
-                if (
-                    other in remaining
-                    and other not in options
-                    and snapshot.components[other].get("role") != "observability"
-                ):
+                if other in remaining and other not in options:
                     options.append(other)
         state = {
             "application": snapshot.app,
@@ -840,7 +838,7 @@ class IterativeDiagnoser(JevDiagnoser):
         affected = {
             cid: {"signals": c.get("signals"), "warning_events": (c.get("warning_events") or [])[:3]}
             for cid, c in snapshot.components.items()
-            if c.get("signals") and c.get("role") != "observability"
+            if c.get("signals")
         }
         state = {
             "application": snapshot.app,
@@ -1032,20 +1030,14 @@ class IterativeDiagnoser(JevDiagnoser):
         # examined before anything is concluded, so a confirmed first pick never hides a better second.
         ranked = component.ranked()
 
-        def admissible(c: str, rank: int) -> bool:
+        def admissible(c: str) -> bool:
             if c == OTHER_OPTION:
                 return bool(snapshot.cluster.get("findings"))
-            # a telemetry component competes only when triage put it first: its own noise (export errors, index
-            # blocks) otherwise wins comparisons against the application's real origin
-            return c in snapshot.components and (rank == 0 or snapshot.components[c].get("role") != "observability")
+            return c in snapshot.components
 
         # triage's top candidates: triage is often sure of a wrong first pick while the true cause ranks just below
-        admitted = [
-            c
-            for rank, (c, p) in enumerate(ranked[:TOP_HYPOTHESES])
-            if p >= MIN_QUEUE_PROBABILITY and admissible(c, rank)
-        ]
-        picks = [c for c in getattr(self, "triage_picks", []) if admissible(c, 0) and c != OTHER_OPTION]
+        admitted = [c for c, p in ranked[:TOP_HYPOTHESES] if p >= MIN_QUEUE_PROBABILITY and admissible(c)]
+        picks = [c for c in getattr(self, "triage_picks", []) if admissible(c) and c != OTHER_OPTION]
         hypotheses = list(dict.fromkeys([*admitted, *picks]))
         if OTHER_OPTION not in hypotheses and platform_change_first(snapshot):
             hypotheses.append(OTHER_OPTION)  # the change nearest the symptoms is outside the workloads: a suspect
@@ -1123,11 +1115,7 @@ class IterativeDiagnoser(JevDiagnoser):
                 backups = [c for c in result["failing_targets"] if c in snapshot.components]
                 insert_at = 1 if queue and queue[0] == nxt else 0
                 for c in backups:
-                    if (
-                        c not in investigated
-                        and c not in queue
-                        and snapshot.components[c].get("role") != "observability"
-                    ):
+                    if c not in investigated and c not in queue:
                         queue.insert(insert_at, c)
                         insert_at += 1
 
@@ -1334,13 +1322,9 @@ class IterativeDiagnoser(JevDiagnoser):
         A candidate's support is its own examination's origin probability. A dependency that a victim's
         still-occurring errors name, and that was not itself judged a victim, gets the victim's certainty times its
         certainty about that dependency when that is higher: a server whose state changed fails its clients while
-        looking healthy. Telemetry components count only when triage put them first.
+        looking healthy. Component role never discards an examination's evidence.
         """
-        top = component.ranked()[0][0] if component.probabilities else None
-        out: dict[str, tuple[float, str | None]] = {}
-        for cid, r in investigated.items():
-            if snapshot.components[cid].get("role") != "observability" or cid == top:
-                out[cid] = (r["origin_p"], None)
+        out: dict[str, tuple[float, str | None]] = {cid: (r["origin_p"], None) for cid, r in investigated.items()}
         for cid, r in investigated.items():
             dep = r["next"]
             if r["verdict"] != "victim" or dep not in out or dep not in (r.get("failing_targets") or []):
@@ -1393,7 +1377,7 @@ class IterativeDiagnoser(JevDiagnoser):
 
     def fallback(self, snapshot: ClusterSnapshot, component: ChoiceResult) -> tuple[str, str]:
         """No candidate was examined: `other` when triage chose it and cluster findings exist, else the highest-ranked
-        triage candidate that is not a telemetry component."""
+        known triage candidate. Role only affects investigation priority, not eligibility."""
         if component.choice == OTHER_OPTION and snapshot.cluster.get("findings"):
             return OTHER_OPTION, "triage chose other"
         for cid, _ in component.ranked():
@@ -1401,8 +1385,8 @@ class IterativeDiagnoser(JevDiagnoser):
                 if snapshot.cluster.get("findings"):
                     return cid, "triage top-1"
                 continue
-            if (snapshot.components.get(cid) or {}).get("role") != "observability":
-                return cid, "triage top-1 (telemetry components skipped)"
+            if cid in snapshot.components:
+                return cid, "triage top-1"
         return component.choice, "triage top-1"
 
     def fault_object(

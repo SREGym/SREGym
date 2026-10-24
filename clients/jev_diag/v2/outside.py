@@ -191,8 +191,8 @@ def change_radar(
     on the components its taints or cordon keep from scheduling (`kept_off`), and on those with pods on it only when
     a taint evicts them (NoExecute).
 
-    Routine writes (`routine_write`, `bulk_bookkeeping`) and writes to telemetry objects keep their change record,
-    marked, but are no finding of their own: the change ranking summarizes them."""
+    Routine writes (`routine_write`, `bulk_bookkeeping`) keep their marked change record but are no finding of
+    their own. Telemetry ownership is a role tag, not a reason to hide an operator's write."""
     if deployed is None:
         return []
     try:
@@ -248,7 +248,7 @@ def change_radar(
                 )
                 written.append((finding, change))
     bulk_bookkeeping(changes[first_record:], background)
-    return [f for f, change in written if not change.get("routine") and change.get("role") != "observability"]
+    return [f for f, change in written if not change.get("routine")]
 
 
 def routine_write(kind: str, obj: dict, writes: list[dict]) -> str | None:
