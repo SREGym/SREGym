@@ -16,8 +16,7 @@ _SUSTAINED_SILENCE_SECONDS = 120
 _POLL_INTERVAL_SECONDS = 10
 # Initial delay before polling; the resolve grace starts after this buffer.
 _BUFFER_SECONDS = 30
-# Rules look back 2 minutes and run once per minute, so alerts can keep firing
-# after a correct repair. Allow them to resolve before grading (SREGym#1116).
+# Alerts can outlast a repair because rules evaluate recent request history.
 _RESOLVE_GRACE_SECONDS = 300
 # Allow time for the final poll and query.
 _EVALUATION_MARGIN_SECONDS = 60
@@ -33,7 +32,7 @@ class AlertOracle(Oracle):
 
     importance = 1.0
 
-    # Baseline capture removes pre-existing alert instances (SREGym#745), and
+    # Baseline capture removes pre-existing alert instances, and
     # exclude_alerts removes configured exceptions. New alerts that persist
     # beyond the grace period are graded as agent errors. Unrelated cluster
     # degradation during an attempt can still affect this verdict.
@@ -68,7 +67,7 @@ class AlertOracle(Oracle):
         # pre-existing alert on one pod/service does not mask a newly firing
         # alert with the same name on a *different* pod/service. ``None`` means
         # no baseline was captured, in which case no baseline filtering is
-        # applied. See SREGym#745.
+        # applied.
         self._baseline_instances = None
 
     # ------------------------------------------------------------------
@@ -142,7 +141,7 @@ class AlertOracle(Oracle):
         deployed and healthy but the fault is not yet active). The captured alert
         names are environmental/chronic noise unrelated to the injected fault —
         for example ``ContainerCPUThrottling`` from the astronomy-shop Grafana
-        sidecar (see SREGym#745) — and are ignored when grading mitigation so the
+        sidecar — and are ignored when grading mitigation so the
         oracle measures the agent's work, not pre-existing noise. Alerts the agent
         newly triggers are not in this baseline and are still caught.
         """

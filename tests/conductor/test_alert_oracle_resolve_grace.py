@@ -1,4 +1,4 @@
-"""Allow alerts to resolve after a correct repair (SREGym#1116).
+"""Allow alerts to resolve after a correct repair.
 
 Rule lookback windows can keep alerts firing after recovery. Passing still
 requires a complete silence window after the last firing poll.
