@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 from typing import Literal, cast
 
@@ -16,13 +17,14 @@ from .errors import (
     UnsupportedFormatError,
 )
 
-AgentName = Literal["claudecode", "cloudthinker", "codex", "copilot", "gemini", "opencode", "stratus"]
+AgentName = Literal["claudecode", "cloudthinker", "codex", "copilot", "gemini", "jev_diag", "opencode", "stratus"]
 SUPPORTED_AGENTS: tuple[AgentName, ...] = (
     "claudecode",
     "cloudthinker",
     "codex",
     "copilot",
     "gemini",
+    "jev_diag",
     "opencode",
     "stratus",
 )
@@ -33,6 +35,7 @@ _CONVERTERS = {
     "codex": codex.convert_file,
     "copilot": copilot.convert_file,
     "gemini": gemini.convert_file,
+    "jev_diag": partial(stratus.convert_file, agent_name="jev_diag", inference_tool="jev.system_one"),
     "opencode": opencode.convert_file,
     "stratus": stratus.convert_file,
 }
@@ -218,6 +221,8 @@ def detect_agent(session_file: Path | str) -> AgentName:
     if _looks_like_gemini(root, records):
         return "gemini"
     if _looks_like_stratus(records):
+        if any(record.get("type") == "metadata" and record.get("agent") == "jev_diag" for record in records):
+            return "jev_diag"
         return "stratus"
     if _looks_like_codex(records):
         return "codex"

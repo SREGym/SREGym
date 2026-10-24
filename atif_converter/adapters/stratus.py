@@ -6,6 +6,8 @@ built from Stratus's emitted trajectory format.
 
 Input: ``<ts>_<problem>_stratus_agent_trajectory.jsonl`` written by
 ``clients/stratus/stratus_agent/driver/driver.py::save_combined_trajectory``.
+Jev diagnosis uses the same event format; its dispatcher supplies its agent
+name and inference tool so deterministic steps are not counted as model calls.
 NDJSON:
 
     {"type":"metadata", "problem_id":..., "total_stages":N, "total_events":M, ...}
@@ -131,7 +133,9 @@ def _tool_calls_from_ai(msg: dict[str, Any]) -> list[ToolCall]:
     return calls
 
 
-def _convert_messages(messages: list[dict[str, Any]], start_step_id: int) -> tuple[list[Step], int]:
+def _convert_messages(
+    messages: list[dict[str, Any]], start_step_id: int, *, inference_tool: str | None = None
+) -> tuple[list[Step], int]:
     """Convert a stage's serialized messages into ATIF steps.
 
     Tool results are attached to the issuing agent step by ``tool_call_id`` when
@@ -163,12 +167,21 @@ def _convert_messages(messages: list[dict[str, Any]], start_step_id: int) -> tup
 
         elif mtype == "AIMessage":
             tool_calls = _tool_calls_from_ai(msg)
+            # Decision agents use the same event format, but only calls to their
+            # inference tool use a model. Collection and submission are deterministic.
+            call_count = (
+                sum(tc.function_name == inference_tool for tc in tool_calls) if inference_tool is not None else 1
+            )
+            response = msg.get("response_metadata") or {}
             step = _new_step(
                 source="agent",
                 message=_msg_text(msg),
                 tool_calls=tool_calls or None,
                 metrics=_metrics_from_usage(msg.get("usage_metadata"), msg.get("response_metadata")),
-                llm_call_count=1,
+                llm_call_count=call_count,
+                model_name=(response.get("model_name") or response.get("model"))
+                if inference_tool is not None and call_count
+                else None,
             )
             if tool_calls:
                 ids = [tc.tool_call_id for tc in tool_calls]
@@ -213,7 +226,9 @@ def _convert_messages(messages: list[dict[str, Any]], start_step_id: int) -> tup
 # --------------------------------------------------------------------------- #
 # main conversion
 # --------------------------------------------------------------------------- #
-def _convert(records: list[dict[str, Any]]) -> tuple[list[Step], list[dict[str, Any]]] | None:
+def _convert(
+    records: list[dict[str, Any]], *, inference_tool: str | None = None
+) -> tuple[list[Step], list[dict[str, Any]]] | None:
     """Build ATIF steps from parsed trajectory records.
 
     Returns (steps, stage_summaries) or None if nothing convertible.
@@ -243,7 +258,7 @@ def _convert(records: list[dict[str, Any]]) -> tuple[list[Step], list[dict[str, 
         last = max(events, key=lambda e: e.get("event_index", 0))
         messages = last.get("messages") or []
         first_step = next_id
-        stage_steps, next_id = _convert_messages(messages, next_id)
+        stage_steps, next_id = _convert_messages(messages, next_id, inference_tool=inference_tool)
         steps.extend(stage_steps)
         stage_summaries.append(
             {
@@ -280,8 +295,10 @@ def _aggregate_final_metrics(steps: list[Step]) -> FinalMetrics | None:
     )
 
 
-def convert_file(session_file: Path | str) -> Trajectory | None:
-    """Convert one Stratus combined-trajectory JSONL file to ATIF."""
+def convert_file(
+    session_file: Path | str, *, agent_name: str = AGENT_NAME, inference_tool: str | None = None
+) -> Trajectory | None:
+    """Convert a combined event stream; decision agents identify their inference tool."""
     traj_file = Path(session_file)
     records = _load_jsonl(traj_file)
     if not records:
@@ -289,28 +306,32 @@ def convert_file(session_file: Path | str) -> Trajectory | None:
 
     metadata = next((r for r in records if r.get("type") == "metadata"), {})
 
-    converted = _convert(records)
+    converted = _convert(records, inference_tool=inference_tool)
     if converted is None:
         logger.debug("No convertible events in Stratus trajectory %s", traj_file)
         return None
     steps, stage_summaries = converted
 
-    stratus_meta: dict[str, Any] = {"stages": stage_summaries}
+    stage_meta: dict[str, Any] = {"stages": stage_summaries}
     # Run-level submitted = any stage submitted.
-    stratus_meta["submitted"] = any(s["submitted"] for s in stage_summaries)
+    stage_meta["submitted"] = any(s["submitted"] for s in stage_summaries)
     # The diagnosis->mitigation boundary is explicit in Stratus's stage structure
     # (the generic "Submission received" marker doesn't apply — Stratus's submit
     # tool emits "Submission complete"). Record the last step of the diagnosis
     # stage as the boundary so consumers can split the two phases.
     diagnosis = next((s for s in stage_summaries if s["stage"] == "diagnosis"), None)
-    if diagnosis is not None:
-        stratus_meta["diagnosis_submitted_step"] = diagnosis["last_step"]
+    if diagnosis is not None and diagnosis["submitted"]:
+        stage_meta["diagnosis_submitted_step"] = diagnosis["last_step"]
 
     return Trajectory(
         schema_version="ATIF-v1.7",
         session_id=metadata.get("problem_id"),
-        agent=Agent(name=AGENT_NAME, version="unknown"),
+        agent=Agent(
+            name=agent_name,
+            version="unknown",
+            model_name=next((s.model_name for s in steps if s.model_name), None),
+        ),
         steps=steps,
         final_metrics=_aggregate_final_metrics(steps),
-        extra={"stratus": stratus_meta},
+        extra={agent_name: stage_meta},
     )
