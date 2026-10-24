@@ -15,6 +15,7 @@ from sregym.service.apps.gitea.mysql_failover import (
     LIVE_TRAFFIC,
     LIVE_TRAFFIC_REPOSITORY,
     RECEIVER,
+    RELAY,
     repository_names,
 )
 
@@ -130,6 +131,8 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         "database_route_bypassed": FailureClass.AGENT_ERROR,
         "repository_volume_replaced": FailureClass.AGENT_ERROR,
         "webhook_receiver_replaced": FailureClass.AGENT_ERROR,
+        "webhook_relay_replaced": FailureClass.AGENT_ERROR,
+        "webhook_backlog_not_drained": FailureClass.AGENT_ERROR,
         "live_traffic_replaced": FailureClass.AGENT_ERROR,
         "live_database_taken_down": FailureClass.AGENT_ERROR,
         "live_gitea_restarted": FailureClass.AGENT_ERROR,
@@ -172,6 +175,8 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             return self.fail("repository_volume_replaced")
         if self.problem.receiver is not None and app.pod_identities(f"app={RECEIVER}") != self.problem.receiver:
             return self.fail("webhook_receiver_replaced")
+        if self.problem.relay is not None and app.pod_identities(f"app={RELAY}") != self.problem.relay:
+            return self.fail("webhook_relay_replaced")
         if self.problem.live_users is not None and app.pod_identities(f"app={LIVE_TRAFFIC}") != self.problem.live_users:
             return self.fail("live_traffic_replaced")
         if self.problem.live_database is not None and app.database_identity("west") != self.problem.live_database:
@@ -248,6 +253,9 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         if lost:
             return self.fail("acknowledged_updates_lost", updates=lost)
         app.wait_for_webhook_attempts(primary)
+        relay = app.wait_for_relay()
+        if relay["paused"] or relay["queued"]:
+            return self.fail("webhook_backlog_not_drained", paused=relay["paused"], queued=len(relay["queued"]))
         deliveries = delivery_report(app.webhook_deliveries(), events)
         if deliveries["conflicting"]:
             return self.fail("webhook_events_conflicting", issues=deliveries["conflicting"])

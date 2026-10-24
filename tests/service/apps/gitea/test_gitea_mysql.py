@@ -6,7 +6,14 @@ from unittest.mock import Mock
 import pytest
 
 from sregym.service.apps.components.mysql import MySQLRegions, checked_gtids
-from sregym.service.apps.gitea.mysql_failover import DIVERGENCE_COUNTS, LIVE_TRAFFIC, RECEIVER, GiteaMySQLApplication
+from sregym.service.apps.gitea.mysql_failover import (
+    DIVERGENCE_COUNTS,
+    LIVE_TRAFFIC,
+    RECEIVER,
+    RELAY,
+    GiteaMySQLApplication,
+    undeliverable,
+)
 
 
 def by_kind(documents, kind):
@@ -21,7 +28,7 @@ def test_gitea_writes_through_the_routed_service_and_runs_in_east():
     assert env["GITEA__database__DB_TYPE"] == "mysql"
     assert env["GITEA__database__HOST"] == "gitea-db-rw:3306"
     assert "GITEA__database__SSL_MODE" not in env
-    assert env["GITEA__webhook__ALLOWED_HOST_LIST"] == RECEIVER
+    assert env["GITEA__webhook__ALLOWED_HOST_LIST"] == RELAY
     assert gitea["replicas"] == 1
     assert gitea["template"]["metadata"]["labels"]["region"] == "east"
 
@@ -39,6 +46,51 @@ def test_each_region_has_one_mysql_server_and_writes_start_in_east():
     receiver = next(d for d in by_kind(documents, "Deployment") if d["metadata"]["name"] == RECEIVER)["spec"]
     assert receiver["template"]["metadata"]["labels"]["region"] == "west"
     assert receiver["template"]["spec"]["automountServiceAccountToken"] is False
+
+
+def test_relay_queues_beside_gitea_and_forwards_across_regions():
+    documents = GiteaMySQLApplication().render()
+    relay = next(d for d in by_kind(documents, "Deployment") if d["metadata"]["name"] == RELAY)["spec"]["template"]
+    assert relay["metadata"]["labels"]["region"] == "east"
+    env = {e["name"]: e["value"] for e in relay["spec"]["containers"][0]["env"]}
+    assert env["TARGET"] == f"http://{RECEIVER}/"
+    assert {d["metadata"]["name"] for d in by_kind(documents, "Service")} >= {RECEIVER, RELAY}
+
+
+def test_queued_events_that_describe_the_old_history_or_repeat_are_undeliverable():
+    state = {
+        "users": [{"id": 1, "lower_name": "zoo"}],
+        "repositories": [{"id": 5, "owner_id": 1, "lower_name": "pets"}],
+        "issues": [
+            {"id": 1, "repo_id": 5, "index": 1, "name": "shared", "content": "a", "is_closed": False},
+            {"id": 3, "repo_id": 5, "index": 2, "name": "post", "content": "c", "is_closed": False},
+        ],
+        "comments": [{"id": 7, "issue_id": 1, "content": "seen in west"}],
+    }
+
+    def event(id, number, issue_id, title, body, action="opened", comment_id=None, comment=None):
+        return {
+            "id": id,
+            "repository": "Zoo/Pets",
+            "action": action,
+            "number": number,
+            "issue_id": issue_id,
+            "title": title,
+            "body": body,
+            "comment_id": comment_id,
+            "comment": comment,
+        }
+
+    queued = [
+        event(1, 2, 3, "post", "c"),
+        event(2, 2, 2, "orphan", "b"),
+        event(3, 1, 1, "shared", "a", "closed"),
+        event(4, 1, 1, "shared", "a", "created", 7, "seen in west"),
+        event(5, 1, 1, "shared", "a", "created", 7, "seen in east"),
+        event(6, 9, 4, "gone", "d"),
+        event(7, 2, 3, "post", "c"),
+    ]
+    assert undeliverable(state, queued) == [2, 3, 5, 6, 7]
 
 
 def test_tiers_differ_only_in_divergence_size():
@@ -143,7 +195,10 @@ def test_reference_repair_replays_only_unreplicated_activity_then_rebuilds(monke
         side_effect=lambda mode, **arguments: [{**arguments["records"][0], "number": 3}] if mode == "create" else []
     )
     app.secret_value = Mock(return_value="ab")
+    app.relay = Mock(return_value={"paused": True, "queued": []})
+    monkeypatch.setattr("sregym.service.apps.gitea.mysql_failover.time.sleep", lambda seconds: None)
     app.reference_repair()
+    assert app.relay.call_args_list[-1].args == ("resume",)
     assert app.recovery_client.call_args_list[0].kwargs == {
         "records": [{"repository": "zoo/pets", "title": "orphan", "body": "b"}]
     }

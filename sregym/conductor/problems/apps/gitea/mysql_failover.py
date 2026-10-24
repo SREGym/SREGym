@@ -1,9 +1,11 @@
 """A partition between two MySQL regions ends with a promoted replica and two histories.
 
 Modelled on GitHub's 21 October 2018 incident. While the regions cannot reach
-each other, Gitea keeps writing issues, comments and closes to the east primary
-and its webhooks to the west consumer fail. The west replica is then promoted,
-writes are routed there, and new issues reuse the numbers east already handed out.
+each other, Gitea keeps writing issues, comments and closes to the east primary,
+and their webhook events pile up in the relay, which cannot reach the west
+consumer. Delivery is paused, the west replica is promoted, writes are routed
+there, and new issues reuse the numbers east already handed out, so the backlog
+mixes current events with events that describe the old history.
 """
 
 import json
@@ -14,7 +16,13 @@ from sregym.conductor.oracles.apps.gitea.mysql_failover import GiteaMySQLFailove
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.gitea.application import FIXTURES
-from sregym.service.apps.gitea.mysql_failover import LIVE_TRAFFIC, RECEIVER, GiteaMySQLApplication
+from sregym.service.apps.gitea.mysql_failover import (
+    DELIVER_TIMEOUT,
+    LIVE_TRAFFIC,
+    RECEIVER,
+    RELAY,
+    GiteaMySQLApplication,
+)
 from sregym.utils.decorators import mark_fault_injected
 
 #: Consecutive failed probes before the replica is promoted.
@@ -58,6 +66,7 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.expected_git = None
         self.repository_ids = {}
         self.receiver = None
+        self.relay = None
         self.live_users = None
         self.live_database = None
         self.live_gitea = None
@@ -67,10 +76,12 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
             namespace=self.namespace,
             description="A network partition between region-east and region-west made the failover promote the "
             "west MySQL replica. The east primary had acknowledged issues, comments and closes during the partition "
-            "that never replicated, and their webhook deliveries to the west receiver failed. After promotion the "
-            "west primary accepted new issues and comments, reusing issue numbers east had already handed out. "
-            "Recovery must keep both histories, deliver each missed event once under the issue's current number, "
-            "and rebuild east as a clean replica of west without interrupting the live west primary or Gitea.",
+            "that never replicated, and their webhook events queued in the relay, which could not reach the west "
+            "receiver. Delivery was then paused. After promotion the west primary accepted new issues and comments, "
+            "reusing issue numbers east had already handed out, so the paused backlog holds current events next to "
+            "events that describe east's history. Recovery must keep both histories, drain the backlog so each event "
+            "arrives once under the issue's current number, and rebuild east as a clean replica of west without "
+            "interrupting the live west primary or Gitea.",
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = GiteaMySQLFailoverOracle(problem=self)
@@ -104,11 +115,19 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         updates += [{**issue, "close": True} for issue in chosen[comments : comments + closes]]
         return updates
 
-    def require_delivered(self, region, issues, updates, phase):
+    def require_delivered(self, region, issues, updates):
         events, lost = issue_events(self.app.snapshot(region), issues, updates)
         report = delivery_report(self.app.webhook_deliveries(), events)
         if lost or any(report.values()):
-            raise RuntimeError(f"{phase} webhook deliveries are not exactly once: {lost} {report}")
+            raise RuntimeError(f"Shared webhook deliveries are not exactly once: {lost} {report}")
+
+    def require_queued(self, region, issues, updates):
+        events, lost = issue_events(self.app.snapshot(region), issues, updates)
+        # A resubmitted issue gets the id and number its lost original had, so both events may be queued.
+        queued = delivery_report(self.app.relay()["queued"], events)
+        delivered = delivery_report(self.app.webhook_deliveries(), events)
+        if lost or queued["undelivered"] or len(delivered["undelivered"]) != len(events):
+            raise RuntimeError(f"Post-failover events are not held in the paused relay: {lost} {queued}")
 
     def wait_for_partition(self, timeout=120):
         app, mysql = self.app, self.app.mysql
@@ -137,7 +156,9 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         mysql.wait_for_gtids("west", mysql.gtid_executed("east"))
         if app.undelivered_webhooks("west"):
             raise RuntimeError("West has not seen every shared webhook attempt")
-        self.require_delivered("east", self.shared_receipts, [], "Shared")
+        if app.wait_for_relay()["queued"]:
+            raise RuntimeError("The relay did not forward the shared webhooks")
+        self.require_delivered("east", self.shared_receipts, [])
         self.shared = app.snapshot("east")
         self.repository_ids = app.repository_ids()
 
@@ -159,6 +180,11 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         west = app.snapshot("west")
         if titles & {r["name"] for r in west["issues"]} or remarks & {r["content"] for r in west["comments"]}:
             raise RuntimeError("Partition writes reached the west replica")
+        if len(app.relay()["queued"]) < len(self.orphaned) + len(partition_updates):
+            raise RuntimeError("Partition webhooks did not queue in the relay")
+        # Delivery stops before the network heals; an attempt already in flight times out first.
+        app.relay("pause")
+        time.sleep(DELIVER_TIMEOUT + 1)
         mysql.promote("west")
 
         mysql.heal()
@@ -175,7 +201,7 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.accepted_after_promotion = app.recovery_client("create", records=self.records(post_count))
         post_updates = app.recovery_client("update", updates=self.updates_for(self.shared_receipts, post_count // 2, 0))
         app.wait_for_webhook_attempts("west")
-        self.require_delivered("west", [*resubmitted, *self.accepted_after_promotion], post_updates, "Post-failover")
+        self.require_queued("west", [*resubmitted, *self.accepted_after_promotion], post_updates)
         self.updates = partition_updates + post_updates
         collisions = {(r["repository"], r["number"]) for r in self.orphaned} & {
             (r["repository"], r["number"]) for r in self.accepted_after_promotion
@@ -186,6 +212,7 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.receiver = app.pod_identities(f"app={RECEIVER}")
         if len(self.receiver) != 1:
             raise RuntimeError("Expected one webhook receiver pod")
+        self.relay = app.pod_identities(f"app={RELAY}")
         app.start_live_traffic()
         self.live_users = app.pod_identities(f"app={LIVE_TRAFFIC}")
         self.live_database = app.database_identity("west")

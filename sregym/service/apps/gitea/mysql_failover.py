@@ -1,4 +1,4 @@
-"""Gitea on two regional MySQL servers, with a webhook consumer in the second region."""
+"""Gitea on two regional MySQL servers, with a webhook relay beside it and the consumer in the second region."""
 
 import base64
 import json
@@ -17,7 +17,8 @@ from sregym.service.apps.gitea.recovery import GiteaRecoveryApplication
 #: Shared-history issues, orphaned writes, post-failover writes.
 DIVERGENCE_COUNTS = {"small": (30, 12, 12), "large": (200, 80, 80)}
 RECEIVER = "gitea-webhook-receiver"
-RECEIVER_IMAGE = "python:3.12.13-alpine3.23"
+RELAY = "gitea-webhook-relay"
+PYTHON_IMAGE = "python:3.12.13-alpine3.23"
 DELIVER_TIMEOUT = 5
 WEBHOOK_STALL_SECONDS = 30
 LIVE_TRAFFIC = "gitea-users"
@@ -47,6 +48,32 @@ def repository_names(state):
     """``owner/name`` for each repository id in a snapshot."""
     users = {r["id"]: r["lower_name"] for r in state["users"]}
     return {r["id"]: users[r["owner_id"]] + "/" + r["lower_name"] for r in state["repositories"]}
+
+
+def undeliverable(state, deliveries):
+    """Ids of deliveries the snapshot no longer matches, or that repeat an earlier delivery."""
+    names = repository_names(state)
+    issues = {(names[r["repo_id"]], r["index"]): r for r in state["issues"]}
+    comments = {r["id"]: r for r in state["comments"]}
+    stale, seen = [], set()
+    for delivery in deliveries:
+        issue = issues.get(((delivery["repository"] or "").lower(), delivery["number"]))
+        comment = comments.get(delivery["comment_id"])
+        described = (delivery["issue_id"], delivery["title"], delivery["body"])
+        key = tuple(v for k, v in sorted(delivery.items()) if k not in ("id", "delivery", "state"))
+        if (
+            key in seen
+            or issue is None
+            or (issue["id"], issue["name"], issue["content"]) != described
+            or (delivery["action"] == "closed" and not issue["is_closed"])
+            or (
+                delivery["comment_id"] is not None
+                and (comment is None or (comment["issue_id"], comment["content"]) != (issue["id"], delivery["comment"]))
+            )
+        ):
+            stale.append(delivery["id"])
+        seen.add(key)
+    return stale
 
 
 class GiteaMySQLApplication(GiteaApplication):
@@ -89,29 +116,65 @@ class GiteaMySQLApplication(GiteaApplication):
         for name, value in {
             "GITEA__database__DB_TYPE": "mysql",
             "GITEA__database__HOST": f"{self.mysql.write_service}:3306",
-            "GITEA__webhook__ALLOWED_HOST_LIST": RECEIVER,
+            "GITEA__webhook__ALLOWED_HOST_LIST": RELAY,
             "GITEA__webhook__DELIVER_TIMEOUT": str(DELIVER_TIMEOUT),
         }.items():
             env[name] = {"name": name, "value": value}
         container["env"] = list(env.values())
-        labels = {"app": RECEIVER, "region": "west"}
-        receiver = [
+        secret = {"secretKeyRef": {"name": "gitea-webhook", "key": "secret"}}
+        return [
+            *self.mysql.render("gitea-database"),
+            *documents,
+            *self.python_pod(
+                RECEIVER, "west", "webhook_receiver.py", [{"name": "WEBHOOK_SECRET", "valueFrom": secret}]
+            ),
+            *self.python_pod(
+                RELAY,
+                "east",
+                "webhook_relay.py",
+                [
+                    {"name": "TARGET", "value": f"http://{RECEIVER}/"},
+                    {"name": "TIMEOUT", "value": str(DELIVER_TIMEOUT)},
+                ],
+            ),
+        ]
+
+    @staticmethod
+    def python_pod(name, region, script, env, volumes=(), mounts=(), service=True):
+        """A one-replica Python helper running ``script``, served on port 80 when ``service`` is set."""
+        labels = {"app": name, "region": region}
+        container = {
+            "name": "main",
+            "image": PYTHON_IMAGE,
+            "command": ["python", "-u", "/app/main.py"],
+            "env": env,
+            "volumeMounts": [{"name": "app", "mountPath": "/app"}, *mounts],
+            "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "128Mi"}},
+        }
+        documents = [
             {
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
-                "metadata": {"name": RECEIVER},
-                "data": {"receiver.py": Path(__file__).with_name("webhook_receiver.py").read_text()},
-            },
-            {
-                "apiVersion": "v1",
-                "kind": "Service",
-                "metadata": {"name": RECEIVER},
-                "spec": {"selector": labels, "ports": [{"port": 80, "targetPort": 8080}]},
-            },
+                "metadata": {"name": name},
+                "data": {"main.py": Path(__file__).with_name(script).read_text()},
+            }
+        ]
+        if service:
+            container["ports"] = [{"containerPort": 8080}]
+            container["readinessProbe"] = {"tcpSocket": {"port": 8080}, "periodSeconds": 5}
+            documents.append(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Service",
+                    "metadata": {"name": name},
+                    "spec": {"selector": labels, "ports": [{"port": 80, "targetPort": 8080}]},
+                }
+            )
+        documents.append(
             {
                 "apiVersion": "apps/v1",
                 "kind": "Deployment",
-                "metadata": {"name": RECEIVER},
+                "metadata": {"name": name},
                 "spec": {
                     "replicas": 1,
                     "selector": {"matchLabels": labels},
@@ -119,33 +182,14 @@ class GiteaMySQLApplication(GiteaApplication):
                         "metadata": {"labels": labels},
                         "spec": {
                             "automountServiceAccountToken": False,
-                            "volumes": [{"name": "receiver", "configMap": {"name": RECEIVER}}],
-                            "containers": [
-                                {
-                                    "name": "receiver",
-                                    "image": RECEIVER_IMAGE,
-                                    "command": ["python", "-u", "/receiver/receiver.py"],
-                                    "env": [
-                                        {
-                                            "name": "WEBHOOK_SECRET",
-                                            "valueFrom": {"secretKeyRef": {"name": "gitea-webhook", "key": "secret"}},
-                                        }
-                                    ],
-                                    "ports": [{"containerPort": 8080}],
-                                    "volumeMounts": [{"name": "receiver", "mountPath": "/receiver"}],
-                                    "readinessProbe": {"tcpSocket": {"port": 8080}, "periodSeconds": 5},
-                                    "resources": {
-                                        "requests": {"cpu": "10m", "memory": "32Mi"},
-                                        "limits": {"memory": "128Mi"},
-                                    },
-                                }
-                            ],
+                            "volumes": [{"name": "app", "configMap": {"name": name}}, *volumes],
+                            "containers": [container],
                         },
                     },
                 },
-            },
-        ]
-        return [*self.mysql.render("gitea-database"), *documents, *receiver]
+            }
+        )
+        return documents
 
     def ensure_secret(self, name, data):
         if not self.command("get", "secret", name, "--ignore-not-found", "-o", "name").strip():
@@ -188,7 +232,8 @@ class GiteaMySQLApplication(GiteaApplication):
 
     def deploy(self):
         super().deploy()
-        self.command("rollout", "status", f"deployment/{RECEIVER}", "--timeout=300s", timeout=320)
+        for name in (RECEIVER, RELAY):
+            self.command("rollout", "status", f"deployment/{name}", "--timeout=300s", timeout=320)
         repositories = [
             r["owner"] + "/" + r["name"]
             for r in json.loads((FIXTURES / "import-data.json").read_text())["repositories"]
@@ -196,58 +241,23 @@ class GiteaMySQLApplication(GiteaApplication):
         self.recovery_client(
             "webhooks",
             repositories=repositories,
-            url=f"http://{RECEIVER}/",
+            url=f"http://{RELAY}/",
             secret=self.secret_value("gitea-webhook", "secret"),
         )
 
     def live_traffic_documents(self):
-        labels = {"app": LIVE_TRAFFIC, "region": "east"}
-        return [
-            {
-                "apiVersion": "v1",
-                "kind": "ConfigMap",
-                "metadata": {"name": LIVE_TRAFFIC},
-                "data": {"users.py": Path(__file__).with_name("live_traffic.py").read_text()},
-            },
-            {
-                "apiVersion": "apps/v1",
-                "kind": "Deployment",
-                "metadata": {"name": LIVE_TRAFFIC},
-                "spec": {
-                    "replicas": 1,
-                    "selector": {"matchLabels": labels},
-                    "template": {
-                        "metadata": {"labels": labels},
-                        "spec": {
-                            "automountServiceAccountToken": False,
-                            "volumes": [
-                                {"name": "users", "configMap": {"name": LIVE_TRAFFIC}},
-                                {"name": "credentials", "secret": {"secretName": "gitea-admin"}},
-                            ],
-                            "containers": [
-                                {
-                                    "name": "users",
-                                    "image": RECEIVER_IMAGE,
-                                    "command": ["python", "-u", "/users/users.py"],
-                                    "env": [
-                                        {"name": "REPOSITORY", "value": LIVE_TRAFFIC_REPOSITORY},
-                                        {"name": "INTERVAL", "value": str(LIVE_TRAFFIC_INTERVAL)},
-                                    ],
-                                    "volumeMounts": [
-                                        {"name": "users", "mountPath": "/users"},
-                                        {"name": "credentials", "mountPath": "/credentials", "readOnly": True},
-                                    ],
-                                    "resources": {
-                                        "requests": {"cpu": "10m", "memory": "32Mi"},
-                                        "limits": {"memory": "128Mi"},
-                                    },
-                                }
-                            ],
-                        },
-                    },
-                },
-            },
-        ]
+        return self.python_pod(
+            LIVE_TRAFFIC,
+            "east",
+            "live_traffic.py",
+            [
+                {"name": "REPOSITORY", "value": LIVE_TRAFFIC_REPOSITORY},
+                {"name": "INTERVAL", "value": str(LIVE_TRAFFIC_INTERVAL)},
+            ],
+            volumes=[{"name": "credentials", "secret": {"secretName": "gitea-admin"}}],
+            mounts=[{"name": "credentials", "mountPath": "/credentials", "readOnly": True}],
+            service=False,
+        )
 
     def start_live_traffic(self):
         self.apply(self.live_traffic_documents())
@@ -283,11 +293,15 @@ class GiteaMySQLApplication(GiteaApplication):
             "exec", f"deployment/{deployment}", "--", "python", "-c", script, "http://127.0.0.1:8080" + path, method
         )
 
-    def live_traffic(self, action=None):
+    def control(self, deployment, action=None):
+        """POST an action to a helper pod, or read its state."""
         if action:
-            self.local_http(LIVE_TRAFFIC, f"/{action}", "POST")
+            self.local_http(deployment, f"/{action}", "POST")
             return None
-        return json.loads(self.local_http(LIVE_TRAFFIC))
+        return json.loads(self.local_http(deployment))
+
+    def live_traffic(self, action=None):
+        return self.control(LIVE_TRAFFIC, action)
 
     def snapshot(self, region=None):
         state = json.loads(self.mysql.sql(region or self.mysql.write_region(), SNAPSHOT_SQL))
@@ -366,12 +380,27 @@ class GiteaMySQLApplication(GiteaApplication):
     def webhook_deliveries(self):
         return json.loads(self.local_http(RECEIVER))
 
-    def reference_repair(self):
-        """Re-accept the stale region's unreplicated issues, comments and closes, then rebuild it as a replica.
+    def relay(self, action=None):
+        return self.control(RELAY, action)
 
-        Works only from the two databases: anything on the stale side with no
-        matching content on the primary was never replicated. Writing it again
-        through the API gives it the primary's numbers and emits each event once.
+    def drop_queued(self, ids):
+        self.local_http(RELAY, "/queue/" + ",".join(str(i) for i in ids), "DELETE")
+
+    def wait_for_relay(self, timeout=120):
+        """The relay's state once it has forwarded everything it can."""
+        deadline = time.monotonic() + timeout
+        while (state := self.relay())["queued"] and not state["paused"] and time.monotonic() < deadline:
+            time.sleep(2)
+        return state
+
+    def reference_repair(self):
+        """Drop stale queued events, re-accept the stale region's unreplicated activity, drain, rebuild.
+
+        Works only from the two databases and the relay: a queued event that
+        no longer matches the primary describes the old history, and anything
+        on the stale side with no matching content on the primary was never
+        replicated. Writing it again through the API gives it the primary's
+        numbers and emits each event once.
         """
         primary = self.mysql.write_region()
         if primary not in REGIONS:
@@ -379,7 +408,13 @@ class GiteaMySQLApplication(GiteaApplication):
             self.mysql.route_writes(primary)
             self.restart_gitea()
         stale = other(primary)
+        # Hold delivery while sorting the backlog; a forward already in flight times out first.
+        self.relay("pause")
+        time.sleep(DELIVER_TIMEOUT + 1)
+        queued = self.relay()["queued"]
         current, state = self.snapshot(primary), self.snapshot(stale)
+        if doomed := undeliverable(current, queued):
+            self.drop_queued(doomed)
         names = repository_names(state)
         present = {(r["repo_id"], r["name"], r["content"]): r for r in current["issues"]}
         missing = [
@@ -411,4 +446,5 @@ class GiteaMySQLApplication(GiteaApplication):
                 updates.append({"repository": repository, "number": number, "close": True})
         if updates:
             self.recovery_client("update", updates=updates)
+        self.relay("resume")
         self.mysql.rebuild(stale, primary, self.secret_value("gitea-mysql", "replication-password"))

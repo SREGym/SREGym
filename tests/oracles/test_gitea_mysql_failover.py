@@ -145,7 +145,7 @@ def test_repaired_replication_passes():
 @pytest.mark.parametrize(
     "state,reason",
     [
-        # No-op after failover: west is primary but east is fenced, not replicating.
+        # No-op after failover: west is primary and east is not replicating.
         ({"replication": None}, "replica_not_replicating"),
         ({"writable": ("east", "west")}, "writable_primary_count"),
         ({"writable": ()}, "writable_primary_count"),
