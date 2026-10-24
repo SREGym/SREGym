@@ -172,7 +172,9 @@ class MySQLRegions:
             )
 
     def initialize(self, replication_password):
-        if self.replication("west"):
+        # A promoted region has no replication channel but must not be reset.
+        replicator = "SELECT COUNT(*) FROM mysql.user WHERE user = 'replicator';"
+        if any(self.sql(region, replicator) != "0" for region in REGIONS):
             return
         # Both servers ran the image's first-start setup independently.
         for region in REGIONS:
@@ -288,9 +290,6 @@ class MySQLRegions:
             region,
             "STOP REPLICA;\nRESET REPLICA ALL;\nSET PERSIST super_read_only = OFF;\nSET PERSIST read_only = OFF;",
         )
-
-    def fence(self, region):
-        self.sql(region, "SET PERSIST super_read_only = ON;")
 
     def write_region(self):
         return self.command("get", "service", self.write_service, "-o", "jsonpath={.spec.selector.region}").strip()

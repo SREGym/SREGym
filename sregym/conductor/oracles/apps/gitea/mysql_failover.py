@@ -11,7 +11,12 @@ from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
 from sregym.service.apps.components.mysql import REGIONS, other
 from sregym.service.apps.gitea.application import FIXTURES
-from sregym.service.apps.gitea.mysql_failover import LIVE_TRAFFIC, LIVE_TRAFFIC_REPOSITORY, RECEIVER
+from sregym.service.apps.gitea.mysql_failover import (
+    LIVE_TRAFFIC,
+    LIVE_TRAFFIC_REPOSITORY,
+    RECEIVER,
+    repository_names,
+)
 
 REPOSITORY_VOLUME = "gitea-repositories"
 #: Gitea indexes issues and comments asynchronously after each write.
@@ -26,8 +31,7 @@ def issue_events(state, issues, updates):
     Every key names the issue's current number, id and content, so a stale or
     invented payload never matches.
     """
-    users = {r["id"]: r["lower_name"] for r in state["users"]}
-    names = {r["id"]: users[r["owner_id"]] + "/" + r["lower_name"] for r in state["repositories"]}
+    names = repository_names(state)
     rows = {(names[r["repo_id"]], r["name"], r["content"]): r for r in state["issues"]}
     comments = Counter((r["issue_id"], r["content"]) for r in state["comments"])
     comment_ids = {}
@@ -60,8 +64,7 @@ def issue_events(state, issues, updates):
 
 def search_queries(state, issues, updates):
     """Each stranded issue's and comment's reference, with the number its issue now has on the primary."""
-    users = {r["id"]: r["lower_name"] for r in state["users"]}
-    names = {r["id"]: users[r["owner_id"]] + "/" + r["lower_name"] for r in state["repositories"]}
+    names = repository_names(state)
     numbers = {(names[r["repo_id"]], r["name"], r["content"]): r["index"] for r in state["issues"]}
     return [
         {
@@ -270,13 +273,16 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             if problem.live_users is not None:
                 traffic = app.live_traffic()
                 app.live_traffic("pause")
-            return self.grade(traffic)
+            verdict = self.grade(traffic)
         except Exception as exc:
-            return self.fail_from_exception(exc)
-        finally:
-            if traffic is not None:
+            verdict = self.fail_from_exception(exc)
+        if traffic is not None:
+            try:
                 app.live_traffic("resume")
                 self.graded = [*self.graded, (traffic["now"], app.live_traffic()["now"])]
+            except Exception as exc:
+                return self.fail_from_exception(exc)
+        return verdict
 
     def grade(self, traffic):
         problem, app = self.problem, self.problem.app

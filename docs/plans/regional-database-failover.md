@@ -1,107 +1,77 @@
 # Regional database failover with real MySQL replication (#1069)
 
-Status: plan, nothing built yet. Anything marked **(verify)** is an assumption I have not tested.
+Status: built and registered as `gitea_mysql_regional_failover_small` and `gitea_mysql_regional_failover_large`.
 
 ## What this is
 
 A problem based on GitHub's October 2018 outage ([post-incident analysis](https://github.blog/news-insights/company-news/oct21-post-incident-analysis/)).
 
-A 43 second network partition made Orchestrator promote a West Coast MySQL replica to primary. The East primary had acknowledged writes that never replicated, so after the network came back both sides held writes the other lacked. Webhook and Pages work piled up behind the outage. Recovery meant keeping both histories, rebuilding replication, and draining the backlog without dropping or duplicating anything.
+A 43 second network partition made Orchestrator promote a West Coast MySQL replica to primary. The East primary had acknowledged writes that never replicated, so after the network came back both sides held writes the other lacked. Webhook work piled up behind the outage. Recovery meant keeping both histories, rebuilding replication, and delivering the backlog without dropping or duplicating anything.
 
 ## What already exists
 
 `gitea_regional_failover` and `gitlab_regional_failover` (from #1062) cover the same story, but they fake it. Promotion is a `pg_restore` of a dump taken earlier. There is no live replication, no partition, no lag, and no backlog. The GitLab one was solved 10/10 in the screen, so it is unregistered as saturated.
 
-This problem keeps the Gitea app, the workload client, the receipt-based oracle pattern and the tier scheme, and replaces the fake with the real mechanism.
-
-Reused from `main`:
-
-- `sregym/service/apps/gitea/` (app, workload client, `snapshot()`, fixtures)
-- `sregym/conductor/problems/apps/gitea/regional_failover.py` (structure of the problem)
-- `sregym/conductor/oracles/apps/gitea/divergent_recovery.py` (receipt checks)
-- `PostgresApplication` / `components/cnpg.py` as the pattern for a database component
-- the isolated verifier already on `main`
-- Calico, which the Kind setup already installs
-
-## What is new
-
-1. A MySQL primary and replica with async GTID replication, as a component beside `cnpg.py`. I plan to use a plain StatefulSet and the official `mysql` image rather than an operator, so there is nothing extra to install **(verify the image and replication setup)**.
-2. Gitea running on that MySQL (`GITEA__database__DB_TYPE=mysql`). Today it only runs on CloudNativePG Postgres **(verify the Zoo import fixture loads on MySQL)**.
-3. A small failover manager. It probes the primary from the other region, and after repeated failed probes promotes the replica and repoints the write service. This plays the part of Orchestrator.
-4. A real partition using a Calico NetworkPolicy between the two regions. No Chaos Mesh.
-5. Real divergence: acknowledged writes on both sides.
-6. A webhook backlog left undelivered at handoff.
+This problem keeps the Gitea app, the workload client and the divergence checks from that work, and replaces the fake with the real mechanism.
 
 ## Layout
 
-One Kind cluster, two namespaces standing in for two regions. They share a control plane, so this models a database failover, not a control-plane outage.
+One namespace, `gitea`. Regions are a `region` pod label, and the partition is a Calico policy that denies traffic between the two labels. No Chaos Mesh.
 
 ```
-region-east:  MySQL primary  <--- async GTID replication --->  region-west: MySQL replica
-              Gitea server (writes go through the gitea-db-rw service)
-              failover manager (probes from the west side)
-              webhook receiver (counts deliveries)
+region=east:  MySQL gitea-db-east  --- async GTID replication --->  region=west: MySQL gitea-db-west
+              Gitea (writes go through the gitea-db-rw service)       webhook receiver
+              application client, live users
 ```
+
+- `components/mysql.py`: one StatefulSet per region on the official `mysql:8.4.6` image, the `gitea-db-rw` service, replication, promotion, the partition, and checks.
+- Gitea runs on MySQL through `GITEA__database__DB_TYPE=mysql`.
+- The webhook receiver checks Gitea's HMAC signature and records each delivery with the issue id, number and comment id.
+- A live users pod opens an issue every 2 seconds through Gitea, so downtime is measurable.
 
 ## Fault lifecycle
 
-1. Deploy, seed, and check the healthy baseline: reads and writes work, the replica has caught up (compare GTID sets).
-2. Apply the NetworkPolicy that blocks east and west from each other.
-3. Write through Gitea while partitioned. These writes are acknowledged on the east primary and never reach the replica. The workload client records a receipt for each.
-4. The failover manager sees failed probes, promotes the west replica, and repoints `gitea-db-rw`.
-5. Write more through Gitea. These land on the new primary and reuse issue numbers the east side already handed out, like the existing problem does.
-6. Remove the NetworkPolicy. Keep the old primary from silently taking writes again **(open question: how exactly it is demoted, see below)**.
-7. Webhook deliveries that were due during the outage are still undelivered at handoff.
-8. Hand over to the agent.
+1. Deploy, seed, add webhooks, and write shared issues. Wait until west has every GTID and every webhook was delivered.
+2. Apply the partition. Wait for three failed probes in a row, standing in for Orchestrator.
+3. Gitea keeps writing to east: new issues, comments on new and shared issues, and closes of shared issues. Their webhooks fail.
+4. Promote west, heal the network, point `gitea-db-rw` at west, restart Gitea. East is left writable with its writes.
+5. Users open some lost issues again on west, and new issues and comments land there, reusing issue numbers east already handed out.
+6. Start the live users and record the identity of the live database, Gitea and the helper pods.
 
-Receipts live in the conductor, outside the cluster, so the agent cannot read or edit them.
+Receipts live in the conductor, outside the cluster, so the agent cannot read or edit them. The agent sees only a one line app description.
 
 ## What the agent has to do
 
-- Find the orphaned writes in the old primary (they are the GTIDs the new primary lacks) and re-apply them to the surviving history without clobbering the post-promotion writes.
-- Fence the old primary and rebuild it as a replica of the new one.
-- Get replication healthy again with no errant GTIDs.
-- Let the webhook backlog drain, each event delivered exactly once.
+- Keep one writable primary and the write service on it.
+- Bring east's lost issues, comments and closes back through Gitea, under the numbers the primary gives them.
+- Deliver each missed webhook event once.
+- Rebuild east as a clean replica.
+- Do it without taking down the live database or Gitea.
 
 ## Grading
 
-The oracle reuses the receipt checks and adds:
+In order, stopping at the first failure:
 
-- every receipt from both histories is present exactly once, with matching content
-- one writable primary, the other member is a replica, replication threads running, GTID sets converged
-- reads agree across members
-- Gitea still serves under continuing workload
-- Git repositories intact
-- each accepted webhook event reached the receiver once (no drops, no duplicates)
+1. Gitea serves, keeps one replica, and still uses `gitea-db-rw`. The repository volume, receiver, live users, live database and Gitea pods are unchanged.
+2. A fresh write round-trips through Gitea and Git.
+3. Exactly one writable region, the write service selects it, the other region replicates from it with no filters or skipped errors, table checksums match, and issue counters and comment and closed counts agree with the rows.
+4. Every issue from both histories is on both regions. Every comment and close is present. Every event implied by the primary's rows was delivered once, with no duplicates or conflicting payloads. Recovered issues and comments are in Gitea's search index.
+5. No acknowledged live user write was lost, and no gap without one was longer than 10 seconds. The oracle pauses the users while it grades and does not count that pause.
 
-Shortcuts the oracle has to reject: resetting to an empty database, dropping the orphaned side, deleting the queue, routing around the intended service, returning fake healthy responses.
+Rows written straight into MySQL are not indexed and do not move counters, so they fail.
 
 ## Reference repair
 
-A script that does the intended recovery, run through the same interface the agent has. It must not read the conductor's receipts or any grader state.
+Reads only the two databases. It re-creates issues, comments and closes that exist only on the stale side through the API, then reloads the stale side from a dump of the primary and starts replication.
 
 ## Scale
 
-Tiers follow `single` / `replicated`. A tier sets the number of shared records, orphaned writes, post-promotion writes, webhook events, and replicas per region. The causal chain stays the same at every size. I start with one small tier that fits the standard Kind cluster (1 control plane, 3 workers). Larger tiers come after the small one works. Development on CloudLab.
+Tiers set the number of shared, orphaned and post-failover issues: small is 30, 12, 12 and large is 200, 80, 80. Both fit the standard Kind cluster.
 
-## Order of work (one PR, separate commits)
+## Validation
 
-1. Spike: MySQL primary/replica in Kind. Show replication, a partition, a promotion, and an errant transaction. If this does not work, nothing else matters.
-2. Gitea on MySQL, healthy and taking writes.
-3. Failover manager and Calico partition.
-4. The problem, receipts, and reference repair.
-5. Oracle checks.
-6. Tiers, registry entry, docs.
-7. Validation: healthy baseline, no-op fails, reference repair passes, unsafe actions fail, clean teardown.
-8. Five baseline agent runs, recording model, harness, budget and seeds. Target 0/5. If more than 2/5 pass, make the causal chain harder and rerun on fresh seeds. Report infrastructure failures separately.
-
-## Open questions
-
-- How the old primary is demoted after the partition heals. The 2018 East side stayed up with its writes. Options: the manager sets it read-only, or it is left running and the agent has to notice. The first is closer to the existing problem; the second is harder and closer to the incident.
-- How Gitea redelivers webhooks after the database is repaired, and whether I can leave a backlog in a way that does not depend on Gitea internals. Needs a prototype.
-- Whether the probe window and partition length can be kept short enough for CI while still triggering promotion.
-- Whether tiers should add database groups or only more data.
+On CloudLab: no-op scores 0 and reference repair scores 1 on both tiers. Restarting Gitea and deleting the live database pod both score 0.
 
 ## Not in this PR
 
-GitLab, the GitLab database-deletion problem (#1074), CodeHub, and any new application.
+GitLab, the GitLab database deletion problem (#1074), CodeHub, and any new application.

@@ -63,6 +63,20 @@ def test_unreachable_target_is_reported_rather_than_raised():
     assert MySQLRegions(command, "gitea-db", "gitea", "x", "s").reachable("west", "east") is False
 
 
+def test_initialize_leaves_an_initialized_pair_alone():
+    command = Mock(return_value="1")
+    MySQLRegions(command, "gitea-db", "gitea", "x", "s").initialize("ab")
+    assert command.call_count == 1
+
+
+def test_missing_or_starting_pods_do_not_raise():
+    app = GiteaMySQLApplication()
+    app.command = Mock(return_value=json.dumps({"items": [{"metadata": {"uid": "u"}, "status": {}}]}))
+    assert app.pod_identities("app=gitea") == [("u", 0)]
+    app.command = Mock(side_effect=subprocess.CalledProcessError(1, ["kubectl"]))
+    assert app.database_identity("west") is None
+
+
 def test_gtid_sets_are_checked_before_interpolation():
     assert checked_gtids("3e11fa47-71ca-11e1-9e33-c80aa9429562:1-5") == "3e11fa47-71ca-11e1-9e33-c80aa9429562:1-5"
     with pytest.raises(ValueError):

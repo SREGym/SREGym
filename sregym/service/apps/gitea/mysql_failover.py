@@ -19,6 +19,7 @@ DIVERGENCE_COUNTS = {"small": (30, 12, 12), "large": (200, 80, 80)}
 RECEIVER = "gitea-webhook-receiver"
 RECEIVER_IMAGE = "python:3.12.13-alpine3.23"
 DELIVER_TIMEOUT = 5
+WEBHOOK_STALL_SECONDS = 30
 LIVE_TRAFFIC = "gitea-users"
 LIVE_TRAFFIC_REPOSITORY = "zoo-labs/zoo-utilities"
 LIVE_TRAFFIC_INTERVAL = 2
@@ -40,6 +41,12 @@ SELECT JSON_OBJECT(
                 FROM comment WHERE type = 0)
 );
 """
+
+
+def repository_names(state):
+    """``owner/name`` for each repository id in a snapshot."""
+    users = {r["id"]: r["lower_name"] for r in state["users"]}
+    return {r["id"]: users[r["owner_id"]] + "/" + r["lower_name"] for r in state["repositories"]}
 
 
 class GiteaMySQLApplication(GiteaApplication):
@@ -248,33 +255,39 @@ class GiteaMySQLApplication(GiteaApplication):
 
     def pod_identities(self, selector):
         pods = json.loads(self.command("get", "pods", "-l", selector, "-o", "json"))["items"]
-        return [(p["metadata"]["uid"], sum(c["restartCount"] for c in p["status"]["containerStatuses"])) for p in pods]
+        return [
+            (p["metadata"]["uid"], sum(c["restartCount"] for c in p["status"].get("containerStatuses", [])))
+            for p in pods
+        ]
 
     def database_identity(self, region):
         """The server's pod, its restarts and its data volume; any change means the server was taken down."""
-        pod = json.loads(self.command("get", "pod", self.mysql.pod(region), "-o", "json"))
-        claims = [
-            v["persistentVolumeClaim"]["claimName"] for v in pod["spec"]["volumes"] if "persistentVolumeClaim" in v
-        ]
-        volumes = [json.loads(self.command("get", "pvc", c, "-o", "json"))["metadata"]["uid"] for c in claims]
-        restarts = sum(c["restartCount"] for c in pod["status"]["containerStatuses"])
+        try:
+            pod = json.loads(self.command("get", "pod", self.mysql.pod(region), "-o", "json"))
+            claims = [
+                v["persistentVolumeClaim"]["claimName"] for v in pod["spec"]["volumes"] if "persistentVolumeClaim" in v
+            ]
+            volumes = [json.loads(self.command("get", "pvc", c, "-o", "json"))["metadata"]["uid"] for c in claims]
+        except subprocess.CalledProcessError:
+            return None
+        restarts = sum(c["restartCount"] for c in pod["status"].get("containerStatuses", []))
         return [pod["metadata"]["uid"], restarts, volumes]
 
+    def local_http(self, deployment, path="/", method="GET"):
+        """Call a helper pod's own HTTP server from inside the pod."""
+        script = (
+            "import sys, urllib.request; "
+            "print(urllib.request.urlopen(urllib.request.Request(sys.argv[1], method=sys.argv[2])).read().decode())"
+        )
+        return self.command(
+            "exec", f"deployment/{deployment}", "--", "python", "-c", script, "http://127.0.0.1:8080" + path, method
+        )
+
     def live_traffic(self, action=None):
-        request = (
-            f"urllib.request.Request('http://127.0.0.1:8080/{action}', method='POST')"
-            if action
-            else ("'http://127.0.0.1:8080/'")
-        )
-        output = self.command(
-            "exec",
-            f"deployment/{LIVE_TRAFFIC}",
-            "--",
-            "python",
-            "-c",
-            f"import urllib.request; print(urllib.request.urlopen({request}).read().decode())",
-        )
-        return None if action else json.loads(output)
+        if action:
+            self.local_http(LIVE_TRAFFIC, f"/{action}", "POST")
+            return None
+        return json.loads(self.local_http(LIVE_TRAFFIC))
 
     def snapshot(self, region=None):
         state = json.loads(self.mysql.sql(region or self.mysql.write_region(), SNAPSHOT_SQL))
@@ -314,12 +327,17 @@ class GiteaMySQLApplication(GiteaApplication):
         return int(self.mysql.sql(region, "SELECT COUNT(*) FROM hook_task WHERE is_delivered = 0;"))
 
     def wait_for_webhook_attempts(self, region):
-        # Partitioned deliveries each wait out DELIVER_TIMEOUT before failing.
-        deadline = time.monotonic() + max(300, (DELIVER_TIMEOUT + 1) * self.undelivered_webhooks(region) + 120)
-        while self.undelivered_webhooks(region):
+        # Partitioned deliveries each wait out DELIVER_TIMEOUT before failing. A task saved by a
+        # request that was then cancelled is only queued when Gitea restarts, so stop once nothing moves.
+        pending = self.undelivered_webhooks(region)
+        deadline = time.monotonic() + max(300, (DELIVER_TIMEOUT + 1) * pending + 120)
+        moved = time.monotonic()
+        while pending and time.monotonic() - moved < WEBHOOK_STALL_SECONDS:
             if time.monotonic() >= deadline:
                 raise RuntimeError("Gitea did not attempt every queued webhook delivery")
             time.sleep(3)
+            if (remaining := self.undelivered_webhooks(region)) != pending:
+                pending, moved = remaining, time.monotonic()
         # Gitea marks a task delivered before sending it; let the last requests finish or time out.
         time.sleep(2 * DELIVER_TIMEOUT + 5)
 
@@ -338,7 +356,7 @@ class GiteaMySQLApplication(GiteaApplication):
         return int(
             self.mysql.sql(
                 region,
-                "SELECT (SELECT COUNT(*) FROM issue i WHERE i.num_comments <> "
+                "SELECT (SELECT COUNT(*) FROM issue i WHERE i.is_pull = 0 AND i.num_comments <> "
                 "(SELECT COUNT(*) FROM comment c WHERE c.issue_id = i.id AND c.type = 0)) + "
                 "(SELECT COUNT(*) FROM repository r WHERE r.num_closed_issues <> "
                 "(SELECT COUNT(*) FROM issue i WHERE i.repo_id = r.id AND i.is_pull = 0 AND i.is_closed = 1));",
@@ -346,16 +364,7 @@ class GiteaMySQLApplication(GiteaApplication):
         )
 
     def webhook_deliveries(self):
-        return json.loads(
-            self.command(
-                "exec",
-                f"deployment/{RECEIVER}",
-                "--",
-                "python",
-                "-c",
-                "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/').read().decode())",
-            )
-        )
+        return json.loads(self.local_http(RECEIVER))
 
     def reference_repair(self):
         """Re-accept the stale region's unreplicated issues, comments and closes, then rebuild it as a replica.
@@ -371,8 +380,7 @@ class GiteaMySQLApplication(GiteaApplication):
             self.restart_gitea()
         stale = other(primary)
         current, state = self.snapshot(primary), self.snapshot(stale)
-        users = {r["id"]: r["lower_name"] for r in state["users"]}
-        names = {r["id"]: users[r["owner_id"]] + "/" + r["lower_name"] for r in state["repositories"]}
+        names = repository_names(state)
         present = {(r["repo_id"], r["name"], r["content"]): r for r in current["issues"]}
         missing = [
             {"repository": names[r["repo_id"]], "title": r["name"], "body": r["content"]}
@@ -385,15 +393,16 @@ class GiteaMySQLApplication(GiteaApplication):
             else {}
         )
         comments = Counter((r["issue_id"], r["content"]) for r in current["comments"])
+        stale_comments = {}
+        for comment in state["comments"]:
+            stale_comments.setdefault(comment["issue_id"], []).append(comment)
         updates = []
         for issue in state["issues"]:
             key = (issue["repo_id"], issue["name"], issue["content"])
             repository = names[issue["repo_id"]]
             target = present.get(key)
             number = target["index"] if target else created[(repository, issue["name"], issue["content"])]["number"]
-            for comment in state["comments"]:
-                if comment["issue_id"] != issue["id"]:
-                    continue
+            for comment in stale_comments.get(issue["id"], []):
                 if target and comments[(target["id"], comment["content"])]:
                     comments[(target["id"], comment["content"])] -= 1
                     continue
