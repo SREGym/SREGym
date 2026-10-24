@@ -13,7 +13,7 @@ from sregym.service.docker_egress import DockerEgress
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 
 
-@pytest.mark.parametrize("failed_step", ["state", "network", "proxy", "connect", "certificate"])
+@pytest.mark.parametrize("failed_step", ["state", "network", "proxy", "directories", "copy", "connect", "certificate"])
 def test_startup_failure_releases_all_acquired_resources(monkeypatch, failed_step):
     egress = DockerEgress()
     paths = []
@@ -27,7 +27,12 @@ def test_startup_failure_releases_all_acquired_resources(monkeypatch, failed_ste
 
     def docker(command, **kwargs):
         step = {("network", "create"): "network", ("run", "-d"): "proxy", ("network", "connect"): "connect"}
-        failed = step.get(tuple(command[1:3])) == failed_step
+        current = step.get(tuple(command[1:3]))
+        if command[1] == "exec" and command[3] == "mkdir":
+            current = "directories"
+        elif command[1] == "cp":
+            current = "copy"
+        failed = current == failed_step
         return subprocess.CompletedProcess(command, int(failed), stdout="true", stderr="test failure" if failed else "")
 
     def certificate():
@@ -45,6 +50,12 @@ def test_startup_failure_releases_all_acquired_resources(monkeypatch, failed_ste
     assert paths and all(not path.exists() for path in paths)
     assert any(call.args[0][1:3] == ["rm", "-f"] for call in run.call_args_list)
     assert any(call.args[0][1:3] == ["network", "rm"] for call in run.call_args_list)
+    assert any(call.args[0][1:3] == ["volume", "rm"] for call in run.call_args_list)
+    if failed_step == "directories":
+        assert not any(
+            call.args[0][1] == "cp" and call.args[0][-1].endswith(":/addons/egress_proxy.py")
+            for call in run.call_args_list
+        )
     with pytest.raises(RuntimeError, match="not ready"):
         egress.docker_args()
     count = run.call_count
@@ -68,13 +79,23 @@ def test_reuse_checks_the_proxy_and_never_reopens_a_stopped_proxy(monkeypatch):
 def test_proxy_bootstrap_uses_docker_copy_instead_of_host_bind_mounts(monkeypatch):
     egress = DockerEgress(k8s_proxy_port=17443)
     commands = []
+    directories_ready = False
+
+    def docker(command, **kwargs):
+        nonlocal directories_ready
+        commands.append(command)
+        if command[1] == "exec" and command[3:] == ["mkdir", "-p", "/addons", "/state"]:
+            assert command[2] == egress._proxy_name
+            assert any(previous[1:3] == ["run", "-d"] for previous in commands)
+            directories_ready = True
+        if command[1] == "cp" and command[-1].startswith(f"{egress._proxy_name}:"):
+            # The detached bootstrap need not have run before the first copy.
+            assert directories_ready, "copy destination is missing"
+        return subprocess.CompletedProcess(command, 0)
+
     monkeypatch.setattr(egress, "_ensure_proxy_image_exists", lambda: None)
     monkeypatch.setattr(egress, "_copy_proxy_certificate", lambda: None)
-    monkeypatch.setattr(
-        egress,
-        "_run_docker_checked",
-        lambda command, action: commands.append(command),
-    )
+    monkeypatch.setattr("sregym.service.docker_egress.subprocess.run", docker)
 
     egress.ensure_started((EndpointRule("provider.test", 443),))
 
