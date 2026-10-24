@@ -34,6 +34,7 @@ from clients.jev_diag.v2.derive import (
     ROLE_SYNONYMS,
     _name_aliases,
     backend_role,
+    diagnostic_signals,
 )
 
 SERVER_KINDS = ("Deployment", "StatefulSet")
@@ -112,7 +113,7 @@ def clients_of(components: dict[str, dict], cid: str) -> list[str]:
 
 def own_signals(comp: dict) -> list[str]:
     """The component's signals about itself, not what other components say about it."""
-    return [s for s in comp.get("signals") or [] if not s.startswith(POINTER_PREFIXES)]
+    return [s for s in diagnostic_signals(comp) if not s.startswith(POINTER_PREFIXES)]
 
 
 def flag_unrouted_servers(components: dict[str, dict]) -> None:

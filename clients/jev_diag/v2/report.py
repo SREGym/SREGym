@@ -37,7 +37,7 @@ from clients.jev_diag.timeutil import parse_time, seconds_between
 from clients.jev_diag.v2 import checks
 from clients.jev_diag.v2.classifier import OTHER_OPTION, Diagnosis
 from clients.jev_diag.v2.collector import ClusterSnapshot, is_error_line
-from clients.jev_diag.v2.derive import TELEMETRY_RE, object_key
+from clients.jev_diag.v2.derive import TELEMETRY_RE, diagnostic_signals, object_key
 
 MAX_TOTAL = 1600  # characters of one cause's block
 MAX_ROOT = 300  # characters of the Root cause line
@@ -539,7 +539,7 @@ def change_of(comp: dict, setting: str) -> str | None:
 def key_fact(d: Diagnosis) -> str | None:
     if d.evidence_result is None:
         return None
-    return next((e["text"] for e in d.evidence if e["id"] == d.evidence_result.choice), None)
+    return next((e["text"] for e in d.evidence if e["id"] == d.evidence_result.choice and not e.get("context")), None)
 
 
 def supporting_facts(d: Diagnosis) -> list[str]:
@@ -548,7 +548,7 @@ def supporting_facts(d: Diagnosis) -> list[str]:
     if r is None:
         return []
     top = r.probabilities.get(r.choice, r.confidence)
-    text = {e["id"]: e["text"] for e in d.evidence}
+    text = {e["id"]: e["text"] for e in d.evidence if not e.get("context")}
     return [text[i] for i, p in r.ranked() if i != r.choice and i in text and p >= COMPARABLE_SUPPORT * top]
 
 
@@ -948,8 +948,14 @@ def fact_of(snapshot: ClusterSnapshot, d: Diagnosis, subject: Subject) -> str | 
     response = platform_response(sources, None)
     if response:
         candidates.append(governing_setting(snapshot, d, subject, response[0]))
-    candidates += supporting_facts(d) + changed_values(comp) + spec_checks(d) + (comp.get("signals") or [])
+    candidates += supporting_facts(d) + changed_values(comp) + spec_checks(d) + diagnostic_signals(comp)
+    provenance = {e["text"]: e for e in [*(comp.get("change_evidence") or []), *d.evidence]}
+    owners = {(kind.lower(), ns, name) for kind, name, ns in subject.objects}
     for item in candidates:
+        entry = provenance.get(item) or {}
+        source = entry.get("source_object")
+        if entry.get("context") or (source and object_key(source) not in owners):
+            continue
         value = value_text(item, d, comp)
         if value:
             grace = next(
@@ -1064,7 +1070,7 @@ def mechanism(
         return "; ".join(parts)
     if semantics:
         parts.append(semantics)
-    own = [s for s in comp.get("signals") or [] if s != fact and not s.startswith(("errors logged by", "server "))]
+    own = [s for s in diagnostic_signals(comp) if s != fact and not s.startswith(("errors logged by", "server "))]
     own = [s for s in own if not _TREND.search(s) and not re.search(r"ready endpoints|desired replicas", s)]
     login = next((s for s in comp.get("signals") or [] if s.startswith("server ") and "rejects logins" in s), None)
     causal = next((s for s in own if _BECAUSE.search(s)), None) or next((s for s in own if _CAUSAL.search(s)), None)
