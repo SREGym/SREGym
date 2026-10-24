@@ -1079,3 +1079,30 @@ def test_teardown_failure_stays_incomplete_even_when_stage_results_exist():
     assert conductor.finalize_attempt_status() == "incomplete"
     assert conductor.results["incomplete_stage"] == "tearing_down"
     assert conductor.results["missing_stages"] == ""
+
+
+@pytest.mark.parametrize(
+    "failure_class,expected_status",
+    [
+        ("environment_error", "incomplete"),
+        ("harness_error", "incomplete"),
+        ("agent_error", "complete"),
+        ("ambiguous", "complete"),
+    ],
+)
+def test_unscorable_oracle_failures_leave_the_attempt_incomplete(failure_class, expected_status):
+    """An unreachable Prometheus is not the agent's failure, so it must not be scored as one."""
+    verdict = {"success": False, "reason": "prometheus_unreachable", "failure_class": failure_class}
+    conductor = _conductor(
+        diagnosis_evaluation=lambda _solution: {"success": True},
+        mitigation_evaluation=lambda _solution: verdict,
+    )
+
+    conductor._submit_evaluate_and_advance("diagnosis", conductor.stage_sequence[0], 1)
+    conductor._submit_evaluate_and_advance("", conductor.stage_sequence[1], 1)
+
+    assert conductor.results["Mitigation"] == verdict
+    assert conductor.finalize_attempt_status() == expected_status
+    if expected_status == "incomplete":
+        assert conductor.results["incomplete_reason"] == f"mitigation_{failure_class}"
+        assert conductor.results["incomplete_stage"] == "mitigation"

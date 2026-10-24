@@ -16,6 +16,14 @@ _SUSTAINED_SILENCE_SECONDS = 120
 _POLL_INTERVAL_SECONDS = 10
 # Grace period before starting to check (let alerts resolve).
 _BUFFER_SECONDS = 30
+# How long firing alerts may persist after the buffer before they count as the
+# agent's failure. Rate-based alerts such as HighRequestErrorRate average over a
+# 2-minute window and then wait for a scrape and an evaluation, so a correct fix
+# keeps them firing for minutes; the Stratus client measured 138-183 s.
+_RESOLVE_GRACE_SECONDS = 300
+# Consecutive failed Prometheus queries tolerated before the verdict becomes
+# ``prometheus_unreachable``; one dropped exec is not evidence of an outage.
+_UNREACHABLE_RETRIES = 3
 
 
 class AlertOracle(Oracle):
@@ -48,12 +56,24 @@ class AlertOracle(Oracle):
         poll_interval_seconds=_POLL_INTERVAL_SECONDS,
         buffer_seconds=_BUFFER_SECONDS,
         exclude_alerts=None,
+        resolve_grace_seconds=_RESOLVE_GRACE_SECONDS,
+        unreachable_retries=_UNREACHABLE_RETRIES,
     ):
         super().__init__(problem)
         self.sustained_silence_seconds = sustained_silence_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
         self.exclude_alerts = set(exclude_alerts or [])
+        self.resolve_grace_seconds = resolve_grace_seconds
+        self.unreachable_retries = unreachable_retries
+        # Longer than main.py's default evaluation drain, so declare it.
+        self.evaluation_timeout_seconds = (
+            buffer_seconds
+            + resolve_grace_seconds
+            + sustained_silence_seconds
+            + (unreachable_retries + 1) * poll_interval_seconds
+            + 60
+        )
         # Alert *instances* (full label sets, not just alertname) already firing
         # before the fault was injected (environmental noise unrelated to the
         # agent). Populated by ``capture_baseline`` and ignored during
@@ -208,18 +228,26 @@ class AlertOracle(Oracle):
         print(f"⏳ Waiting {self.buffer_seconds}s buffer before checking alerts…")
         time.sleep(self.buffer_seconds)
 
-        # Poll for sustained silence. Any firing alert is an immediate failure.
+        # Poll until alerts clear, then for sustained silence. Alerts still
+        # firing once the resolve grace has passed are the agent's failure; any
+        # alert inside the grace restarts the silence window instead.
         start = time.monotonic()
-        last_log_second = -1
+        silence_start = None
+        last_firing_log = float("-inf")
+        last_silence_log = -1
+        failed_queries = 0
 
         while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= self.sustained_silence_seconds:
-                break
-
+            now = time.monotonic()
             try:
                 firing = self._query_firing_alerts(namespace)
+                failed_queries = 0
             except RuntimeError as exc:
+                failed_queries += 1
+                if failed_queries <= self.unreachable_retries:
+                    print(f"⚠️ Prometheus query failed ({failed_queries}/{self.unreachable_retries}), retrying: {exc}")
+                    time.sleep(self.poll_interval_seconds)
+                    continue
                 # Prometheus is the instrument we grade *with*, not the thing
                 # under test. If it is unreachable we have no evidence either
                 # way, and that is the cluster's problem rather than the
@@ -234,17 +262,30 @@ class AlertOracle(Oracle):
 
             if firing:
                 names = ", ".join(self._fmt_alert(a) for a in firing)
-                print(f"❌ Firing alerts in {namespace}: {names}")
-                return self.fail(
-                    "alerts_still_firing",
-                    namespace=namespace,
-                    alerts=sorted({a.get("labels", {}).get("alertname", "") for a in firing}),
-                )
-
-            elapsed_int = int(elapsed)
-            if elapsed_int >= last_log_second + 30:
-                print(f"🔇 No alerts firing — silence for {elapsed_int}/{self.sustained_silence_seconds}s")
-                last_log_second = elapsed_int
+                if now - start >= self.resolve_grace_seconds:
+                    print(f"❌ Firing alerts in {namespace}: {names}")
+                    return self.fail(
+                        "alerts_still_firing",
+                        namespace=namespace,
+                        alerts=sorted({a.get("labels", {}).get("alertname", "") for a in firing}),
+                    )
+                if silence_start is not None or now - last_firing_log >= 30:
+                    print(
+                        f"⏳ Alerts still firing in {namespace} after {int(now - start)}s "
+                        f"(grace {self.resolve_grace_seconds}s): {names}"
+                    )
+                    last_firing_log = now
+                silence_start = None
+            else:
+                if silence_start is None:
+                    silence_start = now
+                    last_silence_log = -1
+                silent_for = int(now - silence_start)
+                if silent_for >= self.sustained_silence_seconds:
+                    break
+                if silent_for >= last_silence_log + 30:
+                    print(f"🔇 No alerts firing — silence for {silent_for}/{self.sustained_silence_seconds}s")
+                    last_silence_log = silent_for
 
             time.sleep(self.poll_interval_seconds)
 

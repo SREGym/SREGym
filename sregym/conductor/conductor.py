@@ -19,6 +19,7 @@ from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
+from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.submission import (
     SUBMISSION_STAGES,
@@ -52,6 +53,9 @@ from sregym.service.telemetry.prometheus import Prometheus
 # `--stages`' choices so the CLI and the conductor cannot disagree about what
 # exists.
 ALL_STAGES = ("diagnosis", "mitigation")
+
+# Failure classes that never count against the model (see oracles/failure.py).
+UNSCORABLE_FAILURE_CLASSES = frozenset({FailureClass.ENVIRONMENT_ERROR, FailureClass.HARNESS_ERROR})
 
 
 @dataclass
@@ -804,6 +808,13 @@ class Conductor:
                 self.results[stage_name.capitalize()] = outcome
                 timing_key = "TTL" if stage_name == "diagnosis" else "TTM"
                 self.results[timing_key] = time.time() - self.execution_start_time
+                # A failure the oracle attributes to the environment or to
+                # SREGym itself says nothing about the agent. Keep the verdict,
+                # but leave the attempt incomplete so it is rerun, not scored.
+                failure_class = outcome.get("failure_class") if isinstance(outcome, dict) else None
+                if failure_class in UNSCORABLE_FAILURE_CLASSES:
+                    self.record_incomplete_attempt(f"{stage_name}_{failure_class}")
+                    self.results["incomplete_stage"] = stage_name
 
             if next_index < len(self.stage_sequence):
                 next_stage_name = self.stage_sequence[next_index]["name"]

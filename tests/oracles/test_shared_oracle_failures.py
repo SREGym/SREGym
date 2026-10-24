@@ -32,9 +32,97 @@ def alert_oracle():
     oracle.buffer_seconds = 0
     oracle.sustained_silence_seconds = 1
     oracle.poll_interval_seconds = 0
+    oracle.resolve_grace_seconds = 0
+    oracle.unreachable_retries = 0
     oracle.exclude_alerts = set()
     oracle._baseline_instances = set()
     return oracle
+
+
+class _Clock:
+    """Monotonic clock advanced only by the oracle's own sleeps."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture
+def timed_alert_oracle(alert_oracle, monkeypatch):
+    """An AlertOracle with production timing, run against a fake clock."""
+    import sregym.conductor.oracles.alert_oracle as module
+
+    clock = _Clock()
+    monkeypatch.setattr(module, "time", clock)
+    alert_oracle.buffer_seconds = 30
+    alert_oracle.poll_interval_seconds = 10
+    alert_oracle.sustained_silence_seconds = 120
+    alert_oracle.resolve_grace_seconds = 300
+    alert_oracle.unreachable_retries = 3
+    return alert_oracle, clock
+
+
+def _alerts_until(clock, seconds):
+    alert = {"labels": {"alertname": "HighRequestErrorRate", "namespace": "hotel-reservation"}}
+    return lambda _ns: [alert] if clock.now < seconds else []
+
+
+def test_alerts_that_clear_within_the_grace_pass(timed_alert_oracle, monkeypatch):
+    """A correct fix leaves rate-window alerts firing for minutes; that is not a failure."""
+    oracle, clock = timed_alert_oracle
+    monkeypatch.setattr(oracle, "_query_firing_alerts", _alerts_until(clock, 30 + 180))
+
+    assert oracle.evaluate() == {"success": True}
+    # Silence is still required for the full window after the alerts clear.
+    assert clock.now >= 30 + 180 + 120
+
+
+def test_alerts_that_outlast_the_grace_fail(timed_alert_oracle, monkeypatch):
+    oracle, clock = timed_alert_oracle
+    monkeypatch.setattr(oracle, "_query_firing_alerts", _alerts_until(clock, float("inf")))
+
+    verdict = oracle.evaluate()
+
+    assert verdict["reason"] == "alerts_still_firing"
+    assert 30 + 300 <= clock.now < 30 + 300 + 20
+
+
+def test_an_alert_inside_the_silence_window_restarts_it(timed_alert_oracle, monkeypatch):
+    """Flapping alerts must not pass on a partial silence."""
+    oracle, clock = timed_alert_oracle
+    alert = {"labels": {"alertname": "HighRequestErrorRate"}}
+    monkeypatch.setattr(oracle, "_query_firing_alerts", lambda _ns: [alert] if 100 <= clock.now < 110 else [])
+
+    assert oracle.evaluate() == {"success": True}
+    assert clock.now >= 110 + 120
+
+
+def test_a_single_failed_query_is_retried(timed_alert_oracle, monkeypatch):
+    oracle, clock = timed_alert_oracle
+    calls = []
+
+    def flaky(_ns):
+        calls.append(clock.now)
+        if len(calls) == 1:
+            raise RuntimeError("Failed to query Prometheus alerts")
+        return []
+
+    monkeypatch.setattr(oracle, "_query_firing_alerts", flaky)
+
+    assert oracle.evaluate() == {"success": True}
+
+
+def test_evaluation_timeout_covers_the_slowest_verdict():
+    """main.py stops waiting after its default drain unless the oracle declares longer."""
+    oracle = AlertOracle(_Problem())
+
+    worst_case = oracle.buffer_seconds + oracle.resolve_grace_seconds + oracle.sustained_silence_seconds
+    assert oracle.evaluation_timeout_seconds > worst_case
 
 
 def test_unreachable_prometheus_is_environmental_not_a_harness_error(alert_oracle, monkeypatch, capsys):
