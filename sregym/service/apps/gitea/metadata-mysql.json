@@ -1,0 +1,8 @@
+{
+  "Name": "Gitea",
+  "Namespace": "gitea",
+  "Desc": "A Gitea server with persistent Git repositories on MySQL. Seeded users, organizations and repositories come from The Zoo benchmark.",
+  "frontend_service": "gitea",
+  "frontend_port": 3000,
+  "Supported Operations": ["Browse and update Git repositories", "Create and read issues"]
+}
