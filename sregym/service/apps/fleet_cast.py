@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sregym.generators.workload.locust import LocustWorkloadManager
 from sregym.observer import tidb_prometheus
+from sregym.observer.ingress_nginx import IngressNginx
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.tidb_cluster_deploy_helper import TiDBClusterDeployHelper
 from sregym.paths import FLEET_CAST_METADATA
@@ -65,6 +66,9 @@ class FleetCast(Application):
                 print(f"[warn] Failed to update helm repos after retries: {e}")
                 print("[info] Continuing with cached charts if available")
 
+            # Cleanup between attempts deletes the namespace but not the chart's
+            # cluster-scoped objects, which Helm then refuses to adopt.
+            IngressNginx()._remove_orphaned_cluster_objects()
             self._sh(
                 "helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx "
                 "-n ingress-nginx --create-namespace "

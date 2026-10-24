@@ -50,9 +50,10 @@ class IngressNginx:
             self.run_cmd(
                 shlex.join(
                     [
+                        # Helm 4 lists releases in every status by default and
+                        # rejects the Helm 3 `--all` flag.
                         "helm",
                         "list",
-                        "--all",
                         "--namespace",
                         self.namespace,
                         "--filter",
