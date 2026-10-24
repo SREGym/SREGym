@@ -3,6 +3,7 @@
 import contextlib
 import copy
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1909,6 +1910,14 @@ class VirtualizationFaultInjector(FaultInjector):
         import tempfile
 
         for service in microservices:
+            # Drop any baseline manifest left behind by an earlier run. The
+            # recovery step only checks that a file exists at this path. A
+            # stale file would pass that check and get applied against the
+            # wrong cluster state. Removing it first means a rollout timeout
+            # below leaves no file at all.
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(f"/tmp/{service}-orig.yaml")
+
             base_dep = {
                 "apiVersion": "apps/v1",
                 "kind": "Deployment",
@@ -1977,6 +1986,16 @@ class VirtualizationFaultInjector(FaultInjector):
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             delete_result = self.kubectl.exec_command(delete_command)
             print(f"Deleted faulty deployment {service}: {delete_result}")
+
+            if not os.path.exists(original_yaml_path):
+                # Injection writes this file only after the baseline rollout
+                # succeeds. kubectl apply on a missing path only prints an
+                # error, since exec_command returns stderr as a string, so
+                # raise instead.
+                raise FileNotFoundError(
+                    f"No baseline manifest at {original_yaml_path} for '{service}': the baseline "
+                    "rollout never completed, so there is nothing to restore."
+                )
 
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
             apply_result = self.kubectl.exec_command(apply_command)
