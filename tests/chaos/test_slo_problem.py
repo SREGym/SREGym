@@ -132,8 +132,8 @@ def test_registry_keeps_existing_and_slo_ids(monkeypatch):
     monkeypatch.setattr("sregym.conductor.problems.registry.KubeCtl", Mock)
     entries = ProblemRegistry().PROBLEM_REGISTRY
     assert BUILTIN_PROBLEM_IDS.issubset(entries)
-    assert "misconfig_app_hotel_res" in entries
-    assert "service_wrong_pod_selection_hotel_reservation" in entries
+    assert "nightly_rebalance_oom_hotel_reservation" in entries
+    assert "cronjob_sidecar_blocks_completion_hotel_reservation" in entries
     assert not any(problem_id.startswith("gen_") for problem_id in entries)
 
 
@@ -142,9 +142,9 @@ def test_slo_ids_cannot_replace_existing_registry_entries(monkeypatch):
 
     monkeypatch.setattr(
         "sregym.conductor.problems.registry.slo_problems",
-        lambda: {"misconfig_app_hotel_res": Mock()},
+        lambda: {"nightly_rebalance_oom_hotel_reservation": Mock()},
     )
-    with pytest.raises(ValueError, match="SLO problem IDs already registered: misconfig_app_hotel_res"):
+    with pytest.raises(ValueError, match="SLO problem IDs already registered: nightly_rebalance_oom_hotel_reservation"):
         ProblemRegistry()
 
 

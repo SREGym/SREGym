@@ -3,6 +3,9 @@
 Exercises the full pipeline: cluster setup → app deploy → fault inject → evaluate → cleanup.
 Uses misconfig_app_hotel_res (HotelReservation with buggy geo image) in mitigation-only mode.
 Expects MitigationOracle to return success=False since the fault is not repaired.
+
+The problem is saturated and no longer registered for benchmark runs, so the
+test registers it on its own Conductor: it exercises the pipeline, not difficulty.
 """
 
 import asyncio
@@ -11,6 +14,7 @@ import pytest
 
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 
 PROBLEM_ID = "misconfig_app_hotel_res"
 POLL_TIMEOUT_S = 600  # 10 minutes
@@ -22,6 +26,7 @@ async def _run_smoke_test():
     conductor = Conductor(config=ConductorConfig(deploy_loki=False))
 
     # 2. Select the problem
+    conductor.problems.PROBLEM_REGISTRY[PROBLEM_ID] = MisconfigAppHotelRes
     conductor.problem_id = PROBLEM_ID
     # Keep this smoke test independent from a developer's local tasklist.yml.
     conductor.get_problem_stages = lambda: setattr(conductor, "tasklist", ["mitigation"])
