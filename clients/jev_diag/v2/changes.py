@@ -868,6 +868,9 @@ def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datet
     estimate). Routine changes (`routine_reason`) come last and stay out of `recent_changes`: cluster_findings
     summarizes them in a line per writer and kind.
     """
+    for comp in components.values():
+        previous = {e["text"] for e in comp.pop("change_evidence", [])}
+        comp["signals"] = [s for s in comp.get("signals") or [] if s not in previous]
     collected_at = collected_at or now()
     onset, source = estimate_symptom_onset(components, cluster, collected_at)
     cluster["symptom_onset"] = onset.isoformat(timespec="seconds") if onset else None
@@ -911,6 +914,15 @@ def rank_changes(components: dict[str, dict], cluster: dict, collected_at: datet
             if comp is None:
                 continue
             text = describe_change(change, cid)
+            comp.setdefault("change_evidence", []).append(
+                {
+                    "text": text,
+                    "source_object": {k: change.get(k) for k in ("kind", "namespace", "name")},
+                    # Membership in a Namespace is context, not evidence that its
+                    # fields are settings or abnormalities of every contained workload.
+                    "context": change["kind"] == "Namespace",
+                }
+            )
             if text not in comp["signals"]:
                 comp["signals"].append(text)
             if change["object"] == cid and change.get("modified_after_creation_s") is not None:

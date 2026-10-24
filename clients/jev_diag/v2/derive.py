@@ -632,6 +632,12 @@ POINTED_MARKERS = ("errors logged by", "server ")
 OWN_LOG_MARKERS = ("logs report", "Kafka consumer group")
 
 
+def diagnostic_signals(comp: dict) -> list[str]:
+    """Signals relevant to a workload's condition, excluding explicitly marked context."""
+    context = {e["text"] for e in comp.get("change_evidence") or [] if e.get("context")}
+    return [s for s in comp.get("signals") or [] if s not in context]
+
+
 def classify_evidence(components: dict[str, dict]) -> None:
     """Tag each component with the kinds of evidence it carries, so the triage rules apply literally.
 
@@ -643,7 +649,7 @@ def classify_evidence(components: dict[str, dict]) -> None:
     """
     for comp in components.values():
         kinds: set[str] = set()
-        for sig in comp.get("signals") or []:
+        for sig in diagnostic_signals(comp):
             # prefixes first: pointer and log signals quote other text, which may contain change words
             if sig.startswith(POINTED_MARKERS):
                 kinds.add("pointed_at")
@@ -885,7 +891,7 @@ _LEGACY_DERIVED_PREFIXES = ("errors logged by", "logs report", "ResourceQuota ",
 
 def component_health(comp: dict) -> bool | None:
     """Known failures are unhealthy; an unread Pod list cannot establish health or absence."""
-    if comp.get("signals") or comp.get("log_error_lines"):
+    if diagnostic_signals(comp) or comp.get("log_error_lines"):
         return False
     return None if comp.get("pods_not_verified") else True
 

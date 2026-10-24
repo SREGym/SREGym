@@ -18,6 +18,47 @@ def test_object_findings_merge_relationships_without_crossing_namespaces():
         assert "changed" in a["signal"] and "denied" in a["signal"]
 
 
+def test_parent_change_provenance_survives_evidence_collection_without_becoming_own_failure():
+    from clients.jev_diag.v2 import deps, tree
+
+    cid = "deployment/shop/web"
+    comp = {"kind": "Deployment", "name": "web", "namespace": "shop", "signals": [], "created": "2026-01-01T00:00:00Z"}
+    record = {
+        "object": "namespace/shop",
+        "kind": "Namespace",
+        "name": "shop",
+        "namespace": None,
+        "at": "2026-01-01T00:01:00Z",
+        "modified_after_creation_s": 60,
+        "values": ['spec = {"finalizers": ["kubernetes"]}'],
+        "affects": [cid],
+    }
+    cluster = {"_changes": [record]}
+    for _ in range(2):
+        changes.rank_changes({cid: comp}, cluster, parse_time("2026-01-01T00:02:00Z"))
+        assert len(comp["change_evidence"]) == 1
+        evidence = tree.detail_evidence(comp, {})
+        assert evidence[0]["source_object"] == {"kind": "Namespace", "name": "shop", "namespace": None}
+        assert evidence[0]["context"] is True
+        assert deps.own_signals(comp) == []
+        assert derive.component_health(comp) is True
+        derive.classify_evidence({cid: comp})
+        assert comp["evidence_kinds"] == []
+
+
+def test_config_and_role_evidence_retain_their_source_objects():
+    from clients.jev_diag.v2.tree import detail_evidence
+
+    comp = {"kind": "Deployment", "name": "web", "namespace": "shop", "signals": []}
+    detail = {
+        "configmaps": {"settings": {"data": {"PORT": "9000"}}},
+        "rbac": {"roles": [{"kind": "ClusterRole", "name": "reader", "rules": ["pods get"]}]},
+    }
+    evidence = detail_evidence(comp, detail)
+    assert evidence[0]["source_object"] == {"kind": "ConfigMap", "name": "settings", "namespace": "shop"}
+    assert evidence[1]["source_object"] == {"kind": "ClusterRole", "name": "reader", "namespace": None}
+
+
 def test_telemetry_names_are_whole_tokens():
     assert derive.OBSERVABILITY_RE.search("otel-collector")
     assert derive.OBSERVABILITY_RE.search("prometheus-server")

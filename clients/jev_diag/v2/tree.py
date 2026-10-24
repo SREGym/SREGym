@@ -145,6 +145,8 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
     values. The list is capped, so the order decides what the model can select.
     """
     items: list[str] = []
+    sources = {e["text"]: e for e in comp.get("change_evidence") or []}
+    owner = {k: comp.get(k) for k in ("kind", "namespace", "name")}
     w = detail.get("workload") or {}
     changed_env: set[tuple[str, str]] = set()
     tc = detail.get("template_changes") or {}
@@ -193,9 +195,12 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
     items += salient_env
     for name, cm in (detail.get("configmaps") or {}).items():
         for key, value in (cm.get("data") or {}).items():
-            items.append(f"ConfigMap {name} key {key}: {value}")
+            text = f"ConfigMap {name} key {key}: {value}"
+            items.append(text)
+            sources[text] = {"source_object": {"kind": "ConfigMap", "name": name, "namespace": comp.get("namespace")}}
     rbac = detail.get("rbac") or {}
     for role in rbac.get("roles") or []:
+        first = len(items)
         items.append(
             f"RBAC {role.get('kind')} {role.get('name')} bound via {', '.join(role.get('bindings') or [])} grants: "
             f"{'; '.join(role.get('rules') or []) or 'nothing'}"
@@ -203,6 +208,14 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
         )
         for sig in role.get("signals") or []:
             items.append(f"RBAC {role.get('kind')} {role.get('name')}: {sig}")
+        for text in items[first:]:
+            sources[text] = {
+                "source_object": {
+                    "kind": role.get("kind"),
+                    "name": role.get("name"),
+                    "namespace": role.get("namespace", comp.get("namespace")) if role.get("kind") == "Role" else None,
+                }
+            }
     if rbac.get("bindings") is not None:
         items.append(f"RBAC bindings for {rbac.get('service_account')}: {rbac.get('bindings') or 'none'}")
     log_items: list[str] = []
@@ -246,7 +259,12 @@ def detail_evidence(comp: dict, detail: dict) -> list[dict]:
     context = {x for x in dep_items if x.startswith("dependency ") and "looks healthy" in x}
     context |= {x for x in telemetry if not x.startswith("saturation:")}
     return [
-        {"id": f"E{i + 1}", "text": text, **({"context": True} if text in context else {})}
+        {
+            "id": f"E{i + 1}",
+            "text": text,
+            "source_object": sources.get(text, {}).get("source_object", owner),
+            **({"context": True} if text in context or sources.get(text, {}).get("context") else {}),
+        }
         for i, text in enumerate(cap_evidence(items, log_items, event_items, dep_items, other_env))
     ]
 
@@ -1250,14 +1268,15 @@ class IterativeDiagnoser(JevDiagnoser):
         v = investigated[victim]
         d = investigated.get(dep) or {}
         failure_prefixes = ("log x", "repeated failure", "previous log", "event ", "this component's still-occurring")
-        items = [
-            f"{victim}: {e['text']}"
-            for e in v["evidence"]
-            if e["text"].startswith(failure_prefixes) or dep in e["text"]
-        ]
-        items += [f"{dep}: {e['text']}" for e in d.get("evidence") or []]
-        unique = list(dict.fromkeys(items))[:MAX_EVIDENCE]
-        evidence = [{"id": f"E{i + 1}", "text": text} for i, text in enumerate(unique)]
+        items = {}
+        for cid, result in ((victim, v), (dep, d)):
+            owner = {k: snapshot.components[cid].get(k) for k in ("kind", "namespace", "name")}
+            for entry in result.get("evidence") or []:
+                if cid == victim and not (entry["text"].startswith(failure_prefixes) or dep in entry["text"]):
+                    continue
+                text = f"{cid}: {entry['text']}"
+                items.setdefault(text, {**entry, "text": text, "source_object": entry.get("source_object", owner)})
+        evidence = [{**entry, "id": f"E{i + 1}"} for i, entry in enumerate(list(items.values())[:MAX_EVIDENCE])]
         comp = snapshot.components[dep]
         state = {
             "application": snapshot.app,
@@ -1287,14 +1306,15 @@ class IterativeDiagnoser(JevDiagnoser):
                 criteria=FAULT_CATEGORIES,
             )
         }
-        if evidence:
+        selectable = [entry for entry in evidence if not entry.get("context")]
+        if selectable:
             questions[EVIDENCE_QUESTION] = Choice(
                 instructions={
                     "question": "Which single item in `evidence` most directly shows the failure between the two "
                     "components?",
                     "how_to_decide": ["Prefer a probe result or an error message that names the failing operation."],
                 },
-                criteria={item["id"]: item["text"] for item in evidence},
+                criteria={item["id"]: item["text"] for item in selectable},
             )
         response = self._ask(f"chain:{victim}->{dep}", state, questions)
         category = ChoiceResult.from_answer(response.choices[CATEGORY_QUESTION])

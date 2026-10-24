@@ -49,6 +49,7 @@ from clients.jev_diag.v2.derive import (
     TELEMETRY_RE,
     _mentions,
     _name_aliases,
+    diagnostic_signals,
 )
 
 logger = logging.getLogger("all.jev_diag.v2.investigate")
@@ -600,7 +601,7 @@ def dependency_state(snapshot: ClusterSnapshot, dep: str, exclude: str) -> dict:
     """A dependency's condition judged from its own state, not from the errors `exclude` logs about it."""
     comp = snapshot.components[dep]
     own_signals = [
-        s for s in comp.get("signals") or [] if not s.startswith(("errors logged by", "server ", "rejects logins"))
+        s for s in diagnostic_signals(comp) if not s.startswith(("errors logged by", "server ", "rejects logins"))
     ]
     pods = comp.get("pods") or []
     pods_verified = not comp.get("pods_not_verified")

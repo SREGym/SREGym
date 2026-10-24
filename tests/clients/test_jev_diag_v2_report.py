@@ -154,6 +154,71 @@ def test_nearby_change_alone_does_not_establish_an_object_relationship():
     assert "acting on" not in _line(build_report(snap, _diag(OTHER, fault_object=role)), "Root cause")
 
 
+def test_a_foreign_objects_field_never_becomes_a_workload_setting():
+    text = 'Namespace shop was modified 20s ago; now spec = {"finalizers": ["kubernetes"]}; written by helm'
+    web = _comp(
+        "web",
+        signals=[text],
+        change_evidence=[{"text": text, "source_object": {"kind": "Namespace", "name": NS, "namespace": None}}],
+    )
+    d = _diag("deployment/web", [text])
+    d.evidence[0]["source_object"] = {"kind": "Namespace", "name": NS, "namespace": None}
+    report = build_report(_snap({"deployment/web": web}), d)
+    assert "finalizers" not in _line(report, "Root cause")
+
+
+def test_a_field_on_the_selected_object_can_still_be_reported():
+    d = _diag("deployment/web", ["workload dns_policy: None"])
+    d.evidence[0]["source_object"] = {"kind": "Deployment", "name": "web", "namespace": NS}
+    report = build_report(_snap({"deployment/web": _comp("web")}), d)
+    assert "dnsPolicy = None" in _line(report, "Root cause")
+
+
+def test_chain_characterization_preserves_fact_ownership_and_context():
+    from types import SimpleNamespace
+
+    from typesafe_sdk import ChoiceAnswer
+
+    from clients.jev_diag.v2.tree import IterativeDiagnoser
+
+    recorded = []
+
+    def answer(state, questions, **kwargs):
+        recorded.append(questions)
+        answers = {}
+        for name, question in questions.items():
+            first = next(iter(question.criteria))
+            answers[name] = ChoiceAnswer(
+                choice=first, confidence=1, probabilities={key: float(key == first) for key in question.criteria}
+            )
+        return SimpleNamespace(model="fake", usage=None, choices=answers, nouls={}, answers=answers)
+
+    owner = {"kind": "Namespace", "name": NS, "namespace": None}
+    victim = {
+        "verdict_probabilities": {"victim": 1},
+        "evidence": [{"id": "old", "text": "log x2 (ongoing): authentication rejected"}],
+    }
+    backend = {
+        "evidence": [
+            {
+                "id": "old",
+                "text": "Namespace shop was modified; spec = finalizers=kubernetes",
+                "source_object": owner,
+                "context": True,
+            }
+        ]
+    }
+    snap = _snap({"deployment/client": _comp("client"), "deployment/backend": _comp("backend")})
+    diagnoser = IterativeDiagnoser(SimpleNamespace(model="fake", system_one=answer), fetch_detail=lambda *args: {})
+    _, key, evidence = diagnoser.chain_characterization(
+        snap, "deployment/client", "deployment/backend", {"deployment/client": victim, "deployment/backend": backend}
+    )
+    assert evidence[1]["source_object"] == owner and evidence[1]["context"] is True
+    assert evidence[0]["source_object"] == {"kind": "Deployment", "name": "client", "namespace": NS}
+    assert evidence[1]["id"] not in recorded[0]["key_evidence"].criteria
+    assert key.choice == evidence[0]["id"]
+
+
 OTHER = "other"
 
 
