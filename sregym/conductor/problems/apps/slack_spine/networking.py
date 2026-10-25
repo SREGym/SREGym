@@ -263,6 +263,15 @@ class IngressMisrouteSlack(IngressMisroute):
         self._app_deploy = self.app.deploy
         self.app.deploy = self._deploy_with_edge
 
+    @property
+    def ingress_probe_path(self) -> str:
+        return f"{self.path}/channels/chan-0/messages?limit=1"
+
+    @staticmethod
+    def ingress_response_valid(payload) -> bool:
+        # svc-thread also exposes /healthz, but does not serve message history.
+        return isinstance(payload, dict) and isinstance(payload.get("messages"), list)
+
     def _ingress(self, backend: str) -> dict:
         return {
             "apiVersion": "networking.k8s.io/v1",
