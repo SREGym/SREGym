@@ -35,6 +35,10 @@ def test_loki_tools_hide_chaos_streams_and_label_values(monkeypatch):
                                         ["2000000000", "chaos-mesh injected a disruption"],
                                     ],
                                 },
+                                {
+                                    "stream": {"namespace": "team-khaos", "job": "team-khaos/frontend"},
+                                    "values": [["1000000000", "database connection timed out"]],
+                                },
                             ]
                         },
                     }
@@ -47,6 +51,7 @@ def test_loki_tools_hide_chaos_streams_and_label_values(monkeypatch):
     values = loki_server.get_label_values.fn("namespace")
 
     assert "checkout completed" in logs
+    assert "database connection timed out" in logs
     assert "chaos-mesh" not in logs
     assert "chaos-mesh" not in values
     assert "astronomy-shop" in values
@@ -54,6 +59,9 @@ def test_loki_tools_hide_chaos_streams_and_label_values(monkeypatch):
 
 def test_object_references_into_hidden_namespaces_are_not_visible():
     for namespace in HIDDEN_NAMESPACES:
+        assert not visible_log_value(f"{namespace}/helper-7d9f")
         assert not visible_log_value(f'Error syncing pod key="{namespace}/helper-7d9f"')
     assert visible_log_value('Error syncing pod key="astronomy-shop/checkout-7d9f"')
+    assert visible_log_value("team-khaos/frontend")
+    assert visible_log_value('Error syncing pod key="team-khaos/frontend"')
     assert visible_log_value("dial tcp: lookup transit.khaos.svc: no such host")

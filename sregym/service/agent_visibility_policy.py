@@ -1,9 +1,11 @@
 """Shared rules for the Kubernetes and observability data shown to agents."""
 
 import json
+import re
 from collections.abc import Callable
 
 HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
+HIDDEN_OBJECT_PATTERN = rf"(^|[^a-z0-9-])({'|'.join(sorted(HIDDEN_NAMESPACES))})/"
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},
@@ -163,7 +165,7 @@ def filter_openapi_document(data: dict, version: str) -> dict:
 
 def names_hidden_object(value: str) -> bool:
     """Return whether text names an object in a hidden namespace, as cluster components log namespace/name."""
-    return any(f"{namespace}/" in value for namespace in HIDDEN_NAMESPACES)
+    return re.search(HIDDEN_OBJECT_PATTERN, value) is not None
 
 
 def visible_log_value(value: str) -> bool:
