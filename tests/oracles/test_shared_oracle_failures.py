@@ -26,12 +26,13 @@ class _Problem:
 
 @pytest.fixture
 def alert_oracle():
-    """An AlertOracle with no buffer wait and a single poll."""
+    """Skip the buffer and grace period for failure-classification checks."""
     oracle = AlertOracle.__new__(AlertOracle)
     oracle.problem = _Problem()
     oracle.buffer_seconds = 0
     oracle.sustained_silence_seconds = 1
     oracle.poll_interval_seconds = 0
+    oracle.resolve_grace_seconds = 0
     oracle.exclude_alerts = set()
     oracle._baseline_instances = set()
     return oracle
