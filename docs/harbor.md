@@ -127,13 +127,20 @@ reason:
   a replaced kube-proxy, and an admission-webhook fault that needs denied
   connections to hang. k3s enforces NetworkPolicy with kube-router, which
   rejects them at once (`REJECT --reject-with icmp-port-unreachable`), where
-  Calico drops them.
+  Calico drops them. Two problems inject their fault with Chaos Mesh, whose
+  `chaos-daemon` cannot bind-mount the node's `/sys` in the unprivileged
+  cluster. Problems ported to Frappe, Saleor or Slack Spine inherit their
+  source problem's entry.
+- problems too large for one task container (`TOO_LARGE`): the two Train Ticket
+  problems (about 29 GB of memory and 22 CPUs) and Blueprint Hotel
+  Reservation's two retry storms, whose memory grows until the container
+  thrashes at any limit.
 
-These 13 problems are generated but are not reliable as tasks at the default
-size (4 CPUs, 8 GiB) on Daytona. Leave them out of a dataset (`--task-ids`). A
-failed setup is reported as an error, never as a reward. The runs are the three
-sweeps under [Validation status](#validation-status); the first used a 5-minute
-fault wait, the others 10 minutes.
+These problems are generated but are not reliable as tasks. Leave them out of
+a dataset (`--task-ids`). A failed setup is reported as an error, never as a
+reward. The Daytona runs are the three sweeps under
+[Validation status](#validation-status) at 4 CPUs / 8 GiB; the plain-Docker
+runs used 8 CPUs / 16 GiB.
 
 | Problem | Oracle agent, 3 sweeps | Why |
 |---|---|---|
@@ -146,14 +153,16 @@ fault wait, the others 10 minutes.
 | `astronomy_shop_ad_service_image_slow_load` | setup failed 3 of 3 | no alert fires. SREGym runs the load generator without browser traffic, so slow images are probably never requested. |
 | `kafka_queue_problems` | 0.0 twice, setup failed once | `MessageConsumerLag` keeps firing after recovery |
 | `loadgenerator_flood_homepage` | setup failed 3 of 3 | the flood's only alert is CPU throttling on the load generator, which the agent cannot see, so no alert it could act on fires |
-| `capacity_decrease_rpc_retry_storm`, `load_spike_rpc_retry_storm` | setup failed every time | CPU stress on every node starves the API server and Prometheus |
-| `trainticket_f17_nested_sql_select_clause_error`, `trainticket_f22_sql_column_name_mismatch_error` | setup failed every time | Train Ticket's dozens of services overload the sandbox |
+| `file_descriptor_exhaustion` | plain Docker: setup failed 2 of 2 | its alerts did not fire within the wait |
+| `nightly_rebalance_oom_hotel_reservation`, `nightly_rebalance_oom_saleor` | plain Docker: 1.0, then setup failed in 5 of 7 runs | the injected OOM often does not take effect before setup gives up |
+| 18 Slack Spine tasks, e.g. `admission_webhook_tls_mismatch_slack_spine`, `faulty_image_correlated_slack_spine` | plain Docker: 0.0 in every run, a few pass on rerun | the reference fix leaves 99.5% goodput, but `app_health` also needs 95% per load-generator driver, and `session_reaction`, `session_edit` and `session_delete` send only 5 to 30 requests in the window |
+| `consul_stale_snapshot_restore_hotel_reservation`, `profile_mongodb_eviction_unit_mismatch_hotel_reservation` | plain Docker: 0.0 twice | the SLO window passes, then the application check fails (`/hotels did not return hotel results`, `slo_violated`) |
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--backend-image` | `ghcr.io/sregym/sregym-harbor:latest` | Image each task builds on (`docker/harbor`). |
 | `--agent-timeout` | `1800` | Agent time limit in seconds. |
-| `--cpus` / `--memory-mb` / `--storage-mb` | `4` / `8192` / `10240` | Resources requested for the task container. Cloud providers size the sandbox from these. The defaults are Daytona's default per-sandbox limits, which refuse anything larger, and every problem was validated at this size. |
+| `--cpus` / `--memory-mb` / `--storage-mb` | `8` / `16384` / `30720` | Resources requested for the task container. Cloud providers size the sandbox from these. Every generated task was validated at this size on plain Docker; with no limits, the largest working set was about 9 GB (Astronomy Shop) and the k3s volume reached 17 GB. Daytona refuses more than 4 / 8192 / 10240 unless the organization's limits are raised, so pass those values there. |
 | `--dataset-name` | `sregym/<suite>` | Harbor Hub dataset name used in the README. |
 | `--limit`, `--overwrite` | | Standard Harbor adapter flags. |
 
@@ -207,7 +216,19 @@ harbor run -y -p datasets/sregym/network-policy-block -a oracle -e docker \
 ```
 
 Pass the overlay as an absolute path. On a host with fewer CPUs than the task
-requests, keep `--cpus ignore --memory ignore` or use `--override-cpus N`.
+requests, keep `--cpus ignore --memory ignore` or use `--override-cpus N`; pass
+`--cpus limit --memory limit` to hold each trial to the task's size.
+
+Running many trials on one Docker host:
+
+- Harbor's teardown can time out on a loaded host and leave exited task
+  containers, their 10 to 17 GB anonymous k3s volumes and per-trial networks
+  behind. Docker's default address pools allow about 30 networks; after that
+  every trial fails with "all predefined address pools have been fully
+  subnetted". Remove leftovers (`docker container prune`, `docker network
+  prune`, `docker volume prune`) between jobs.
+- Disk I/O, not CPU, limits how many clusters one host runs at once: every
+  trial pulls its application's images into its own cluster.
 
 ### Diagnosing a trial
 
@@ -296,6 +317,17 @@ To publish an update, regenerate with a new image tag and the same secret, run
 | Self-test, oracle and no-op agents, **Harbor Self-Test** workflow (`docker` environment, GitHub runner) | Rewards 1 and 0 |
 | `operator_overload_replicas` (FleetCast), **Harbor Oracle Sweep** (`docker` environment, GitHub amd64 runner) | 1.0 once the overlay raised the open-file limit; before, TiKV exited at start |
 
+**Plain Docker, every task.** Harbor 0.24's `docker` environment on a 64-core
+RHEL 9 host (cgroup v2), with the overlay, 8 CPUs / 16 GiB / 30 GB enforced per
+trial, SREGym `main` at #1135:
+
+| Check | Result |
+|---|---|
+| Privileges | Without the overlay the cluster fails (`unshare: Operation not permitted`). Of the overlay, only `seccomp=unconfined` and `systempaths=unconfined` are needed (plus the open-file limit for FleetCast). `docker inspect`: `Privileged=false`, no added capabilities. |
+| Oracle agent, all 200 generated tasks, up to 3 runs each | **172 pass** (154 on the first run). The rest are in the table under [Generate tasks](#generate-tasks). |
+| No-op agent, the 22 alert- and SLO-graded tasks that pass | 0.0 in all 22 (one setup error) |
+| Claude Code (Opus 5.5), 3 attempts on 171 of the passing tasks | Mean reward 0.81 over 510 attempts; 152 solved at least once. The 3 GitLab problems were never solved. |
+
 `kafka_producer_leak` and `postgres_lock_contention_product_catalog`, flaky in
 the first sweep (2 of 3 and 1 of 2), scored 1.0 in both later ones.
 
@@ -320,7 +352,7 @@ still scores 1.0 on Daytona (amd64); it has not been rerun on arm64. On an arm64
 (Docker Desktop) the Prometheus stack once did not become ready within the
 hour; that did not recur on arm64 Linux.
 
-Not yet validated: other cloud providers and real agents.
+Not yet validated: other cloud providers.
 
 The **Harbor Oracle Sweep** workflow (`.github/workflows/harbor-oracle.yml`,
 manual) runs Harbor's oracle agent on real problems, one problem per runner,
@@ -333,9 +365,10 @@ with the local Docker environment.
 - **k3s-compatible problems only.** Problems that need real nodes, KIND node
   containers or Calico are skipped. Validate individual tasks with the oracle
   agent before relying on them.
-- **Sized for a 4-CPU, 8 GiB sandbox.** 13 generated problems are not reliable
-  at that size: they overload the sandbox, or their alerts do not fire or do
-  not clear in time. See [Generate tasks](#generate-tasks).
+- **Sized for an 8-CPU, 16 GiB sandbox.** At Daytona's default 4 CPUs / 8 GiB,
+  Astronomy Shop, FleetCast and Saleor run close to their memory limit. Some
+  generated problems are not reliable at any size: their alerts do not fire or
+  clear in time, or their oracle is too strict. See [Generate tasks](#generate-tasks).
 - **Alert-graded problems are graded when the agent stops.** `AlertOracle`
   fails while any new alert fires in the namespace, and alerts lag a fix by a
   few minutes. The reference solution waits for the oracle to pass; an agent

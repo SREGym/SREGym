@@ -246,6 +246,12 @@ def test_inspection_skips_ports_of_problems_the_unprivileged_cluster_cannot_run(
     )
 
 
+def test_inspection_skips_problems_too_large_for_one_task_container():
+    inspection = adapter.inspect_problems(["network_policy_block", *adapter.TOO_LARGE])
+    assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]
+    assert inspection.skipped == adapter.TOO_LARGE
+
+
 def test_inspection_skips_problems_the_unprivileged_cluster_cannot_run():
     # inspect_problems() rejects unknown IDs, so a renamed problem fails here.
     inspection = adapter.inspect_problems(["network_policy_block", *adapter.K3S_UNSUPPORTED])

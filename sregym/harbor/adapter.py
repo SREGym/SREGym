@@ -41,11 +41,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BACKEND_IMAGE = "ghcr.io/sregym/sregym-harbor:latest"
 # SREGym's own runner gives agents 1800s per attempt.
 DEFAULT_AGENT_TIMEOUT_S = 1800
-# Task container resources: the largest sandbox Daytona allows by default, the
-# size every problem was validated at. Larger requests fail to start there.
-DEFAULT_CPUS = 4
-DEFAULT_MEMORY_MB = 8192
-DEFAULT_STORAGE_MB = 10240
+# Task container resources. Measured on plain Docker with no limits, the
+# largest working sets were about 9 GB (Astronomy Shop) and the k3s volume grew
+# to 17 GB; every generated task was validated at this size. Daytona refuses
+# more than 4 CPUs / 8 GiB unless the organization's limits are raised.
+DEFAULT_CPUS = 8
+DEFAULT_MEMORY_MB = 16384
+DEFAULT_STORAGE_MB = 30720
 # Default oracle budget: the base mitigation oracle waits up to 60s for
 # rollouts, and custom oracles can declare a longer evaluation_timeout_seconds.
 DEFAULT_GRADE_TIMEOUT_S = 900
@@ -93,6 +95,21 @@ K3S_UNSUPPORTED = {
         "injects its fault with Chaos Mesh, whose chaos-daemon bind-mounts the node's /sys; "
         "the unprivileged cluster forbids that mount"
     ),
+}
+
+# Problems that need far more than one task container should hold, with the
+# reason. Measured on plain Docker with no limits.
+TOO_LARGE = {
+    "trainticket_f17_nested_sql_select_clause_error": (
+        "deploys Train Ticket, whose dozens of services need about 29 GB of memory and 22 CPUs"
+    ),
+    "trainticket_f22_sql_column_name_mismatch_error": (
+        "deploys Train Ticket, whose dozens of services need about 29 GB of memory and 22 CPUs"
+    ),
+    "capacity_decrease_rpc_retry_storm": (
+        "its retry storm grows memory without bound (15 GB of 16 GiB, then thrashing the host)"
+    ),
+    "load_spike_rpc_retry_storm": "its retry storm grows memory without bound (16 GiB, then thrashing the host)",
 }
 
 
@@ -171,6 +188,9 @@ def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
             continue
         if problem_id in K3S_UNSUPPORTED:
             inspection.skipped[problem_id] = K3S_UNSUPPORTED[problem_id]
+            continue
+        if problem_id in TOO_LARGE:
+            inspection.skipped[problem_id] = TOO_LARGE[problem_id]
             continue
         if port_sources.get(problem_id) in K3S_UNSUPPORTED:
             source = port_sources[problem_id]
