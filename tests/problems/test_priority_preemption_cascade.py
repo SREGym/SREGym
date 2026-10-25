@@ -1,6 +1,12 @@
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+from kubernetes.client import Configuration
+from kubernetes.client.exceptions import ApiException
 
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 
@@ -14,6 +20,7 @@ def _problem():
     problem._deployment_priority_classes = {}
     problem._target_original_resources = None
     problem._target_original_node_selector = None
+    problem._application_check = None
     return problem
 
 
@@ -289,6 +296,179 @@ def test_inject_sizes_pressure_after_padding_and_cleans_namespace_on_setup_failu
 
     assert order.index("padding") < order.index("pressure-size")
     assert deleted == [problem.PRESSURE_NAMESPACE]
+
+
+def test_peer_rollouts_finish_in_dependency_order():
+    problem = _problem()
+    names = ["frontend", "rate", "consul", "mongodb-rate", "reservation", "search", "memcached-rate"]
+    problem._app_deployments = lambda: [_deployment(name) for name in names]
+    operations = []
+    problem.apps_v1 = SimpleNamespace(
+        patch_namespaced_deployment=lambda name, **kwargs: operations.append(("patch", name))
+    )
+    problem._wait_for_deployment_ready = lambda name, namespace: operations.append(("ready", name))
+
+    problem._protect_peer_deployments()
+
+    expected = ["consul", "memcached-rate", "mongodb-rate", "rate", "search", "frontend"]
+    assert operations == [(action, name) for name in expected for action in ("patch", "ready")]
+
+
+def test_preparation_is_functional_and_target_is_priority_zero_before_enabling_default():
+    problem = _problem()
+    target = _pod("reservation-0", memory="8Gi")
+    operations = []
+    problem._delete_support_resources = lambda: None
+    problem._capture_priority_classes = lambda: None
+    problem._target_pod = lambda: target
+    problem._target_request_for_node = lambda node: "8Gi"
+    problem._capture_app_template_state = lambda: None
+    problem._create_or_replace_priority_class = lambda name, **kwargs: operations.append(
+        (name, kwargs["global_default"])
+    )
+    problem._protect_peer_deployments = lambda: operations.append("peers")
+    problem._patch_target_requests = lambda: operations.append("target-requests")
+    problem._pin_target_to_node = lambda: operations.append("target-pin")
+    problem._ensure_target_preemptable = lambda pod: operations.append("priority-zero")
+    problem._application_check = lambda: operations.append("healthy-requests")
+    problem._create_capacity_padding = lambda: []
+    problem._pressure_request_for_target_pod = lambda pod: "12Gi"
+    problem._create_pressure_deployment = lambda: operations.append("pressure")
+    problem._wait_for_pressure_pod = lambda: _pod("pressure")
+    problem._ensure_pressure_can_preempt_target = lambda *args: None
+    problem._wait_for_preemption = lambda: None
+
+    problem.inject_fault()
+
+    assert operations == [
+        (problem.PLATFORM_PRIORITY_CLASS, False),
+        (problem.PRODUCTION_PRIORITY_CLASS, False),
+        "peers",
+        "target-requests",
+        "target-pin",
+        "priority-zero",
+        "healthy-requests",
+        (problem.PLATFORM_PRIORITY_CLASS, True),
+        "pressure",
+    ]
+
+
+def test_broken_preparation_does_not_start_pressure():
+    problem = _problem()
+    target = _pod("reservation-0")
+    for name in (
+        "_delete_support_resources",
+        "_capture_priority_classes",
+        "_capture_app_template_state",
+        "_protect_peer_deployments",
+        "_patch_target_requests",
+        "_pin_target_to_node",
+    ):
+        setattr(problem, name, lambda: None)
+    problem._target_pod = lambda: target
+    problem._target_request_for_node = lambda node: "8Gi"
+    problem._ensure_target_preemptable = lambda pod: None
+    defaults = []
+    problem._create_or_replace_priority_class = lambda name, **kwargs: defaults.append(kwargs["global_default"])
+
+    def broken():
+        raise ValueError("application not healthy")
+
+    problem._application_check = broken
+    problem._create_capacity_padding = lambda: pytest.fail("must not start pressure")
+    with pytest.raises(ValueError, match="application not healthy"):
+        problem.inject_fault()
+    assert defaults == [False, False]
+
+
+@pytest.mark.parametrize("status", [401, 403, 429])
+def test_application_probe_preserves_api_errors(status):
+    problem = _problem()
+    problem._probe_application = lambda: (_ for _ in ()).throw(_api_exception(status))
+    with pytest.raises(ApiException) as error:
+        problem._wait_for_application()
+    assert error.value.status == status
+
+
+def test_application_requests_can_settle_after_a_rollout(monkeypatch):
+    problem = _problem()
+    problem._probe_application = Mock(side_effect=[_api_exception(503), None])
+    monkeypatch.setattr("sregym.conductor.problems.priority_preemption_cascade.time.sleep", lambda _: None)
+    problem._wait_for_application()
+    assert problem._probe_application.call_count == 2
+
+
+def test_application_request_failure_is_bounded(monkeypatch):
+    problem = _problem()
+    problem._probe_application = Mock(side_effect=ValueError("HTTP 500"))
+    monkeypatch.setattr(
+        "sregym.conductor.problems.priority_preemption_cascade.time.monotonic", Mock(side_effect=[0, 61])
+    )
+    with pytest.raises(ValueError, match="HTTP 500"):
+        problem._wait_for_application()
+
+
+@pytest.mark.parametrize(
+    "status,payload,valid",
+    [
+        (200, {"type": "FeatureCollection", "features": [{"id": "40", "properties": {"name": "Hotel"}}]}, True),
+        (200, "OK", False),
+        (200, {"type": "FeatureCollection", "features": []}, False),
+        (200, {"type": "FeatureCollection", "features": [None]}, False),
+        (200, {"type": "FeatureCollection", "features": [{"id": "40"}]}, False),
+        (302, {}, False),
+        (500, {"error": "no connection available"}, False),
+    ],
+)
+def test_real_api_client_checks_search_and_recommendations(monkeypatch, status, payload, valid):
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(200 if self.path == "/other" else status)
+            self.send_header("Content-Type", "application/json")
+            if status == 302:
+                self.send_header("Location", "/other")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    configuration = Configuration(host=f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr(Configuration, "get_default_copy", lambda: configuration)
+    problem = _problem()
+    problem.app = SimpleNamespace(frontend_service="frontend", frontend_port=5000)
+    try:
+        if valid:
+            problem._probe_application()
+            assert len(requests) == 2
+            assert requests[1].endswith("/recommendations?lat=38.0235&lon=-122.095&require=dis")
+        else:
+            with pytest.raises((ValueError, ApiException)):
+                problem._probe_application()
+            assert len(requests) == 1
+        assert requests[0].startswith("/api/v1/namespaces/hotel-reservation/services/http:frontend:5000/proxy/hotels?")
+        assert "inDate=2030-01-10&outDate=2030-01-11" in requests[0]
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def test_recovery_checks_function_after_the_target_rollout():
+    problem = _problem()
+    order = []
+    problem._make_platform_priority_safe = lambda: order.append("policy")
+    problem._protect_target_deployment = lambda: order.append("target")
+    problem._wait_for_deployment_ready = lambda *args: order.append("ready")
+    problem._application_check = lambda: order.append("requests")
+    problem.recover_fault()
+    assert order == ["policy", "target", "ready", "requests"]
 
 
 def test_preemption_evidence_requires_scheduler_event_and_replacement_priority():
