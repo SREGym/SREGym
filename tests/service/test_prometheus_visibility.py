@@ -1,9 +1,10 @@
+import re
 from pathlib import Path
 
 import yaml
 
 from mcp_server import prometheus_server
-from sregym.service.agent_visibility_policy import HIDDEN_NAMESPACES
+from sregym.service.agent_visibility_policy import HIDDEN_NAMESPACES, HIDDEN_OBJECT_PATTERN
 
 
 class FakeResponse:
@@ -31,6 +32,10 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
                                 {"metric": {"namespace": "chaos-mesh", "pod": "chaos-daemon-123"}, "value": [1, "1"]},
                                 {"metric": {"namespace": "khaos", "pod": "helper"}, "value": [1, "1"]},
                                 {"metric": {"namespace": "astronomy-shop", "pod": "checkout"}, "value": [1, "1"]},
+                                {
+                                    "metric": {"namespace": "team-khaos", "job": "team-khaos/frontend"},
+                                    "value": [1, "1"],
+                                },
                             ],
                         }
                     }
@@ -53,7 +58,8 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
 
     assert "checkout" in metrics
     assert "chaos-mesh" not in metrics
-    assert "khaos" not in metrics
+    assert "'namespace': 'khaos'" not in metrics
+    assert "team-khaos/frontend" in metrics
     assert "CheckoutDown" in alerts
     assert "chaos-mesh" not in alerts
 
@@ -78,3 +84,11 @@ def test_observability_collectors_use_the_shared_hidden_namespaces():
     )
     assert namespace_rule["action"] == "drop"
     assert set(namespace_rule["regex"].split("|")) == HIDDEN_NAMESPACES
+
+    stages = promtail_values["config"]["snippets"]["pipelineStages"]
+    assert {"cri": {}} in stages
+    expression = next(stage["drop"]["expression"] for stage in stages if "drop" in stage)
+    assert expression == HIDDEN_OBJECT_PATTERN
+    assert re.search(expression, 'key="khaos/pg-lock-holder"')
+    assert not re.search(expression, 'key="astronomy-shop/checkout"')
+    assert not re.search(expression, 'key="team-khaos/frontend"')

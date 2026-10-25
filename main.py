@@ -43,6 +43,7 @@ from sregym.traces import postprocess as trace_postprocess
 from sregym.traces import store as trace_store
 
 LAUNCHER = AgentLauncher()
+_launcher_cleanup_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
@@ -60,6 +61,22 @@ def problem_cleanup_timeout(conductor) -> float:
     problem = getattr(conductor, "problem", None)
     problem_timeout = getattr(problem, "cleanup_timeout_seconds", CLEANUP_DRAIN_TIMEOUT_SECONDS)
     return max(CLEANUP_DRAIN_TIMEOUT_SECONDS, problem_timeout)
+
+
+def cleanup_interrupted_problem(conductor) -> None:
+    """Give an interrupted workload the same bounded teardown as a completed run."""
+    if getattr(conductor, "problem", None) is None:
+        return
+    try:
+        if conductor.close_submissions():
+            asyncio.run(conductor.wait_for_submission_evaluations(timeout=EVALUATION_DRAIN_TIMEOUT_SECONDS))
+        cleanup = conductor.finish_problem_in_background()
+        cleanup.result(timeout=problem_cleanup_timeout(conductor))
+    except TimeoutError:
+        conductor.abandon_submission_work()
+        logger.warning("Interrupted benchmark work exceeded its deadline; no further cleanup will run")
+    except Exception as exc:
+        logger.warning("Interrupted benchmark cleanup did not finish cleanly: %s", exc)
 
 
 def _http_endpoint(value: str) -> str:
@@ -229,6 +246,7 @@ def driver_loop(
     agent_timeout: int = 1800,
     resume_csv: str | None = None,
     judge_backend: str = "api",
+    stop_event: threading.Event | None = None,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -241,15 +259,28 @@ def driver_loop(
         use_external_harness: If True, inject fault and exit without running evaluation logic.
         n_attempts: Number of end-to-end attempts to run each problem.
         resume_csv: Path to a previous results CSV to resume from (skip completed problems).
+        stop_event: Optional signal to stop before starting more driver work.
     """
 
+    progress: Progress | None = None
+
     async def driver():
+        nonlocal progress
+        all_results_for_agent = []
+
+        def check_interrupted() -> None:
+            if stop_event is not None and stop_event.is_set():
+                raise BenchmarkCampaignAborted(
+                    "Benchmark interrupted by user.", [{agent_to_run: all_results_for_agent}]
+                )
+
         base_dir = Path("results") / get_current_datetime_formatted()
         base_dir.mkdir(parents=True, exist_ok=True)
         global _driver_base_dir
         _driver_base_dir = base_dir
         # give the API a moment to bind
         await asyncio.sleep(1)
+        check_interrupted()
 
         # Verify agent exists in registry (skip if using external harness)
         if use_external_harness:
@@ -270,8 +301,6 @@ def driver_loop(
             console.log("🔒 Starting Kubernetes API proxy to hide chaos namespaces...")
             conductor.start_k8s_proxy()
             LAUNCHER.set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
-
-        all_results_for_agent = []
 
         async def finish_problem_with_deadline(timeout_reason: str) -> bool:
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
@@ -368,6 +397,7 @@ def driver_loop(
         progress.start()
 
         for pid in problem_ids:
+            check_interrupted()
             if pid in completed_problems:
                 console.log(f"⏭️  Skipping already-completed problem: {pid}")
                 continue
@@ -382,6 +412,7 @@ def driver_loop(
                 attempt for attempt in range(1, n_attempts + 1) if attempt not in completed_attempts.get(pid, set())
             ]
             for attempt_position, attempt in enumerate(attempts_to_run):
+                check_interrupted()
                 abort_campaign_after_attempt = False
                 progress.update(
                     task_id,
@@ -414,6 +445,7 @@ def driver_loop(
                 result = None
                 deploy_cleanup_failed = False
                 for deploy_attempt in range(1, max_deploy_retries + 1):
+                    check_interrupted()
                     try:
                         result = await conductor.start_problem()
                         break  # Success — exit retry loop
@@ -443,6 +475,7 @@ def driver_loop(
                             )
                             result = None
 
+                check_interrupted()
                 if result is None:
                     # The inner retry loop already logged the failure. Don't crash the
                     # entire driver — record the failure, clean up cluster state, and
@@ -523,7 +556,9 @@ def driver_loop(
                             path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
                         )
                         if reg:
+                            check_interrupted()
                             agent_proc = await LAUNCHER.ensure_started(reg)
+                            check_interrupted()
                 else:
                     console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
                     if conductor.close_submissions():
@@ -544,6 +579,7 @@ def driver_loop(
                 agent_start_time = time.monotonic()
                 conductor.agent_deadline_monotonic = agent_start_time + agent_timeout
                 while not abort_campaign_after_attempt and conductor.submission_stage != "done":
+                    check_interrupted()
                     if time.monotonic() > conductor.agent_deadline_monotonic:
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
@@ -671,6 +707,7 @@ def driver_loop(
                         timeout = 60  # seconds
                         elapsed = 0
                         while elapsed < timeout:
+                            check_interrupted()
                             agent_proc.proc.poll()
                             if agent_proc.proc.returncode is not None:
                                 console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
@@ -802,7 +839,11 @@ def driver_loop(
 
         return [{agent_to_run: all_results_for_agent}]
 
-    return asyncio.run(driver())
+    try:
+        return asyncio.run(driver())
+    finally:
+        if progress is not None:
+            progress.stop()
 
 
 def _run_driver_and_shutdown(
@@ -814,6 +855,7 @@ def _run_driver_and_shutdown(
     agent_timeout: int = 1800,
     resume_csv: str | None = None,
     judge_backend: str = "api",
+    stop_event: threading.Event | None = None,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     global _driver_error, _driver_results
@@ -827,6 +869,7 @@ def _run_driver_and_shutdown(
             agent_timeout=agent_timeout,
             resume_csv=resume_csv,
             judge_backend=judge_backend,
+            stop_event=stop_event,
         )
         _driver_results = results
     except BenchmarkCampaignAborted as exc:
@@ -837,7 +880,12 @@ def _run_driver_and_shutdown(
         _driver_error = exc
         logger.exception("Driver thread crashed")
     finally:
-        LAUNCHER.cleanup_all()
+        with _launcher_cleanup_lock:
+            LAUNCHER.cleanup_all()
+        if stop_event is not None and stop_event.is_set():
+            # This thread owns deployment, so its setup work has stopped before
+            # recovery starts. The main thread must not tear down concurrently.
+            cleanup_interrupted_problem(conductor)
         request_shutdown()
 
 
@@ -955,6 +1003,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         logger.info(f"Running {suite}: {len(problem_selection)} problems")
 
     # Start the driver in the background; it will call request_shutdown() when finished
+    stop_event = threading.Event()
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
         args=(
@@ -967,7 +1016,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
             args.resume,
         ),
         name="driver",
-        kwargs={"judge_backend": judge_backend},
+        kwargs={"judge_backend": judge_backend, "stop_event": stop_event},
         daemon=True,
     )
     driver_thread.start()
@@ -976,12 +1025,19 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     try:
         run_api(conductor)
     except KeyboardInterrupt:
-        # If interrupted, still try to shut down cleanly
-        LAUNCHER.cleanup_all()
+        stop_event.set()
+        with _launcher_cleanup_lock:
+            LAUNCHER.cleanup_all()
         request_shutdown()
+        driver_thread.join(timeout=EVALUATION_DRAIN_TIMEOUT_SECONDS + problem_cleanup_timeout(conductor))
+        if driver_thread.is_alive():
+            conductor.abandon_submission_work()
+            _driver_error = RuntimeError("Interrupted benchmark driver did not stop before its deadline")
+            logger.warning("Driver did not stop before the interrupt deadline; refusing concurrent teardown")
     finally:
         # Stop any remaining agent containers/processes
-        LAUNCHER.cleanup_all()
+        with _launcher_cleanup_lock:
+            LAUNCHER.cleanup_all()
         if not args.use_external_harness:
             conductor.stop_k8s_proxy()
 
