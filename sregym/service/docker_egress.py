@@ -60,9 +60,16 @@ def _find_host_ca_bundle() -> Path:
 
 
 class DockerEgress:
-    def __init__(self, image: str = DEFAULT_EGRESS_PROXY_IMAGE, *, k8s_proxy_port: int = 16443):
+    def __init__(
+        self,
+        image: str = DEFAULT_EGRESS_PROXY_IMAGE,
+        *,
+        k8s_proxy_port: int = 16443,
+        disable_bridge_address: bool = False,
+    ):
         self.image = image
         self.k8s_proxy_port = k8s_proxy_port
+        self.disable_bridge_address = disable_bridge_address
         self._network_name: str | None = None
         self._proxy_name: str | None = None
         self._cert_volume: str | None = None
@@ -85,12 +92,11 @@ class DockerEgress:
 
     def docker_args(self) -> list[str]:
         self._require_ready()
-        return [
-            f"--network={self._network_name}",
-            "--add-host=host.docker.internal:host-gateway",
-            "-v",
-            f"{self._cert_volume}:/etc/evaluation-egress:ro",
-        ]
+        args = [f"--network={self._network_name}"]
+        if not self.disable_bridge_address:
+            args.append("--add-host=host.docker.internal:host-gateway")
+        args.extend(["-v", f"{self._cert_volume}:/etc/evaluation-egress:ro"])
+        return args
 
     def environment(self) -> dict[str, str]:
         self._require_ready()
@@ -196,8 +202,13 @@ class DockerEgress:
             state_dir = self._tmp_dir
             if state_dir is None:
                 raise RuntimeError("Filtered egress state is not initialized")
+            network_args = ["docker", "network", "create", "--internal"]
+            if self.disable_bridge_address:
+                # An internal bridge can still reach its host-side address.
+                # Company tools must go through the selected HTTP endpoints.
+                network_args.extend(["--opt", "com.docker.network.bridge.inhibit_ipv4=true"])
             self._run_docker_checked(
-                ["docker", "network", "create", "--internal", self._network_name],
+                [*network_args, self._network_name],
                 "create the filtered egress network",
             )
             self._run_docker_checked(

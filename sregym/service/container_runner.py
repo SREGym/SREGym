@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 import yaml
 
 from sregym.service.docker_egress import DEFAULT_EGRESS_PROXY_IMAGE, DockerEgress
+from sregym.service.endpoint_access import EndpointAccess
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.provider_endpoints import provider_endpoint_rules
 
@@ -121,6 +122,7 @@ class ContainerConfig:
     published_ports: list[str] = field(default_factory=list)
     forward_host_credentials: bool = True
     codex_auth: Literal["copy", "shared", "none"] = "copy"
+    endpoint_access: EndpointAccess | None = None
 
 
 class ContainerRunner:
@@ -280,7 +282,11 @@ class ContainerRunner:
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
         self._credential_tmps: list[str] = []
-        self._egress = DockerEgress(self.config.egress_proxy_image, k8s_proxy_port=self.config.k8s_proxy_port)
+        self._egress = DockerEgress(
+            self.config.egress_proxy_image,
+            k8s_proxy_port=self.config.k8s_proxy_port,
+            disable_bridge_address=self.config.endpoint_access is not None,
+        )
         self._agent_tools_volume: str | None = None
 
     @property
@@ -311,27 +317,47 @@ class ContainerRunner:
                 self.cleanup_agent_tools()
 
     def _configured_egress_rules(self, env_vars: dict[str, str]) -> tuple[EndpointRule, ...]:
-        rules = {
-            EndpointRule("host.docker.internal", int(env_vars.get("API_PORT", "8000")), inspect_tools=False),
-            EndpointRule("host.docker.internal", self.config.k8s_proxy_port, inspect_tools=False),
-            EndpointRule("host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954")), inspect_tools=False),
-        }
-        rules.update(
+        rules = set(
             provider_endpoint_rules(
                 self.config.internet_policy,
                 env_vars,
                 codex_subscription_auth=(
                     self.config.internet_policy.is_filtered
                     and (self.config.internet_policy.agent_name or "").casefold() == "codex"
-                    and _codex_subscription_auth_available(Path.home() / ".codex" / "auth.json")
+                    and _codex_subscription_auth_available(
+                        Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "auth.json"
+                    )
                 ),
             )
         )
-        rules.update(
-            EndpointRule.from_url(_replace_loopback_host(endpoint))
-            for endpoint in self.config.internet_policy.additional_allowed_endpoints
-        )
+        if self.config.endpoint_access is not None:
+            # The public gateway replaces host Kubernetes/MCP and all optional
+            # application destinations. Model transport remains unchanged.
+            gateway = EndpointRule.from_url(self.config.endpoint_access.gateway_url)
+            rules.add(EndpointRule(gateway.host, gateway.port, inspect_tools=False))
+        else:
+            rules.update(
+                {
+                    EndpointRule("host.docker.internal", int(env_vars.get("API_PORT", "8000")), inspect_tools=False),
+                    EndpointRule("host.docker.internal", self.config.k8s_proxy_port, inspect_tools=False),
+                    EndpointRule(
+                        "host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954")), inspect_tools=False
+                    ),
+                }
+            )
+            rules.update(
+                EndpointRule.from_url(_replace_loopback_host(endpoint))
+                for endpoint in self.config.internet_policy.additional_allowed_endpoints
+            )
         return tuple(sorted(rules))
+
+    def set_endpoint_access(self, access: EndpointAccess | None) -> None:
+        if access is not None and (not self.config.internet_policy.is_filtered or not self.config.harden_container):
+            raise RuntimeError("This application requires filtered container networking and container hardening")
+        if access != self.config.endpoint_access:
+            self.cleanup_egress_proxy()
+            self.config.endpoint_access = access
+            self._egress.disable_bridge_address = access is not None
 
     @property
     def has_prepared_agent_tools(self) -> bool:
@@ -536,7 +562,7 @@ class ContainerRunner:
             args.extend(["-v", f"{self._agent_tools_volume}:{AGENT_TOOLS_CONTAINER_PATH}:ro"])
 
         # Mount kubeconfig (read-only)
-        if self.config.kubeconfig_path and self.config.kubeconfig_path.exists():
+        if not self.config.endpoint_access and self.config.kubeconfig_path and self.config.kubeconfig_path.exists():
             kubeconfig_path = self._prepare_kubeconfig(self.config.kubeconfig_path)
             args.extend(["-v", f"{kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
@@ -565,14 +591,22 @@ class ContainerRunner:
         if self.config.logs_path:
             self.config.logs_path.mkdir(parents=True, exist_ok=True)
             args.extend(["-v", f"{self.config.logs_path.resolve()}:/logs"])
+            if self.config.endpoint_access is not None and self.config.internet_policy.agent_name == "codex":
+                # An independent world cutoff kills the whole container before
+                # Codex's finally block can archive subscription sessions.
+                sessions = self.config.logs_path.resolve() / "sessions"
+                sessions.mkdir(exist_ok=True)
+                args.extend(["-v", f"{sessions}:/root/.codex/sessions"])
 
         # Mount only the needed SREGym-applications subdirectories (read-only)
-        if self.config.sregym_apps_path and self.config.sregym_app_subdirs:
+        if not self.config.endpoint_access and self.config.sregym_apps_path and self.config.sregym_app_subdirs:
             for subdir in self.config.sregym_app_subdirs:
                 host_path = self.config.sregym_apps_path / subdir
                 if host_path.exists():
                     args.extend(["-v", f"{host_path.resolve()}:/opt/sregym/SREGym-applications/{subdir}:ro"])
 
+        if self.config.endpoint_access is not None:
+            args.extend(["-v", f"{self.config.endpoint_access.public_dir.resolve()}:/opt/company:ro"])
         return args
 
     def _prepare_kubeconfig(self, source: Path) -> Path:
@@ -612,7 +646,18 @@ class ContainerRunner:
             exec_input.container_name = container_name
         cmd.extend(self._build_env_flags(exec_input.env))
         cmd.append(self.config.image)
-        cmd.append(exec_input.command)
+        command = exec_input.command
+        if self.config.endpoint_access is not None:
+            access = self.config.endpoint_access
+            import time
+
+            if time.monotonic() >= access.deadline_monotonic:
+                raise TimeoutError("The application response deadline has passed")
+            temporary = access.container_record.with_suffix(".publishing")
+            temporary.write_text(json.dumps({"name": exec_input.container_name}) + "\n")
+            temporary.replace(access.container_record)
+            command = access.wrap_command(command)
+        cmd.append(command)
         return cmd
 
     def build_composite_command(

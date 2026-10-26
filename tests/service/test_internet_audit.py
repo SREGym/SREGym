@@ -202,6 +202,7 @@ def test_driver_persists_audit_before_shutdown(audit_runner, tmp_path, monkeypat
     append(log, record("preflight.test"))
     conductor = Mock()
     conductor.problem = None
+    conductor.app = Mock(endpoint_access=None)
     conductor.phases = None
     conductor.problems.get_problem_ids.return_value = ["test_fault"]
     conductor.get_agent_kubeconfig_path.return_value = None
@@ -214,6 +215,7 @@ def test_driver_persists_audit_before_shutdown(audit_runner, tmp_path, monkeypat
 
     async def start_problem():
         conductor.results = {}
+        conductor.agent_deadline_monotonic = None
         conductor.submission_stage = "active" if scenario in ("exit", "timeout", "cleanup_error") else "done"
         return object()
 

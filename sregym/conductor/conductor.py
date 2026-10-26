@@ -69,6 +69,7 @@ class ConductorConfig:
     stages: tuple[str, ...] | None = None
     baseline_override_s: int | None = None  # overrides per-problem baseline_duration_s when set
     propagation_override_s: int | None = None  # overrides per-problem propagation_duration_s when set
+    manage_kubernetes: bool = True
 
     @property
     def restrict_network_access(self) -> bool:
@@ -85,24 +86,32 @@ class Conductor:
 
         # core services
         self.problems = ProblemRegistry()
-        self.kubectl = KubeCtl()
-        self.prometheus = Prometheus()
-        self.jaeger = Jaeger()
-        self.otel_collector = OtelCollector()
-        self.loki = Loki()
-        self.mcp_server = MCPServer(restrict_network_access=self.config.restrict_network_access)
+        self.kubectl = KubeCtl() if self.config.manage_kubernetes else None
+        self.prometheus = Prometheus() if self.config.manage_kubernetes else None
+        self.jaeger = Jaeger() if self.config.manage_kubernetes else None
+        self.otel_collector = OtelCollector() if self.config.manage_kubernetes else None
+        self.loki = Loki() if self.config.manage_kubernetes else None
+        self.mcp_server = (
+            MCPServer(restrict_network_access=self.config.restrict_network_access)
+            if self.config.manage_kubernetes
+            else None
+        )
         self.apps = AppRegistry()
         self.agent_name = None
 
-        self.cluster_state = ClusterStateManager(self.kubectl)
-        self.cluster_egress = ClusterEgressBoundary(self.kubectl)
+        self.cluster_state = ClusterStateManager(self.kubectl) if self.config.manage_kubernetes else None
+        self.cluster_egress = ClusterEgressBoundary(self.kubectl) if self.config.manage_kubernetes else None
         self._baseline_captured = False
 
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
-        self.k8s_proxy = KubernetesAPIProxy(
-            listen_port=self.config.k8s_proxy_listen_port,
-            listen_host=self.config.k8s_proxy_listen_host,
-            restrict_network_access=self.config.restrict_network_access,
+        self.k8s_proxy = (
+            KubernetesAPIProxy(
+                listen_port=self.config.k8s_proxy_listen_port,
+                listen_host=self.config.k8s_proxy_listen_host,
+                restrict_network_access=self.config.restrict_network_access,
+            )
+            if self.config.manage_kubernetes
+            else None
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -171,6 +180,8 @@ class Conductor:
 
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
+        if self.k8s_proxy is None:
+            return
         self.logger.info("Stopping Kubernetes API filtering proxy...")
         try:
             self.k8s_proxy.stop()
@@ -182,7 +193,8 @@ class Conductor:
 
     def clear_cluster_egress_boundary(self):
         """Remove a policy left by a previously interrupted filtered run."""
-        self.cluster_egress.stop()
+        if self.cluster_egress is not None:
+            self.cluster_egress.stop()
 
     def get_agent_kubeconfig_path(self) -> str | None:
         """
@@ -537,7 +549,7 @@ class Conductor:
             return
 
         # Reconcile cluster state to baseline
-        if self._baseline_captured:
+        if self._baseline_captured and getattr(problem, "uses_kubernetes", True):
             self.logger.info("[CLEANUP] Reconciling cluster state to baseline...")
             try:
                 changes = self.cluster_state.reconcile_to_baseline()
@@ -697,7 +709,9 @@ class Conductor:
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)
 
-        self.dependency_check(["kubectl", "helm", "docker"])
+        self.dependency_check(
+            ["kubectl", "helm", "docker"] if getattr(self.problem, "uses_kubernetes", True) else ["docker"]
+        )
         self.logger.debug("Dependency check passed: kubectl, helm")
 
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
@@ -707,8 +721,9 @@ class Conductor:
         self._build_stage_sequence()
         self._preflight_active_oracles()
 
-        with self._phase("fix_kubernetes"):
-            self.fix_kubernetes()
+        if getattr(self.problem, "uses_kubernetes", True):
+            with self._phase("fix_kubernetes"):
+                self.fix_kubernetes()
 
         self.logger.info("Undeploying app leftovers...")
         with self._phase("undeploy_leftovers"):
@@ -748,6 +763,7 @@ class Conductor:
         await self._advance_to_next_stage(start_index=0)
 
         self.execution_start_time = time.time()  # Reset: measure agent time only
+        self.agent_deadline_monotonic = getattr(self.problem.app, "agent_deadline_monotonic", None)
 
         if self.submission_stage and self.submission_stage != "done":
             self.logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}")
@@ -897,6 +913,9 @@ class Conductor:
         with self._submission_lock:
             if expected_generation is not None and expected_generation != self._submission_generation:
                 raise SubmissionAttemptMismatch(expected_generation, self._submission_generation)
+            deadline = getattr(self, "agent_deadline_monotonic", None)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SubmissionAttemptClosed("The agent response deadline has passed.")
 
             registered_request = (
                 expected_generation is not None
@@ -1383,6 +1402,9 @@ class Conductor:
 
     def deploy_app(self):
         """Kubectl + Prometheus + problem.app deployment."""
+        if not getattr(self.problem, "uses_kubernetes", True):
+            self.problem.app.deploy()
+            return
         problem = self.current_problem
         self.submission_stage = "setup"
 
