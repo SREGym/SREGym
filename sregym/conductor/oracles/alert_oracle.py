@@ -14,29 +14,28 @@ _PROMETHEUS_URL = "http://localhost:9090"
 # How long to monitor for sustained alert silence.
 _SUSTAINED_SILENCE_SECONDS = 120
 _POLL_INTERVAL_SECONDS = 10
-# Grace period before starting to check (let alerts resolve).
+# Initial delay before polling; the resolve grace starts after this buffer.
 _BUFFER_SECONDS = 30
+# Alerts can outlast a repair because rules evaluate recent request history.
+_RESOLVE_GRACE_SECONDS = 300
+# Allow time for the final poll and query.
+_EVALUATION_MARGIN_SECONDS = 60
 
 
 class AlertOracle(Oracle):
-    """Mitigation oracle that passes when no Prometheus alerts are firing.
+    """Require sustained silence from new alerts in the problem's namespace.
 
-    Queries the Prometheus alerts API for firing alerts scoped to the
-    problem's namespace.  Because alerts can be flaky, the oracle waits
-    for a sustained silence window before declaring success.
+    After an initial buffer, allow firing alerts to resolve within the grace
+    period. Pass only after a continuous silence window; each firing poll
+    resets that window.
     """
 
     importance = 1.0
 
-    # An alert still firing here is treated as the agent's failure, not as
-    # ambiguous, because everything this oracle does exists to make that call
-    # decisive: ``capture_baseline`` removes alerts that were already firing
-    # before injection (SREGym#745), ``exclude_alerts`` removes known-chronic
-    # ones, and the verdict requires a *sustained* silence window rather than an
-    # instant. What survives all three is a new, persistent alert in the
-    # problem's namespace. The residual risk -- an alert triggered by unrelated
-    # cluster degradation mid-run -- is what the environment-health precondition
-    # is for, not something to hedge by calling every failure ambiguous.
+    # Baseline capture removes pre-existing alert instances, and
+    # exclude_alerts removes configured exceptions. New alerts that persist
+    # beyond the grace period are graded as agent errors. Unrelated cluster
+    # degradation during an attempt can still affect this verdict.
     FAILURE_CLASSES = {
         "alerts_still_firing": FailureClass.AGENT_ERROR,
     }
@@ -48,12 +47,19 @@ class AlertOracle(Oracle):
         poll_interval_seconds=_POLL_INTERVAL_SECONDS,
         buffer_seconds=_BUFFER_SECONDS,
         exclude_alerts=None,
+        resolve_grace_seconds=_RESOLVE_GRACE_SECONDS,
     ):
         super().__init__(problem)
         self.sustained_silence_seconds = sustained_silence_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
         self.exclude_alerts = set(exclude_alerts or [])
+        self.resolve_grace_seconds = resolve_grace_seconds
+        # A late resolution still needs a full silence window. Advertise that
+        # budget so the conductor does not stop grading before it completes.
+        self.evaluation_timeout_seconds = (
+            buffer_seconds + resolve_grace_seconds + sustained_silence_seconds + _EVALUATION_MARGIN_SECONDS
+        )
         # Alert *instances* (full label sets, not just alertname) already firing
         # before the fault was injected (environmental noise unrelated to the
         # agent). Populated by ``capture_baseline`` and ignored during
@@ -61,7 +67,7 @@ class AlertOracle(Oracle):
         # pre-existing alert on one pod/service does not mask a newly firing
         # alert with the same name on a *different* pod/service. ``None`` means
         # no baseline was captured, in which case no baseline filtering is
-        # applied. See SREGym#745.
+        # applied.
         self._baseline_instances = None
 
     # ------------------------------------------------------------------
@@ -135,7 +141,7 @@ class AlertOracle(Oracle):
         deployed and healthy but the fault is not yet active). The captured alert
         names are environmental/chronic noise unrelated to the injected fault —
         for example ``ContainerCPUThrottling`` from the astronomy-shop Grafana
-        sidecar (see SREGym#745) — and are ignored when grading mitigation so the
+        sidecar — and are ignored when grading mitigation so the
         oracle measures the agent's work, not pre-existing noise. Alerts the agent
         newly triggers are not in this baseline and are still caught.
         """
@@ -204,47 +210,49 @@ class AlertOracle(Oracle):
 
         namespace = self.problem.namespace
 
-        # Buffer: give alerts time to resolve after mitigation.
+        # Give monitoring time to reflect the repair before polling.
         print(f"⏳ Waiting {self.buffer_seconds}s buffer before checking alerts…")
         time.sleep(self.buffer_seconds)
 
-        # Poll for sustained silence. Any firing alert is an immediate failure.
+        # The grace deadline is fixed; only the silence window restarts.
         start = time.monotonic()
+        silence_start = None
         last_log_second = -1
 
         while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= self.sustained_silence_seconds:
-                break
-
             try:
                 firing = self._query_firing_alerts(namespace)
             except RuntimeError as exc:
-                # Prometheus is the instrument we grade *with*, not the thing
-                # under test. If it is unreachable we have no evidence either
-                # way, and that is the cluster's problem rather than the
-                # agent's. Letting this propagate would reach the conductor's
-                # exception handler and be recorded as a harness error, which
-                # would be wrong twice over: it blames our code, and it hides a
-                # real infrastructure failure behind a bare stack trace. This
-                # oracle backs 23 problems, so that misattribution would be the
-                # single largest source of miscounted failures.
+                # Without Prometheus, the repair cannot be measured. Return an
+                # environment failure explicitly; an escaping exception would be
+                # recorded by the conductor as a harness error instead.
                 print(f"❌ Cannot reach Prometheus to check alerts in {namespace}: {exc}")
                 return self.fail("prometheus_unreachable", namespace=namespace, error=str(exc))
 
+            now = time.monotonic()
+            elapsed_int = int(now - start)
             if firing:
                 names = ", ".join(self._fmt_alert(a) for a in firing)
-                print(f"❌ Firing alerts in {namespace}: {names}")
-                return self.fail(
-                    "alerts_still_firing",
-                    namespace=namespace,
-                    alerts=sorted({a.get("labels", {}).get("alertname", "") for a in firing}),
-                )
-
-            elapsed_int = int(elapsed)
-            if elapsed_int >= last_log_second + 30:
-                print(f"🔇 No alerts firing — silence for {elapsed_int}/{self.sustained_silence_seconds}s")
-                last_log_second = elapsed_int
+                if now - start >= self.resolve_grace_seconds:
+                    print(f"❌ Firing alerts in {namespace} after {self.resolve_grace_seconds}s: {names}")
+                    return self.fail(
+                        "alerts_still_firing",
+                        namespace=namespace,
+                        alerts=sorted({a.get("labels", {}).get("alertname", "") for a in firing}),
+                    )
+                silence_start = None
+                if elapsed_int >= last_log_second + 30:
+                    print(f"⏳ Firing alerts in {namespace}: {names} (waiting for them to resolve)")
+                    last_log_second = elapsed_int
+            else:
+                if silence_start is None:
+                    silence_start = now
+                silent = now - silence_start
+                if silent >= self.sustained_silence_seconds:
+                    break
+                if elapsed_int >= last_log_second + 30:
+                    print(f"🔇 No alerts firing — silence for {int(silent)}/{self.sustained_silence_seconds}s")
+                    last_log_second = elapsed_int
 
             time.sleep(self.poll_interval_seconds)
 
