@@ -144,9 +144,9 @@ SELFTEST_DATASET_NAME = "sregym/harbor-selftest"
 _DATASET_TEXT = {
     "sregym/sregym": (
         "SREGym",
-        "This dataset holds every SREGym problem that runs on an emulated (KIND) "
-        "cluster: {count} tasks across microservice applications, fault types and "
-        "difficulty levels.",
+        "This dataset holds the SREGym problems that run reliably as single-container "
+        "Harbor tasks: {count} tasks across microservice applications, fault types and "
+        "difficulty levels. Every task's reference solution scored 1.0 on plain Docker.",
     ),
     "sregym/sregym-lite": (
         "SREGym-Lite",
