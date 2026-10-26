@@ -14,8 +14,16 @@ from sregym.conductor.oracles.apps.gitea.mysql_failover import (
 )
 
 
-def issue(id, index, name, content="b", closed=False):
-    return {"id": id, "repo_id": 5, "index": index, "name": name, "content": content, "is_closed": closed}
+def issue(id, index, name, content="b", closed=False, created=0):
+    return {
+        "id": id,
+        "repo_id": 5,
+        "index": index,
+        "name": name,
+        "content": content,
+        "is_closed": closed,
+        "created_unix": created,
+    }
 
 
 def state(issues, comments=()):
@@ -109,23 +117,28 @@ def traffic(*writes, started=0, now=20):
 
 
 def test_live_writes_must_survive_on_the_primary():
-    issues = [issue(1, 4, "f1"), issue(2, 5, "f2")]
+    issues = [issue(1, 4, "f1", created=5), issue(2, 5, "f2", created=10)]
     report = live_traffic_report(traffic((4, "f1", 5), (5, "f2", 10), (6, "f3", 15)), issues, 5)
     assert report == {"lost": ["f3"], "longest_outage": 5}
 
 
 def test_a_live_write_with_its_body_changed_is_lost():
-    report = live_traffic_report(traffic((4, "f1", 5)), [issue(1, 4, "f1", content="")], 5)
+    report = live_traffic_report(traffic((4, "f1", 5)), [issue(1, 4, "f1", content="", created=5)], 5)
+    assert report["lost"] == ["f1"]
+
+
+def test_a_write_stored_long_after_its_acknowledgement_is_lost():
+    report = live_traffic_report(traffic((4, "f1", 5)), [issue(1, 4, "f1", created=40)], 5)
     assert report["lost"] == ["f1"]
 
 
 def test_a_stretch_without_acknowledged_writes_is_an_outage():
-    assert live_traffic_report(traffic((4, "f1", 5), now=65), [issue(1, 4, "f1")], 5)["longest_outage"] == 60
+    assert live_traffic_report(traffic((4, "f1", 5), now=65), [issue(1, 4, "f1", created=5)], 5)["longest_outage"] == 60
 
 
 def test_only_the_oracles_own_pauses_are_excused():
     writes = traffic((4, "f1", 5), now=65)
-    assert live_traffic_report(writes, [issue(1, 4, "f1")], 5, graded=[(10, 62)])["longest_outage"] == 8
+    assert live_traffic_report(writes, [issue(1, 4, "f1", created=5)], 5, graded=[(10, 62)])["longest_outage"] == 8
 
 
 HEALTHY = {"source": "uuid-west", "io": "ON", "sql": "ON"}

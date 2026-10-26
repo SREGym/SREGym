@@ -38,7 +38,7 @@ region=east:  MySQL gitea-db-east  --- async GTID replication --->  region=west:
 3. Gitea keeps writing to east: new issues, comments on new and shared issues, and closes of shared issues. Their events queue in the relay, which cannot reach the receiver.
 4. Pause the relay, as GitHub paused webhook delivery. Promote west, heal the network, point `gitea-db-rw` at west, restart Gitea. East is left writable with its writes.
 5. Users open some lost issues again on west, and new issues and comments land there, reusing issue numbers east already handed out. Their events join the paused backlog, so it now holds current events, events that describe east's history under numbers west reused, and repeats of the same event.
-6. Start the live users and record the identity of the live database, Gitea and the helper pods.
+6. Start the live users and record the identity of the helper pods.
 
 Receipts live in the conductor, outside the cluster, so the agent cannot read or edit them. The agent sees only a one line app description.
 
@@ -54,7 +54,7 @@ Receipts live in the conductor, outside the cluster, so the agent cannot read or
 
 In order, stopping at the first failure:
 
-1. Gitea serves, keeps one replica, and still uses `gitea-db-rw`. The repository volume, receiver, relay, live users, live database and Gitea pods are unchanged.
+1. Gitea serves, keeps one replica, and still uses `gitea-db-rw`. The repository volume, receiver, relay and live users pods are unchanged.
 2. A fresh write round-trips through Gitea and Git.
 3. Exactly one writable region, the write service selects it, the other region replicates from it with no filters or skipped errors, table checksums match, and issue counters and comment and closed counts agree with the rows.
 4. Every issue from both histories is on both regions. Every comment and close is present. The relay is resumed and empty. Every event implied by the primary's rows was delivered once, with no duplicates or conflicting payloads. Recovered issues and comments are in Gitea's search index.
@@ -72,7 +72,7 @@ Tiers set the number of shared, orphaned and post-failover issues: small is 30, 
 
 ## Validation
 
-On CloudLab: no-op scores 0 and reference repair scores 1 on both tiers. Restarting Gitea and deleting the live database pod both score 0.
+On CloudLab: no-op scores 0 and reference repair scores 1 on both tiers. Restarting Gitea stops writes for 17 seconds and restarting the live database for 54, so both score 0 on availability.
 
 ## Not in this PR
 

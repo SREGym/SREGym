@@ -123,7 +123,7 @@ class MySQLRegions:
                                         },
                                         "resources": {
                                             "requests": {"cpu": "100m", "memory": "512Mi"},
-                                            "limits": {"cpu": "1", "memory": "1Gi"},
+                                            "limits": {"cpu": "1", "memory": "2Gi"},
                                         },
                                     }
                                 ],

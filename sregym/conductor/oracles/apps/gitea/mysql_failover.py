@@ -4,6 +4,7 @@ import json
 import secrets
 import time
 from collections import Counter
+from math import inf
 
 from sregym.conductor.oracles.apps.gitea.divergent_recovery import GiteaDivergentRecoveryOracle, gitea_keys
 from sregym.conductor.oracles.apps.gitlab.divergent_recovery import divergence_report
@@ -93,16 +94,23 @@ def search_queries(state, issues, updates):
 def live_traffic_report(traffic, issues, repository_id, graded=()):
     """Acknowledged user writes the primary no longer has, and the longest time no write was acknowledged.
 
-    ``graded`` holds the windows in which the oracle itself paused the writers.
+    ``graded`` holds the windows in which the oracle itself paused the writers. A write Gitea stored
+    long after it was acknowledged was not served at the time, so it counts as lost.
     """
-    present = {(r["index"], r["name"], r["content"]) for r in issues if r["repo_id"] == repository_id}
+    created = {
+        (r["index"], r["name"], r["content"]): r["created_unix"] for r in issues if r["repo_id"] == repository_id
+    }
     times = [traffic["started"], *(w["at"] for w in traffic["acknowledged"]), traffic["now"]]
 
     def outage(a, b):
         return b - a - sum(max(0, min(b, end) - max(a, start)) for start, end in graded)
 
     return {
-        "lost": [w["title"] for w in traffic["acknowledged"] if (w["number"], w["title"], w["body"]) not in present],
+        "lost": [
+            w["title"]
+            for w in traffic["acknowledged"]
+            if abs(created.get((w["number"], w["title"], w["body"]), -inf) - w["at"]) > MAX_OUTAGE_SECONDS
+        ],
         "longest_outage": max(outage(a, b) for a, b in zip(times, times[1:], strict=False)),
     }
 
@@ -147,8 +155,6 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         "webhook_relay_replaced": FailureClass.AGENT_ERROR,
         "webhook_backlog_not_drained": FailureClass.AGENT_ERROR,
         "live_traffic_replaced": FailureClass.AGENT_ERROR,
-        "live_database_taken_down": FailureClass.AGENT_ERROR,
-        "live_gitea_restarted": FailureClass.AGENT_ERROR,
         "service_interrupted": FailureClass.AGENT_ERROR,
         "live_writes_lost": FailureClass.AGENT_ERROR,
         "writable_primary_count": FailureClass.AGENT_ERROR,
@@ -192,11 +198,6 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             return self.fail("webhook_relay_replaced")
         if self.problem.live_users is not None and app.pod_identities(f"app={LIVE_TRAFFIC}") != self.problem.live_users:
             return self.fail("live_traffic_replaced")
-        if self.problem.live_database is not None and app.database_identity("west") != self.problem.live_database:
-            return self.fail("live_database_taken_down")
-        # One Gitea replica with the Recreate strategy: any restart is downtime.
-        if self.problem.live_gitea is not None and app.pod_identities("app=gitea") != self.problem.live_gitea:
-            return self.fail("live_gitea_restarted")
         return None
 
     def check_search(self, primary):

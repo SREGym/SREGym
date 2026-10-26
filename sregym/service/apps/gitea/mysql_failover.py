@@ -35,7 +35,7 @@ SELECT JSON_OBJECT(
                     FROM repository),
  'issues', (SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT(
               'id', id, 'repo_id', repo_id, 'index', `index`, 'name', name, 'content', content,
-              'is_pull', is_pull, 'is_closed', is_closed)), JSON_ARRAY())
+              'is_pull', is_pull, 'is_closed', is_closed, 'created_unix', created_unix)), JSON_ARRAY())
               FROM issue),
  'comments', (SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('id', id, 'issue_id', issue_id, 'content', content)),
                 JSON_ARRAY())
@@ -269,19 +269,6 @@ class GiteaMySQLApplication(GiteaApplication):
             (p["metadata"]["uid"], sum(c["restartCount"] for c in p["status"].get("containerStatuses", [])))
             for p in pods
         ]
-
-    def database_identity(self, region):
-        """The server's pod, its restarts and its data volume; any change means the server was taken down."""
-        try:
-            pod = json.loads(self.command("get", "pod", self.mysql.pod(region), "-o", "json"))
-            claims = [
-                v["persistentVolumeClaim"]["claimName"] for v in pod["spec"]["volumes"] if "persistentVolumeClaim" in v
-            ]
-            volumes = [json.loads(self.command("get", "pvc", c, "-o", "json"))["metadata"]["uid"] for c in claims]
-        except subprocess.CalledProcessError:
-            return None
-        restarts = sum(c["restartCount"] for c in pod["status"].get("containerStatuses", []))
-        return [pod["metadata"]["uid"], restarts, volumes]
 
     def local_http(self, deployment, path="/", method="GET"):
         """Call a helper pod's own HTTP server from inside the pod."""

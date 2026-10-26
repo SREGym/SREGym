@@ -68,8 +68,6 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.receiver = None
         self.relay = None
         self.live_users = None
-        self.live_database = None
-        self.live_gitea = None
         self.failover_performed = False
         self.root_cause = self.build_structured_root_cause(
             component="gitea-db",
@@ -215,8 +213,6 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.relay = app.pod_identities(f"app={RELAY}")
         app.start_live_traffic()
         self.live_users = app.pod_identities(f"app={LIVE_TRAFFIC}")
-        self.live_database = app.database_identity("west")
-        self.live_gitea = app.pod_identities("app=gitea")
 
     @mark_fault_injected(strict=True)
     def recover_fault(self):
