@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPOSITORY = os.environ["REPOSITORY"]
 INTERVAL = float(os.environ["INTERVAL"])
+BODY = "Opened from the web UI."
 STARTED = time.time()
 acknowledged = []
 lock = threading.Lock()
@@ -24,7 +25,7 @@ def open_issue(title):
     password = Path("/credentials/password").read_text().strip()
     request = urllib.request.Request(
         f"http://gitea:3000/api/v1/repos/{REPOSITORY}/issues",
-        data=json.dumps({"title": title, "body": "Opened from the web UI."}).encode(),
+        data=json.dumps({"title": title, "body": BODY}).encode(),
         headers={
             "Authorization": "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode(),
             "Content-Type": "application/json",
@@ -46,7 +47,7 @@ def write_forever():
             pass
         else:
             with lock:
-                acknowledged.append({"number": number, "title": title, "at": time.time()})
+                acknowledged.append({"number": number, "title": title, "body": BODY, "at": time.time()})
         time.sleep(max(0.0, INTERVAL - (time.time() - started)))
 
 

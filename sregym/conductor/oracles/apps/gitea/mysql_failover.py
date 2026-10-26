@@ -17,6 +17,7 @@ from sregym.service.apps.gitea.mysql_failover import (
     RECEIVER,
     RELAY,
     repository_names,
+    undeliverable,
 )
 
 REPOSITORY_VOLUME = "gitea-repositories"
@@ -63,6 +64,18 @@ def issue_events(state, issues, updates):
     return events, lost
 
 
+def duplicated_comments(state, updates):
+    """Acknowledged comments the primary holds more than once."""
+    counts = Counter(r["content"] for r in state["comments"])
+    return [u["comment"] for u in updates if "comment" in u and counts[u["comment"]] > 1]
+
+
+def stale_deliveries(state, deliveries):
+    """Delivered events that describe an issue, comment or close the primary does not have."""
+    stale = undeliverable(state, [{**d, "id": i} for i, d in enumerate(deliveries)])
+    return [deliveries[i]["delivery"] for i in stale]
+
+
 def search_queries(state, issues, updates):
     """Each stranded issue's and comment's reference, with the number its issue now has on the primary."""
     names = repository_names(state)
@@ -82,14 +95,14 @@ def live_traffic_report(traffic, issues, repository_id, graded=()):
 
     ``graded`` holds the windows in which the oracle itself paused the writers.
     """
-    present = {(r["index"], r["name"]) for r in issues if r["repo_id"] == repository_id}
+    present = {(r["index"], r["name"], r["content"]) for r in issues if r["repo_id"] == repository_id}
     times = [traffic["started"], *(w["at"] for w in traffic["acknowledged"]), traffic["now"]]
 
     def outage(a, b):
         return b - a - sum(max(0, min(b, end) - max(a, start)) for start, end in graded)
 
     return {
-        "lost": [w["title"] for w in traffic["acknowledged"] if (w["number"], w["title"]) not in present],
+        "lost": [w["title"] for w in traffic["acknowledged"] if (w["number"], w["title"], w["body"]) not in present],
         "longest_outage": max(outage(a, b) for a, b in zip(times, times[1:], strict=False)),
     }
 
@@ -233,8 +246,12 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             return primary, self.fail("issue_statistics_stale")
         return primary, None
 
-    def check_divergence(self, primary):
+    def check_divergence(self, primary, traffic):
         problem, app = self.problem, self.problem.app
+        live = [
+            {"repository": LIVE_TRAFFIC_REPOSITORY, "title": w["title"], "body": w["body"]}
+            for w in (traffic or {}).get("acknowledged", [])
+        ]
         for region in REGIONS:
             report = divergence_report(
                 problem.shared["issues"],
@@ -245,20 +262,26 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             )
             if failed := self.verdict(report):
                 return {**failed, "member": region}
+        state = app.snapshot(primary)
         events, lost = issue_events(
-            app.snapshot(primary),
-            [*problem.shared_receipts, *problem.orphaned, *problem.accepted_after_promotion],
+            state,
+            [*problem.shared_receipts, *problem.orphaned, *problem.accepted_after_promotion, *live],
             problem.updates,
         )
         if lost:
             return self.fail("acknowledged_updates_lost", updates=lost)
+        if duplicated := duplicated_comments(state, problem.updates):
+            return self.fail("acknowledged_writes_duplicated", comments=duplicated)
         app.wait_for_webhook_attempts(primary)
         relay = app.wait_for_relay()
         if relay["paused"] or relay["queued"]:
             return self.fail("webhook_backlog_not_drained", paused=relay["paused"], queued=len(relay["queued"]))
-        deliveries = delivery_report(app.webhook_deliveries(), events)
+        received = app.webhook_deliveries()
+        deliveries = delivery_report(received, events)
         if deliveries["conflicting"]:
             return self.fail("webhook_events_conflicting", issues=deliveries["conflicting"])
+        if stale := stale_deliveries(state, received):
+            return self.fail("webhook_events_conflicting", deliveries=stale)
         if deliveries["duplicated"]:
             return self.fail("webhook_events_duplicated", events=deliveries["duplicated"])
         if deliveries["undelivered"]:
@@ -305,9 +328,9 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             if failed:
                 return failed
             app.run_client("verify", **self.baseline, fixture=json.loads((FIXTURES / "import-data.json").read_text()))
-            if problem.shared is not None and (failed := self.check_divergence(primary)):
-                return failed
             if traffic is not None and (failed := self.check_live_traffic(primary, traffic)):
+                return failed
+            if problem.shared is not None and (failed := self.check_divergence(primary, traffic)):
                 return failed
         except Exception as exc:
             return self.fail_from_exception(exc)

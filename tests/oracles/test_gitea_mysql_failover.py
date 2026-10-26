@@ -6,9 +6,11 @@ import pytest
 from sregym.conductor.oracles.apps.gitea.mysql_failover import (
     GiteaMySQLFailoverOracle,
     delivery_report,
+    duplicated_comments,
     issue_events,
     live_traffic_report,
     search_queries,
+    stale_deliveries,
 )
 
 
@@ -85,11 +87,24 @@ def test_a_signed_event_naming_the_wrong_number_does_not_count():
     assert delivery_report([forged], events)["undelivered"] == ["a"]
 
 
+def test_a_comment_posted_twice_on_the_primary_is_duplicated():
+    twice = state([issue(10, 1, "a"), issue(11, 2, "b", closed=True)], comments=[(7, 10, "hi"), (8, 10, "hi")])
+    assert duplicated_comments(twice, UPDATES) == ["hi"]
+    assert duplicated_comments(PRIMARY, UPDATES) == []
+
+
+def test_a_delivery_the_primary_does_not_back_is_stale():
+    old_comment = delivery("issue_comment", "created", 1, 10, "a", comment_id=3, comment="hi")
+    vacant = delivery("issues", "opened", 9, 40, "gone")
+    assert stale_deliveries(PRIMARY, DELIVERED) == []
+    assert stale_deliveries(PRIMARY, [*DELIVERED, old_comment, vacant]) == ["a-created-3", "gone-opened-None"]
+
+
 def traffic(*writes, started=0, now=20):
     return {
         "started": started,
         "now": now,
-        "acknowledged": [{"number": n, "title": t, "at": at} for n, t, at in writes],
+        "acknowledged": [{"number": n, "title": t, "body": "b", "at": at} for n, t, at in writes],
     }
 
 
@@ -97,6 +112,11 @@ def test_live_writes_must_survive_on_the_primary():
     issues = [issue(1, 4, "f1"), issue(2, 5, "f2")]
     report = live_traffic_report(traffic((4, "f1", 5), (5, "f2", 10), (6, "f3", 15)), issues, 5)
     assert report == {"lost": ["f3"], "longest_outage": 5}
+
+
+def test_a_live_write_with_its_body_changed_is_lost():
+    report = live_traffic_report(traffic((4, "f1", 5)), [issue(1, 4, "f1", content="")], 5)
+    assert report["lost"] == ["f1"]
 
 
 def test_a_stretch_without_acknowledged_writes_is_an_outage():
