@@ -46,18 +46,10 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v4
 
-      - name: Build kind node image with fixed containerd
-        run: |
-          docker build -t sregym-kind:smoke \
-            --build-arg KIND_NODE_IMAGE=kindest/node:v1.32.5@sha256:36187f6c542fa9b78d2d499de4c857249c5a0ac8cc2241bef2ccd92729a7a259 \
-            -f kind/Dockerfile kind
-
       - name: Prepare /run/udev for OpenEBS NDM
         run: sudo mkdir -p /run/udev
 
       - name: Create kind cluster with Calico
-        env:
-          KIND_NODE_IMAGE: sregym-kind:smoke
         run: bash kind/setup_kind_cluster.sh x86
 
       # ── Python environment ────────────────────────────────────────────
