@@ -9,8 +9,28 @@ production incidents. The agent must then mitigate it using `kubectl`.
 
 ## Run
 
+On plain Docker (Harbor's `docker` environment), save this overlay as
+`sregym-docker.yaml`. It lifts Docker's default seccomp profile and masked
+`/proc` paths so the task can create its cluster's namespaces; it grants no
+privileges or capabilities.
+
+```yaml
+services:
+  main:
+    security_opt:
+      - seccomp=unconfined
+      - systempaths=unconfined
+      - apparmor=unconfined
+    cgroup: private
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+```
+
 ```bash
-harbor run -d {{dataset_name}} -a claude-code -m anthropic/<model> -e daytona -n 4
+harbor run -d {{dataset_name}} -a claude-code -m anthropic/<model> -n 4 \
+    -e docker --extra-docker-compose "$PWD/sregym-docker.yaml" --cpus limit --memory limit
 ```
 
 Each task is one unprivileged container. It starts a private four-node
@@ -22,11 +42,13 @@ code.
 
 ### Requirements
 
-- **A Harbor environment whose sandbox lets the container's root create
-  namespaces and mount cgroups**, without `--privileged`:
-  - works: `daytona` (Sysbox) and VM-based sandboxes
-  - Harbor's local `docker` environment: add the overlay from the
-    [Harbor guide](https://github.com/SREGym/SREGym/blob/main/docs/harbor.md)
+- **A Harbor environment that lets the container's root create namespaces and
+  mount cgroups**, without `--privileged`:
+  - Harbor's `docker` environment, with the overlay above. On Ubuntu 24.04
+    hosts, also run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
+  - Sysbox sandboxes (`daytona`) and VM-based sandboxes, without the overlay.
+    Daytona refuses more than 4 CPUs / 8 GiB per sandbox unless its limits are
+    raised.
 - **About {{cpus}} CPUs, {{memory_mb}} MiB of memory and {{storage_mb}} MiB of
   disk per task.**
 - **Network access** to container registries and Helm chart repositories during

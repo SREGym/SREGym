@@ -179,6 +179,14 @@ def test_dataset_readme_lists_every_task_for_harbor_hub(tmp_path):
     assert "@article{sregym:26" in readme
 
 
+def test_dataset_readme_inlines_the_docker_overlay():
+    # Hub users get only the dataset, so the README carries docker/harbor/local-docker.yaml.
+    overlay = (adapter.REPO_ROOT / "docker/harbor/local-docker.yaml").read_text()
+    overlay = overlay[overlay.index("services:") :].strip()
+    readme = (adapter.REPO_ROOT / "sregym/harbor/dataset-readme.md").read_text()
+    assert f"```yaml\n{overlay}\n```" in readme
+
+
 def test_unrendered_placeholders_are_rejected():
     with pytest.raises(ValueError, match="placeholder"):
         adapter._render("value: {{missing}}", {})

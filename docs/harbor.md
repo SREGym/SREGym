@@ -1,13 +1,19 @@
 # Running SREGym on Harbor
 
 [Harbor](https://harborframework.com) runs agent benchmarks as self-contained
-tasks, locally or on cloud sandboxes, with many trials in parallel. SREGym can
-generate a Harbor task for every problem that runs on its emulated cluster.
+tasks, with many trials in parallel. SREGym can generate a Harbor task for
+every problem that runs on its emulated cluster.
 
 Each task is **one unprivileged container**. It holds a private four-node
 Kubernetes cluster, the application, SREGym's grader and the agent. It needs no
-`--privileged`, added capabilities, devices or Docker Compose, so it runs on
-Harbor's cloud sandboxes, Daytona included, and can be published to Harbor Hub.
+`--privileged`, added capabilities or devices.
+
+**Plain Docker is the default target**: Harbor's `docker` environment, which
+every Harbor user has. Run tasks there with the overlay
+`docker/harbor/local-docker.yaml` (see [Run with Harbor](#run-with-harbor)).
+Defaults, sizes and validation are calibrated for it. The same tasks also run
+on sandboxes that allow nested namespaces, such as Daytona (Sysbox) or VMs, and
+can be published to Harbor Hub.
 
 The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
 
@@ -92,14 +98,21 @@ out; their containerd pulls images through a proxy in the container.
 
 The container's root must be able to create those namespaces and mount cgroups:
 
+- **Plain Docker** (Harbor's `docker` environment) blocks it with its default
+  seccomp profile and masked `/proc` paths, so setup fails at once with
+  `unshare: Operation not permitted`. The overlay `docker/harbor/local-docker.yaml`
+  lifts those two filters (`seccomp=unconfined`, `systempaths=unconfined`; no
+  privileges or capabilities) and raises the open-file limit (TiDB's TiKV needs
+  about 82920 open files). Its `apparmor=unconfined` and `cgroup: private` were
+  not needed on the RHEL host it was validated on, but may be on AppArmor hosts. On Ubuntu 24.04 hosts, also allow unprivileged
+  user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
+
+  The overlay is passed at run time and deliberately not shipped in the tasks:
+  a task's own `environment/docker-compose.yaml` would make cloud providers such
+  as Daytona run the task in their privileged Docker-in-Docker mode.
 - **Sysbox sandboxes** (Daytona) and **VM sandboxes** allow this as they are.
   Under Sysbox the container already runs in a user namespace, so the cluster
   uses it directly instead of creating a nested one.
-- **Plain Docker** (Harbor's `docker` environment) blocks it with its default
-  seccomp profile and masked `/proc` paths. Run with the overlay below, which
-  lifts only those two filters and raises the open-file limit (TiDB's TiKV
-  needs about 82920 open files). On Ubuntu 24.04 hosts, also allow unprivileged
-  user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
 
 ## Generate tasks
 
@@ -173,14 +186,7 @@ Task names are `sregym/<problem-id>`, lowercased with `_` replaced by `-`.
 The task image has the SREGym checkout baked in, so rebuild it whenever
 problems or oracles change.
 
-**For cloud providers**, run the **Publish Harbor Image** workflow
-(`.github/workflows/publish-harbor-images.yml`, from the Actions tab). It pushes
-`ghcr.io/sregym/sregym-harbor:<tag>` and prints the matching adapter command.
-Cloud sandboxes pull anonymously, so the GHCR package must be public. Generate
-tasks with `--backend-image` pointing at the published tag, so a dataset pins
-the SREGym version that produced it.
-
-**For local runs**:
+**Locally**:
 
 ```bash
 git submodule update --init --recursive
@@ -189,35 +195,43 @@ docker build -f docker/harbor/Dockerfile -t sregym-harbor:local .
 
 Then generate with `--backend-image sregym-harbor:local`.
 
+**To share a dataset** (Harbor Hub, other machines, cloud sandboxes), run the
+**Publish Harbor Image** workflow (`.github/workflows/publish-harbor-images.yml`,
+from the Actions tab). It pushes `ghcr.io/sregym/sregym-harbor:<tag>` and prints
+the matching adapter command. Other hosts pull anonymously, so the GHCR package
+must be public. Generate tasks with `--backend-image` pointing at the published
+tag, so a dataset pins the SREGym version that produced it.
+
 ## Run with Harbor
 
 ```bash
 uv tool install harbor            # 0.23 or newer
+OVERLAY="$PWD/docker/harbor/local-docker.yaml"   # an absolute path
 
 # Reference solution: every task should score 1.0. The oracle agent needs
 # the secret the adapter saved beside the tasks.
 export SREGYM_ORACLE_SECRET=$(cat datasets/sregym/.sregym-oracle-secret)
-harbor run -y -p datasets/sregym/network-policy-block -a oracle -e daytona
+harbor run -y -p datasets/sregym/network-policy-block -a oracle \
+    -e docker --extra-docker-compose "$OVERLAY" --cpus limit --memory limit
 
 # No-op agent: every task should score 0.0
-harbor run -y -p datasets/sregym/network-policy-block -a nop -e daytona
+harbor run -y -p datasets/sregym/network-policy-block -a nop \
+    -e docker --extra-docker-compose "$OVERLAY" --cpus limit --memory limit
 
 # A real agent, several tasks at a time
-harbor run -y -p datasets/sregym-lite -a claude-code -m anthropic/claude-sonnet-5 -e daytona -n 4
+harbor run -y -p datasets/sregym-lite -a claude-code -m anthropic/claude-sonnet-5 -n 4 \
+    -e docker --extra-docker-compose "$OVERLAY" --cpus limit --memory limit
 ```
 
 `-y` confirms passing `SREGYM_ORACLE_SECRET` to the reference solution.
+`--cpus limit --memory limit` holds each trial to the task's size (8 CPUs,
+16 GiB). On a host with fewer CPUs than that, pass `--cpus ignore --memory
+ignore` or `--override-cpus N` instead.
 
-**Harbor's local Docker environment** needs the overlay described above:
-
-```bash
-harbor run -y -p datasets/sregym/network-policy-block -a oracle -e docker \
-    --extra-docker-compose "$PWD/docker/harbor/local-docker.yaml" --cpus ignore --memory ignore
-```
-
-Pass the overlay as an absolute path. On a host with fewer CPUs than the task
-requests, keep `--cpus ignore --memory ignore` or use `--override-cpus N`; pass
-`--cpus limit --memory limit` to hold each trial to the task's size.
+**Other environments.** On a sandbox that allows nested namespaces, drop the
+overlay: `harbor run ... -e daytona`. Daytona refuses tasks above 4 CPUs /
+8 GiB unless the organization's limits are raised, so generate tasks for it
+with `--cpus 4 --memory-mb 8192 --storage-mb 10240`.
 
 Running many trials on one Docker host:
 
@@ -290,7 +304,8 @@ oracle sweep.
 5. **Check it:**
 
    ```bash
-   SREGYM_ORACLE_SECRET=... harbor run -y -d sregym/sregym-lite@v1.0 -a oracle -e daytona -l 1
+   SREGYM_ORACLE_SECRET=... harbor run -y -d sregym/sregym-lite@v1.0 -a oracle -l 1 \
+       -e docker --extra-docker-compose "$PWD/docker/harbor/local-docker.yaml"
    ```
 
 To publish an update, regenerate with a new image tag and the same secret, run
@@ -300,10 +315,23 @@ To publish an update, regenerate with a new image tag and the same secret, run
 
 ## Validation status
 
+**Plain Docker** (the default target), every task: Harbor 0.24's `docker` environment on a 64-core
+RHEL 9 host (cgroup v2), with the overlay, 8 CPUs / 16 GiB / 30 GB enforced per
+trial, SREGym `main` at #1135:
+
+| Check | Result |
+|---|---|
+| Privileges | Without the overlay the cluster fails (`unshare: Operation not permitted`). Of the overlay, only `seccomp=unconfined` and `systempaths=unconfined` are needed (plus the open-file limit for FleetCast). `docker inspect`: `Privileged=false`, no added capabilities. |
+| Oracle agent, all 200 generated tasks, up to 3 runs each | **172 pass** (154 on the first run). The rest are in the table under [Generate tasks](#generate-tasks). |
+| No-op agent, the 22 alert- and SLO-graded tasks that pass | 0.0 in all 22 (one setup error) |
+| Claude Code (Opus 5.5), 3 attempts on 171 of the passing tasks | Mean reward 0.81 over 510 attempts; 152 solved at least once. The 3 GitLab problems were never solved. |
+
+**Daytona and GitHub runners**, earlier rounds at 4 CPUs / 8 GiB, before `main`'s Frappe, Saleor and Slack Spine problems:
+
 | Check | Result |
 |---|---|
 | **SREGym-Lite on the published image**, oracle agent, Harbor on Daytona, `ghcr.io/sregym/sregym-harbor:bcb224d85322`, generated exactly as for the Hub | **17/17 at 1.0** |
-| **Oracle sweep of every generated task**, Harbor on Daytona, default task size (4 CPUs, 8 GiB, 10 GiB), image `ae0f9edc14db` with every later change up to `d4ef5df` layered on (the same code as `bcb224d85322`) | **80 of 93 pass**: 75 of the 77 tasks not graded by alerts scored 1.0 (not the two Train Ticket problems), and 5 alert-graded tasks scored 1.0 here and in both earlier sweeps. Every trial that reached the agent had first shown the oracle failing with the fault live. The other 12 are in the table under [Generate tasks](#generate-tasks). |
+| **Oracle sweep of every generated task**, Harbor on Daytona, task size 4 CPUs, 8 GiB, 10 GiB, image `ae0f9edc14db` with every later change up to `d4ef5df` layered on (the same code as `bcb224d85322`) | **80 of 93 pass**: 75 of the 77 tasks not graded by alerts scored 1.0 (not the two Train Ticket problems), and 5 alert-graded tasks scored 1.0 here and in both earlier sweeps. Every trial that reached the agent had first shown the oracle failing with the fault live. The other 12 are in the table under [Generate tasks](#generate-tasks). |
 | No-op agent, the 16 alert-graded tasks plus `operator_wrong_operator_image`, three sweeps | 0.0 in every run that got through setup (28 runs). The rest failed setup because no alert fired within the wait, and Harbor scored them as errors, not rewards. Before the fault wait, the no-op agent scored 1.0 on `gc_capacity_degradation` and `loadgenerator_flood_homepage`. |
 | Social Network's 14 tasks with the restored multi-arch nginx-thrift chart, oracle agent, Harbor on Daytona | 14/14 at 1.0 |
 | `gc_capacity_degradation`, oracle agent, twice with the control-plane taint (`bcb224d85322`) and twice without | 1.0 once each. The other runs failed setup: with the taint its alerts were late, without it the cluster hit the cgroup error below. The taint does not affect it. |
@@ -316,17 +344,6 @@ To publish an update, regenerate with a new image tag and the same secret, run
 | Agent isolation in a ready Daytona sandbox, probed as `agent` | Problem ID, SREGym code, cluster credentials, grade token and logs unreadable. `/grade` and `/oracle/recover` refuse without tokens. The k3s API refuses without credentials. `kubectl` works through the proxy. |
 | Self-test, oracle and no-op agents, **Harbor Self-Test** workflow (`docker` environment, GitHub runner) | Rewards 1 and 0 |
 | `operator_overload_replicas` (FleetCast), **Harbor Oracle Sweep** (`docker` environment, GitHub amd64 runner) | 1.0 once the overlay raised the open-file limit; before, TiKV exited at start |
-
-**Plain Docker, every task.** Harbor 0.24's `docker` environment on a 64-core
-RHEL 9 host (cgroup v2), with the overlay, 8 CPUs / 16 GiB / 30 GB enforced per
-trial, SREGym `main` at #1135:
-
-| Check | Result |
-|---|---|
-| Privileges | Without the overlay the cluster fails (`unshare: Operation not permitted`). Of the overlay, only `seccomp=unconfined` and `systempaths=unconfined` are needed (plus the open-file limit for FleetCast). `docker inspect`: `Privileged=false`, no added capabilities. |
-| Oracle agent, all 200 generated tasks, up to 3 runs each | **172 pass** (154 on the first run). The rest are in the table under [Generate tasks](#generate-tasks). |
-| No-op agent, the 22 alert- and SLO-graded tasks that pass | 0.0 in all 22 (one setup error) |
-| Claude Code (Opus 5.5), 3 attempts on 171 of the passing tasks | Mean reward 0.81 over 510 attempts; 152 solved at least once. The 3 GitLab problems were never solved. |
 
 `kafka_producer_leak` and `postgres_lock_contention_product_catalog`, flaky in
 the first sweep (2 of 3 and 1 of 2), scored 1.0 in both later ones.
