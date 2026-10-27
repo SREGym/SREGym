@@ -261,6 +261,12 @@ def test_inspection_skips_ports_of_problems_the_unprivileged_cluster_cannot_run(
     )
 
 
+def test_inspection_skips_flaky_alert_graded_feature_flag_faults():
+    inspection = adapter.inspect_problems(["network_policy_block", *adapter.FLAKY_ALERT_GRADED])
+    assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]
+    assert inspection.skipped == adapter.FLAKY_ALERT_GRADED
+
+
 def test_inspection_skips_problems_too_large_for_one_task_container():
     inspection = adapter.inspect_problems(["network_policy_block", *adapter.TOO_LARGE])
     assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]
@@ -275,9 +281,9 @@ def test_inspection_skips_problems_the_unprivileged_cluster_cannot_run():
 
 
 def test_alert_graded_problems_run_steady_before_the_fault(tmp_path):
-    inspection = adapter.inspect_problems(["network_policy_block", "astronomy_shop_ad_service_failure"])
+    inspection = adapter.inspect_problems(["network_policy_block", "valkey_memory_disruption"])
     steady = {info.problem_id: info.steady_state_s for info in inspection.eligible}
-    assert steady == {"network_policy_block": 0, "astronomy_shop_ad_service_failure": adapter.ALERT_STEADY_STATE_S}
+    assert steady == {"network_policy_block": 0, "valkey_memory_disruption": adapter.ALERT_STEADY_STATE_S}
     task = SREGymAdapter(tmp_path, backend_image="example.test/sregym:1").generate_task(
         _info(steady_state_s=adapter.ALERT_STEADY_STATE_S)
     )

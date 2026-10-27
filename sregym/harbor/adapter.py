@@ -114,6 +114,29 @@ TOO_LARGE = {
     "load_spike_rpc_retry_storm": "its retry storm grows memory without bound (16 GiB, then thrashing the host)",
 }
 
+# Astronomy Shop's feature-flag faults (flagd), graded by Prometheus alerts.
+# Their alerts fire and clear minutes after the fault and the fix, so the grade
+# depends on timing: the reference solution failed some runs on alerts that were
+# still firing, and agents mostly fail the same way. Saturated besides.
+_FLAG_FAULT = (
+    "is an Astronomy Shop feature-flag fault graded by Prometheus alerts, which lag the fault and the fix unpredictably"
+)
+FLAKY_ALERT_GRADED = {
+    problem_id: _FLAG_FAULT
+    for problem_id in (
+        "astronomy_shop_ad_service_failure",
+        "astronomy_shop_ad_service_high_cpu",
+        "astronomy_shop_ad_service_image_slow_load",
+        "astronomy_shop_ad_service_manual_gc",
+        "astronomy_shop_cart_service_failure",
+        "astronomy_shop_failed_readiness_probe",
+        "astronomy_shop_payment_service_failure",
+        "astronomy_shop_product_catalog_service_failure",
+        "kafka_queue_problems",
+        "loadgenerator_flood_homepage",
+    )
+}
+
 
 @dataclass
 class ProblemInfo:
@@ -193,6 +216,9 @@ def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
             continue
         if problem_id in TOO_LARGE:
             inspection.skipped[problem_id] = TOO_LARGE[problem_id]
+            continue
+        if problem_id in FLAKY_ALERT_GRADED:
+            inspection.skipped[problem_id] = FLAKY_ALERT_GRADED[problem_id]
             continue
         if port_sources.get(problem_id) in K3S_UNSUPPORTED:
             source = port_sources[problem_id]

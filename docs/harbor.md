@@ -171,6 +171,10 @@ reason:
   problems (about 29 GB of memory and 22 CPUs) and Blueprint Hotel
   Reservation's two retry storms, whose memory grows until the container
   thrashes at any limit.
+- Astronomy Shop's ten feature-flag faults (`FLAKY_ALERT_GRADED`), graded by
+  Prometheus alerts that fire and clear minutes after the fault and the fix: the
+  reference solution failed some runs on alerts still firing, and they are
+  saturated besides.
 
 These problems are generated but are not reliable as tasks. Leave them out of
 a dataset (`--task-ids`). A failed setup is reported as an error, never as a
@@ -181,14 +185,6 @@ runs used 8 CPUs / 16 GiB.
 | Problem | Oracle agent, 3 sweeps | Why |
 |---|---|---|
 | `gc_capacity_degradation` | 1.0 in all 5 runs that got through setup (no-op 0.0 in all 3); setup failed in 5 of 10 | its alerts had not fired within 10 minutes 3 times, also when it ran alone; Blueprint Hotel Reservation once did not become ready while some 30 sandboxes ran at once; once the cgroup error below |
-| `astronomy_shop_product_catalog_service_failure` | 1.0, 1.0; setup failed once (5-minute wait) | passes when set up, but its alerts did not fire in time in 2 of 3 no-op runs |
-| `astronomy_shop_ad_service_failure` | 1.0 once, 0.0 twice | Locust's `HighRequestErrorRate` can keep firing for 10 minutes after recovery |
-| `astronomy_shop_ad_service_high_cpu` | 1.0, 0.0, setup failed once | its alerts are slow to fire and to clear |
-| `astronomy_shop_cart_service_failure` | 0.0; setup failed twice | as above |
-| `astronomy_shop_ad_service_manual_gc` | setup failed 3 of 3 | its alerts rarely fire within the wait |
-| `astronomy_shop_ad_service_image_slow_load` | setup failed 3 of 3 | no alert fires. SREGym runs the load generator without browser traffic, so slow images are probably never requested. |
-| `kafka_queue_problems` | 0.0 twice, setup failed once | `MessageConsumerLag` keeps firing after recovery |
-| `loadgenerator_flood_homepage` | setup failed 3 of 3 | the flood's only alert is CPU throttling on the load generator, which the agent cannot see, so no alert it could act on fires |
 | `file_descriptor_exhaustion` | plain Docker: setup failed 2 of 2 | its alerts did not fire within the wait |
 | `nightly_rebalance_oom_hotel_reservation`, `nightly_rebalance_oom_saleor` | plain Docker: 1.0, then setup failed in 5 of 7 runs | the injected OOM often does not take effect before setup gives up |
 | 18 Slack Spine tasks, e.g. `admission_webhook_tls_mismatch_slack_spine`, `faulty_image_correlated_slack_spine` | plain Docker: 0.0 in every run, a few pass on rerun | the reference fix leaves 99.5% goodput, but `app_health` also needs 95% per load-generator driver, and `session_reaction`, `session_edit` and `session_delete` send only 5 to 30 requests in the window |
