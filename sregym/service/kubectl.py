@@ -25,6 +25,7 @@ from kubernetes.client.rest import ApiException  # noqa: E402
 from logger import console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
+NETWORK_PROBE_TIMEOUT = int(os.getenv("SREGYM_NETWORK_PROBE_TIMEOUT", "60"))
 NAMESPACE_GRACEFUL_DELETE_TIMEOUT = int(os.getenv("NAMESPACE_GRACEFUL_DELETE_TIMEOUT", "180"))
 NAMESPACE_FORCE_DELETE_TIMEOUT = int(os.getenv("NAMESPACE_FORCE_DELETE_TIMEOUT", "120"))
 PLATFORM_ERROR_MARKERS = (
@@ -70,6 +71,130 @@ class KubeCtl:
     def list_nodes(self):
         """Return a list of all running nodes."""
         return self.core_v1_api.list_node()
+
+    def assert_pod_networking(
+        self,
+        namespace: str = "kube-system",
+        timeout: int = NETWORK_PROBE_TIMEOUT,
+        poll_interval: float = 1,
+    ) -> None:
+        """Require a fresh pod sandbox on every uncordoned Linux node.
+
+        Create all probes before waiting, with one shared startup deadline.
+        Pin them to nodes so a healthy worker cannot hide another worker's CNI
+        failure. Tolerations include control-plane nodes used by infrastructure.
+        """
+        if timeout <= 0 or poll_interval <= 0:
+            raise ValueError("Pod networking timeout and poll interval must be positive")
+        deadline = time.monotonic() + timeout
+
+        def request_timeout() -> tuple[float, float]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Pod sandbox preflight exceeded {timeout}s")
+            budget = min(10, remaining)
+            return budget, budget
+
+        nodes = self.core_v1_api.list_node(_request_timeout=request_timeout()).items
+        nodes = [
+            node.metadata.name
+            for node in nodes
+            if (node.metadata.labels or {}).get("kubernetes.io/os") == "linux"
+            and not getattr(node.spec, "unschedulable", False)
+        ]
+        if not nodes:
+            raise RuntimeError("Cannot check pod networking: no uncordoned Linux nodes")
+
+        image = os.getenv("SREGYM_NETWORK_PROBE_IMAGE") or "registry.k8s.io/pause:3.10"
+        suffix = uuid.uuid4().hex[:12]
+        probes: dict[str, client.V1Pod] = {}
+        cleanup_errors = []
+        try:
+            for index, node_name in enumerate(nodes):
+                name = f"sregym-cni-probe-{suffix}-{index}"
+                pod = client.V1Pod(
+                    metadata=client.V1ObjectMeta(name=name, labels={"app": "sregym-cni-probe"}),
+                    spec=client.V1PodSpec(
+                        node_name=node_name,
+                        restart_policy="Never",
+                        tolerations=[client.V1Toleration(operator="Exists")],
+                        automount_service_account_token=False,
+                        containers=[client.V1Container(name="pause", image=image, image_pull_policy="IfNotPresent")],
+                    ),
+                )
+                # A timed-out create may still reach the server. Include it in cleanup.
+                probes[name] = pod
+                self.core_v1_api.create_namespaced_pod(
+                    namespace=namespace, body=pod, _request_timeout=request_timeout()
+                )
+
+            pending = set(probes)
+            while pending and time.monotonic() < deadline:
+                for name in tuple(pending):
+                    observed = self.core_v1_api.read_namespaced_pod(
+                        name=name, namespace=namespace, _request_timeout=request_timeout()
+                    )
+                    probes[name] = observed
+                    status = observed.status
+                    if (
+                        status
+                        and status.pod_ip
+                        and any(
+                            condition.type == "Ready" and condition.status == "True"
+                            for condition in status.conditions or []
+                        )
+                    ):
+                        pending.remove(name)
+                    elif status and status.phase == "Failed":
+                        raise RuntimeError(self._pod_networking_failure(namespace, [observed], timeout))
+                if pending:
+                    time.sleep(min(poll_interval, max(0, deadline - time.monotonic())))
+            if pending:
+                raise RuntimeError(self._pod_networking_failure(namespace, [probes[name] for name in pending], timeout))
+        except TimeoutError as exc:
+            details = self._pod_networking_failure(namespace, list(probes.values()), timeout)
+            raise TimeoutError(f"{exc}. {details}") from exc
+        except ApiException as exc:
+            raise RuntimeError(f"Pod sandbox preflight API error: {exc.status} {exc.reason}") from exc
+        finally:
+            for name in probes:
+                try:
+                    self.core_v1_api.delete_namespaced_pod(
+                        name=name, namespace=namespace, grace_period_seconds=0, _request_timeout=10
+                    )
+                except Exception as exc:
+                    if not isinstance(exc, ApiException) or exc.status != 404:
+                        cleanup_errors.append(f"{namespace}/{name}: {exc}")
+                        logger.warning("Failed to remove networking probe %s/%s: %s", namespace, name, exc)
+        if cleanup_errors:
+            raise RuntimeError(f"Could not remove pod networking probes: {'; '.join(cleanup_errors)}")
+
+    def _pod_networking_failure(self, namespace: str, pods: list, timeout: int) -> str:
+        """Capture pod and event diagnostics before removing failed probes."""
+        details = []
+        for pod in pods:
+            name = pod.metadata.name
+            if pod.status:
+                details.append(self._pod_readiness_summary(pod))
+                if not pod.status.pod_ip:
+                    details.append(f"{name}: no pod IP")
+            else:
+                details.append(f"{name} on {pod.spec.node_name}: pod status unavailable")
+            field = f"involvedObject.uid={pod.metadata.uid}" if pod.metadata.uid else f"involvedObject.name={name}"
+            try:
+                events = self.core_v1_api.list_namespaced_event(
+                    namespace=namespace, field_selector=field, _request_timeout=(2, 2)
+                ).items
+                warnings = sorted(
+                    (event for event in events if event.type == "Warning"),
+                    key=lambda event: str(
+                        event.last_timestamp or event.event_time or event.metadata.creation_timestamp
+                    ),
+                )
+                details.extend(f"{name}: {event.reason}: {(event.message or '')[:1000]}" for event in warnings[-3:])
+            except Exception as exc:
+                details.append(f"{name}: warning events unavailable ({exc})")
+        return f"Pod sandbox preflight did not reach Ready with an IP within {timeout}s: {'; '.join(details)}"
 
     def get_node_free_pct(self, node_name: str) -> int:
         """Return the nodefs free-space percentage as reported by kubelet stats summary."""
