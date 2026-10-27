@@ -29,7 +29,7 @@ if [[ ! -f "${KIND_CONFIG}" ]]; then
     exit 1
 fi
 
-BASELINE_CACHE_PATH="${SREGYM_BASELINE_CACHE_PATH:-${HOME}/cache_dir/cluster_baseline_state.json}"
+BASELINE_CACHE_PATH="${SREGYM_BASELINE_CACHE_PATH:-${SREGYM_CACHE_DIR:-${HOME}/cache_dir}/cluster_baseline_state.json}"
 
 echo "==> Step 1: Invalidate cached cluster baseline"
 # A newly created Kind cluster has different resource identities. Invalidate

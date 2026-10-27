@@ -32,6 +32,7 @@ def shell_environment(tmp_path):
         "KIND_TEST_CALL_LOG": str(log),
     }
     env.pop("SREGYM_BASELINE_CACHE_PATH", None)
+    env.pop("SREGYM_CACHE_DIR", None)
 
     def run(script, *args, extra_env=None):
         result = subprocess.run(
@@ -79,14 +80,33 @@ def test_kind_setup_accepts_dind_config_and_node_image(shell_environment, tmp_pa
     assert calls[1] == f"kind create cluster --config {config} --image sregym-kind:local --retain"
 
 
-@pytest.mark.parametrize("custom_cache_path", [False, True], ids=["default-path", "custom-path"])
-def test_kind_setup_invalidates_baseline_before_cluster_creation(shell_environment, tmp_path, custom_cache_path):
+def test_kind_setup_clears_baseline_in_default_cache_dir(shell_environment):
+    result, calls = shell_environment("setup_kind_cluster.sh")
+    assert result.returncode == 0, result.stderr
+    home = os.environ["HOME"]
+    assert f"rm -f {home}/cache_dir/cluster_baseline_state.json" in calls
+
+
+def test_kind_setup_clears_baseline_in_sregym_cache_dir(shell_environment, tmp_path):
+    cache_dir = tmp_path / "cache"
+    result, calls = shell_environment("setup_kind_cluster.sh", extra_env={"SREGYM_CACHE_DIR": str(cache_dir)})
+    assert result.returncode == 0, result.stderr
+    assert f"rm -f {cache_dir}/cluster_baseline_state.json" in calls
+
+
+@pytest.mark.parametrize("cache_setting", ["default", "cache-dir", "baseline-path"])
+def test_kind_setup_invalidates_baseline_before_cluster_creation(shell_environment, tmp_path, cache_setting):
     home = tmp_path / "home"
     baseline = home / "cache_dir" / "cluster_baseline_state.json"
     extra_env = {"HOME": str(home), "KIND_TEST_FAIL": "kind"}
-    if custom_cache_path:
+    if cache_setting == "cache-dir":
+        cache_dir = tmp_path / "custom cache"
+        baseline = cache_dir / "cluster_baseline_state.json"
+        extra_env["SREGYM_CACHE_DIR"] = str(cache_dir)
+    elif cache_setting == "baseline-path":
         baseline = tmp_path / "custom_baseline.json"
         extra_env["SREGYM_BASELINE_CACHE_PATH"] = str(baseline)
+        extra_env["SREGYM_CACHE_DIR"] = str(tmp_path / "other-cache")
 
     result, calls = shell_environment(
         "setup_kind_cluster.sh",
