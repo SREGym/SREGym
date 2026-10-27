@@ -18,6 +18,11 @@ logger = logging.getLogger("all.sregym.mcp_server")
 MCP_ROLLOUT_TIMEOUT_SECONDS = int(os.getenv("MCP_ROLLOUT_TIMEOUT_SECONDS", str(WAIT_FOR_POD_READY_TIMEOUT)))
 MCP_ROLLOUT_ATTEMPTS = int(os.getenv("MCP_ROLLOUT_ATTEMPTS", "2"))
 MCP_ROLLOUT_RETRY_DELAY_SECONDS = int(os.getenv("MCP_ROLLOUT_RETRY_DELAY_SECONDS", "5"))
+# How long a freshly started port-forward gets to answer an HTTP request
+# before it is torn down and retried. A floor, not a ceiling: the probe
+# itself waits up to 5s for a reply and the loop sleeps 2s between probes,
+# so one attempt can run about 7s past this.
+PORT_FORWARD_READY_TIMEOUT = int(os.getenv("PORT_FORWARD_READY_TIMEOUT", "20"))
 
 
 class MCPServer:
@@ -229,11 +234,35 @@ class MCPServer:
         cmdline = self._process_cmdline(pid)
         return "port-forward" in cmdline and f"svc/{self.service_name}" in cmdline
 
+    def _export_port_env(self):
+        os.environ["MCP_SERVER_PORT"] = str(self.port)
+        # Keep the URL in step with the port for callers that construct
+        # an MCPServer directly (cli.py, external harnesses) and so
+        # never pass through main.py's env setup.
+        os.environ["MCP_SERVER_URL"] = f"http://127.0.0.1:{self.port}"
+
     def start_port_forward(self):
-        """Starts port-forwarding to access the MCP server."""
-        self._kill_stale_port_forward()
+        """Starts port-forwarding to access the MCP server.
+
+        Returns early when the port already serves traffic. The reclaim below
+        is destructive, so running it before checking tore down a working
+        forward and, when all three attempts then failed, left none at all.
+        A forward accepted this way is not owned by this object:
+        `port_forward_process` stays None and `stop_port_forward` will not
+        end it.
+        """
+        if self._is_port_forward_healthy():
+            logger.info(f"Port-forward on {self.port} is already serving; leaving it in place.")
+            self._export_port_env()
+            return
 
         for attempt in range(3):
+            # Every attempt, not only the first: the command runs under
+            # `shell=True`, and `stop_port_forward` signals the shell. A
+            # kubectl the shell did not exec outlives it and holds the port,
+            # which would turn the remaining attempts into "port in use".
+            self._kill_stale_port_forward()
+
             if self.is_port_in_use(self.port):
                 logger.debug(
                     f"Port {self.port} is already in use. Attempt {attempt + 1} of 3. Retrying in 3 seconds..."
@@ -251,18 +280,38 @@ class MCPServer:
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            time.sleep(3)
+            # Accept the forward once it serves traffic, not once the process
+            # exists. `kubectl port-forward` stays alive while forwarding to a
+            # pod that is not ready, so `poll() is None` accepted a socket that
+            # connects and never answers, and every later call paid its full
+            # timeout against it.
+            #
+            # Polled to a deadline rather than checked once: a pod that passed
+            # its rollout can still take a few seconds before the SSE endpoint
+            # answers, and one check three seconds in would tear down a
+            # forward that was about to work.
+            healthy = False
+            deadline = time.monotonic() + PORT_FORWARD_READY_TIMEOUT
+            while time.monotonic() < deadline:
+                if self.port_forward_process.poll() is not None:
+                    break  # the process exited; nothing left to wait for
+                if self._is_port_forward_healthy():
+                    healthy = True
+                    break
+                time.sleep(2)
 
-            if self.port_forward_process.poll() is None:
-                os.environ["MCP_SERVER_PORT"] = str(self.port)
-                # Keep the URL in step with the port for callers that construct
-                # an MCPServer directly (cli.py, external harnesses) and so
-                # never pass through main.py's env setup.
-                os.environ["MCP_SERVER_URL"] = f"http://127.0.0.1:{self.port}"
+            if healthy:
+                self._export_port_env()
                 logger.info(f"Port forwarding established at {self.port}. MCP_SERVER_PORT set.")
                 break
-            else:
-                logger.warning("Port forwarding failed. Retrying...")
+
+            state = "alive" if self.port_forward_process.poll() is None else "exited"
+            logger.warning(
+                f"Port forwarding did not serve within the {PORT_FORWARD_READY_TIMEOUT}s ready window "
+                f"(process {state}). Retrying..."
+            )
+            self.stop_port_forward()
+            self.port_forward_process = None
         else:
             logger.warning("Failed to establish port forwarding after multiple attempts.")
 
