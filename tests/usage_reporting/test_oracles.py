@@ -123,7 +123,7 @@ def install_grader(problem, monkeypatch, status="pass", failure=None, schema="sr
         )
 
     command = Mock(side_effect=grade)
-    monkeypatch.setattr(oracles.subprocess, "run", command)
+    monkeypatch.setattr(oracles, "run_grader", command)
     return command
 
 
@@ -169,6 +169,38 @@ def test_grader_errors_are_harness_failures(problem, monkeypatch, failure):
     assert result["success"] is False
     assert result["reason"] == "world_grader_failed"
     assert result["failure_class"] == "harness_error"
+
+
+def test_aborted_run_is_a_harness_failure_without_grading(problem, monkeypatch):
+    command = install_grader(problem, monkeypatch, "fail")
+    (problem.app.run_dir / "abort.json").write_text(json.dumps({"reason": "Host resource limit: swap"}))
+    result = problem.mitigation_oracle.evaluate()
+    assert result["reason"] == "world_run_aborted"
+    assert result["failure_class"] == "harness_error"
+    command.assert_not_called()
+
+
+def test_grader_timeout_stops_its_whole_process_group(tmp_path):
+    import os
+    import sys
+
+    marker = tmp_path / "child.pid"
+    script = "import subprocess,sys,time; p=subprocess.Popen(['sleep','60']); open(sys.argv[1],'w').write(str(p.pid)); time.sleep(60)"
+    with (tmp_path / "grader.log").open("w") as log, pytest.raises(subprocess.TimeoutExpired):
+        oracles.run_grader([sys.executable, "-c", script, str(marker)], cwd=tmp_path, log=log, timeout=2)
+    child = int(marker.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            state = Path(f"/proc/{child}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except FileNotFoundError:
+            break
+        if state == "Z":
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(child, 9)
+        pytest.fail("Grader child survived the timeout")
 
 
 @pytest.mark.parametrize("status", ["ungraded", "unknown", None])

@@ -267,12 +267,15 @@ def test_resource_guard_must_report_a_fresh_sample(tmp_path, monkeypatch):
         runtime.start_resource_guard(lab, run)
 
 
-def test_endpoint_probe_records_each_customer_endpoint(tmp_path, monkeypatch):
+def test_endpoint_probes_record_silent_endpoints_as_not_serving(tmp_path, monkeypatch):
     import http.server
     import threading
+    import time
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.path == "/slow":
+                time.sleep(3)
             self.send_response(200 if self.path == "/health" else 503)
             self.end_headers()
             self.wfile.write(b"ok")
@@ -283,12 +286,103 @@ def test_endpoint_probe_records_each_customer_endpoint(tmp_path, monkeypatch):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_port}"
-    monkeypatch.setattr(runtime, "HEALTH_ENDPOINTS", {"health": base + "/health", "live": base + "/api/live"})
+    endpoints = {"health": base + "/health", "live": base + "/api/live", "slow": base + "/slow"}
+    monkeypatch.setattr(runtime, "HEALTH_ENDPOINTS", endpoints)
     try:
-        runtime.probe_endpoints(tmp_path)
+        record = runtime.start_endpoint_probes()
+        end = time.monotonic() + 5
+        while len(record["endpoints"]) < 2 and time.monotonic() < end:
+            time.sleep(0.02)
+        runtime.record_endpoint_probes(tmp_path, record)
     finally:
         server.shutdown()
-    record = json.loads((tmp_path / "service-health-at-D.json").read_text())
-    assert record["endpoints"]["health"]["status"] == 200
-    assert record["endpoints"]["live"]["status"] == 503
-    assert record["completed_monotonic"] >= record["begin_monotonic"]
+    written = json.loads((tmp_path / "service-health-at-D.json").read_text())["endpoints"]
+    assert written["health"]["status"] == 200
+    assert written["live"]["status"] == 503
+    assert written["slow"] == {"status": None, "error": "No response before the deadline"}
+
+
+def test_agent_container_that_survives_the_kill_fails_the_cutoff(tmp_path, monkeypatch):
+    runtime.write(tmp_path / "agent-container.json", {"name": "sregym-claudecode-run-1"})
+
+    def docker(argv, **kwargs):
+        running = "true" if argv[1] == "inspect" else ""
+        return subprocess.CompletedProcess(argv, 1 if argv[1] == "kill" else 0, running, "refused")
+
+    monkeypatch.setattr(runtime.subprocess, "run", docker)
+    with pytest.raises(RuntimeError, match="still running"):
+        runtime.stop_agent(tmp_path)
+    assert json.loads((tmp_path / "solver-cutoff.json").read_text())["still_running"] is True
+
+
+def test_agent_container_already_gone_is_a_completed_cutoff(tmp_path, monkeypatch):
+    runtime.write(tmp_path / "agent-container.json", {"name": "sregym-claudecode-run-1"})
+    monkeypatch.setattr(
+        runtime.subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "No such container")
+    )
+    runtime.stop_agent(tmp_path)
+    assert json.loads((tmp_path / "solver-cutoff.json").read_text())["still_running"] is False
+
+
+def test_missing_or_stale_resource_sample_stops_the_run(tmp_path):
+    artifacts = tmp_path / "artifacts/runs"
+    artifacts.mkdir(parents=True)
+    lab = SimpleNamespace(
+        ROOT=tmp_path, VM=tmp_path, ARTIFACTS=tmp_path / "artifacts", pid_of=lambda _p: 123, owned=lambda *_a: True
+    )
+    assert runtime.resource_problem(lab) == "Host resource watcher stopped reporting"
+    sample = artifacts / "resource-current.json"
+    sample.write_text("{")
+    assert runtime.resource_problem(lab) is None
+    os.utime(sample, (0, 0))
+    assert runtime.resource_problem(lab) == "Host resource watcher stopped reporting"
+
+
+def test_abort_tears_down_even_when_capture_fails(tmp_path, monkeypatch):
+    import time
+
+    run = tmp_path / "run"
+    run.mkdir()
+    runtime.write(run / "launch.json", {"start_monotonic": time.monotonic() - 2000, "seconds": 1800})
+    runtime.write(run / "abort.json", {"reason": "Conductor exited before the deadline"})
+    monkeypatch.setattr(runtime, "modules", lambda _p: (SimpleNamespace(), None, None, None))
+    monkeypatch.setattr(runtime, "freeze", Mock(side_effect=RuntimeError("QMP unavailable")))
+    teardown = Mock()
+    monkeypatch.setattr(runtime, "teardown", teardown)
+    with pytest.raises(RuntimeError, match="QMP unavailable"):
+        runtime.watch(tmp_path, run, os.getpid())
+    teardown.assert_called_once_with(tmp_path, run)
+    assert "QMP unavailable" in (run / "capture-error.json").read_text()
+
+
+def test_overrunning_capture_helper_is_stopped_before_teardown(app, monkeypatch):
+    app.run_dir.mkdir(parents=True)
+    (app.project / "build/world-config.json").write_text(json.dumps({"probe_run": str(app.run_dir)}))
+    app._owned = True
+    app.agent_deadline_monotonic = 10
+    calls = []
+    app.watcher = Mock(pid=4242, poll=Mock(return_value=None), wait=Mock())
+    monkeypatch.setattr(world.os, "killpg", lambda pid, sig: calls.append(("kill", pid)))
+    monkeypatch.setattr(app, "_command", lambda action, **kw: calls.append(action))
+    monkeypatch.setattr(app, "wait_frozen", Mock(side_effect=TimeoutError("capture overran")))
+    with pytest.raises(TimeoutError):
+        app.cleanup()
+    assert calls == [("kill", 4242), "teardown"]
+
+
+def test_failed_fallback_capture_still_cleans_up_and_releases_the_lease(app, monkeypatch):
+    def command(argv, **kwargs):
+        if argv[0].endswith("revive.sh"):
+            app.run_dir.mkdir(parents=True)
+        if "freeze" in argv:
+            raise subprocess.CalledProcessError(1, argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(world.subprocess, "run", command)
+    monkeypatch.setattr(world.subprocess, "Popen", Mock(side_effect=OSError("cannot start watcher")))
+    cleanup = Mock()
+    monkeypatch.setattr(app, "cleanup", cleanup)
+    with pytest.raises(subprocess.CalledProcessError):
+        app.deploy()
+    cleanup.assert_called_once()
+    assert app._lease is None

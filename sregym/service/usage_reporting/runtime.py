@@ -110,10 +110,16 @@ def resource_problem(lab):
     pid = lab.pid_of(lab.VM / "world-guard-sregym.pid")
     if not pid or not lab.owned(pid, "world_guard.py"):
         return "Host resource watcher exited"
+    path = resource_path(lab)
     try:
-        row = json.loads(resource_path(lab).read_text())
+        row = json.loads(path.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
-        return None
+        # A sample may be mid-rewrite, but it must not stay missing or unreadable.
+        try:
+            age = time.time() - path.stat().st_mtime
+        except FileNotFoundError:
+            age = float("inf")
+        return "Host resource watcher stopped reporting" if age > 10 else None
     if row.get("stop_reasons"):
         return "Host resource limit: " + ", ".join(row["stop_reasons"])
     if time.time() - row["epoch"] > 10:
@@ -129,11 +135,17 @@ def stop_agent(run):
         if not name.startswith("sregym-") or not all(c.isalnum() or c in "-_" for c in name):
             raise ValueError("Invalid run container name")
         result = subprocess.run(["docker", "kill", name], capture_output=True, text=True, timeout=15)
-        record.update(container=name, returncode=result.returncode, error=result.stderr.strip())
+        state = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Running}}", name], capture_output=True, text=True, timeout=15
+        )
+        running = state.returncode == 0 and state.stdout.strip() == "true"
+        record.update(container=name, returncode=result.returncode, error=result.stderr.strip(), still_running=running)
     else:
         record["agent_not_started"] = True
     record["completed_monotonic"] = time.monotonic()
     write(run / "solver-cutoff.json", record)
+    if record.get("still_running"):
+        raise RuntimeError("Agent container is still running after the deadline")
 
 
 def freeze(project, run):
@@ -243,23 +255,43 @@ def teardown(project, run):
     write(run / "teardown.json", {"completed_monotonic": time.monotonic(), "saved_capture_retained": True})
 
 
-def probe_endpoints(run):
-    """Record whether each customer endpoint serves just before the deadline freeze."""
+def probe_endpoint(label, url, answers):
+    began = time.monotonic()
+    try:
+        with urllib.request.urlopen(url, timeout=4) as response:
+            body = response.read(400).decode("utf-8", "replace")
+            answers[label] = {"status": response.status, "seconds": time.monotonic() - began, "body": body}
+    except Exception as exc:
+        answers[label] = {
+            "status": getattr(exc, "code", None),
+            "seconds": time.monotonic() - began,
+            "error": repr(exc)[:300],
+        }
 
-    def get(url):
-        began = time.monotonic()
-        try:
-            with urllib.request.urlopen(url, timeout=4) as response:
-                body = response.read(400).decode("utf-8", "replace")
-                return {"status": response.status, "seconds": time.monotonic() - began, "body": body}
-        except Exception as exc:
-            return {"status": getattr(exc, "code", None), "seconds": time.monotonic() - began, "error": repr(exc)[:300]}
 
-    record = {"begin_host_epoch": time.time(), "begin_monotonic": time.monotonic()}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(HEALTH_ENDPOINTS)) as pool:
-        record["endpoints"] = dict(zip(HEALTH_ENDPOINTS, pool.map(get, HEALTH_ENDPOINTS.values()), strict=True))
-    record["completed_monotonic"] = time.monotonic()
-    write(run / "service-health-at-D.json", record)
+def start_endpoint_probes():
+    """Probe every customer endpoint concurrently; answers arrive in the returned record."""
+    record = {"begin_host_epoch": time.time(), "begin_monotonic": time.monotonic(), "endpoints": {}}
+    for label, url in HEALTH_ENDPOINTS.items():
+        threading.Thread(target=probe_endpoint, args=(label, url, record["endpoints"]), daemon=True).start()
+    return record
+
+
+def record_endpoint_probes(run, record):
+    """Write the answers received by now; an endpoint still silent at the deadline is not serving."""
+    endpoints = dict(record["endpoints"])
+    for label in HEALTH_ENDPOINTS:
+        endpoints.setdefault(label, {"status": None, "error": "No response before the deadline"})
+    write(run / "service-health-at-D.json", {**record, "endpoints": endpoints, "completed_monotonic": time.monotonic()})
+
+
+def capture(project, run):
+    """Freeze and capture the world; a failure is recorded so waiters stop at once."""
+    try:
+        freeze(project, run)
+    except Exception as exc:
+        write(run / "capture-error.json", {"error": f"{type(exc).__name__}: {exc}"})
+        raise
 
 
 def watch(project, run, parent_pid):
@@ -292,11 +324,11 @@ def watch(project, run, parent_pid):
             done.wait(30)
 
     threading.Thread(target=sample_clock, daemon=True).start()
-    prober = threading.Thread(target=probe_endpoints, args=(run,), daemon=True)
+    probes = None
     next_resource_check = 0
     while time.monotonic() < deadline:
-        if prober.ident is None and time.monotonic() >= deadline - 6:
-            prober.start()
+        if probes is None and time.monotonic() >= deadline - 6:
+            probes = start_endpoint_probes()
         try:
             os.kill(parent_pid, 0)
         except ProcessLookupError:
@@ -312,15 +344,14 @@ def watch(project, run, parent_pid):
             next_resource_check = time.monotonic() + 1
         time.sleep(min(0.05, max(0, deadline - time.monotonic())))
     done.set()
-    if prober.ident is not None:
-        prober.join(max(0, deadline - time.monotonic()))  # Never delays the freeze past the deadline.
+    if probes is not None:
+        record_endpoint_probes(run, probes)
     try:
-        freeze(project, run)
-    except Exception as exc:
-        write(run / "capture-error.json", {"error": f"{type(exc).__name__}: {exc}"})
-        raise
-    if (run / "abort.json").exists():
-        teardown(project, run)
+        capture(project, run)
+    finally:
+        # After an abort the conductor may be gone, so this helper owns teardown.
+        if (run / "abort.json").exists():
+            teardown(project, run)
 
 
 if __name__ == "__main__":
@@ -337,4 +368,4 @@ if __name__ == "__main__":
     elif args.action == "ready":
         ready(args.project, args.run)
     else:
-        freeze(args.project, args.run)
+        capture(args.project, args.run)

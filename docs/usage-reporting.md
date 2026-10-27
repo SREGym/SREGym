@@ -86,13 +86,16 @@ The mitigation oracle calls the configured grader with `RUN_DIR --capture
 END_STATE --output OUTPUT --runtime-limit 870`. It requires
 `GRADE.json` with schema `sregym-grade-v1`, a matching `run`, and
 `mitigation.status` equal to `pass` or `fail`, mapped to a boolean `success`.
-An incomplete or invalid grader outcome returns a harness failure. Full tables,
+An incomplete or invalid grader outcome returns a harness failure, and so does a
+run the harness cut short (for example at a host resource limit), which is not
+graded. Full tables,
 limitations and validity metadata remain in `GRADE.json`. Mitigation passes only
 when every reading that still has a copy at handoff is in its regional ledger
 exactly once, readings offered after a 600-second restoration window reach the
 ledger within 120 seconds, the customer endpoints are serving at the deadline (the
 world watcher probes each `/health` and `/api/live` endpoint six seconds before the
-freeze and writes `service-health-at-D.json`), and
+freeze and writes `service-health-at-D.json`; an endpoint that has not answered
+by the deadline counts as not serving), and
 re-running the scheduled role, profile and package maintenance on a private copy
 of the end state, with automation restored, removes no routing rule and breaks no
 connectivity on any host.

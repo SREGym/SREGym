@@ -8,6 +8,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -193,14 +194,18 @@ class UsageReportingApplication(Application):
                 public, gateway_url, self.run_dir / "agent-container.json", self.agent_deadline_monotonic
             )
         except BaseException:
-            if self.agent_deadline_monotonic is not None:
-                write(self.run_dir / "abort.json", {"reason": "Deployment did not finish"})
-                if self.watcher is None:
-                    self._command("freeze", timeout=600)
-            self.cleanup()
-            if self._lease is not None:
-                self._lease.close()
-                self._lease = None
+            try:
+                if self.agent_deadline_monotonic is not None:
+                    write(self.run_dir / "abort.json", {"reason": "Deployment did not finish"})
+                    if self.watcher is None:
+                        self._command("freeze", timeout=600)
+            finally:
+                try:
+                    self.cleanup()
+                finally:
+                    if self._lease is not None:
+                        self._lease.close()
+                        self._lease = None
             raise
 
     def _wait_file(self, name, timeout):
@@ -241,6 +246,12 @@ class UsageReportingApplication(Application):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
 
+    def _stop_watcher(self):
+        """Stop a capture helper that did not finish, so it cannot run alongside teardown."""
+        if self.watcher is not None and self.watcher.poll() is None:
+            os.killpg(self.watcher.pid, signal.SIGKILL)
+            self.watcher.wait(timeout=30)
+
     def cleanup(self):
         if not self._owned or self._cleaned:
             return
@@ -251,6 +262,7 @@ class UsageReportingApplication(Application):
                     self.wait_frozen()
                 except (RuntimeError, TimeoutError) as exc:
                     capture_error = exc
+                    self._stop_watcher()
             # Partial revive can fail before assigning world ownership.
             config_path = self.project / "build/world-config.json"
             config = json.loads(config_path.read_text()) if config_path.exists() else {}

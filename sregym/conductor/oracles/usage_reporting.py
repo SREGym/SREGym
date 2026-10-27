@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -12,11 +15,25 @@ from sregym.conductor.oracles.failure import FailureClass
 from sregym.service.usage_reporting.runtime import write
 
 
+def run_grader(command, *, cwd, log, timeout):
+    """Run the grader in its own process group so its private world copy never outlives it."""
+    process = subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        returncode = process.wait(timeout=timeout)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+    if returncode:
+        raise subprocess.CalledProcessError(returncode, command)
+
+
 class UsageMitigationOracle(Oracle):
     # An early submission waits until D, then extraction may take 15 minutes.
     evaluation_timeout_seconds = 3600
     FAILURE_CLASSES = {
         "world_grader_failed": FailureClass.HARNESS_ERROR,
+        "world_run_aborted": FailureClass.HARNESS_ERROR,
         "world_mitigation_failed": FailureClass.AGENT_ERROR,
     }
 
@@ -30,6 +47,11 @@ class UsageMitigationOracle(Oracle):
         app = self.problem.app
         capsule = app.wait_frozen()
         app.retain_workspace(getattr(app, "agent_workspace", None))
+        abort = app.run_dir / "abort.json"
+        if abort.exists():
+            # A run cut short by the harness says nothing about the agent.
+            self.result = self.fail("world_run_aborted", abort=json.loads(abort.read_text()))
+            return self.result
         grader = app.grader
         output = grader.parent / "results" / ("sregym-" + app.run_dir.name)
         command = [
@@ -46,7 +68,7 @@ class UsageMitigationOracle(Oracle):
         ]
         with (app.run_dir / "grader.log").open("w") as log:
             try:
-                subprocess.run(command, cwd=app.project, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=930)
+                run_grader(command, cwd=app.project, log=log, timeout=930)
                 grade = json.loads((output / "GRADE.json").read_text())
                 if grade.get("schema") != "sregym-grade-v1" or Path(grade["run"]) != app.run_dir:
                     raise ValueError("Grader result schema/run does not match this attempt")
