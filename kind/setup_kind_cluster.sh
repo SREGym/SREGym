@@ -77,9 +77,11 @@ for attempt in 1 2 3; do
 done
 
 echo "==> Step 4: Wait for Calico to be ready"
-# 300s (vs 120s) accommodates first-time image pulls on slow CI runners,
-# where 1 of N calico-node pods routinely lags behind the others.
-CALICO_TIMEOUT="${CALICO_TIMEOUT:-300s}"
+# A fresh four-node cluster pulls the CNI and node images into four independent
+# containerd stores. Slow registries can take more than five minutes without the
+# rollout being unhealthy, so keep this aligned with the cold-start budget used
+# by the benchmark runtime.
+CALICO_TIMEOUT="${CALICO_TIMEOUT:-900s}"
 
 dump_calico_diagnostics() {
     echo ""

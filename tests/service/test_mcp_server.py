@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from sregym.paths import MCP_SERVER_K8S
+from sregym.service.kubectl import WAIT_FOR_POD_READY_TIMEOUT
 from sregym.service.kubernetes_access_policy import restricted_cluster_role
 from sregym.service.mcp_server import MCPServer
 
@@ -70,6 +71,9 @@ def test_deploy_applies_final_permissions_before_exposing_mcp(rendered_manifests
         assert not any("set env" in call.args[0] for call in calls)
 
     assert "rollout status" in events.mock_calls[-2].args[0]
+    rollout = next(call for call in calls if "rollout status" in call.args[0])
+    assert f"--timeout={WAIT_FOR_POD_READY_TIMEOUT}s" in rollout.args[0]
+    assert rollout.kwargs["timeout"] == WAIT_FOR_POD_READY_TIMEOUT + 10
     assert events.mock_calls[-1] == ("expose", (), {})
 
 

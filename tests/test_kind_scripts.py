@@ -53,6 +53,7 @@ def test_kind_setup_uses_shared_config_for_default_and_legacy_aliases(shell_envi
     assert calls[0].startswith("rm -f ")
     assert calls[1].startswith("kind create cluster --config ")
     assert calls[1].endswith("kind-config.yaml")
+    assert any("rollout status daemonset/calico-node -n kube-system --timeout=900s" in call for call in calls)
     assert any("kubectl wait --for=condition=Ready nodes --all" in call for call in calls)
 
 
