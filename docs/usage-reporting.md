@@ -83,12 +83,17 @@ mismatched truth fails before deployment. No custom checklist or per-layer
 judging is used.
 
 The mitigation oracle calls the configured grader with `RUN_DIR --capture
-END_STATE --output OUTPUT --no-recurrence --runtime-limit 870`. It requires
+END_STATE --output OUTPUT --runtime-limit 870`. It requires
 `GRADE.json` with schema `sregym-grade-v1`, a matching `run`, and
 `mitigation.status` equal to `pass` or `fail`, mapped to a boolean `success`.
 An incomplete or invalid grader outcome returns a harness failure. Full tables,
-limitations and validity metadata remain in `GRADE.json`. A separate
-post-deadline recurrence test is not credited as an in-budget repair.
+limitations and validity metadata remain in `GRADE.json`. Mitigation passes only
+when every reading that still has a copy at handoff is in its regional ledger
+exactly once, readings offered after a 600-second restoration window reach the
+ledger within 120 seconds, the customer endpoints are serving at the deadline, and
+re-running the scheduled role, profile and package maintenance on a private copy
+of the end state, with automation restored, removes no routing rule and breaks no
+connectivity on any host.
 
 ## Resources and distribution
 

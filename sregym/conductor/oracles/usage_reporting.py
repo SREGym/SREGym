@@ -41,7 +41,6 @@ class UsageMitigationOracle(Oracle):
             str(capsule),
             "--output",
             str(output),
-            "--no-recurrence",
             "--runtime-limit",
             "870",
         ]

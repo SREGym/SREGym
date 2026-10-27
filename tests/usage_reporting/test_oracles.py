@@ -105,7 +105,7 @@ def install_grader(problem, monkeypatch, status="pass", failure=None, schema="sr
     def grade(command, **kwargs):
         app.wait_frozen.assert_called_once()
         assert command[command.index("--capture") + 1] == str(app.run_dir / "end-state")
-        assert "--no-recurrence" in command
+        assert "--no-recurrence" not in command
         assert kwargs["timeout"] == 930
         if failure:
             raise failure
