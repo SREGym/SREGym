@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -174,11 +175,15 @@ def build_messages(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
             }
         )
 
-    responses = {r["label"]: r for r in by_event.get(("jev", "response"), [])}
-    for req in by_event.get(("jev", "request"), []):
+    responses: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
+    for response in by_event.get(("jev", "response"), []):
+        responses[response["label"]].append(response)
+    for invocation, req in enumerate(by_event.get(("jev", "request"), []), 1):
         label = req["label"]
-        resp = responses.get(label)
-        call_id = f"jev_{label}"
+        # A component can be examined again after new evidence arrives. Labels
+        # describe the question, not a unique invocation; responses are in call order.
+        resp = responses[label].popleft() if responses[label] else None
+        call_id = f"jev_{invocation}"
         usage = (resp or {}).get("usage") or {}
         ai: dict[str, Any] = {
             "type": "AIMessage",

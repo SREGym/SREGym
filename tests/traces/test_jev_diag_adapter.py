@@ -103,3 +103,37 @@ def test_jev_uses_newest_trace_only(tmp_path):
     os.utime(old, ns=(1, 1))
     native.write_text(native.read_text().replace("jev-test", "jev-current"))
     assert convert_run(run).agent.model_name == "jev-current"
+
+
+@pytest.mark.parametrize("first_failed", [False, True])
+def test_repeated_questions_keep_each_response_usage_and_tool_identity(tmp_path, first_failed):
+    from clients.jev_diag.trace import DecisionTrace
+
+    trace = DecisionTrace(tmp_path / "trace.jsonl", problem_id=PROBLEM)
+    for visit, tokens, answer in ((1, 10, "first"), (2, 30, "second")):
+        trace.record("jev", "request", label="investigate:cache", state={"visit": visit}, questions={"q": {}})
+        if visit == 1 and first_failed:
+            trace.record("jev", "response", label="investigate:cache", error="API unavailable")
+        else:
+            trace.record(
+                "jev",
+                "response",
+                label="investigate:cache",
+                model="test",
+                usage={"input_tokens": tokens, "output_tokens": visit},
+                answers={"q": {"choice": answer}},
+            )
+    trace.close("ok")
+    trajectory = convert(trace.write_trajectory(tmp_path / "trajectory"))
+    calls = [step for step in trajectory.steps if step.tool_calls]
+    assert len(calls) == 2
+    assert calls[0].tool_calls[0].tool_call_id != calls[1].tool_calls[0].tool_call_id
+    assert [step.tool_calls[0].arguments["state"]["visit"] for step in calls] == [1, 2]
+    outputs = [step.observation.results[0].content for step in calls]
+    if first_failed:
+        assert outputs[0] == "API unavailable"
+    else:
+        assert json.loads(outputs[0])["q"]["choice"] == "first"
+    assert json.loads(outputs[1])["q"]["choice"] == "second"
+    assert trajectory.final_metrics.total_prompt_tokens == (30 if first_failed else 40)
+    assert trajectory.final_metrics.total_completion_tokens == (2 if first_failed else 3)
