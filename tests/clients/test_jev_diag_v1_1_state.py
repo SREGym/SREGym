@@ -13,6 +13,53 @@ from clients.jev_diag.v1_1 import collector
 NOW = parse_time("2026-01-05T10:00:00Z")
 
 
+@pytest.mark.parametrize("kind", ["Role", "ClusterRole"])
+@pytest.mark.parametrize("outcome", ["forbidden", "timeout", "invalid_json", "missing", "present"])
+def test_rbac_read_failures_do_not_invent_missing_permissions(monkeypatch, kind, outcome):
+    cid = "deployment/shop/worker"
+    components = {
+        cid: {
+            "namespace": "shop",
+            "service_account": "worker",
+            "signals": [],
+            "log_signals": [{"line": 'cannot get resource "pods"', "count": 1, "state": "ongoing"}],
+        }
+    }
+    binding = {
+        "metadata": {"name": "worker", "namespace": "shop"},
+        "subjects": [{"kind": "ServiceAccount", "name": "worker", "namespace": "shop"}],
+        "roleRef": {"kind": kind, "name": "worker"},
+    }
+    resource = "rolebindings" if kind == "Role" else "clusterrolebindings"
+    monkeypatch.setattr(collector, "kubectl_items", lambda name, *a, **kw: [binding] if name == resource else [])
+
+    def read(args):
+        assert "--ignore-not-found" in args
+        if outcome in ("forbidden", "timeout"):
+            raise RuntimeError(outcome)
+        if outcome == "invalid_json":
+            return "invalid JSON"
+        if outcome == "missing":
+            return ""
+        return json.dumps({"rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get"]}]})
+
+    monkeypatch.setattr(collector, "run_kubectl", read)
+    errors = []
+    (role,) = collector.summarize_rbac(["shop"], components, errors)
+    signals = " ".join(role["signals"])
+    if outcome in ("forbidden", "timeout", "invalid_json"):
+        assert errors and role["rules"] == ["(role could not be read)"]
+        assert "is not granted" not in signals and "is granted" not in signals
+        assert "could not be verified" in " ".join(components[cid]["signals"])
+    elif outcome == "missing":
+        assert not errors and role["rules"] == ["(role not found)"]
+        assert "is not granted" in signals
+    else:
+        assert not errors and role["rules"] == ["pods [core]: get"]
+        assert "is granted by this role" in signals
+    assert "logs authorization denials" in signals
+
+
 @pytest.mark.parametrize(
     "failure", [RuntimeError("Forbidden"), TimeoutError("API timed out"), ValueError("invalid JSON")]
 )

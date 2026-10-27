@@ -2061,13 +2061,15 @@ def summarize_rbac(
         rns = bmeta.get("namespace") if rkind == "Role" else None
         ekey = (rkind, rns, rname)
         if ekey not in entries:
-            args = ["get", rkind.lower(), rname, "-o", "json", "--show-managed-fields"] + (["-n", rns] if rns else [])
+            args = ["get", rkind.lower(), rname, "-o", "json", "--show-managed-fields", "--ignore-not-found"] + (
+                ["-n", rns] if rns else []
+            )
             try:
-                role = json.loads(run_kubectl(args))
-            except Exception as exc:  # noqa: BLE001 - a missing role is itself a finding
-                role = {}
+                role = json.loads(run_kubectl(args) or "{}")
+            except Exception as exc:  # noqa: BLE001 - unread permissions are unknown, not empty
+                role = None
                 errors.append(f"rbac {rkind}/{rname}: {str(exc)[:160]}")
-            rmeta = role.get("metadata", {})
+            rmeta = (role or {}).get("metadata", {})
             entries[ekey] = {
                 "kind": rkind,
                 "name": rname,
@@ -2075,8 +2077,12 @@ def summarize_rbac(
                 "bindings": [],
                 "service_accounts": [],
                 "components": [],
-                "rules": _rule_lines(role.get("rules") or []) if role else ["(role not found)"],
-                "_rules": role.get("rules") or [],
+                "rules": (
+                    _rule_lines(role.get("rules") or [])
+                    if role
+                    else ["(role not found)" if role is not None else "(role could not be read)"]
+                ),
+                "_rules": (role.get("rules") or []) if role is not None else None,
                 "created": rmeta.get("creationTimestamp"),
                 "modified": last_update_time(rmeta),
                 "modified_after_creation_s": change_log.modified_after_creation(rmeta),
@@ -2103,11 +2109,18 @@ def summarize_rbac(
                 continue
             count = sum(int(s.get("count") or 1) for s in denied)
             entry["signals"].append(f"bound workload {cid} logs authorization denials ({count} lines)")
+            permissions = (
+                f"granting: {'; '.join(entry['rules'][:4]) or 'nothing'}"
+                if entry["_rules"] is not None
+                else "whose permissions could not be verified"
+            )
             comp.setdefault("signals", []).append(
                 f"service account {comp.get('namespace')}/{comp.get('service_account') or 'default'} is bound to "
-                f"{entry['kind']}/{entry['name']} granting: {'; '.join(entry['rules'][:4]) or 'nothing'}"
+                f"{entry['kind']}/{entry['name']} {permissions}"
             )
             for s in denied:
+                if entry["_rules"] is None:
+                    break
                 m = _DENIED_OPERATION_RE.search(s.get("line") or "")
                 if not m:
                     continue
