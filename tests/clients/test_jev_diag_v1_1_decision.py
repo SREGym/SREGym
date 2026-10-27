@@ -73,6 +73,25 @@ def test_triage_asks_for_the_component_and_the_fault_object_kind_only():
     assert set(questions) == {"root_cause_component", "fault_object_kind"}
 
 
+def test_no_next_candidate_is_resolved_without_a_single_option_question():
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
+
+    cid = "deployment/a"
+    snap = _snap({cid: _comp("a")})
+
+    class Strict(Scripted):
+        def system_one(self, state, questions, **kwargs):
+            assert "next_component" not in questions
+            return super().system_one(state, questions, **kwargs)
+
+    model = Strict({cid: 1.0}, {cid: {"origin": 1.0}})
+    diagnoser = IterativeDiagnoser(model, fetch_detail=lambda *args: {})
+    diagnosis = diagnoser.diagnose(snap)
+    assert diagnosis.component == cid
+    assert diagnosis.investigation["fallback"] is None
+    assert diagnosis.investigation["steps"][0]["next"] == "none"
+
+
 def test_configured_model_limit_reaches_the_production_diagnoser(monkeypatch):
     import sys
 

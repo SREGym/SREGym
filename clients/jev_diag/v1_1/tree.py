@@ -449,6 +449,8 @@ def build_investigation_questions(
                 if not item.get("context")
             },
         )
+    if not remaining:
+        questions.pop(NEXT_QUESTION)
     return questions
 
 
@@ -819,7 +821,11 @@ class IterativeDiagnoser(JevDiagnoser):
             ),
         )
         verdict = ChoiceResult.from_answer(response.choices[VERDICT_QUESTION])
-        nxt = ChoiceResult.from_answer(response.choices[NEXT_QUESTION])
+        nxt = (
+            ChoiceResult.from_answer(response.choices[NEXT_QUESTION])
+            if options
+            else ChoiceResult(choice=NONE_OPTION, confidence=1.0, probabilities={NONE_OPTION: 1.0})
+        )
         category = ChoiceResult.from_answer(response.choices[CATEGORY_QUESTION])
         key = (
             ChoiceResult.from_answer(response.choices[EVIDENCE_QUESTION])
