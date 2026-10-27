@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
+from sregym.conductor.oracles.kubelet_crash_mitigation import KubeletCrashMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
@@ -25,7 +25,7 @@ class KubeletCrash(Problem):
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = KubeletCrashMitigationOracle(problem=self)
 
         self.app.create_workload()
 
@@ -42,6 +42,6 @@ class KubeletCrash(Problem):
     def recover_fault(self):
         print("== Fault Recovery ==")
         self.injector.recover_kubelet_crash()
-        # rollout restart all services for faster recovery
-        self.kubectl.exec_command(f"kubectl rollout restart deployment -n {self.namespace}")
+        # The interrupted rollouts resume once kubelets return. Restarting all
+        # Deployments would also discard data in the demo's ephemeral stores.
         self.kubectl.wait_for_ready(self.namespace)
