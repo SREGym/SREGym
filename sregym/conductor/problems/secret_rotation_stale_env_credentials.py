@@ -10,6 +10,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.secret_rotation_stale_env_mitigation import SecretRotationStaleEnvMitigation
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -25,9 +26,9 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
     _POSTGRES_PASSWORD_CHECK_INTERVAL_SECONDS = 3
     _VERIFY_TIMEOUT_SECONDS = 30
 
-    def __init__(self):
+    def __init__(self, *, app: Application | None = None):
         """Configure the fixed Astronomy Shop secret-rotation problem."""
-        self.app = AstronomyShop()
+        self.app = app if app is not None else AstronomyShop()
         self.namespace = self.app.namespace
         super().__init__(app=self.app, namespace=self.namespace)
         self.kubectl = KubeCtl()

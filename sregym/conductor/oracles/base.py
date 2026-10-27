@@ -6,6 +6,7 @@ from sregym.conductor.oracles.failure import classify
 
 
 class Oracle(ABC):
+    requires_llm_judge = False
     # Long-running oracles can request a larger grading budget. None preserves
     # the runner's default; this does not extend agent or cleanup deadlines.
     evaluation_timeout_seconds: float | None = None
@@ -113,6 +114,12 @@ class Oracle(ABC):
                 break
         return cls.fail("oracle_raised", **detail)
 
+    @staticmethod
+    def is_completed_job_pod(pod) -> bool:
+        """Only successful Job pods are exempt from workload readiness."""
+        owners = getattr(pod.metadata, "owner_references", None) or []
+        return pod.status.phase == "Succeeded" and any(getattr(owner, "kind", None) == "Job" for owner in owners)
+
     def pods_unready(self, pods, **detail) -> dict | None:
         """Return a verdict for the first unhealthy pod or container, else None.
 
@@ -130,6 +137,8 @@ class Oracle(ABC):
         """
         for pod in pods:
             pod_name = pod.metadata.name
+            if self.is_completed_job_pod(pod):
+                continue
             if pod.status.phase != "Running":
                 print(f"❌ Pod {pod_name} is in phase: {pod.status.phase}")
                 return self.fail("pods_not_ready", pod=pod_name, phase=pod.status.phase, **detail)

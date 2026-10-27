@@ -29,7 +29,15 @@ if [[ ! -f "${KIND_CONFIG}" ]]; then
     exit 1
 fi
 
-echo "==> Step 1: Create Kind cluster"
+BASELINE_CACHE_PATH="${SREGYM_BASELINE_CACHE_PATH:-${SREGYM_CACHE_DIR:-${HOME}/cache_dir}/cluster_baseline_state.json}"
+
+echo "==> Step 1: Invalidate cached cluster baseline"
+# A newly created Kind cluster has different resource identities. Invalidate
+# before creation so a later setup failure cannot leave an old baseline eligible
+# for the next benchmark attempt.
+rm -f "${BASELINE_CACHE_PATH}"
+
+echo "==> Step 2: Create Kind cluster"
 CREATE_ARGS=(--config "${KIND_CONFIG}")
 if [[ -n ${KIND_NODE_IMAGE:-} ]]; then
     CREATE_ARGS+=(--image "${KIND_NODE_IMAGE}")
@@ -39,7 +47,22 @@ if [[ ${KIND_RETAIN_ON_FAILURE:-false} == true ]]; then
 fi
 kind create cluster "${CREATE_ARGS[@]}"
 
-echo "==> Step 2: Install Calico CNI"
+echo "==> Step 2b: Drop host DNS search domains from the nodes"
+# Docker copies the host's "search" list into each node's /etc/resolv.conf and
+# kubelet appends it to every pod's search list. With ndots:5 a short name such
+# as "frontend" whose AAAA lookup has no cluster answer then walks the host
+# domains. On hosts whose search domains contain a real "frontend" (for example
+# corporate networks) Envoy in astronomy-shop's frontend-proxy resolves that
+# foreign address and every request fails with 503. Pods only need the cluster
+# search domains, which kubelet adds on its own.
+CONTAINER_CLI="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
+for node in $(kind get nodes 2>/dev/null); do
+    # /etc/resolv.conf is a bind mount: rewrite the content, not the inode.
+    "${CONTAINER_CLI}" exec "${node}" sh -c \
+        'awk "!/^search /" /etc/resolv.conf > /tmp/resolv.conf.sregym && cat /tmp/resolv.conf.sregym > /etc/resolv.conf'
+done
+
+echo "==> Step 3: Install Calico CNI"
 # Cold parallel starts can briefly overload etcd while node images unpack.
 # Apply is declarative, so retrying also handles a partially applied manifest.
 for attempt in 1 2 3; do
@@ -53,10 +76,12 @@ for attempt in 1 2 3; do
     sleep 5
 done
 
-echo "==> Step 3: Wait for Calico to be ready"
-# 300s (vs 120s) accommodates first-time image pulls on slow CI runners,
-# where 1 of N calico-node pods routinely lags behind the others.
-CALICO_TIMEOUT="${CALICO_TIMEOUT:-300s}"
+echo "==> Step 4: Wait for Calico to be ready"
+# A fresh four-node cluster pulls the CNI and node images into four independent
+# containerd stores. Slow registries can take more than five minutes without the
+# rollout being unhealthy, so keep this aligned with the cold-start budget used
+# by the benchmark runtime.
+CALICO_TIMEOUT="${CALICO_TIMEOUT:-900s}"
 
 dump_calico_diagnostics() {
     echo ""
@@ -85,7 +110,7 @@ if ! kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n kube-syste
     exit 1
 fi
 
-echo "==> Step 3b: Confirm all nodes are Ready"
+echo "==> Step 4b: Confirm all nodes are Ready"
 # Calico rollout completing does not on its own guarantee nodes flip to Ready
 # (kubelet has its own debounce). Assert it explicitly so a stuck node fails
 # loudly here, not 10 minutes later inside wait_for_ready('kube-system').
@@ -95,11 +120,6 @@ if ! kubectl wait --for=condition=Ready nodes --all --timeout=120s; then
     kubectl describe nodes || true
     exit 1
 fi
-
-echo "==> Step 4: Delete SREGym cluster baseline cache"
-# SREGym caches the cluster baseline state after first deployment.
-# Deleting it forces SREGym to capture a fresh baseline with Calico installed.
-rm -f ~/cache_dir/cluster_baseline_state.json
 
 echo ""
 echo "✅ Cluster setup complete!"

@@ -4,3 +4,7 @@ controllerManager:
   podChaos:
     podFailure:
       pauseImage: registry.k8s.io/pause:3.9@sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097
+chaosDaemon:
+  # Workloads can move to tainted nodes, including a KIND control-plane node.
+  tolerations:
+    - operator: Exists

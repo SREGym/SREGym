@@ -3,19 +3,22 @@ from sregym.conductor.oracles.missing_env_variable_mitigation import MissingEnvV
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class MissingEnvVariable(Problem):
-    def __init__(self, app_name: str = "astronomy_shop", faulty_service: str = "frontend"):
+    def __init__(
+        self, app_name: str = "astronomy_shop", faulty_service: str = "frontend", *, app: Application | None = None
+    ):
         self.faulty_service = faulty_service
         self.app_name = app_name
 
         if self.app_name != "astronomy_shop":
             raise ValueError
 
-        super().__init__(app=AstronomyShop())
+        super().__init__(app=app if app is not None else AstronomyShop())
         self.env_var = "CART_ADDR"
         self.env_var_value = "cart:8080"
         self.root_cause = self.build_structured_root_cause(

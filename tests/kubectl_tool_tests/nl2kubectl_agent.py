@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -66,7 +67,7 @@ class NL2KubectlAgent:
         )
         self.client = Client(transport)
 
-        exec_kubectl_cmd_safely = ExecKubectlCmdSafely(self.client)
+        exec_kubectl_cmd_safely = ExecKubectlCmdSafely(self.client, session_id)
         rollback_command = RollbackCommand(self.client)
         get_previous_rollbackable_cmd = GetPreviousRollbackableCmd(self.client)
         self.kubectl_tools = [
@@ -128,19 +129,13 @@ class NL2KubectlAgent:
             state["messages"] + [ai_message_template],
         )
 
-        output = [*state["messages"], ai_message_template]
-        return {
-            "messages": output,
-            "curr_file": state["curr_file"],
-            "curr_line": state["curr_line"],
-        }
+        ai_message_template.id = str(uuid.uuid4())
+        return {"messages": [ai_message_template]}
 
     def llm_inference_step(self, state: State):
         logger.info("invoking llm inference, custom state: %s", state)
         return {
             "messages": [self.llm.inference(messages=state["messages"], tools=self.kubectl_tools)],
-            "curr_file": state["curr_file"],
-            "curr_line": state["curr_line"],
         }
 
     def build_agent(self, mock: bool = False):
@@ -190,25 +185,14 @@ class NL2KubectlAgent:
         self.graph = self.graph_builder.compile(checkpointer=memory)
 
     def graph_step(self, user_input: str):
+        asyncio.run(self._graph_step(user_input))
+
+    async def _graph_step(self, user_input: str):
         if not self.graph:
             raise ValueError("Agent graph is None. Have you built the agent?")
         config = {"configurable": {"thread_id": "1"}}
-        last_state = self.graph.get_state(config=config)
-        logger.info("last state: %s", last_state)
-        if len(last_state.values) != 0:
-            msgs = last_state.values["messages"] + [{"role": "user", "content": user_input}]
-            state = dict(last_state.values)
-            state["messages"] = msgs
-            logger.info("last state values: %s", state)
-        else:
-            state = {
-                "messages": [{"role": "user", "content": user_input}],
-                "workdir": "",
-                "curr_file": "",
-                "curr_line": 0,
-            }
-        for event in self.graph.stream(
-            state,
+        async for event in self.graph.astream(
+            {"messages": [{"role": "user", "content": user_input}]},
             config=config,
             stream_mode="values",
         ):

@@ -9,7 +9,7 @@ BASE_PARENT_DIR = Path(__file__).resolve().parent.parent
 TARGET_MICROSERVICES = BASE_PARENT_DIR / "SREGym-applications"
 
 # Cache directories
-CACHE_DIR = HOME_DIR / "cache_dir"
+CACHE_DIR = Path(os.environ.get("SREGYM_CACHE_DIR", HOME_DIR / "cache_dir"))
 LLM_CACHE_FILE = CACHE_DIR / "llm_cache.json"
 
 # Cluster baseline state snapshot (captured from a fresh cluster)
@@ -20,6 +20,7 @@ FAULT_SCRIPTS = BASE_DIR / "generators" / "fault" / "script"
 
 # Metadata files
 SOCIAL_NETWORK_METADATA = BASE_DIR / "service" / "metadata" / "social-network.json"
+SOCIAL_NETWORK_IMAGE_VALUES = BASE_DIR / "service" / "apps" / "values" / "social-network-images.yaml"
 HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "hotel-reservation.json"
 PROMETHEUS_METADATA = BASE_DIR / "service" / "metadata" / "prometheus.json"
 LOKI_METADATA = BASE_DIR / "service" / "metadata" / "loki.json"

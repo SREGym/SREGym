@@ -38,6 +38,8 @@ local ``recommendation`` pod will fail silently.
       observable symptoms.
    d. Patch the ``recommendation`` Service:
       ``spec.internalTrafficPolicy: Local``.
+   e. Replace the backend pod so established connections cannot bypass the
+      changed policy.
 
 2. ``recover_fault``
    a. Restore ``spec.internalTrafficPolicy: Cluster`` on the Service.
@@ -61,6 +63,7 @@ from sregym.conductor.oracles.internal_traffic_policy_mitigation import Internal
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -80,8 +83,8 @@ class InternalTrafficPolicyLocalAstronomyShop(Problem):
     CALLER_SERVICE = "frontend"
     CALLER_POD_LABEL_SELECTOR = "app.kubernetes.io/component=frontend"
 
-    def __init__(self):
-        super().__init__(app=AstronomyShop())
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else AstronomyShop())
         self.kubectl = KubeCtl()
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
@@ -113,6 +116,11 @@ class InternalTrafficPolicyLocalAstronomyShop(Problem):
             ),
         )
 
+        # Wait after fault injection so frontend timeout errors and Prometheus
+        # scrape/alert state reflect the dropped cross-node connections before
+        # the agent starts diagnosis.
+        self.propagation_duration_s = 65
+
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = InternalTrafficPolicyMitigationOracle(problem=self)
         self.app.create_workload()
@@ -136,12 +144,19 @@ class InternalTrafficPolicyLocalAstronomyShop(Problem):
         return workers[0], workers[1]  # (pod_node, victim_node)
 
     def _nodes_with_running_pod(self, label_selector: str | None = None) -> set[str]:
-        """Return the set of nodes that currently have a Running pod for the given selector."""
+        """Return the set of nodes that currently have a non-terminating Ready pod for the given selector."""
         pods = self.core_v1.list_namespaced_pod(
             self.namespace,
             label_selector=label_selector or self.POD_LABEL_SELECTOR,
         )
-        return {pod.spec.node_name for pod in pods.items if pod.status.phase == "Running" and pod.spec.node_name}
+        ready_nodes: set[str] = set()
+        for pod in pods.items:
+            if pod.metadata.deletion_timestamp is not None or pod.status.phase != "Running" or not pod.spec.node_name:
+                continue
+            conditions = pod.status.conditions or []
+            if any(c.type == "Ready" and c.status == "True" for c in conditions):
+                ready_nodes.add(pod.spec.node_name)
+        return ready_nodes
 
     # ------------------------------------------------------------------
     # Deployment / service helpers
@@ -172,7 +187,9 @@ class InternalTrafficPolicyLocalAstronomyShop(Problem):
         label_selector = label_selector or self.POD_LABEL_SELECTOR
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if target_node in self._nodes_with_running_pod(label_selector):
+            pods = self.core_v1.list_namespaced_pod(self.namespace, label_selector=label_selector).items
+            has_terminating = any(pod.metadata.deletion_timestamp is not None for pod in pods)
+            if not has_terminating and target_node in self._nodes_with_running_pod(label_selector):
                 return
             time.sleep(4)
         raise RuntimeError(f"pod ({label_selector}) did not reach {target_node} within {timeout}s")
@@ -189,15 +206,28 @@ class InternalTrafficPolicyLocalAstronomyShop(Problem):
         print(f"Pod node: {self.pod_node} | Victim node: {self.victim_node}")
 
         self._pin_deployment_to_node(self.FAULTY_SERVICE, self.pod_node)
-        self.kubectl.exec_command(f"kubectl rollout restart deployment/{self.FAULTY_SERVICE} -n {self.namespace}")
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{self.FAULTY_SERVICE} -n {self.namespace} --timeout=180s"
+        )
         self._wait_for_pod_on_node(self.pod_node)
         print(f"{self.FAULTY_SERVICE} pod is Running on {self.pod_node}")
         self._pin_deployment_to_node(self.CALLER_SERVICE, self.victim_node)
-        self.kubectl.exec_command(f"kubectl rollout restart deployment/{self.CALLER_SERVICE} -n {self.namespace}")
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{self.CALLER_SERVICE} -n {self.namespace} --timeout=180s"
+        )
         self._wait_for_pod_on_node(self.victim_node, self.CALLER_POD_LABEL_SELECTOR)
         print(f"{self.CALLER_SERVICE} pod is Running on {self.victim_node}")
 
         self._set_internal_traffic_policy("Local")
+        # Established connections survive a Service policy change. Recreate
+        # the backend so callers must reconnect under the new policy.
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout restart deployment/{self.FAULTY_SERVICE} -n {self.namespace}"
+        )
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{self.FAULTY_SERVICE} -n {self.namespace} --timeout=300s"
+        )
+        self._wait_for_pod_on_node(self.pod_node)
         print(
             f"Patched service/{self.FAULTY_SERVICE}: internalTrafficPolicy=Local\n"
             f"Callers on {self.victim_node} will now have connections silently dropped.\n"

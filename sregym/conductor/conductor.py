@@ -42,7 +42,7 @@ from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
-from sregym.service.kubectl import KubeCtl
+from sregym.service.kubectl import WAIT_FOR_POD_READY_TIMEOUT, KubeCtl
 from sregym.service.mcp_server import MCPServer
 from sregym.service.rollout import deployment_rollout_complete
 from sregym.service.telemetry.loki import Loki
@@ -78,8 +78,10 @@ class ConductorConfig:
 
 
 class Conductor:
-    def __init__(self, config: ConductorConfig | None = None):
+    def __init__(self, config: ConductorConfig | None = None, *, judge_preflight: Callable[[], None] | None = None):
         self.config = config or ConductorConfig()
+        self._judge_preflight = judge_preflight
+        self._judge_preflight_done = False
 
         # core services
         self.problems = ProblemRegistry()
@@ -109,6 +111,8 @@ class Conductor:
         self.app = None
         self.detection_oracle = None
         self.execution_start_time: float = 0.0
+        self.agent_timeout_seconds: float | None = None
+        self.agent_deadline_monotonic: float | None = None
 
         # grading flow state
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
@@ -302,6 +306,17 @@ class Conductor:
                 "No stages left after checking oracles. This problem will complete without agent interaction."
             )
 
+    def _preflight_active_oracles(self) -> None:
+        """Check judge credentials once, only if an effective stage uses them."""
+        if self._judge_preflight_done or self._judge_preflight is None:
+            return
+        if any(
+            getattr(getattr(self.problem, f"{stage['name']}_oracle"), "requires_llm_judge", False)
+            for stage in self.stage_sequence
+        ):
+            self._judge_preflight()
+            self._judge_preflight_done = True
+
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
@@ -416,8 +431,7 @@ class Conductor:
             self.finish_problem_in_background()
             return
 
-        # Inject fault before the first stage if not already done -- the
-        # interactive visualizer injects itself before calling this.
+        # Inject the fault once before the first stage.
         if start_index == 0 and not self.fault_injected:
             with self._phase("inject_fault"):
                 self._inject_fault()
@@ -675,6 +689,8 @@ class Conductor:
             self.problem = None
             self.app = None
             self.results = {}
+            self.agent_timeout_seconds = None
+            self.agent_deadline_monotonic = None
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
@@ -687,11 +703,12 @@ class Conductor:
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
         self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
-        with self._phase("fix_kubernetes"):
-            self.fix_kubernetes()
-
         self.get_problem_stages()
         self._build_stage_sequence()
+        self._preflight_active_oracles()
+
+        with self._phase("fix_kubernetes"):
+            self.fix_kubernetes()
 
         self.logger.info("Undeploying app leftovers...")
         with self._phase("undeploy_leftovers"):
@@ -1441,8 +1458,17 @@ class Conductor:
         # earlier full-profile run on the same cluster.
         if svelte:
             self._trim_openebs_ndm()
+        # An interrupted preload can leave completed non-Job pods behind.
+        # Remove only our disposable helpers before checking OpenEBS readiness.
+        self.kubectl.exec_command_checked(
+            "kubectl delete pods -n openebs -l app=sregym-image-preload "
+            "--ignore-not-found=true --grace-period=0 --wait=true "
+            f"--timeout={WAIT_FOR_POD_READY_TIMEOUT}s",
+            timeout=WAIT_FOR_POD_READY_TIMEOUT + 10,
+        )
         self.kubectl.wait_for_ready("openebs")
         self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
+        self._preload_openebs_helper_image()
         if not svelte:
             self._ensure_openebs_device_storageclass()
 
@@ -1622,6 +1648,30 @@ class Conductor:
             and status.number_ready == desired
             and status.number_available == desired
             and (status.number_misscheduled or 0) == 0
+        )
+
+    def _preload_openebs_helper_image(self) -> None:
+        """Make LocalPV's helper image available before workload PVC creation."""
+        deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(
+            "openebs-localpv-provisioner", "openebs", _request_timeout=10
+        )
+        containers = deployment.spec.template.spec.containers or []
+        helper_image = next(
+            (
+                env.value
+                for container in containers
+                for env in (container.env or [])
+                if env.name == "OPENEBS_IO_HELPER_IMAGE" and env.value
+            ),
+            None,
+        )
+        if not helper_image:
+            raise RuntimeError("OpenEBS provisioner does not declare OPENEBS_IO_HELPER_IMAGE")
+        self.logger.info("[DEPLOY] Preloading OpenEBS helper image %s on every node…", helper_image)
+        self.kubectl.preload_image_on_nodes(
+            helper_image,
+            namespace="openebs",
+            timeout=WAIT_FOR_POD_READY_TIMEOUT,
         )
 
     # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV

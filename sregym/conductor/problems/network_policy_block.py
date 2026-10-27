@@ -4,6 +4,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.network_policy_oracle import NetworkPolicyMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.paths import TARGET_MICROSERVICES
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -13,8 +14,8 @@ class NetworkPolicyBlock(Problem):
     # HotelReservation pods use "io.kompose.service" as their label key
     POD_LABEL_KEY = "io.kompose.service"
 
-    def __init__(self, faulty_service="recommendation"):
-        super().__init__(app=HotelReservation())
+    def __init__(self, faulty_service="recommendation", *, app: Application | None = None):
+        super().__init__(app=app if app is not None else HotelReservation())
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
         self.policy_name = f"deny-all-{faulty_service}"

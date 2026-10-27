@@ -58,6 +58,21 @@ class EnvVariableShadowingMitigationOracle(Oracle):
                 self.problem.namespace,
             )
 
+    @property
+    def _service_name(self) -> str:
+        # Ports to apps whose Service is not named after its Deployment set
+        # ``service_name``; the original problem uses one name for both.
+        return getattr(self.problem, "service_name", None) or self.problem.faulty_service
+
+    @property
+    def _container_name(self) -> str:
+        return getattr(self.problem, "container_name", None) or self.problem.faulty_service
+
+    def _content_check(self) -> str:
+        # Ports whose health endpoint answers an empty 200 set expected_content="".
+        expected = getattr(self.problem, "expected_content", self.expected_content)
+        return f"grep -q '{expected}' /tmp/frontend; " if expected else ""
+
     @staticmethod
     def _find_container(deployment, name):
         return next(
@@ -83,7 +98,7 @@ class EnvVariableShadowingMitigationOracle(Oracle):
 
     def _service_target_endpoint_unready(self, deployment) -> dict | None:
         namespace = self.problem.namespace
-        service_name = self.problem.faulty_service
+        service_name = self._service_name
         selector = deployment.spec.selector.match_labels or {}
         if not selector:
             print(f"[FAIL] Deployment '{service_name}' has no matchLabels selector")
@@ -117,7 +132,7 @@ class EnvVariableShadowingMitigationOracle(Oracle):
 
     def _frontend_probe_failed(self) -> dict | None:
         namespace = self.problem.namespace
-        service_name = self.problem.faulty_service
+        service_name = self._service_name
         core_v1 = self.problem.kubectl.core_v1_api
         service = core_v1.read_namespaced_service(name=service_name, namespace=namespace)
         service_ports = service.spec.ports or []
@@ -126,12 +141,13 @@ class EnvVariableShadowingMitigationOracle(Oracle):
             return self.fail("service_has_no_ports", service=service_name)
 
         service_port = service_ports[0].port
-        url = f"http://{service_name}.{namespace}.svc.cluster.local:{service_port}/"
+        path = getattr(self.problem, "health_path", None) or "/"
+        url = f"http://{service_name}.{namespace}.svc.cluster.local:{service_port}{path}"
         pod_name = f"frontend-content-check-{time.time_ns()}"[:63]
         script = (
             "set -eu; "
             f"wget -q -T {self.request_timeout_seconds} -t 1 -O /tmp/frontend '{url}'; "
-            f"grep -q '{self.expected_content}' /tmp/frontend; "
+            f"{self._content_check()}"
             "echo FRONTEND_OK"
         )
         pod = client.V1Pod(
@@ -202,10 +218,10 @@ class EnvVariableShadowingMitigationOracle(Oracle):
                     waited_seconds=self.rollout_timeout_seconds,
                 )
 
-            container = self._find_container(deployment, deployment_name)
+            container = self._find_container(deployment, self._container_name)
             if container is None:
-                print(f"[FAIL] Container '{deployment_name}' was not found")
-                return self.fail("target_container_missing", container=deployment_name)
+                print(f"[FAIL] Container '{self._container_name}' was not found")
+                return self.fail("target_container_missing", container=self._container_name)
 
             configuration_failure = self._host_configuration_unsafe(container)
             if configuration_failure is not None:

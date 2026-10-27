@@ -159,6 +159,10 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.11.1",
 ]
 
+[tool.uv]
+required-version = ">=0.11.8"
+exclude-newer = "7 days"
+
 [tool.black]
 line-length = 120
 target-version = ["py312"]
@@ -178,6 +182,8 @@ exclude = [
     "*.egg-info",
     # Vendored verbatim from Harbor (see atif_converter/atif/UPSTREAM.md).
     "atif_converter/atif",
+    # Keep the pinned upstream application and its contract tests unchanged.
+    "docker/apps/stripe/backend/vendor",
 ]
 
 [tool.ruff.lint]
@@ -209,6 +215,8 @@ quote-style = "double"
 docstring-code-format = true
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--ignore=docker/apps/stripe/backend/vendor"]
 markers = [
     "integration: end-to-end tests requiring a running Kubernetes cluster",
 ]
@@ -229,6 +237,7 @@ packages = [
     "atif_converter.atif",
     "sregym",
     "sregym.traces",
+    "sregym.viewer",
     "clients",
     "scripts",
     "llm_backend",
@@ -238,3 +247,4 @@ packages = [
 [tool.setuptools.package-data]
 atif_converter = ["README.md"]
 "atif_converter.atif" = ["UPSTREAM.md"]
+"sregym.viewer" = ["templates/*.html", "static/*.css"]

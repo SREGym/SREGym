@@ -59,7 +59,16 @@ if [[ -n ${SREGYM_DOCKER_TMPFS_SIZE:-} ]]; then
     mount -o loop,noatime "$docker_data_image" /var/lib/docker
 fi
 export container=docker
-dockerd --host=unix:///var/run/docker.sock \
+# Optional Docker Hub mirrors (comma-separated URLs, tried in order), e.g. a
+# pull-through cache on the host: every run has a private daemon and cluster,
+# so without one each run pulls every image from Docker Hub again.
+mirror_args=()
+IFS=, read -r -a registry_mirrors <<<"${SREGYM_REGISTRY_MIRRORS:-}"
+for mirror in "${registry_mirrors[@]}"; do
+    mirror_args+=("--registry-mirror=$mirror")
+    [[ $mirror == http://* ]] && mirror_args+=("--insecure-registry=${mirror#http://}")
+done
+dockerd --host=unix:///var/run/docker.sock "${mirror_args[@]}" \
     --storage-driver="${SREGYM_DOCKER_STORAGE_DRIVER:-overlay2}" >"$daemon_log" 2>&1 &
 daemon_pid=$!
 ready=false
@@ -97,6 +106,8 @@ export KIND_NODE_IMAGE=sregym-kind:local
 if [[ ${SREGYM_ETCD_TMPFS_SIZE:-512m} != 0 ]]; then
     mkdir -p /run/sregym-etcd
     mount -t tmpfs -o "size=${SREGYM_ETCD_TMPFS_SIZE:-512m}" tmpfs /run/sregym-etcd
+fi
+if [[ ${SREGYM_ETCD_TMPFS_SIZE:-512m} != 0 || -n ${SREGYM_REGISTRY_MIRRORS:-} ]]; then
     export KIND_CONFIG=/run/sregym-kind.yaml
     python - <<'PY'
 import os
@@ -105,9 +116,29 @@ from pathlib import Path
 import yaml
 
 config = yaml.safe_load(Path("kind/kind-config.yaml").read_text())
-config["nodes"][0].setdefault("extraMounts", []).append(
-    {"hostPath": "/run/sregym-etcd", "containerPath": "/var/lib/etcd"}
-)
+if os.environ.get("SREGYM_ETCD_TMPFS_SIZE", "512m") != "0":
+    config["nodes"][0].setdefault("extraMounts", []).append(
+        {"hostPath": "/run/sregym-etcd", "containerPath": "/var/lib/etcd"}
+    )
+mirrors = [m for m in os.environ.get("SREGYM_REGISTRY_MIRRORS", "").split(",") if m]
+if mirrors:
+    # containerd reads per-registry hosts.toml files from config_path; every
+    # node mounts the same directory, so mirrors apply from the first pull.
+    certs = Path("/run/sregym-certs.d/docker.io")
+    certs.mkdir(parents=True, exist_ok=True)
+    hosts = ['server = "https://registry-1.docker.io"']
+    for mirror in mirrors:
+        hosts += ["", f'[host."{mirror}"]', '  capabilities = ["pull", "resolve"]']
+        if mirror.startswith("http://"):
+            hosts.append("  skip_verify = true")
+    (certs / "hosts.toml").write_text("\n".join(hosts) + "\n")
+    config.setdefault("containerdConfigPatches", []).append(
+        '[plugins."io.containerd.grpc.v1.cri".registry]\n  config_path = "/etc/containerd/certs.d"\n'
+    )
+    for node in config["nodes"]:
+        node.setdefault("extraMounts", []).append(
+            {"hostPath": "/run/sregym-certs.d", "containerPath": "/etc/containerd/certs.d", "readOnly": True}
+        )
 Path(os.environ["KIND_CONFIG"]).write_text(yaml.safe_dump(config))
 PY
 fi

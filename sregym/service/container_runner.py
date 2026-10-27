@@ -23,8 +23,8 @@ logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_AGENT_IMAGE = (
-    "ghcr.io/sregym/agent-base:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9"
-    "@sha256:92e8b52af763c6e165144d314ec25b1ad3ba0e0f1b0a28ffa4a1760e92ec6b61"
+    "ghcr.io/sregym/agent-base:sha-802e7e8595a75e44b3bd6071157f0369722d2100"
+    "@sha256:4f547bf83bc0f28d04025f2d37d81ed2980e01e0eba0d3aefbc948be5a270150"
 )
 LOCAL_AGENT_IMAGE = "sregym-agent-base:latest"
 HARDENING_FLAGS = (
@@ -104,7 +104,7 @@ class ExecInput:
 
 @dataclass
 class ContainerConfig:
-    image: str = DEFAULT_AGENT_IMAGE
+    image: str = field(default_factory=lambda: os.environ.get("SREGYM_AGENT_IMAGE") or DEFAULT_AGENT_IMAGE)
     network_mode: str = "host"
     kubeconfig_path: Path | None = None
     workspace_path: Path | None = None  # bind-mounted to /workspace for agent output

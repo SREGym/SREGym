@@ -5,6 +5,7 @@ import time
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -34,9 +35,9 @@ class PodCIDRExhaustionHotelReservation(Problem):
     DEFAULT_POOL_NAME = "default-ipv4-ippool"
     NUM_EXHAUST_PODS = 60  # enough to exhaust a /26 with strictAffinity
 
-    def __init__(self, faulty_service: str = "frontend"):
+    def __init__(self, faulty_service: str = "frontend", *, app: Application | None = None):
         self.faulty_service = faulty_service
-        self.app = HotelReservation()
+        self.app = app if app is not None else HotelReservation()
         self.namespace = self.app.namespace
         self.kubectl = KubeCtl()
         super().__init__(app=self.app, namespace=self.namespace)

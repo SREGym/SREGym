@@ -98,14 +98,18 @@ class NetworkPolicyMitigationOracle(Oracle):
             return False
         pod_name = f"recommendation-connectivity-check-{time.time_ns()}"[:63]
         target_dns = f"{target_service}.{namespace}.svc.cluster.local"
-        url = (
-            f"http://{frontend_service}.{namespace}.svc.cluster.local:{frontend_port}/recommendations"
-            "?require=rate&lat=38.0235&lon=-122.095"
+        # Ports to other apps name a frontend path and the text its reply must
+        # contain; the defaults are Hotel Reservation's recommendation query.
+        probe_path = (
+            getattr(self.problem, "probe_path", None) or "/recommendations?require=rate&lat=38.0235&lon=-122.095"
         )
+        probe_expect = getattr(self.problem, "probe_expect", '"type":"FeatureCollection"')
+        url = f"http://{frontend_service}.{namespace}.svc.cluster.local:{frontend_port}{probe_path}"
+        content_check = f"printf '%s' \"$response\" | grep -qF '{probe_expect}' && " if probe_expect else ""
         script = (
             f"nc -z -w 5 '{target_dns}' {target_port} && "
             f"response=$(wget -q -T 10 -O - '{url}') && "
-            'printf \'%s\' "$response" | grep -q \'"type":"FeatureCollection"\' && '
+            f"{content_check}"
             "echo RECOMMENDATION_OK"
         )
         pod = client.V1Pod(

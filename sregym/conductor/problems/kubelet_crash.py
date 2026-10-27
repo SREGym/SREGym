@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
+from sregym.conductor.oracles.kubelet_crash_mitigation import KubeletCrashMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
@@ -18,14 +18,17 @@ class KubeletCrash(Problem):
             component="node/kubelet",
             namespace=self.namespace,
             description=(
-                "A node-level kubelet crash prevents normal pod lifecycle management on the affected node, so rescheduled "
-                "or restarted workloads fail to come up cleanly and dependent services become partially unavailable."
+                "Kubelet services stop on all worker nodes while the control plane remains healthy. The workers become "
+                "NotReady, their Pods lose ready Service endpoints, and normal pod lifecycle management stops on those "
+                "nodes. New or restarted Pods remain Pending when no eligible healthy node is available. The resulting "
+                "endpoint loss and stuck frontend, frontend-proxy and currency rollouts can make the whole application "
+                "unavailable. The failed worker kubelets are the root cause, not the dependent application services."
             ),
         )
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = KubeletCrashMitigationOracle(problem=self)
 
         self.app.create_workload()
 
@@ -42,6 +45,6 @@ class KubeletCrash(Problem):
     def recover_fault(self):
         print("== Fault Recovery ==")
         self.injector.recover_kubelet_crash()
-        # rollout restart all services for faster recovery
-        self.kubectl.exec_command(f"kubectl rollout restart deployment -n {self.namespace}")
+        # The interrupted rollouts resume once kubelets return. Restarting all
+        # Deployments would also discard data in the demo's ephemeral stores.
         self.kubectl.wait_for_ready(self.namespace)

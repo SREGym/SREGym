@@ -50,6 +50,7 @@ from sregym.conductor.oracles.mutating_webhook_resource_limits_mitigation import
     MutatingWebhookResourceLimitsMitigationOracle,
 )
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -159,9 +160,9 @@ class MutatingWebhookResourceLimits(Problem):
         },
     )
 
-    def __init__(self):
+    def __init__(self, *, app: Application | None = None):
         self.faulty_service = "nginx-thrift"
-        self.app = SocialNetwork()
+        self.app = app if app is not None else SocialNetwork()
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.namespace = self.app.namespace
@@ -687,10 +688,10 @@ spec:
 
         time.sleep(8)
 
-        pods = self.core_api.list_namespaced_pod(
-            namespace=self.namespace,
-            label_selector=f"service={self.faulty_service}",
-        )
+        # The Deployment's own selector (service=<name> on Social Network) finds its pods on every app.
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        selector = ",".join(f"{key}={value}" for key, value in deployment.spec.selector.match_labels.items())
+        pods = self.core_api.list_namespaced_pod(namespace=self.namespace, label_selector=selector)
         if not pods.items:
             raise RuntimeError(f"No pods found for service '{self.faulty_service}' in namespace '{self.namespace}'")
 

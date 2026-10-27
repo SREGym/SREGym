@@ -10,6 +10,13 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class MissingService(Problem):
+    """Model missing Services across applications.
+
+    The ``missing_service_astronomy_shop`` and ``missing_service_social_network``
+    configurations are deprecated in SREGym 1.1 after reaching 100% overall
+    pass@3.
+    """
+
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
         self.app_name = app_name
         self.faulty_service = faulty_service
