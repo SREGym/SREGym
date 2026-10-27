@@ -11,7 +11,7 @@ from sregym.conductor.oracles.imbalance_mitigation import ImbalanceMitigationOra
 from sregym.conductor.oracles.kubelet_eviction_threshold_misconfig_mitigation import (
     KubeletEvictionThresholdMisconfigMitigationOracle,
 )
-from sregym.conductor.problems.apps.slack_spine.manifests import _SURGE_CLIENT, _clean_deployment_manifest
+from sregym.conductor.problems.apps.slack_spine.manifests import _SURGE_CLIENT
 from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.environment import configure_port, make_app, reopen_connections
 from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
@@ -116,8 +116,6 @@ class KubeletEvictionThresholdMisconfigSlack(KubeletEvictionThresholdMisconfig):
     worker usually hosts one; those pods stay Pending until the node recovers).
     """
 
-    LOADGEN_SELECTOR = "app.kubernetes.io/component=loadgen"
-
     def __init__(self, app_name: str = "slack_spine", faulty_service: str = "svc-notification"):
         super().__init__(app=make_app(app_name))
         self.faulty_service = faulty_service
@@ -143,50 +141,9 @@ class KubeletEvictionThresholdMisconfigSlack(KubeletEvictionThresholdMisconfig):
             "pod is evicted and recreated in a continuous loop and the service is unavailable."
         )
 
-    def _choose_node(self) -> str:
-        pods = self.kubectl.core_v1_api.list_pod_for_all_namespaces().items
-        workers = sorted(
-            n.metadata.name
-            for n in self.kubectl.core_v1_api.list_node().items
-            if "node-role.kubernetes.io/control-plane" not in (n.metadata.labels or {})
-        )
-        loadgen_nodes = {
-            p.spec.node_name
-            for p in pods
-            if p.metadata.namespace == self.namespace
-            and (p.metadata.labels or {}).get("app.kubernetes.io/component") == "loadgen"
-        }
-        candidates = [w for w in workers if w not in loadgen_nodes] or workers
-
-        def bound(node: str) -> int:
-            return sum(
-                1
-                for p in pods
-                if p.spec.node_name == node and any(v.persistent_volume_claim for v in (p.spec.volumes or []))
-            )
-
-        return min(candidates, key=lambda node: (bound(node), node))
-
-    @mark_fault_injected
-    def inject_fault(self):
-        self.target_node = self._choose_node()
-        self.root_cause = self.build_structured_root_cause(
-            component=f"node/{self.target_node}", namespace=self.namespace, description=self._description()
-        )
-        self.diagnosis_oracle.expected = self.root_cause
+    def _prepare_injection(self):
+        super()._prepare_injection()
         self._state_path().write_text(self.target_node)
-        print("== Fault Injection ==")
-        # The original patches nodeName in place; on a 1-replica Deployment the
-        # rolling update keeps the old ReplicaSet's pod (rescheduled off the
-        # pressured node) serving, so the Deployment is re-created pinned instead.
-        injector = VirtualizationFaultInjector(namespace=self.namespace)
-        dyaml = _clean_deployment_manifest(injector._get_deployment_yaml(self.faulty_service))
-        dyaml["spec"]["template"]["spec"]["nodeName"] = self.target_node
-        path = injector._write_yaml_to_file(f"{self.faulty_service}-pinned", dyaml)
-        self.kubectl.exec_command(f"kubectl delete deployment {self.faulty_service} -n {self.namespace} --wait=true")
-        self.kubectl.exec_command_checked(f"kubectl apply -f {path} -n {self.namespace}")
-        self.injected_threshold = self.injector.inject_disk_pressure(node_name=self.target_node)
-        print(f"Service: {self.faulty_service} | Node: {self.target_node} | Namespace: {self.namespace}\n")
 
     def _state_path(self) -> Path:
         return Path(f"/tmp/sregym-{self.namespace}-eviction-node")
@@ -196,8 +153,6 @@ class KubeletEvictionThresholdMisconfigSlack(KubeletEvictionThresholdMisconfig):
         if self.target_node.startswith("<") and self._state_path().exists():
             self.target_node = self._state_path().read_text().strip()
         super().recover_fault()
-        # Evicted pods stay behind as Failed pods.
-        self.kubectl.exec_command(f"kubectl delete pods -n {self.namespace} --field-selector=status.phase=Failed")
         self.kubectl.exec_command(
             f"kubectl rollout status deployment/{self.faulty_service} -n {self.namespace} --timeout=300s"
         )

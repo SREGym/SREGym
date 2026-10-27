@@ -229,6 +229,12 @@ class DockerEgress:
                 ],
                 "start the filtered egress proxy",
             )
+            # The detached bootstrap shell may not have run yet when docker run
+            # returns. Create the copy destinations synchronously before upload.
+            self._run_docker_checked(
+                ["docker", "exec", self._proxy_name, "mkdir", "-p", "/addons", "/state"],
+                "prepare the filtered egress proxy directories",
+            )
             self._copy_file_to_proxy(addon_path, "/addons/egress_proxy.py")
             self._copy_file_to_proxy(policy_path, "/addons/internet_policy.py")
             self._copy_file_to_proxy(state_dir / "policy.json", "/state/policy.json")
@@ -260,7 +266,6 @@ class DockerEgress:
         """
         return " ".join(
             (
-                "mkdir -p /addons /state;",
                 f"while [ ! -f {PROXY_BOOTSTRAP_SENTINEL} ]; do sleep 0.05; done;",
                 "exec mitmdump --listen-host 0.0.0.0",
                 f"--listen-port {EGRESS_PROXY_PORT}",
