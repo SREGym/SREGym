@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import pytest
+from kubernetes.client.exceptions import ApiException
+
 from sregym.conductor.oracles.mutating_webhook_resource_limits_mitigation import (
     MutatingWebhookResourceLimitsMitigationOracle,
 )
@@ -29,7 +32,7 @@ def _container_status(
         ready=ready,
         restart_count=restart_count,
         state=SimpleNamespace(
-            terminated=(None if terminated_reason is None else SimpleNamespace(reason=terminated_reason))
+            waiting=None, terminated=(None if terminated_reason is None else SimpleNamespace(reason=terminated_reason))
         ),
         last_state=SimpleNamespace(
             terminated=(None if last_terminated_reason is None else SimpleNamespace(reason=last_terminated_reason))
@@ -73,6 +76,7 @@ def _pod(
 
 def _deployment(
     *,
+    name="nginx-thrift",
     request="128Mi",
     limit="256Mi",
     replicas=1,
@@ -84,7 +88,7 @@ def _deployment(
     unavailable=0,
 ):
     return SimpleNamespace(
-        metadata=SimpleNamespace(name="nginx-thrift", generation=generation),
+        metadata=SimpleNamespace(name=name, generation=generation, deletion_timestamp=None),
         spec=SimpleNamespace(
             replicas=replicas,
             template=SimpleNamespace(spec=SimpleNamespace(containers=[_container(request=request, limit=limit)])),
@@ -130,6 +134,16 @@ class _CoreV1:
         self.stability_pod = stability_pod
         self.deleted = False
         self.deletions = []
+        self.services = {
+            name: SimpleNamespace(metadata=SimpleNamespace(name=name, deletion_timestamp=None))
+            for name in ("nginx-thrift", "user-service")
+        }
+
+    def list_namespaced_service(self, namespace):
+        return SimpleNamespace(items=list(self.services.values()))
+
+    def list_namespaced_persistent_volume_claim(self, namespace):
+        return SimpleNamespace(items=[])
 
     def replacement_pod(self):
         return _pod(
@@ -170,6 +184,11 @@ class _KubeCtl:
         self.replica_sets = [_replica_set()] if replica_sets is None else replica_sets
         self.get_error = get_error
         self.unrelated_pods = unrelated_pods or []
+        self.dependencies = {"user-service": _deployment(name="user-service")}
+        self.apps_v1_api = SimpleNamespace(list_namespaced_stateful_set=lambda _: SimpleNamespace(items=[]))
+
+    def list_deployments(self, namespace):
+        return SimpleNamespace(items=[self.deployment, *self.dependencies.values()])
 
     def get_deployment(self, name, namespace):
         if self.get_error is not None:
@@ -193,7 +212,8 @@ def _oracle(kubectl):
         kubectl=kubectl,
     )
     oracle = MutatingWebhookResourceLimitsMitigationOracle(problem)
-    oracle.rollout_timeout_seconds = 0
+    oracle.capture_baseline()
+    oracle.rollout_time = 0
     oracle.replacement_timeout_seconds = 0
     oracle.stability_seconds = 0
     oracle.poll_interval_seconds = 0
@@ -202,7 +222,7 @@ def _oracle(kubectl):
 
 def test_accepts_stable_replacement_with_deployment_resources_and_endpoint():
     core_v1 = _CoreV1()
-    unrelated = _pod("maintenance", "other-uid", ready=False, replica_set="other-rs")
+    unrelated = _pod("maintenance", "other-uid", replica_set="other-rs")
 
     assert _oracle(_KubeCtl(core_v1=core_v1, unrelated_pods=[unrelated])).evaluate()["success"] is True
     assert core_v1.deletions == [("nginx-old", "social-network", 0)]
@@ -291,3 +311,88 @@ def test_rejects_deleted_deployment_without_deleting_pod():
 
     assert _oracle(_KubeCtl(core_v1=core_v1, get_error=RuntimeError("not found"))).evaluate()["success"] is False
     assert core_v1.deletions == []
+
+
+@pytest.mark.parametrize("replicas", [None, 1, 3])
+def test_accepts_healthy_dependency_without_freezing_replica_count(replicas):
+    kube = _KubeCtl()
+    oracle = _oracle(kube)
+    count = 1 if replicas is None else replicas
+    kube.dependencies["user-service"] = _deployment(
+        name="user-service", replicas=replicas, updated=count, ready=count, available=count
+    )
+
+    assert oracle.evaluate()["success"] is True
+
+
+@pytest.mark.parametrize("name", ["nginx-thrift", "user-service"])
+def test_rejects_required_deployment_scaled_to_zero_after_baseline(name):
+    kube = _KubeCtl()
+    oracle = _oracle(kube)
+    scaled = _deployment(name=name, replicas=0, updated=0, ready=0, available=0)
+    if name == "nginx-thrift":
+        kube.deployment = scaled
+    else:
+        kube.dependencies[name] = scaled
+
+    result = oracle.evaluate()
+
+    assert result["reason"] == "required_deployment_scaled_to_zero"
+    assert result["failure_class"] == "agent_error"
+    assert result["detail"]["deployment"] == name
+    assert kube.core_v1_api.deletions == []
+
+
+def test_rejects_deleted_dependency_before_recreating_target():
+    kube = _KubeCtl()
+    oracle = _oracle(kube)
+    del kube.dependencies["user-service"]
+
+    result = oracle.evaluate()
+
+    assert result["reason"] == "required_deployment_missing"
+    assert result["failure_class"] == "agent_error"
+    assert kube.core_v1_api.deletions == []
+
+
+def test_rejects_stale_dependency_rollout():
+    kube = _KubeCtl()
+    oracle = _oracle(kube)
+    kube.dependencies["user-service"].metadata.generation += 1
+
+    assert oracle.evaluate()["reason"] == "deployment_replicas_unready"
+    assert kube.core_v1_api.deletions == []
+
+
+def test_rejects_missing_dependency_service():
+    kube = _KubeCtl()
+    oracle = _oracle(kube)
+    del kube.core_v1_api.services["user-service"]
+
+    result = oracle.evaluate()
+
+    assert result["reason"] == "required_resource_missing"
+    assert result["failure_class"] == "agent_error"
+    assert kube.core_v1_api.deletions == []
+
+
+def test_rejects_unhealthy_non_target_pod():
+    kube = _KubeCtl(unrelated_pods=[_pod("user-service-pod", "user-uid", ready=False, replica_set="user-rs")])
+
+    assert _oracle(kube).evaluate()["reason"] == "pods_not_ready"
+    assert kube.core_v1_api.deletions == []
+
+
+def test_shared_api_failure_is_not_reported_as_health(monkeypatch):
+    kube = _KubeCtl()
+    oracle = _oracle(kube)
+
+    def unavailable(namespace):
+        raise ApiException(status=503)
+
+    monkeypatch.setattr(kube.core_v1_api, "list_namespaced_service", unavailable)
+    result = oracle.evaluate()
+
+    assert result["reason"] == "kubernetes_api_error"
+    assert result["failure_class"] == "environment_error"
+    assert kube.core_v1_api.deletions == []
