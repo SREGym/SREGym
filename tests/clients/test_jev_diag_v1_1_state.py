@@ -60,6 +60,27 @@ def test_verified_webhook_endpoint_counts_are_retained(monkeypatch, response, re
     assert bool(record["signals"]) == (ready == 0)
 
 
+@pytest.mark.parametrize(
+    "cause,meaning",
+    [
+        ("dial tcp 10.0.0.1:443: connect: connection refused", "its backend refuses the connection"),
+        ('service "policy" not found', "its backend Service has no endpoints"),
+        ("no endpoints available for service", "its backend Service has no endpoints"),
+        ("context deadline exceeded", "the call times out"),
+        ("dial tcp 10.0.0.1:443: i/o timeout", "the call times out"),
+        ("Client.Timeout exceeded while awaiting headers", "the call times out"),
+        ("x509: certificate signed by unknown authority", "its certificate is not trusted or not valid"),
+    ],
+)
+def test_webhook_failure_classification_ignores_url_parameters(cause, meaning):
+    from clients.jev_diag.v1_1.platform_events import event_signal
+
+    message = f'failed calling webhook "timeout-policy.example": Post "https://policy.platform.svc:443/timeout?timeout=10s": {cause}'
+    signal = event_signal("FailedCreate", message)
+    assert f"objects: {meaning} (" in signal
+    assert cause in signal
+
+
 def _healthy(name: str, pad: int = 40) -> dict:
     return {
         "kind": "Deployment",

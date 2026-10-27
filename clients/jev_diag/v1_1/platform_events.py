@@ -28,7 +28,13 @@ _NETWORK_SETUP = re.compile(
 _WEBHOOK_CALL = re.compile(r'failed calling webhook "(?P<name>[^"]+)"')
 _CALL_FAILURES = (
     ("its certificate is not trusted or not valid", re.compile(r"(?i)x509|certificate|tls:")),
-    ("the call times out", re.compile(r"(?i)deadline exceeded|timeout|timed out")),
+    (
+        "the call times out",
+        re.compile(
+            r"(?i)deadline exceeded|timed out|\b(?:i/o|request|connection|handshake|Client\.)\s*timeout\b|"
+            r"\btimeout(?: exceeded| after| awaiting|: request)"
+        ),
+    ),
     ("its backend refuses the connection", re.compile(r"(?i)connection refused")),
     ("its backend Service has no endpoints", re.compile(r"(?i)no endpoints available|service .* not found")),
 )
@@ -52,7 +58,10 @@ NODE_EVENT_REASONS = {
 
 
 def call_failure(message: str) -> str:
-    return next((meaning for meaning, rx in _CALL_FAILURES if rx.search(message)), "the call fails")
+    # API-server errors include the webhook URL, whose query commonly contains
+    # timeout=... even when the actual cause is a refusal or a missing Service.
+    cause = re.sub(r"https?://[^\s\"']+", "", message)
+    return next((meaning for meaning, rx in _CALL_FAILURES if rx.search(cause)), "the call fails")
 
 
 # Platform layers whose failure a workload's events state, with what the layer is. A layer failing for several
