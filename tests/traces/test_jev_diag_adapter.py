@@ -137,3 +137,58 @@ def test_repeated_questions_keep_each_response_usage_and_tool_identity(tmp_path,
     assert json.loads(outputs[1])["q"]["choice"] == "second"
     assert trajectory.final_metrics.total_prompt_tokens == (30 if first_failed else 40)
     assert trajectory.final_metrics.total_completion_tokens == (2 if first_failed else 3)
+
+
+@pytest.mark.parametrize("fail_after_triage", [False, True])
+def test_fallback_diagnosis_and_submission_survive_export(tmp_path, fail_after_triage):
+    from types import SimpleNamespace
+
+    from typesafe_sdk import ChoiceAnswer
+
+    from clients.jev_diag.trace import DecisionTrace
+    from clients.jev_diag.v1_1.collector import ClusterSnapshot
+    from clients.jev_diag.v1_1.tree import IterativeDiagnoser
+
+    cid = "deployment/shop/frontend"
+
+    class Unavailable:
+        calls = 0
+
+        def system_one(self, state, questions):
+            self.calls += 1
+            if self.calls == 1 and fail_after_triage:
+                answer = ChoiceAnswer(choice=cid, confidence=1.0, probabilities={cid: 1.0, "other": 0.0})
+                return SimpleNamespace(
+                    model="test",
+                    usage=None,
+                    answers={"root_cause_component": answer},
+                    choices={"root_cause_component": answer},
+                )
+            raise RuntimeError("API unavailable")
+
+    snapshot = ClusterSnapshot(
+        app={"name": "shop", "namespaces": ["shop"]},
+        components={
+            cid: {
+                "kind": "Deployment",
+                "name": "frontend",
+                "namespace": "shop",
+                "signals": ["no pods exist"],
+                "healthy": False,
+            }
+        },
+        cluster={},
+    )
+    trace = DecisionTrace(tmp_path / "trace.jsonl", problem_id=PROBLEM)
+    diagnosis = IterativeDiagnoser(Unavailable(), fetch_detail=lambda *args: {}, trace=trace).diagnose(snapshot)
+    trace.record("submit", "response", response={"success": True})
+    trace.close("ok")
+    recorded = [r for r in trace.records if (r["phase"], r["event"]) == ("decide", "diagnosis_text")]
+    assert len(recorded) == 1 and recorded[0]["text"] == diagnosis.text
+    trajectory = convert(trace.write_trajectory(tmp_path / "trajectory"))
+    submission = next(
+        step for step in trajectory.steps if any(call.function_name == "submit" for call in step.tool_calls or [])
+    )
+    assert submission.message == diagnosis.text
+    assert submission.tool_calls[0].arguments["ans"] == diagnosis.text
+    assert trajectory.extra["jev_diag"]["submitted"] is True

@@ -1055,15 +1055,27 @@ class IterativeDiagnoser(JevDiagnoser):
         self._probe_cache.clear()
         self._progress: dict = {}
         try:
-            return self._diagnose(snapshot)
+            diagnosis = self._diagnose(snapshot)
         except Exception as exc:  # noqa: BLE001 - a diagnosis without the model beats submitting nothing
             reason = f"{type(exc).__name__}: {exc}"
             logger.error("decision model unavailable, reporting from what is known: %s", reason)
             self._trace("decide", "fallback_without_model", error=reason, traceback=traceback.format_exc())
             try:
-                return self._from_progress(snapshot, reason)
+                diagnosis = self._from_progress(snapshot, reason)
             except Exception:  # noqa: BLE001
-                return code_only_diagnosis(snapshot, reason)
+                diagnosis = code_only_diagnosis(snapshot, reason)
+        investigation = diagnosis.investigation or {}
+        self._trace(
+            "decide",
+            "diagnosis_text",
+            component=diagnosis.component,
+            text=diagnosis.text,
+            chars=len(diagnosis.text),
+            steps=len(investigation.get("steps") or []),
+            fallback=investigation.get("fallback"),
+            fault_object=diagnosis.fault_object,
+        )
+        return diagnosis
 
     def _from_progress(self, snapshot: ClusterSnapshot, reason: str) -> Diagnosis:
         """The conclusion the work done so far supports when a later model request fails: the candidate with the most
@@ -1256,16 +1268,6 @@ class IterativeDiagnoser(JevDiagnoser):
             "triage_top": component.ranked()[:5],
         }
         diagnosis.text = build_report(snapshot, diagnosis)
-        self._trace(
-            "decide",
-            "diagnosis_text",
-            component=concluded,
-            text=diagnosis.text,
-            chars=len(diagnosis.text),
-            steps=len(steps),
-            fallback=fallback_reason,
-            fault_object=info["fault_object"],
-        )
         return diagnosis
 
     def _characterize(
