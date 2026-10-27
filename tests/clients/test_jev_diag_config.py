@@ -27,6 +27,7 @@ def test_container_launch_preserves_mode_and_v2_disable_switches(monkeypatch, mo
         "JEV_DIAG_V1_1_TELEMETRY": "0",
         "JEV_DIAG_IGNORE_NAMESPACES": "unrelated,monitoring",
         "JEV_DIAG_START_DELAY": "0",
+        "JEV_DIAG_MAX_CHOICE_OPTIONS": "26",
     }
     for name, value in settings.items():
         monkeypatch.setenv(name, value)
@@ -35,6 +36,15 @@ def test_container_launch_preserves_mode_and_v2_disable_switches(monkeypatch, mo
     with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", ["jev_diag"]):
         args = driver.parse_args()
     assert args.mode == mode and args.start_delay == 0
+    assert args.max_choice_options == 26
+
+
+@pytest.mark.parametrize("value", ["0", "1", "-1", "invalid"])
+def test_invalid_choice_limits_fail_before_launch(monkeypatch, value):
+    monkeypatch.setenv("JEV_DIAG_MAX_CHOICE_OPTIONS", value)
+    monkeypatch.setattr(sys, "argv", ["jev_diag"])
+    with pytest.raises(SystemExit):
+        driver.parse_args()
 
 
 def test_forwarded_settings_keep_explicit_container_overrides(monkeypatch):

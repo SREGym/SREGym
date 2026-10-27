@@ -206,8 +206,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-raw", action="store_true", help="do not record raw kubectl output")
     parser.add_argument("--log-tail", type=int, default=DEFAULT_LOG_TAIL)
     parser.add_argument("--state-token-budget", type=int, default=DEFAULT_STATE_TOKEN_BUDGET)
+    parser.add_argument(
+        "--max-choice-options",
+        type=int,
+        default=os.environ.get("JEV_DIAG_MAX_CHOICE_OPTIONS"),
+        help="v1.1: maximum options per choice question for the selected model (default: no limit)",
+    )
     parser.add_argument("--wait-timeout", type=int, default=600, help="Seconds to wait for the diagnosis stage")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.max_choice_options is not None and args.max_choice_options < 2:
+        parser.error("--max-choice-options must be at least 2")
+    return args
 
 
 def main() -> None:

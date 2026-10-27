@@ -409,13 +409,16 @@ class JevDiagnoser:
         state_token_budget: int = DEFAULT_STATE_TOKEN_BUDGET,
         characterize: bool = True,
         trace: DecisionTrace | None = None,
+        max_choice_options: int | None = None,
     ) -> None:
+        if max_choice_options is not None and max_choice_options < 2:
+            raise ValueError("max_choice_options must be at least 2")
         self._client = client
         self.state_token_budget = state_token_budget
         self.characterize = characterize
         self.trace = trace
         self.requests: list[dict] = []  # request/response artifacts for the logs dir
-        self.max_choice_options: int | None = None  # a decision model's limit on options per question, if any
+        self.max_choice_options = max_choice_options
         self.option_priority: list[str] = []  # options kept first when a question must be cut to that limit
 
     def _trace(self, phase: str, event: str, **payload: Any) -> None:

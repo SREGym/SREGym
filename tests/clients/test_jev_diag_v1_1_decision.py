@@ -73,6 +73,53 @@ def test_triage_asks_for_the_component_and_the_fault_object_kind_only():
     assert set(questions) == {"root_cause_component", "fault_object_kind"}
 
 
+def test_configured_model_limit_reaches_the_production_diagnoser(monkeypatch):
+    import sys
+
+    from typesafe_sdk import Choice, ChoiceAnswer, NoulAnswer
+
+    from clients.jev_diag import driver
+    from clients.jev_diag.v1_1.driver import make_diagnoser
+
+    monkeypatch.setenv("JEV_DIAG_MAX_CHOICE_OPTIONS", "26")
+    monkeypatch.setenv("JEV_DIAG_V1_1_PROBES", "0")
+    monkeypatch.setattr(sys, "argv", ["jev_diag", "--mode", "v1.1"])
+    args = driver.parse_args()
+
+    class Limited:
+        counts = []
+
+        def system_one(self, state, questions):
+            answers = {}
+            for name, question in questions.items():
+                if isinstance(question, Choice):
+                    options = list(question.criteria)
+                    self.counts.append(len(options))
+                    assert 2 <= len(options) <= 26
+                    answers[name] = ChoiceAnswer(
+                        choice=options[0], confidence=1.0, probabilities={o: float(o == options[0]) for o in options}
+                    )
+                else:
+                    answers[name] = NoulAnswer(noul=0.0)
+            return SimpleNamespace(
+                model="limited",
+                usage=None,
+                answers=answers,
+                choices={k: v for k, v in answers.items() if isinstance(v, ChoiceAnswer)},
+                nouls={k: v for k, v in answers.items() if isinstance(v, NoulAnswer)},
+            )
+
+    model = Limited()
+    diagnoser = make_diagnoser(args, None, client=model)
+    diagnoser.fetch_detail = lambda *args: {}
+    comps = {f"deployment/svc-{i}": _comp(f"svc-{i}", signals=[], healthy=True) for i in range(30)}
+    comps["deployment/svc-0"].update(signals=["no pods exist"], healthy=False)
+    diagnosis = diagnoser.diagnose(_snap(comps))
+    assert diagnoser.max_choice_options == 26
+    assert max(model.counts) == 26
+    assert "decision model" not in (diagnosis.investigation["fallback"] or "")
+
+
 def test_a_clear_leader_is_concluded_without_a_comparison():
     comps = {"deployment/a": _comp("a"), "deployment/b": _comp("b")}
     verdicts = {"deployment/a": {"origin": 0.9, "victim": 0.1}, "deployment/b": {"origin": 0.5, "undetermined": 0.5}}

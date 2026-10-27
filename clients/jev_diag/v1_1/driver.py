@@ -219,5 +219,6 @@ def make_diagnoser(args: argparse.Namespace, trace: DecisionTrace, client=None) 
         max_steps=args.max_steps,
         probe=probe,
         state_token_budget=args.state_token_budget,
+        max_choice_options=getattr(args, "max_choice_options", None),
         trace=trace,
     )
