@@ -1,0 +1,31 @@
+# Docker settings every SREGym Harbor task ships as environment/docker-compose.yaml,
+# so `harbor run -d sregym/sregym -a <agent> -e docker` needs no extra flags.
+# The task runs a four-node Kubernetes cluster in its own namespaces and cgroups,
+# which Docker's defaults forbid. Not --privileged: no devices, and only these
+# capabilities are added:
+#   SYS_ADMIN     create the nodes' namespaces and mount their cgroups directly,
+#                 without a user namespace, which Ubuntu 24.04's AppArmor
+#                 default forbids for unprivileged containers
+#   NET_ADMIN     build the network between the nodes
+#   SYS_RESOURCE  let runc set the pods' OOM scores
+#   SYS_PTRACE    let runc enter the containers' namespaces
+# Docker's seccomp filter and masked /proc paths block unshare and the nodes'
+# procfs mounts. The open-file limit is a resource limit: TiKV (FleetCast's TiDB)
+# needs about 82920 open files. This file is the source the adapter copies into
+# each task; tests/harbor checks they match.
+services:
+  main:
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - SYS_RESOURCE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+      - systempaths=unconfined
+      - apparmor=unconfined
+    cgroup: private
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576

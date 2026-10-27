@@ -31,6 +31,17 @@ def test_cleanup_checks_both_helm_ownership_annotations():
     assert len(commands) == 3
 
 
+def test_release_lookup_lists_every_state_without_helm3_only_flags():
+    ingress = IngressNginx()
+    ingress.run_cmd = Mock(return_value='[{"name":"ingress-nginx"}]')
+    ingress._remove_orphaned_cluster_objects()
+    command = ingress.run_cmd.call_args.args[0].split()
+    # Helm 4 (docker/dind, docker/harbor) rejects `helm list --all`.
+    assert "--all" not in command
+    for state in ("--deployed", "--failed", "--pending", "--superseded", "--uninstalling", "--uninstalled"):
+        assert state in command
+
+
 def test_existing_release_keeps_its_cluster_objects():
     ingress = IngressNginx()
     ingress.run_cmd = Mock(return_value='[{"name":"ingress-nginx"}]')
