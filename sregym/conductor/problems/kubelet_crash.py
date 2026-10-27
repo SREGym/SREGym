@@ -18,8 +18,11 @@ class KubeletCrash(Problem):
             component="node/kubelet",
             namespace=self.namespace,
             description=(
-                "A node-level kubelet crash prevents normal pod lifecycle management on the affected node, so rescheduled "
-                "or restarted workloads fail to come up cleanly and dependent services become partially unavailable."
+                "Kubelet services stop on all worker nodes while the control plane remains healthy. The workers become "
+                "NotReady, their Pods lose ready Service endpoints, and normal pod lifecycle management stops on those "
+                "nodes. New or restarted Pods remain Pending when no eligible healthy node is available. The resulting "
+                "endpoint loss and stuck frontend, frontend-proxy and currency rollouts can make the whole application "
+                "unavailable. The failed worker kubelets are the root cause, not the dependent application services."
             ),
         )
 
