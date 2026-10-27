@@ -35,7 +35,10 @@ HARDENING_FLAGS = (
 )
 AGENT_TOOLS_CONTAINER_PATH = "/opt/agent-tools"
 JEV_AGENT_CACHE_CONTAINER_PATH = "/jev-agent-cache"
-CONTAINER_PATH = f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Keep the image's Python environment when adding the separately installed CLIs.
+CONTAINER_PATH = (
+    f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
 
 
 def _docker_uses_separate_host() -> bool:
