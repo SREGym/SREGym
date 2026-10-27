@@ -10,12 +10,12 @@ import requests
 import yaml
 
 from sregym.paths import MCP_SERVER_K8S
-from sregym.service.kubectl import KubeCtl
+from sregym.service.kubectl import WAIT_FOR_POD_READY_TIMEOUT, KubeCtl
 from sregym.service.kubernetes_access_policy import restricted_cluster_role
 from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger("all.sregym.mcp_server")
-MCP_ROLLOUT_TIMEOUT_SECONDS = int(os.getenv("MCP_ROLLOUT_TIMEOUT_SECONDS", "300"))
+MCP_ROLLOUT_TIMEOUT_SECONDS = int(os.getenv("MCP_ROLLOUT_TIMEOUT_SECONDS", str(WAIT_FOR_POD_READY_TIMEOUT)))
 MCP_ROLLOUT_ATTEMPTS = int(os.getenv("MCP_ROLLOUT_ATTEMPTS", "2"))
 MCP_ROLLOUT_RETRY_DELAY_SECONDS = int(os.getenv("MCP_ROLLOUT_RETRY_DELAY_SECONDS", "5"))
 

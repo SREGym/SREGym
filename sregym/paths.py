@@ -20,6 +20,7 @@ FAULT_SCRIPTS = BASE_DIR / "generators" / "fault" / "script"
 
 # Metadata files
 SOCIAL_NETWORK_METADATA = BASE_DIR / "service" / "metadata" / "social-network.json"
+SOCIAL_NETWORK_IMAGE_VALUES = BASE_DIR / "service" / "apps" / "values" / "social-network-images.yaml"
 HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "hotel-reservation.json"
 PROMETHEUS_METADATA = BASE_DIR / "service" / "metadata" / "prometheus.json"
 LOKI_METADATA = BASE_DIR / "service" / "metadata" / "loki.json"

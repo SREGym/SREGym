@@ -33,7 +33,7 @@ RUN test -f SREGym-applications/README.md && uv sync --frozen --no-dev --no-buil
 ENV PATH="/opt/sregym/.venv/bin:${PATH}" \
     DOCKER_HOST=unix:///var/run/docker.sock \
     KIND_EXPERIMENTAL_PROVIDER=docker \
-    CALICO_TIMEOUT=600s \
+    CALICO_TIMEOUT=900s \
     WAIT_FOR_POD_READY_TIMEOUT=1800
 VOLUME /var/lib/docker
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/opt/sregym/docker/dind/entrypoint.sh"]
