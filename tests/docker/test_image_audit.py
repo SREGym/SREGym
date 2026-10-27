@@ -104,11 +104,13 @@ def test_chaos_install_passes_the_multiarch_pause_image_for_both_runtimes(runtim
     with (
         patch.object(stress_injector, "KubeCtl") as kubectl,
         patch.object(stress_injector, "Helm") as helm,
+        patch.object(stress_injector, "get_noise_manager") as noise_manager,
     ):
         kubectl.return_value.get_container_runtime.return_value = runtime
         kubectl.return_value.exec_command.return_value = ""
         helm.exists_release.return_value = False
         stress_injector.ChaosInjector("test")
+    noise_manager.return_value.wait_for_chaos_mesh_ready.assert_called_once_with()
     values = yaml.safe_load(Path(helm.install.call_args.kwargs["values_file"]).read_text())
     assert helm.install.call_args.kwargs["remote_chart"] is True
     assert values["controllerManager"]["podChaos"]["podFailure"]["pauseImage"] == IMAGES["chaos-pause"]
@@ -132,10 +134,13 @@ def test_noise_install_uses_the_same_multiarch_overrides(runtime, socket_path):
             return "controller 1/1 Running"
         return ""
 
-    with patch.object(manager.NoiseManager, "_instance", None), patch.object(manager, "KubeCtl") as kubectl:
+    with (
+        patch.object(manager.NoiseManager, "_instance", None),
+        patch.object(manager, "KubeCtl") as kubectl,
+        patch.object(manager.NoiseManager, "wait_for_chaos_mesh_ready") as wait_for_ready,
+    ):
         kubectl.return_value.exec_command.side_effect = execute
-        noise = manager.NoiseManager()
-        noise._ensure_chaos_mesh_installed()
+        manager.NoiseManager()._ensure_chaos_mesh_installed()
 
     commands = [call.args[0] for call in kubectl.return_value.exec_command.call_args_list]
     install_command = next(command for command in commands if command.startswith("helm upgrade --install"))
@@ -147,4 +152,4 @@ def test_noise_install_uses_the_same_multiarch_overrides(runtime, socket_path):
     assert f"chaosDaemon.runtime={runtime}" in args
     assert f"chaosDaemon.socketPath={socket_path}" in args
     assert args[args.index("--version") + 1] == "2.8.0"
-    assert noise._chaos_mesh_ready is True
+    wait_for_ready.assert_called_once_with()

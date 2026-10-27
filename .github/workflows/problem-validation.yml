@@ -273,16 +273,13 @@ jobs:
       # ── Cluster tooling ───────────────────────────────────────────────
       - name: Install Kind
         run: |
-          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.28.0/kind-linux-amd64
           chmod +x /tmp/kind
           sudo mv /tmp/kind /usr/local/bin/kind
           kind version
 
       - name: Install Helm
         uses: azure/setup-helm@v4
-
-      - name: Pre-pull kind node image
-        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
 
       - name: Prepare /run/udev for OpenEBS NDM
         run: sudo mkdir -p /run/udev
