@@ -265,3 +265,30 @@ def test_resource_guard_must_report_a_fresh_sample(tmp_path, monkeypatch):
     assert runtime.resource_problem(lab) == "Host resource limit: swap"
     with pytest.raises(RuntimeError, match="preflight failed: swap"):
         runtime.start_resource_guard(lab, run)
+
+
+def test_endpoint_probe_records_each_customer_endpoint(tmp_path, monkeypatch):
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if self.path == "/health" else 503)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    monkeypatch.setattr(runtime, "HEALTH_ENDPOINTS", {"health": base + "/health", "live": base + "/api/live"})
+    try:
+        runtime.probe_endpoints(tmp_path)
+    finally:
+        server.shutdown()
+    record = json.loads((tmp_path / "service-health-at-D.json").read_text())
+    assert record["endpoints"]["health"]["status"] == 200
+    assert record["endpoints"]["live"]["status"] == 503
+    assert record["completed_monotonic"] >= record["begin_monotonic"]

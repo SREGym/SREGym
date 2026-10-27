@@ -90,7 +90,9 @@ An incomplete or invalid grader outcome returns a harness failure. Full tables,
 limitations and validity metadata remain in `GRADE.json`. Mitigation passes only
 when every reading that still has a copy at handoff is in its regional ledger
 exactly once, readings offered after a 600-second restoration window reach the
-ledger within 120 seconds, the customer endpoints are serving at the deadline, and
+ledger within 120 seconds, the customer endpoints are serving at the deadline (the
+world watcher probes each `/health` and `/api/live` endpoint six seconds before the
+freeze and writes `service-health-at-D.json`), and
 re-running the scheduled role, profile and package maintenance on a private copy
 of the end state, with automation restored, removes no routing rule and breaks no
 connectivity on any host.

@@ -16,7 +16,16 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
+
+# Customer endpoints whose service the grader judges at the deadline.
+HEALTH_ENDPOINTS = {
+    "eu-health": "http://127.0.0.1:28310/health",
+    "us-health": "http://127.0.0.1:28320/health",
+    "eu-live": "http://127.0.0.1:28310/api/live",
+    "us-live": "http://127.0.0.1:28320/api/live",
+}
 
 
 def write(path, value):
@@ -234,6 +243,25 @@ def teardown(project, run):
     write(run / "teardown.json", {"completed_monotonic": time.monotonic(), "saved_capture_retained": True})
 
 
+def probe_endpoints(run):
+    """Record whether each customer endpoint serves just before the deadline freeze."""
+
+    def get(url):
+        began = time.monotonic()
+        try:
+            with urllib.request.urlopen(url, timeout=4) as response:
+                body = response.read(400).decode("utf-8", "replace")
+                return {"status": response.status, "seconds": time.monotonic() - began, "body": body}
+        except Exception as exc:
+            return {"status": getattr(exc, "code", None), "seconds": time.monotonic() - began, "error": repr(exc)[:300]}
+
+    record = {"begin_host_epoch": time.time(), "begin_monotonic": time.monotonic()}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(HEALTH_ENDPOINTS)) as pool:
+        record["endpoints"] = dict(zip(HEALTH_ENDPOINTS, pool.map(get, HEALTH_ENDPOINTS.values()), strict=True))
+    record["completed_monotonic"] = time.monotonic()
+    write(run / "service-health-at-D.json", record)
+
+
 def watch(project, run, parent_pid):
     launch = json.loads((run / "launch.json").read_text())
     deadline = launch["start_monotonic"] + launch["seconds"]
@@ -264,8 +292,11 @@ def watch(project, run, parent_pid):
             done.wait(30)
 
     threading.Thread(target=sample_clock, daemon=True).start()
+    prober = threading.Thread(target=probe_endpoints, args=(run,), daemon=True)
     next_resource_check = 0
     while time.monotonic() < deadline:
+        if prober.ident is None and time.monotonic() >= deadline - 6:
+            prober.start()
         try:
             os.kill(parent_pid, 0)
         except ProcessLookupError:
@@ -281,6 +312,8 @@ def watch(project, run, parent_pid):
             next_resource_check = time.monotonic() + 1
         time.sleep(min(0.05, max(0, deadline - time.monotonic())))
     done.set()
+    if prober.ident is not None:
+        prober.join(max(0, deadline - time.monotonic()))  # Never delays the freeze past the deadline.
     try:
         freeze(project, run)
     except Exception as exc:
