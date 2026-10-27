@@ -42,7 +42,7 @@ from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
-from sregym.service.kubectl import KubeCtl
+from sregym.service.kubectl import WAIT_FOR_POD_READY_TIMEOUT, KubeCtl
 from sregym.service.mcp_server import MCPServer
 from sregym.service.rollout import deployment_rollout_complete
 from sregym.service.telemetry.loki import Loki
@@ -1458,8 +1458,17 @@ class Conductor:
         # earlier full-profile run on the same cluster.
         if svelte:
             self._trim_openebs_ndm()
+        # An interrupted preload can leave completed non-Job pods behind.
+        # Remove only our disposable helpers before checking OpenEBS readiness.
+        self.kubectl.exec_command_checked(
+            "kubectl delete pods -n openebs -l app=sregym-image-preload "
+            "--ignore-not-found=true --grace-period=0 --wait=true "
+            f"--timeout={WAIT_FOR_POD_READY_TIMEOUT}s",
+            timeout=WAIT_FOR_POD_READY_TIMEOUT + 10,
+        )
         self.kubectl.wait_for_ready("openebs")
         self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
+        self._preload_openebs_helper_image()
         if not svelte:
             self._ensure_openebs_device_storageclass()
 
@@ -1639,6 +1648,30 @@ class Conductor:
             and status.number_ready == desired
             and status.number_available == desired
             and (status.number_misscheduled or 0) == 0
+        )
+
+    def _preload_openebs_helper_image(self) -> None:
+        """Make LocalPV's helper image available before workload PVC creation."""
+        deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(
+            "openebs-localpv-provisioner", "openebs", _request_timeout=10
+        )
+        containers = deployment.spec.template.spec.containers or []
+        helper_image = next(
+            (
+                env.value
+                for container in containers
+                for env in (container.env or [])
+                if env.name == "OPENEBS_IO_HELPER_IMAGE" and env.value
+            ),
+            None,
+        )
+        if not helper_image:
+            raise RuntimeError("OpenEBS provisioner does not declare OPENEBS_IO_HELPER_IMAGE")
+        self.logger.info("[DEPLOY] Preloading OpenEBS helper image %s on every node…", helper_image)
+        self.kubectl.preload_image_on_nodes(
+            helper_image,
+            namespace="openebs",
+            timeout=WAIT_FOR_POD_READY_TIMEOUT,
         )
 
     # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV

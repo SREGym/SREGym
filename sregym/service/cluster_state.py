@@ -85,6 +85,7 @@ def _is_preserved_infra_resource(kind: str, name: str) -> bool:
 class ClusterBaseline:
     """Snapshot of cluster state to reconcile back to."""
 
+    cluster_uid: str | None = None
     namespaces: set[str] = field(default_factory=set)
     cluster_roles: set[str] = field(default_factory=set)
     cluster_role_bindings: set[str] = field(default_factory=set)
@@ -102,6 +103,7 @@ class ClusterBaseline:
     def to_dict(self) -> dict:
         """Serialize baseline to a dictionary for logging/debugging."""
         return {
+            "cluster_uid": self.cluster_uid,
             "namespaces": sorted(self.namespaces),
             "cluster_roles": sorted(self.cluster_roles),
             "cluster_role_bindings": sorted(self.cluster_role_bindings),
@@ -122,6 +124,7 @@ class ClusterBaseline:
     def to_json(self) -> dict:
         """Lossless serialization to a JSON-compatible dict (for persisting to disk)."""
         return {
+            "cluster_uid": self.cluster_uid,
             "namespaces": sorted(self.namespaces),
             "cluster_roles": sorted(self.cluster_roles),
             "cluster_role_bindings": sorted(self.cluster_role_bindings),
@@ -141,6 +144,7 @@ class ClusterBaseline:
     def from_json(cls, data: dict) -> "ClusterBaseline":
         """Deserialize from a JSON-compatible dict (loaded from disk)."""
         return cls(
+            cluster_uid=data.get("cluster_uid"),
             namespaces=set(data.get("namespaces", [])),
             cluster_roles=set(data.get("cluster_roles", [])),
             cluster_role_bindings=set(data.get("cluster_role_bindings", [])),
@@ -179,6 +183,7 @@ class ClusterStateManager:
         logger.info("Capturing cluster baseline state...")
 
         self.baseline = ClusterBaseline(
+            cluster_uid=self._get_cluster_uid(),
             namespaces=self._get_namespaces(raise_on_error=True),
             cluster_roles=self._get_cluster_roles(raise_on_error=True),
             cluster_role_bindings=self._get_cluster_role_bindings(raise_on_error=True),
@@ -220,6 +225,19 @@ class ClusterStateManager:
         try:
             with open(path) as f:
                 data = json.load(f)
+            current_cluster_uid = self._get_cluster_uid()
+            saved_cluster_uid = data.get("cluster_uid")
+            if not saved_cluster_uid:
+                logger.warning(f"Ignoring baseline state at {path}: snapshot has no cluster identity")
+                return False
+            if saved_cluster_uid != current_cluster_uid:
+                logger.warning(
+                    "Ignoring baseline state at %s: snapshot belongs to cluster %s, current cluster is %s",
+                    path,
+                    saved_cluster_uid,
+                    current_cluster_uid,
+                )
+                return False
             # Legacy snapshots did not record these resources. Preserve what
             # exists before this attempt, rather than treating it as unexpected.
             for field_name, resource in (
@@ -422,6 +440,14 @@ class ClusterStateManager:
 
         logger.info(f"Reconciliation complete: {changes}")
         return changes
+
+    def _get_cluster_uid(self) -> str:
+        """Return an identity that changes whenever the Kubernetes cluster is recreated."""
+        namespace = self.core_v1.read_namespace(name="kube-system")
+        uid = getattr(getattr(namespace, "metadata", None), "uid", None)
+        if not uid:
+            raise RuntimeError("kube-system namespace has no UID; refusing to use a cluster baseline")
+        return str(uid)
 
     def _get_namespaces(self, raise_on_error: bool = False) -> set[str]:
         """Get all namespace names in the cluster."""
