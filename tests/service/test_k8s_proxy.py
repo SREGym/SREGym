@@ -8,6 +8,7 @@ import time
 from datetime import timedelta
 
 import pytest
+import yaml
 from cryptography import x509
 from kubernetes import config
 
@@ -16,14 +17,17 @@ from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_TYPE,
     filter_resource_list,
     is_helm_release_secret,
+    sanitize_visible_resource,
 )
 from sregym.service.k8s_proxy import (
     KubernetesAPIProxy,
     _inspect_workload_request,
     _is_cluster_egress_control_mutation,
+    _is_credential_request,
     _is_filtered_object_read,
     _is_helm_release_secret_request,
     _is_hidden_namespace_request,
+    _is_node_proxy_request,
     _is_secret_collection_delete,
     _is_secret_watch_request,
     _requires_json_secret_response,
@@ -1243,3 +1247,40 @@ def test_upstream_kubeconfig_merges_files_and_resolves_relative_certificates(mon
     assert proxy.api_port == 7443
     assert (proxy.ca_cert, proxy.client_cert, proxy.client_key) == ("test-ca", "test-cert", "test-key")
     assert proxy._bearer_token == "test-token"
+
+
+def test_agents_cannot_mint_credentials_that_work_without_the_proxy():
+    json_type = "application/json"
+    token = "/api/v1/namespaces/sregym/serviceaccounts/mcp-server/token"
+    assert _is_credential_request(token, "POST", b"{}", json_type)
+    secrets = "/api/v1/namespaces/gitea/secrets"
+    minted = {"kind": "Secret", "type": "kubernetes.io/service-account-token", "metadata": {"name": "t"}}
+    assert _is_credential_request(secrets, "POST", json.dumps(minted).encode(), json_type)
+    applied = f"{secrets}/t?fieldManager=kubectl"
+    assert _is_credential_request(applied, "PATCH", yaml.safe_dump(minted).encode(), "application/apply-patch+yaml")
+    ordinary = {"kind": "Secret", "metadata": {"name": "t"}, "stringData": {"key": "value"}}
+    assert not _is_credential_request(secrets, "POST", json.dumps(ordinary).encode(), json_type)
+    # Some problems are fixed by restoring RBAC, so bindings stay writable.
+    bindings = "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings"
+    assert not _is_credential_request(bindings, "POST", b"{}", json_type)
+
+
+def test_node_proxy_is_blocked_because_the_kubelet_serves_hidden_pods():
+    assert _is_node_proxy_request("/api/v1/nodes/kind-worker/proxy/pods")
+    assert not _is_node_proxy_request("/api/v1/nodes/kind-worker")
+
+
+def test_ipam_blocks_do_not_name_pods_in_hidden_namespaces():
+    block = {
+        "kind": "IPAMBlock",
+        "metadata": {"name": "10-244-1-0-26"},
+        "spec": {
+            "attributes": [
+                {"handle_id": "k8s-pod-network.a", "secondary": {"namespace": "khaos", "pod": "probe", "node": "w1"}},
+                {"handle_id": "k8s-pod-network.b", "secondary": {"namespace": "gitea", "pod": "gitea", "node": "w1"}},
+            ]
+        },
+    }
+    attributes = sanitize_visible_resource(block)["spec"]["attributes"]
+    assert attributes[0]["secondary"] == {}
+    assert attributes[1]["secondary"]["pod"] == "gitea"
