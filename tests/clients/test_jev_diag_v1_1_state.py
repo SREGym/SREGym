@@ -5,10 +5,59 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from clients.jev_diag.timeutil import parse_time
 from clients.jev_diag.v1_1 import collector
 
 NOW = parse_time("2026-01-05T10:00:00Z")
+
+
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("Forbidden"), TimeoutError("API timed out"), ValueError("invalid JSON")]
+)
+def test_unread_webhook_endpoints_are_unknown(monkeypatch, failure):
+    webhook = {
+        "name": "validate.example",
+        "failurePolicy": "Fail",
+        "clientConfig": {"service": {"name": "policy", "namespace": "platform"}},
+        "rules": [{"apiGroups": [""], "resources": ["pods"], "operations": ["CREATE"]}],
+    }
+    config = {"kind": "ValidatingWebhookConfiguration", "metadata": {"name": "policy"}, "webhooks": [webhook, webhook]}
+    calls = []
+
+    def read(args):
+        calls.append(args)
+        raise failure
+
+    monkeypatch.setattr(collector, "run_kubectl", read)
+    errors = []
+    records = collector.summarize_webhooks([config], errors)
+    assert all(record["backend_ready_endpoints"] is None and not record["signals"] for record in records)
+    assert len(calls) == 1 and len(errors) == 1
+
+
+@pytest.mark.parametrize(
+    "response,ready", [("", 0), ('{"subsets": []}', 0), ('{"subsets": [{"addresses": [{"ip": "10.0.0.1"}]}]}', 1)]
+)
+def test_verified_webhook_endpoint_counts_are_retained(monkeypatch, response, ready):
+    webhook = {
+        "name": "validate.example",
+        "failurePolicy": "Fail",
+        "clientConfig": {"service": {"name": "policy", "namespace": "platform"}},
+        "rules": [{"apiGroups": [""], "resources": ["pods"], "operations": ["CREATE"]}],
+    }
+    config = {"kind": "ValidatingWebhookConfiguration", "metadata": {"name": "policy"}, "webhooks": [webhook]}
+
+    def read(args):
+        assert "--ignore-not-found" in args
+        return response
+
+    monkeypatch.setattr(collector, "run_kubectl", read)
+    errors = []
+    (record,) = collector.summarize_webhooks([config], errors)
+    assert record["backend_ready_endpoints"] == ready and not errors
+    assert bool(record["signals"]) == (ready == 0)
 
 
 def _healthy(name: str, pad: int = 40) -> dict:

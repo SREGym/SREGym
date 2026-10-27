@@ -1709,11 +1709,23 @@ def summarize_webhooks(configs: list[dict], errors: list[str]) -> list[dict]:
                 if key not in endpoint_cache:
                     try:
                         ep = json.loads(
-                            run_kubectl(["get", "endpoints", svc["name"], "-n", svc["namespace"], "-o", "json"])
+                            run_kubectl(
+                                [
+                                    "get",
+                                    "endpoints",
+                                    svc["name"],
+                                    "-n",
+                                    svc["namespace"],
+                                    "-o",
+                                    "json",
+                                    "--ignore-not-found",
+                                ]
+                            )
+                            or "{}"
                         )
                         endpoint_cache[key] = sum(len(sub.get("addresses") or []) for sub in ep.get("subsets") or [])
-                    except Exception as exc:  # noqa: BLE001 - missing service is itself a finding
-                        endpoint_cache[key] = 0
+                    except Exception as exc:  # noqa: BLE001 - an unread backend is unknown, not empty
+                        endpoint_cache[key] = None
                         errors.append(f"webhook backend {key}: {exc}")
                 ready = endpoint_cache[key]
             rules = [
