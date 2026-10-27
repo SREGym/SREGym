@@ -106,6 +106,7 @@ def run_preflight_check(
     agent_driver_modules = {
         "stratus": "clients.stratus.stratus_agent.driver.driver",
         "claudecode": "clients.claudecode.driver",
+        "claudecode_radar": "clients.claudecode_radar.driver",
         "codex": "clients.codex.driver",
         "copilot": "clients.copilot.driver",
         "opencode": "clients.opencode.driver",
