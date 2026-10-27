@@ -310,7 +310,7 @@ target "agent-base" {
   inherits = ["_common"]
   context = "."
   dockerfile = "docker/agents/Dockerfile"
-  // Match the Kubernetes version used by the bundled KIND node image.
+  // Keep kubectl on the same Kubernetes minor version as the KIND node image.
   args = { KUBECTL_VERSION = "v1.32.1" }
   tags = ["${REGISTRY}/agent-base:${IMAGE_TAG}"]
 }

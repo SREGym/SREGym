@@ -22,6 +22,7 @@ def shell_environment(tmp_path):
         executable = commands / command
         executable.write_text(
             f'#!/bin/sh\ncommand_name={command}\nprintf "%s %s\\n" "$command_name" "$*" >> "$KIND_TEST_CALL_LOG"\n'
+            'if [ "${KIND_TEST_FAIL:-}" = "$command_name" ]; then exit 1; fi\n'
         )
         executable.chmod(0o755)
     log = tmp_path / "calls.txt"
@@ -30,6 +31,8 @@ def shell_environment(tmp_path):
         "PATH": str(commands) + os.pathsep + os.environ["PATH"],
         "KIND_TEST_CALL_LOG": str(log),
     }
+    env.pop("SREGYM_BASELINE_CACHE_PATH", None)
+    env.pop("SREGYM_CACHE_DIR", None)
 
     def run(script, *args, extra_env=None):
         result = subprocess.run(
@@ -48,8 +51,10 @@ def shell_environment(tmp_path):
 def test_kind_setup_uses_shared_config_for_default_and_legacy_aliases(shell_environment, args):
     result, calls = shell_environment("setup_kind_cluster.sh", *args)
     assert result.returncode == 0, result.stderr
-    assert calls[0].startswith("kind create cluster --config ")
-    assert calls[0].endswith("kind-config.yaml")
+    assert calls[0].startswith("rm -f ")
+    assert calls[1].startswith("kind create cluster --config ")
+    assert calls[1].endswith("kind-config.yaml")
+    assert any("rollout status daemonset/calico-node -n kube-system --timeout=900s" in call for call in calls)
     assert any("kubectl wait --for=condition=Ready nodes --all" in call for call in calls)
 
 
@@ -72,7 +77,7 @@ def test_kind_setup_accepts_dind_config_and_node_image(shell_environment, tmp_pa
         },
     )
     assert result.returncode == 0, result.stderr
-    assert calls[0] == f"kind create cluster --config {config} --image sregym-kind:local --retain"
+    assert calls[1] == f"kind create cluster --config {config} --image sregym-kind:local --retain"
 
 
 def test_kind_setup_clears_baseline_in_default_cache_dir(shell_environment):
@@ -87,3 +92,28 @@ def test_kind_setup_clears_baseline_in_sregym_cache_dir(shell_environment, tmp_p
     result, calls = shell_environment("setup_kind_cluster.sh", extra_env={"SREGYM_CACHE_DIR": str(cache_dir)})
     assert result.returncode == 0, result.stderr
     assert f"rm -f {cache_dir}/cluster_baseline_state.json" in calls
+
+
+@pytest.mark.parametrize("cache_setting", ["default", "cache-dir", "baseline-path"])
+def test_kind_setup_invalidates_baseline_before_cluster_creation(shell_environment, tmp_path, cache_setting):
+    home = tmp_path / "home"
+    baseline = home / "cache_dir" / "cluster_baseline_state.json"
+    extra_env = {"HOME": str(home), "KIND_TEST_FAIL": "kind"}
+    if cache_setting == "cache-dir":
+        cache_dir = tmp_path / "custom cache"
+        baseline = cache_dir / "cluster_baseline_state.json"
+        extra_env["SREGYM_CACHE_DIR"] = str(cache_dir)
+    elif cache_setting == "baseline-path":
+        baseline = tmp_path / "custom_baseline.json"
+        extra_env["SREGYM_BASELINE_CACHE_PATH"] = str(baseline)
+        extra_env["SREGYM_CACHE_DIR"] = str(tmp_path / "other-cache")
+
+    result, calls = shell_environment(
+        "setup_kind_cluster.sh",
+        extra_env=extra_env,
+    )
+
+    assert result.returncode != 0
+    assert len(calls) == 2
+    assert calls[0] == f"rm -f {baseline}"
+    assert calls[1].startswith("kind create cluster --config ")
