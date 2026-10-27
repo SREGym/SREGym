@@ -44,6 +44,7 @@ def test_generated_task_is_complete_and_parses(task_dir):
         "instruction.md",
         "task.toml",
         "environment/Dockerfile",
+        "environment/docker-compose.yaml",
         "solution/solve.sh",
         "tests/test.sh",
         "tests/score.py",
@@ -179,12 +180,18 @@ def test_dataset_readme_lists_every_task_for_harbor_hub(tmp_path):
     assert "@article{sregym:26" in readme
 
 
-def test_dataset_readme_inlines_the_docker_overlay():
-    # Hub users get only the dataset, so the README carries docker/harbor/local-docker.yaml.
-    overlay = (adapter.REPO_ROOT / "docker/harbor/local-docker.yaml").read_text()
-    overlay = overlay[overlay.index("services:") :].strip()
-    readme = (adapter.REPO_ROOT / "sregym/harbor/dataset-readme.md").read_text()
-    assert f"```yaml\n{overlay}\n```" in readme
+def test_tasks_ship_the_docker_settings(task_dir):
+    # Harbor's docker environment merges this file, so `harbor run -e docker` needs no flags.
+    shipped = task_dir / "environment" / "docker-compose.yaml"
+    assert shipped.read_bytes() == adapter.DOCKER_SETTINGS.read_bytes()
+
+
+def test_docker_settings_add_only_the_documented_capabilities():
+    import yaml
+
+    main = yaml.safe_load(adapter.DOCKER_SETTINGS.read_text())["services"]["main"]
+    assert sorted(main["cap_add"]) == ["NET_ADMIN", "SYS_ADMIN", "SYS_PTRACE", "SYS_RESOURCE"]
+    assert not main.get("privileged") and not main.get("devices")
 
 
 def test_unrendered_placeholders_are_rejected():

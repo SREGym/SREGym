@@ -10,14 +10,12 @@ healthy again after the agent stops, and 0.0 otherwise.
 
 ## Runtime
 
-One unprivileged container runs everything: a four-node k3s cluster, the
-application and SREGym's grader. It needs no `--privileged`, added capabilities
-or devices. The agent runs as an unprivileged user and reaches the cluster only
-through a filtered Kubernetes API proxy.
+One container runs everything: a four-node k3s cluster, the application and
+SREGym's grader. The agent runs as an unprivileged user and reaches the cluster
+only through a filtered Kubernetes API proxy.
 
-The container's root must be able to create namespaces and mount cgroups. On
-Harbor's `docker` environment, pass the overlay from the dataset README with
-`--extra-docker-compose`; Sysbox (`daytona`) and VM sandboxes allow it as they are.
-Request about {{cpus}} CPUs, {{memory_mb}} MiB of memory and {{storage_mb}} MiB
-of disk. Setup pulls images and Helm charts before the agent starts. See the
-[Harbor guide](https://github.com/SREGym/SREGym/blob/main/docs/harbor.md).
+Run it with `harbor run ... -e docker`; the task ships the Docker settings its
+cluster needs in `environment/docker-compose.yaml` (four added capabilities, not
+`--privileged`). It uses up to {{cpus}} CPUs, {{memory_mb}} MiB of memory and
+{{storage_mb}} MiB of disk, and pulls images and Helm charts before the agent
+starts. See the [Harbor guide](https://github.com/SREGym/SREGym/blob/main/docs/harbor.md).

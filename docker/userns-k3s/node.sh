@@ -8,6 +8,9 @@ ip addr add $ip/24 dev eth0
 ip link set eth0 up
 ip route add default via 10.250.0.1 dev eth0  # k3s needs a default route; the fabric drops it
 hostname $name
+# Without a user namespace (a container granted CAP_SYS_ADMIN) the kubelet opens
+# /dev/kmsg, which Docker does not provide; KIND links it the same way.
+[ -e /dev/kmsg ] || ln -s /dev/null /dev/kmsg 2>/dev/null || true
 
 # Remount cgroupfs so this node sees its own subtree as the root.
 if [ "$cgroup_version" = 2 ]; then

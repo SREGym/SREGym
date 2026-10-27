@@ -39,6 +39,8 @@ TEMPLATE_DIR = Path(__file__).parent / "task-template"
 DATASET_README = Path(__file__).parent / "dataset-readme.md"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BACKEND_IMAGE = "ghcr.io/sregym/sregym-harbor:latest"
+# Docker settings shipped in every task (see the file's comment).
+DOCKER_SETTINGS = REPO_ROOT / "docker" / "harbor" / "local-docker.yaml"
 # SREGym's own runner gives agents 1800s per attempt.
 DEFAULT_AGENT_TIMEOUT_S = 1800
 # Task container resources. Measured on plain Docker with no limits, the
@@ -405,6 +407,9 @@ class SREGymAdapter:
             target.write_text(_render(source.read_text(), values))
             if source.suffix == ".sh" or source.name == "sregym-ready":
                 target.chmod(0o755)
+        # Harbor's docker environment merges a task's own compose file, so the
+        # settings the cluster needs travel with the task: no flags for users.
+        shutil.copyfile(DOCKER_SETTINGS, task_dir / "environment" / "docker-compose.yaml")
         return task_dir
 
     def write_dataset_readme(self) -> Path:

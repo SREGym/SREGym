@@ -14,12 +14,26 @@ exec >>"$out/logs/start.log" 2>&1
 
 stage="startup"
 fail() {
-    local reason="SREGym setup failed during: $stage. Log: $out/logs/start.log"
+    local reason="${1:-SREGym setup failed during: $stage. Log: $out/logs/start.log}"
     echo "$reason"
     printf '{"state": "failed", "error": "%s"}\n' "$reason" > "$shared/status.json"
     echo failed > "$shared/state"
 }
 trap fail ERR
+
+# The cluster's processes run as the host's root user, so its inotify instances
+# count against the host's per-user limit. The four nodes and an application
+# such as Astronomy Shop peaked at 177 on a GitHub runner; the kernel default
+# is 128. A container cannot raise it, so stop with an explanation.
+stage="host check"
+inotify_needed=256
+inotify_limit=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null || echo 0)
+echo "inotify: max_user_instances=$inotify_limit max_user_watches=$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null)"
+if [ "$inotify_limit" -lt "$inotify_needed" ]; then
+    trap - ERR
+    fail "This Docker host allows $inotify_limit inotify instances per user (fs.inotify.max_user_instances), and SREGym's Kubernetes cluster needs about $inotify_needed. Run it on a host with a higher limit, such as a GitHub runner or most cloud VMs."
+    exit 1
+fi
 
 stage="image-pull proxy"
 python3 /usr/local/lib/userns-k3s/egress-proxy.py --listen 127.0.0.1 --port 3128 >"$out/logs/egress.log" 2>&1 &

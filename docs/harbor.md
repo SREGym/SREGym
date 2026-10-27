@@ -4,23 +4,29 @@
 tasks, with many trials in parallel. SREGym can generate a Harbor task for
 every problem that runs on its emulated cluster.
 
-Each task is **one unprivileged container**. It holds a private four-node
-Kubernetes cluster, the application, SREGym's grader and the agent. It needs no
-`--privileged`, added capabilities or devices.
+Each task is **one container**. It holds a private four-node Kubernetes
+cluster, the application, SREGym's grader and the agent. It is not
+`--privileged`: it has no devices and adds four capabilities (see
+[The cluster](#the-cluster)).
 
 **Plain Docker is the default target**: Harbor's `docker` environment, which
-every Harbor user has. Run tasks there with the overlay
-`docker/harbor/local-docker.yaml` (see [Run with Harbor](#run-with-harbor)).
-Defaults, sizes and validation are calibrated for it. The same tasks also run
-on sandboxes that allow nested namespaces, such as Daytona (Sysbox) or VMs, and
-can be published to Harbor Hub.
+every Harbor user has. Each task ships the Docker settings it needs as
+`environment/docker-compose.yaml`, so running the benchmark is one command:
+
+```bash
+harbor run -d sregym/sregym -a claude-code -m anthropic/<model> -e docker
+```
+
+Defaults, sizes and validation are calibrated for plain Docker, including
+stock Ubuntu 24.04 hosts with no host changes. The tasks can be published to
+Harbor Hub.
 
 The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
 
 ## How a task works
 
 ```
-  Harbor task container (unprivileged; root inside it, Docker's default capabilities)
+  Harbor task container (not --privileged; root inside it, four added capabilities)
   ┌───────────────────────────────────────────────────────────────────────────┐
   │ root                                                                      │
   │  k3s cluster: kind-control-plane, kind-worker, kind-worker2, kind-worker3  │
@@ -96,23 +102,36 @@ so SREGym treats the cluster as its emulated one, and as in KIND the control
 plane is tainted, so workloads run on the three workers. Nodes have no route
 out; their containerd pulls images through a proxy in the container.
 
-The container's root must be able to create those namespaces and mount cgroups:
+The container's root must be able to create those namespaces and mount
+cgroups, which Docker's defaults forbid. Every task therefore ships
+`docker/harbor/local-docker.yaml` as its `environment/docker-compose.yaml`,
+which Harbor's `docker` environment merges on its own:
 
-- **Plain Docker** (Harbor's `docker` environment) blocks it with its default
-  seccomp profile and masked `/proc` paths, so setup fails at once with
-  `unshare: Operation not permitted`. The overlay `docker/harbor/local-docker.yaml`
-  lifts those two filters (`seccomp=unconfined`, `systempaths=unconfined`; no
-  privileges or capabilities) and raises the open-file limit (TiDB's TiKV needs
-  about 82920 open files). Its `apparmor=unconfined` and `cgroup: private` were
-  not needed on the RHEL host it was validated on, but may be on AppArmor hosts. On Ubuntu 24.04 hosts, also allow unprivileged
-  user namespaces: `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
+- **Capabilities** `SYS_ADMIN` (create the nodes' namespaces and mount their
+  cgroups), `NET_ADMIN` (the network between nodes), `SYS_RESOURCE` (runc sets
+  pods' OOM scores) and `SYS_PTRACE` (runc enters the containers' namespaces).
+  No devices, not `--privileged`.
+- **`seccomp=unconfined`, `systempaths=unconfined`, `apparmor=unconfined`**:
+  Docker's default seccomp filter blocks `unshare` and `mount`, and its masked
+  `/proc` paths block the nodes' procfs mounts.
+- **Open-file limit** of 1048576: TiDB's TiKV (FleetCast) needs about 82920.
 
-  The overlay is passed at run time and deliberately not shipped in the tasks:
-  a task's own `environment/docker-compose.yaml` would make cloud providers such
-  as Daytona run the task in their privileged Docker-in-Docker mode.
-- **Sysbox sandboxes** (Daytona) and **VM sandboxes** allow this as they are.
-  Under Sysbox the container already runs in a user namespace, so the cluster
-  uses it directly instead of creating a nested one.
+With `CAP_SYS_ADMIN` the cluster creates its nodes' namespaces directly. It does
+not create a user namespace, which Ubuntu 24.04's AppArmor default
+(`kernel.apparmor_restrict_unprivileged_userns=1`) forbids for unprivileged
+containers, so stock Ubuntu hosts need no change. Without `CAP_SYS_ADMIN` it
+falls back to an identity-mapped user namespace, which Ubuntu 24.04 blocks.
+Under Sysbox the container already runs in a user namespace and the cluster
+uses it directly.
+
+**One host limit cannot be shipped.** The cluster's processes run as the host's
+root user, so their inotify instances count against the host's per-user limit,
+`fs.inotify.max_user_instances`. The four nodes plus Astronomy Shop peaked at
+177 on a GitHub runner (host processes included); the kernel's default is 128.
+Setup checks the limit first and, below 256, stops before the cluster starts
+with a message naming it, so Harbor records an error rather than a score. RHEL
+and Fedora hosts (8192), GitHub's runners (1280) and most cloud images allow
+more.
 
 ## Generate tasks
 
@@ -206,32 +225,28 @@ tag, so a dataset pins the SREGym version that produced it.
 
 ```bash
 uv tool install harbor            # 0.23 or newer
-OVERLAY="$PWD/docker/harbor/local-docker.yaml"   # an absolute path
 
 # Reference solution: every task should score 1.0. The oracle agent needs
 # the secret the adapter saved beside the tasks.
 export SREGYM_ORACLE_SECRET=$(cat datasets/sregym/.sregym-oracle-secret)
-harbor run -y -p datasets/sregym/network-policy-block -a oracle \
-    -e docker --extra-docker-compose "$OVERLAY" --cpus limit --memory limit
+harbor run -y -p datasets/sregym/network-policy-block -a oracle -e docker
 
 # No-op agent: every task should score 0.0
-harbor run -y -p datasets/sregym/network-policy-block -a nop \
-    -e docker --extra-docker-compose "$OVERLAY" --cpus limit --memory limit
+harbor run -y -p datasets/sregym/network-policy-block -a nop -e docker
 
 # A real agent, several tasks at a time
-harbor run -y -p datasets/sregym-lite -a claude-code -m anthropic/claude-sonnet-5 -n 4 \
-    -e docker --extra-docker-compose "$OVERLAY" --cpus limit --memory limit
+harbor run -y -p datasets/sregym-lite -a claude-code -m anthropic/claude-sonnet-5 -n 4 -e docker
 ```
 
-`-y` confirms passing `SREGYM_ORACLE_SECRET` to the reference solution.
-`--cpus limit --memory limit` holds each trial to the task's size (8 CPUs,
-16 GiB). On a host with fewer CPUs than that, pass `--cpus ignore --memory
-ignore` or `--override-cpus N` instead.
+`-y` confirms passing `SREGYM_ORACLE_SECRET` to the reference solution. Add
+`--cpus limit --memory limit` to hold each trial to the task's size (8 CPUs,
+16 GiB).
 
-**Other environments.** On a sandbox that allows nested namespaces, drop the
-overlay: `harbor run ... -e daytona`. Daytona refuses tasks above 4 CPUs /
-8 GiB unless the organization's limits are raised, so generate tasks for it
-with `--cpus 4 --memory-mb 8192 --storage-mb 10240`.
+**Other environments.** Cloud sandboxes see the task's compose file too: Harbor's
+Daytona environment, for example, then runs the task through Docker inside the
+sandbox. That path has not been validated with these settings. Daytona refuses
+tasks above 4 CPUs / 8 GiB unless the organization's limits are raised, so
+generate tasks for it with `--cpus 4 --memory-mb 8192 --storage-mb 10240`.
 
 Running many trials on one Docker host:
 
@@ -304,8 +319,7 @@ oracle sweep.
 5. **Check it:**
 
    ```bash
-   SREGYM_ORACLE_SECRET=... harbor run -y -d sregym/sregym-lite@v1.0 -a oracle -l 1 \
-       -e docker --extra-docker-compose "$PWD/docker/harbor/local-docker.yaml"
+   SREGYM_ORACLE_SECRET=... harbor run -y -d sregym/sregym-lite@v1.0 -a oracle -l 1 -e docker
    ```
 
 To publish an update, regenerate with a new image tag and the same secret, run
@@ -316,12 +330,13 @@ To publish an update, regenerate with a new image tag and the same secret, run
 ## Validation status
 
 **Plain Docker** (the default target), every task: Harbor 0.24's `docker` environment on a 64-core
-RHEL 9 host (cgroup v2), with the overlay, 8 CPUs / 16 GiB / 30 GB enforced per
+RHEL 9 host (cgroup v2), 8 CPUs / 16 GiB / 30 GB enforced per
 trial, SREGym `main` at #1135:
 
 | Check | Result |
 |---|---|
-| Privileges | Without the overlay the cluster fails (`unshare: Operation not permitted`). Of the overlay, only `seccomp=unconfined` and `systempaths=unconfined` are needed (plus the open-file limit for FleetCast). `docker inspect`: `Privileged=false`, no added capabilities. |
+| Docker settings | With Docker's defaults the cluster fails (`unshare: Operation not permitted`). These sweeps passed the seccomp, masked-path and open-file settings with `--extra-docker-compose`, before the tasks shipped them and before the capabilities. `docker inspect`: `Privileged=false`. |
+| **Stock Ubuntu 24.04**, GitHub runner, no host changes (`kernel.apparmor_restrict_unprivileged_userns=1`), settings shipped in the task, plain `harbor run -e docker` | Without capabilities: setup fails (`unshare: cannot open /proc/self/setgroups: Permission denied`). With the four capabilities: self-test, `network_policy_block` and `env_variable_shadowing_astronomy_shop` 1.0. Peak inotify instances held by root: 71, 154, 177. |
 | Oracle agent, all 200 generated tasks, up to 3 runs each | **172 pass** (154 on the first run). The rest are in the table under [Generate tasks](#generate-tasks). |
 | No-op agent, the 22 alert- and SLO-graded tasks that pass | 0.0 in all 22 (one setup error) |
 | Claude Code (Opus 5.5), 3 attempts on 171 of the passing tasks | Mean reward 0.81 over 510 attempts; 152 solved at least once. The 3 GitLab problems were never solved. |
@@ -343,7 +358,7 @@ trial, SREGym `main` at #1135:
 | `network_policy_block`, no-op agent, Harbor on Daytona | Reward 0.0 (`fault_still_present`) |
 | Agent isolation in a ready Daytona sandbox, probed as `agent` | Problem ID, SREGym code, cluster credentials, grade token and logs unreadable. `/grade` and `/oracle/recover` refuse without tokens. The k3s API refuses without credentials. `kubectl` works through the proxy. |
 | Self-test, oracle and no-op agents, **Harbor Self-Test** workflow (`docker` environment, GitHub runner) | Rewards 1 and 0 |
-| `operator_overload_replicas` (FleetCast), **Harbor Oracle Sweep** (`docker` environment, GitHub amd64 runner) | 1.0 once the overlay raised the open-file limit; before, TiKV exited at start |
+| `operator_overload_replicas` (FleetCast), **Harbor Oracle Sweep** (`docker` environment, GitHub amd64 runner) | 1.0 once the Docker settings raised the open-file limit; before, TiKV exited at start |
 
 `kafka_producer_leak` and `postgres_lock_contention_product_catalog`, flaky in
 the first sweep (2 of 3 and 1 of 2), scored 1.0 in both later ones.

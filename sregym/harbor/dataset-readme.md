@@ -9,50 +9,23 @@ production incidents. The agent must then mitigate it using `kubectl`.
 
 ## Run
 
-On plain Docker (Harbor's `docker` environment), save this overlay as
-`sregym-docker.yaml`. It lifts Docker's default seccomp profile and masked
-`/proc` paths so the task can create its cluster's namespaces; it grants no
-privileges or capabilities.
-
-```yaml
-services:
-  main:
-    security_opt:
-      - seccomp=unconfined
-      - systempaths=unconfined
-      - apparmor=unconfined
-    cgroup: private
-    ulimits:
-      nofile:
-        soft: 1048576
-        hard: 1048576
-```
-
 ```bash
-harbor run -d {{dataset_name}} -a claude-code -m anthropic/<model> -n 4 \
-    -e docker --extra-docker-compose "$PWD/sregym-docker.yaml" --cpus limit --memory limit
+harbor run -d {{dataset_name}} -a claude-code -m anthropic/<model> -e docker
 ```
 
-Each task is one unprivileged container. It starts a private four-node
-Kubernetes cluster, deploys the application, captures a healthy baseline and
-injects the fault. Only then does the agent start. The agent runs as an
+Each task is one container. It starts a private four-node Kubernetes cluster,
+deploys the application, captures a healthy baseline and injects the fault. Only
+then does the agent start, which takes several minutes. The agent runs as an
 unprivileged user and reaches the cluster through a Kubernetes API proxy that
 hides SREGym's own infrastructure. It cannot read the problem ID or the grading
-code.
+code. A task uses up to {{cpus}} CPUs, {{memory_mb}} MiB of memory and
+{{storage_mb}} MiB of disk; pass `-n` to run several at once.
 
-### Requirements
-
-- **A Harbor environment that lets the container's root create namespaces and
-  mount cgroups**, without `--privileged`:
-  - Harbor's `docker` environment, with the overlay above. On Ubuntu 24.04
-    hosts, also run `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
-  - Sysbox sandboxes (`daytona`) and VM-based sandboxes, without the overlay.
-    Daytona refuses more than 4 CPUs / 8 GiB per sandbox unless its limits are
-    raised.
-- **About {{cpus}} CPUs, {{memory_mb}} MiB of memory and {{storage_mb}} MiB of
-  disk per task.**
-- **Network access** to container registries and Helm chart repositories during
-  setup, which takes several minutes per task.
+Each task ships the Docker settings its cluster needs
+(`environment/docker-compose.yaml`): four added capabilities, but not
+`--privileged`. If the Docker host cannot run the cluster, setup stops with an
+explanation before the agent starts, and Harbor records an error rather than a
+score.
 
 ## Grading
 

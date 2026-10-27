@@ -1,14 +1,25 @@
-# Overlay for running SREGym Harbor tasks on Harbor's local Docker environment:
-#   harbor run ... -e docker --extra-docker-compose docker/harbor/local-docker.yaml
-# Plain Docker's default seccomp profile and masked /proc paths stop the task
-# container from creating the namespaces its cluster runs in. This lifts those
-# two filters only: the container stays unprivileged, with Docker's default
-# capabilities and no devices. Cloud sandboxes (VMs, Sysbox) need no overlay.
-# It also raises the open-file limit, a resource limit rather than a privilege:
-# TiKV (FleetCast's TiDB) needs about 82920 open files and cannot raise a lower
-# hard limit from inside the cluster's user namespace.
+# Docker settings every SREGym Harbor task ships as environment/docker-compose.yaml,
+# so `harbor run -d sregym/sregym -a <agent> -e docker` needs no extra flags.
+# The task runs a four-node Kubernetes cluster in its own namespaces and cgroups,
+# which Docker's defaults forbid. Not --privileged: no devices, and only these
+# capabilities are added:
+#   SYS_ADMIN     create the nodes' namespaces and mount their cgroups directly,
+#                 without a user namespace, which Ubuntu 24.04's AppArmor
+#                 default forbids for unprivileged containers
+#   NET_ADMIN     build the network between the nodes
+#   SYS_RESOURCE  let runc set the pods' OOM scores
+#   SYS_PTRACE    let runc enter the containers' namespaces
+# Docker's seccomp filter and masked /proc paths block unshare and the nodes'
+# procfs mounts. The open-file limit is a resource limit: TiKV (FleetCast's TiDB)
+# needs about 82920 open files. This file is the source the adapter copies into
+# each task; tests/harbor checks they match.
 services:
   main:
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - SYS_RESOURCE
+      - SYS_PTRACE
     security_opt:
       - seccomp=unconfined
       - systempaths=unconfined

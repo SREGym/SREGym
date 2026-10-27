@@ -1,6 +1,8 @@
 #!/bin/sh
-# Runs as container root WITHOUT --privileged, with Docker's default capabilities
-# and no devices. Everything Kubernetes needs happens inside a user namespace.
+# Runs as container root WITHOUT --privileged and with no devices. Given
+# CAP_SYS_ADMIN (the Harbor tasks' docker-compose.yaml adds it), the nodes'
+# namespaces are created directly; otherwise everything Kubernetes needs happens
+# inside an identity-mapped user namespace.
 set -e
 lib=/usr/local/lib/userns-k3s
 # Images that keep k3s's binaries outside /bin (the Harbor task image) name the
@@ -27,8 +29,16 @@ fi
 # A container that already runs in a user namespace (Sysbox, as on Daytona)
 # skips this: its root already owns its namespaces, and a nested user namespace
 # cannot mount the fresh procfs every node needs.
+#
+# A container granted CAP_SYS_ADMIN skips it too: it can create the nodes'
+# namespaces directly, which works where the host forbids unprivileged user
+# namespaces (Ubuntu 24.04's AppArmor default).
 userns="--user --map-users=0:0:65536 --map-groups=0:0:65536 --setgroups=allow"
 if ! grep -qE '^ +0 +0 +4294967295$' /proc/self/uid_map; then
+    userns=""
+fi
+cap_eff=$(awk '/^CapEff:/ {print $2}' /proc/self/status)
+if [ $(( (0x$cap_eff >> 21) & 1 )) -eq 1 ]; then
     userns=""
 fi
 exec unshare $userns \
