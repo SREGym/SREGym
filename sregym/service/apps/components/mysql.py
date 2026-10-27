@@ -31,12 +31,14 @@ def checked_gtids(value):
 class MySQLRegions:
     """One server per region; the rw service selects whichever region takes writes."""
 
-    def __init__(self, command: Callable, name: str, database: str, storage_class: str, secret: str):
+    def __init__(self, command: Callable, name: str, database: str, storage_class: str, secret: str, client=None):
         self.command = command
         self.name = name
         self.database = database
         self.storage_class = storage_class
         self.secret = secret
+        # ``(kubectl, deployment)`` of a MySQL client outside the servers, so queries never run in a server's pod.
+        self.client = client
 
     def service(self, region):
         return f"{self.name}-{region}"
@@ -145,6 +147,26 @@ class MySQLRegions:
         return documents
 
     def sql(self, region, statement, timeout=60):
+        if self.client:
+            kubectl, deployment = self.client
+            # By pod address, so a re-pointed service cannot answer in the server's place.
+            address = self.command("get", "pod", self.pod(region), "-o", "jsonpath={.status.podIP}").strip()
+            return kubectl(
+                "exec",
+                "-i",
+                f"deployment/{deployment}",
+                "--",
+                "mysql",
+                "-h",
+                address,
+                "-uroot",
+                "--batch",
+                "--raw",
+                "--skip-column-names",
+                self.database,
+                input_text=statement,
+                timeout=timeout,
+            ).strip()
         return self.command(
             "exec",
             "-i",
@@ -328,11 +350,17 @@ class MySQLRegions:
                     "selector": f"region == '{region}'",
                     "types": ["Ingress", "Egress"],
                     "ingress": [
-                        {"action": "Deny", "source": {"selector": f"region == '{other(region)}'"}},
+                        {
+                            "action": "Deny",
+                            "source": {"selector": f"region == '{other(region)}'", "namespaceSelector": "all()"},
+                        },
                         {"action": "Allow"},
                     ],
                     "egress": [
-                        {"action": "Deny", "destination": {"selector": f"region == '{other(region)}'"}},
+                        {
+                            "action": "Deny",
+                            "destination": {"selector": f"region == '{other(region)}'", "namespaceSelector": "all()"},
+                        },
                         {"action": "Allow"},
                     ],
                 },

@@ -1,6 +1,7 @@
-"""Gitea on two regional MySQL servers, with a webhook relay beside it and the consumer in the second region."""
+"""Gitea on two regional MySQL servers, with a webhook relay beside it and a hidden consumer in the second region."""
 
 import base64
+import contextlib
 import json
 import secrets
 import subprocess
@@ -9,7 +10,8 @@ from collections import Counter
 from pathlib import Path
 
 from sregym.service.apps.base import Application
-from sregym.service.apps.components.mysql import REGIONS, MySQLRegions, other
+from sregym.service.apps.components.client_runner import PythonClientRunner
+from sregym.service.apps.components.mysql import MYSQL_IMAGE, REGIONS, MySQLRegions, other
 from sregym.service.apps.gitea.application import FIXTURES, GiteaApplication
 from sregym.service.apps.gitea.failover import GiteaFailoverApplication
 from sregym.service.apps.gitea.recovery import GiteaRecoveryApplication
@@ -24,6 +26,14 @@ WEBHOOK_STALL_SECONDS = 30
 LIVE_TRAFFIC = "gitea-users"
 LIVE_TRAFFIC_REPOSITORY = "zoo-labs/zoo-utilities"
 LIVE_TRAFFIC_INTERVAL = 2
+#: The consumer, the users and the checks stand outside the incident, where the agent cannot see or change them.
+HIDDEN = "khaos"
+CHECKS = "gitea-checks"
+DATABASE_CLIENT = "gitea-db-client"
+HIDDEN_DEPLOYMENTS = (RECEIVER, LIVE_TRAFFIC, CHECKS, DATABASE_CLIENT)
+SHARED_SECRETS = ("gitea-mysql", "gitea-webhook", "gitea-admin")
+MEMBER = "mchen"
+MEMBER_SECRET = "gitea-member"
 
 # Rows are sorted in Python: JSON_ARRAYAGG does not guarantee order.
 SNAPSHOT_SQL = """
@@ -78,7 +88,6 @@ def undeliverable(state, deliveries):
 
 class GiteaMySQLApplication(GiteaApplication):
     metadata_file = Path(__file__).with_name("metadata-mysql.json")
-    recovery_client = GiteaRecoveryApplication.recovery_client
     git_inventory = GiteaRecoveryApplication.git_inventory
     repository_ids = GiteaFailoverApplication.repository_ids
 
@@ -95,7 +104,9 @@ class GiteaMySQLApplication(GiteaApplication):
 
     @property
     def mysql(self):
-        return MySQLRegions(self.command, "gitea-db", "gitea", self.storage_class, "gitea-mysql")
+        return MySQLRegions(
+            self.command, "gitea-db", "gitea", self.storage_class, "gitea-mysql", client=(self.hidden, DATABASE_CLIENT)
+        )
 
     @property
     def expected_volume_count(self):
@@ -121,23 +132,21 @@ class GiteaMySQLApplication(GiteaApplication):
         }.items():
             env[name] = {"name": name, "value": value}
         container["env"] = list(env.values())
+        return [*self.mysql.render("gitea-database"), *documents]
+
+    def receiver_documents(self):
         secret = {"secretKeyRef": {"name": "gitea-webhook", "key": "secret"}}
-        return [
-            *self.mysql.render("gitea-database"),
-            *documents,
-            *self.python_pod(
-                RECEIVER, "west", "webhook_receiver.py", [{"name": "WEBHOOK_SECRET", "valueFrom": secret}]
-            ),
-            *self.python_pod(
-                RELAY,
-                "east",
-                "webhook_relay.py",
-                [
-                    {"name": "TARGET", "value": f"http://{RECEIVER}/"},
-                    {"name": "TIMEOUT", "value": str(DELIVER_TIMEOUT)},
-                ],
-            ),
-        ]
+        return self.python_pod(
+            RECEIVER, "west", "webhook_receiver.py", [{"name": "WEBHOOK_SECRET", "valueFrom": secret}]
+        )
+
+    def relay_documents(self, target):
+        return self.python_pod(
+            RELAY,
+            "east",
+            "webhook_relay.py",
+            [{"name": "TARGET", "value": target}, {"name": "TIMEOUT", "value": str(DELIVER_TIMEOUT)}],
+        )
 
     @staticmethod
     def python_pod(name, region, script, env, volumes=(), mounts=(), service=True):
@@ -191,6 +200,50 @@ class GiteaMySQLApplication(GiteaApplication):
         )
         return documents
 
+    @staticmethod
+    def idle_pod(name, image, env=(), volumes=(), mounts=()):
+        """A one-replica pod that only waits to be exec'd into."""
+        return {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": name},
+            "spec": {
+                "replicas": 1,
+                "selector": {"matchLabels": {"app": name}},
+                "template": {
+                    "metadata": {"labels": {"app": name}},
+                    "spec": {
+                        "automountServiceAccountToken": False,
+                        # sleep ignores SIGTERM as PID 1, so do not wait it out.
+                        "terminationGracePeriodSeconds": 1,
+                        "volumes": list(volumes),
+                        "containers": [
+                            {
+                                "name": "main",
+                                "image": image,
+                                "command": ["sleep", "infinity"],
+                                "env": list(env),
+                                "volumeMounts": list(mounts),
+                            }
+                        ],
+                    },
+                },
+            },
+        }
+
+    def checks_documents(self):
+        root = {"secretKeyRef": {"name": "gitea-mysql", "key": "root-password"}}
+        return [
+            self.idle_pod(
+                CHECKS,
+                "python:3.12-alpine",
+                env=[{"name": "GITEA_URL", "value": f"http://gitea.{self.namespace}.svc:3000"}],
+                volumes=[{"name": "credentials", "secret": {"secretName": "gitea-admin"}}],
+                mounts=[{"name": "credentials", "mountPath": "/credentials", "readOnly": True}],
+            ),
+            self.idle_pod(DATABASE_CLIENT, MYSQL_IMAGE, env=[{"name": "MYSQL_PWD", "valueFrom": root}]),
+        ]
+
     def ensure_secret(self, name, data):
         if not self.command("get", "secret", name, "--ignore-not-found", "-o", "name").strip():
             self.apply(
@@ -220,6 +273,7 @@ class GiteaMySQLApplication(GiteaApplication):
             {"root-password": secrets.token_hex(24), "replication-password": secrets.token_hex(16)},
         )
         self.ensure_secret("gitea-webhook", {"secret": secrets.token_hex(24)})
+        self.prepare_hidden()
         database = [
             d
             for d in documents
@@ -230,10 +284,68 @@ class GiteaMySQLApplication(GiteaApplication):
         self.mysql.initialize(self.secret_value("gitea-mysql", "replication-password"))
         return database
 
+    def hidden(self, *args, **kwargs):
+        return self.command("-n", HIDDEN, *args, **kwargs)
+
+    def kubectl_for(self, name):
+        return self.hidden if name in HIDDEN_DEPLOYMENTS else self.command
+
+    def apply_hidden(self, documents):
+        self.hidden("apply", "-f", "-", input_text=json.dumps({"apiVersion": "v1", "kind": "List", "items": documents}))
+
+    def remove_hidden(self):
+        objects = [
+            *(f"{kind}/{name}" for name in HIDDEN_DEPLOYMENTS for kind in ("deployment", "service", "configmap")),
+            *(f"secret/{name}" for name in (*SHARED_SECRETS, MEMBER_SECRET)),
+        ]
+        with contextlib.suppress(subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            # Foreground, so no old pod is left for an exec to land on once the new ones are applied.
+            self.hidden("delete", *objects, "--ignore-not-found", "--cascade=foreground", timeout=200)
+
+    def prepare_hidden(self):
+        """The checks' clients and the secrets the hidden pods use, before anything is checked."""
+        if not self.command("get", "namespace", HIDDEN, "--ignore-not-found", "-o", "name").strip():
+            self.command("create", "namespace", HIDDEN)
+        self.remove_hidden()
+        for name in SHARED_SECRETS:
+            secret = json.loads(self.command("get", "secret", name, "-o", "json"))
+            self.apply_hidden(
+                [{"apiVersion": "v1", "kind": "Secret", "metadata": {"name": name}, "data": secret["data"]}]
+            )
+        member = {"username": MEMBER, "password": secrets.token_hex(16)}
+        self.apply_hidden(
+            [{"apiVersion": "v1", "kind": "Secret", "metadata": {"name": MEMBER_SECRET}, "stringData": member}]
+        )
+        self.apply_hidden(self.checks_documents())
+        for name in (CHECKS, DATABASE_CLIENT):
+            self.hidden("rollout", "status", f"deployment/{name}", "--timeout=300s", timeout=320)
+
+    def run_client(self, mode, **arguments):
+        return PythonClientRunner(self.hidden, f"deployment/{CHECKS}").run(
+            [Path(__file__).with_name("workflow.py")],
+            "run(" + repr(mode) + ", **json.loads(" + repr(json.dumps(arguments)) + "))",
+        )
+
+    def recovery_client(self, mode, **arguments):
+        directory = Path(__file__).parent
+        source = (directory / "workflow.py").read_text() + "\n" + (directory / "recovery_workflow.py").read_text()
+        source += "\nrun_recovery(api, " + repr(mode) + ", **json.loads(" + repr(json.dumps(arguments)) + "))\n"
+        output = self.hidden("exec", "-i", f"deployment/{CHECKS}", "--", "python", "-", input_text=source, timeout=300)
+        return json.loads(output)
+
     def deploy(self):
         super().deploy()
-        for name in (RECEIVER, RELAY):
-            self.command("rollout", "status", f"deployment/{name}", "--timeout=300s", timeout=320)
+        member = json.loads(self.hidden("get", "secret", MEMBER_SECRET, "-o", "json"))["data"]
+        self.recovery_client(
+            "member",
+            username=MEMBER,
+            password=base64.b64decode(member["password"]).decode(),
+            repository=LIVE_TRAFFIC_REPOSITORY,
+        )
+        self.apply_hidden(self.receiver_documents())
+        self.hidden("rollout", "status", f"deployment/{RECEIVER}", "--timeout=300s", timeout=320)
+        self.apply(self.relay_documents(f"http://{self.receiver_address()}/"))
+        self.command("rollout", "status", f"deployment/{RELAY}", "--timeout=300s", timeout=320)
         repositories = [
             r["owner"] + "/" + r["name"]
             for r in json.loads((FIXTURES / "import-data.json").read_text())["repositories"]
@@ -251,20 +363,21 @@ class GiteaMySQLApplication(GiteaApplication):
             "east",
             "live_traffic.py",
             [
+                {"name": "GITEA", "value": f"http://gitea.{self.namespace}.svc:3000"},
                 {"name": "REPOSITORY", "value": LIVE_TRAFFIC_REPOSITORY},
                 {"name": "INTERVAL", "value": str(LIVE_TRAFFIC_INTERVAL)},
             ],
-            volumes=[{"name": "credentials", "secret": {"secretName": "gitea-admin"}}],
+            volumes=[{"name": "credentials", "secret": {"secretName": MEMBER_SECRET}}],
             mounts=[{"name": "credentials", "mountPath": "/credentials", "readOnly": True}],
             service=False,
         )
 
     def start_live_traffic(self):
-        self.apply(self.live_traffic_documents())
-        self.command("rollout", "status", f"deployment/{LIVE_TRAFFIC}", "--timeout=300s", timeout=320)
+        self.apply_hidden(self.live_traffic_documents())
+        self.hidden("rollout", "status", f"deployment/{LIVE_TRAFFIC}", "--timeout=300s", timeout=320)
 
-    def pod_identities(self, selector):
-        pods = json.loads(self.command("get", "pods", "-l", selector, "-o", "json"))["items"]
+    def pod_identities(self, name):
+        pods = json.loads(self.kubectl_for(name)("get", "pods", "-l", f"app={name}", "-o", "json"))["items"]
         return [
             (p["metadata"]["uid"], sum(c["restartCount"] for c in p["status"].get("containerStatuses", [])))
             for p in pods
@@ -276,8 +389,10 @@ class GiteaMySQLApplication(GiteaApplication):
             "import sys, urllib.request; "
             "print(urllib.request.urlopen(urllib.request.Request(sys.argv[1], method=sys.argv[2])).read().decode())"
         )
-        return self.command(
-            "exec", f"deployment/{deployment}", "--", "python", "-c", script, "http://127.0.0.1:8080" + path, method
+        # Isolated, so nothing planted in the pod's Python path runs in place of the script.
+        python = ("python", "-I", "-S", "-c", script)
+        return self.kubectl_for(deployment)(
+            "exec", f"deployment/{deployment}", "--", *python, "http://127.0.0.1:8080" + path, method
         )
 
     def control(self, deployment, action=None):
@@ -290,6 +405,10 @@ class GiteaMySQLApplication(GiteaApplication):
     def live_traffic(self, action=None):
         return self.control(LIVE_TRAFFIC, action)
 
+    def cleanup(self):
+        self.remove_hidden()
+        super().cleanup()
+
     def snapshot(self, region=None):
         state = json.loads(self.mysql.sql(region or self.mysql.write_region(), SNAPSHOT_SQL))
         state["users"].sort(key=lambda r: r["id"])
@@ -300,17 +419,24 @@ class GiteaMySQLApplication(GiteaApplication):
         state["comments"].sort(key=lambda r: r["id"])
         return state
 
-    def client_fetch(self, url):
-        """Fetch a URL from the region-east client pod, as Gitea would."""
-        script = "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=3).read()"
+    def from_client(self, script, *args):
+        """Run ``script`` in the region-east client pod, as Gitea would; False if it fails."""
         try:
-            self.command("exec", "application-client", "--", "python", "-c", script, url, timeout=30)
+            self.command("exec", "application-client", "--", "python", "-c", script, *args, timeout=30)
         except subprocess.CalledProcessError:
             return False
         return True
 
+    def client_fetch(self, url):
+        script = "import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=3).read()"
+        return self.from_client(script, url)
+
+    def receiver_address(self):
+        return self.hidden("get", "service", RECEIVER, "-o", "jsonpath={.spec.clusterIP}").strip()
+
     def receiver_reachable(self):
-        return self.client_fetch(f"http://{RECEIVER}/")
+        script = "import socket, sys; socket.create_connection((sys.argv[1], 80), timeout=3).close()"
+        return self.from_client(script, self.receiver_address())
 
     def wait_for_api(self, timeout=180):
         deadline = time.monotonic() + timeout
@@ -326,6 +452,10 @@ class GiteaMySQLApplication(GiteaApplication):
 
     def undelivered_webhooks(self, region):
         return int(self.mysql.sql(region, "SELECT COUNT(*) FROM hook_task WHERE is_delivered = 0;"))
+
+    def delivery_ids(self, region):
+        """The X-Gitea-Delivery id of every webhook delivery Gitea recorded."""
+        return set(self.mysql.sql(region, "SELECT uuid FROM hook_task;").split())
 
     def wait_for_webhook_attempts(self, region):
         # Partitioned deliveries each wait out DELIVER_TIMEOUT before failing. A task saved by a

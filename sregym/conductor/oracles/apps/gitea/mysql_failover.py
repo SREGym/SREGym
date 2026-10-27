@@ -71,10 +71,13 @@ def duplicated_comments(state, updates):
     return [u["comment"] for u in updates if "comment" in u and counts[u["comment"]] > 1]
 
 
-def stale_deliveries(state, deliveries):
-    """Delivered events that describe an issue, comment or close the primary does not have."""
+def stale_deliveries(state, deliveries, recorded=frozenset()):
+    """Delivered events that describe an issue, comment or close the primary does not have.
+
+    Events the primary ``recorded`` sending were current when sent, so later changes do not make them stale.
+    """
     stale = undeliverable(state, [{**d, "id": i} for i, d in enumerate(deliveries)])
-    return [deliveries[i]["delivery"] for i in stale]
+    return [deliveries[i]["delivery"] for i in stale if deliveries[i]["delivery"] not in recorded]
 
 
 def search_queries(state, issues, updates):
@@ -192,11 +195,11 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             return self.fail("database_route_bypassed", host=env.get("GITEA__database__HOST"))
         if self.volume_ids().get(REPOSITORY_VOLUME) != self.volumes[REPOSITORY_VOLUME]:
             return self.fail("repository_volume_replaced")
-        if self.problem.receiver is not None and app.pod_identities(f"app={RECEIVER}") != self.problem.receiver:
+        if self.problem.receiver is not None and app.pod_identities(RECEIVER) != self.problem.receiver:
             return self.fail("webhook_receiver_replaced")
-        if self.problem.relay is not None and app.pod_identities(f"app={RELAY}") != self.problem.relay:
+        if self.problem.relay is not None and app.pod_identities(RELAY) != self.problem.relay:
             return self.fail("webhook_relay_replaced")
-        if self.problem.live_users is not None and app.pod_identities(f"app={LIVE_TRAFFIC}") != self.problem.live_users:
+        if self.problem.live_users is not None and app.pod_identities(LIVE_TRAFFIC) != self.problem.live_users:
             return self.fail("live_traffic_replaced")
         return None
 
@@ -281,7 +284,7 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         deliveries = delivery_report(received, events)
         if deliveries["conflicting"]:
             return self.fail("webhook_events_conflicting", issues=deliveries["conflicting"])
-        if stale := stale_deliveries(state, received):
+        if stale := stale_deliveries(state, received, app.delivery_ids(primary)):
             return self.fail("webhook_events_conflicting", deliveries=stale)
         if deliveries["duplicated"]:
             return self.fail("webhook_events_duplicated", events=deliveries["duplicated"])

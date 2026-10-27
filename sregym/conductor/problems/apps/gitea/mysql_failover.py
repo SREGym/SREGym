@@ -207,12 +207,12 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         if not collisions:
             raise RuntimeError("The two histories did not reuse any public issue number")
         self.expected_git = app.git_inventory()
-        self.receiver = app.pod_identities(f"app={RECEIVER}")
+        self.receiver = app.pod_identities(RECEIVER)
         if len(self.receiver) != 1:
             raise RuntimeError("Expected one webhook receiver pod")
-        self.relay = app.pod_identities(f"app={RELAY}")
+        self.relay = app.pod_identities(RELAY)
         app.start_live_traffic()
-        self.live_users = app.pod_identities(f"app={LIVE_TRAFFIC}")
+        self.live_users = app.pod_identities(LIVE_TRAFFIC)
 
     @mark_fault_injected(strict=True)
     def recover_fault(self):

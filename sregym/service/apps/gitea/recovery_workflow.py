@@ -76,6 +76,29 @@ def search_issues(api, queries):
     return found
 
 
+def add_member(api, username, password, repository):
+    """A non-admin user with write access to one repository."""
+    if api(f"/users/{username}", missing_ok=True) is None:
+        api(
+            "/admin/users",
+            "POST",
+            {
+                "username": username,
+                "email": f"{username}@example.com",
+                "password": password,
+                "must_change_password": False,
+            },
+        )
+    else:
+        api(
+            f"/admin/users/{username}",
+            "PATCH",
+            {"login_name": username, "source_id": 0, "password": password, "must_change_password": False},
+        )
+    api(f"/repos/{repository}/collaborators/{username}", "PUT", {"permission": "write"})
+    return {"username": username}
+
+
 def run_recovery(api, mode, **arguments):
     if mode == "create":
         result = create_issues(api, arguments["records"])
@@ -85,6 +108,8 @@ def run_recovery(api, mode, **arguments):
         result = update_issues(api, arguments["updates"])
     elif mode == "webhooks":
         result = create_webhooks(api, **arguments)
+    elif mode == "member":
+        result = add_member(api, **arguments)
     elif mode in {"replay", "verify"}:
         result = reconcile_issues(api, arguments["receipts"], write=mode == "replay")
     else:

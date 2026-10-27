@@ -29,7 +29,10 @@ region=east:  MySQL gitea-db-east  --- async GTID replication --->  region=west:
 - Gitea runs on MySQL through `GITEA__database__DB_TYPE=mysql`.
 - Gitea sends its webhooks to a relay beside it, standing in for GitHub's job queue. The relay forwards them in order, and can be paused, resumed, listed and have items dropped.
 - The webhook receiver checks Gitea's HMAC signature and records each delivery with the issue id, number and comment id.
-- A live users pod opens an issue every 2 seconds through Gitea, so downtime is measurable.
+- A live users pod opens an issue about every 2 seconds through Gitea, as a non-admin member with write access to one repository, with varied titles and bodies, so downtime is measurable.
+- The receiver and the live users run in the hidden `khaos` namespace, so the agent cannot read their code, logs or records. The relay reaches the receiver by its service IP, and the partition policy matches it across namespaces.
+- Setup and grading run their Gitea and MySQL checks from two idle client pods in `khaos`, so nothing the agent changes in `gitea` sits on the grading path. MySQL is queried by pod IP, so a re-pointed service cannot answer for a server.
+- The agent's kubectl proxy refuses node proxying, which reaches every pod's kubelet, and refuses minting service account tokens, which would work without the proxy. It also blanks Calico IPAM entries that name pods in hidden namespaces.
 
 ## Fault lifecycle
 
@@ -40,7 +43,7 @@ region=east:  MySQL gitea-db-east  --- async GTID replication --->  region=west:
 5. Users open some lost issues again on west, and new issues and comments land there, reusing issue numbers east already handed out. Their events join the paused backlog, so it now holds current events, events that describe east's history under numbers west reused, and repeats of the same event.
 6. Start the live users and record the identity of the helper pods.
 
-Receipts live in the conductor, outside the cluster, so the agent cannot read or edit them. The agent sees only a one line app description.
+Receipts live in the conductor, outside the cluster, so the agent cannot read or edit them. The agent sees a short app description that says the database keeps a live replica in a second region, that users expect the service to stay up, and that consumers expect each issue event once with current details. It does not name the regions, the webhook path or the fault.
 
 ## What the agent has to do
 
@@ -57,7 +60,7 @@ In order, stopping at the first failure:
 1. Gitea serves, keeps one replica, and still uses `gitea-db-rw`. The repository volume, receiver, relay and live users pods are unchanged.
 2. A fresh write round-trips through Gitea and Git.
 3. Exactly one writable region, the write service selects it, the other region replicates from it with no filters or skipped errors, table checksums match, and issue counters and comment and closed counts agree with the rows.
-4. Every issue from both histories is on both regions. Every comment and close is present. The relay is resumed and empty. Every event implied by the primary's rows was delivered once, with no duplicates or conflicting payloads. Recovered issues and comments are in Gitea's search index.
+4. Every issue from both histories is on both regions. Every comment and close is present. The relay is resumed and empty. Every event implied by the primary's rows was delivered once, with no duplicates or conflicting payloads. A delivery the primary has no record of sending, such as one of the stale side's events, must still match the primary. Events the primary sent stay valid if their issue changes later, so an agent's own test issues do not count against it. Recovered issues and comments are in Gitea's search index.
 5. No acknowledged live user write was lost, and no gap without one was longer than 10 seconds. The oracle pauses the users while it grades and does not count that pause.
 
 Rows written straight into MySQL are not indexed and do not move counters, so they fail.

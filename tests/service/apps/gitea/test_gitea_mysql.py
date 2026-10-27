@@ -7,8 +7,12 @@ import pytest
 
 from sregym.service.apps.components.mysql import MySQLRegions, checked_gtids
 from sregym.service.apps.gitea.mysql_failover import (
+    CHECKS,
+    DATABASE_CLIENT,
     DIVERGENCE_COUNTS,
+    HIDDEN,
     LIVE_TRAFFIC,
+    MEMBER_SECRET,
     RECEIVER,
     RELAY,
     GiteaMySQLApplication,
@@ -43,18 +47,30 @@ def test_each_region_has_one_mysql_server_and_writes_start_in_east():
         assert "--gtid-mode=ON" in spec["template"]["spec"]["containers"][0]["args"]
     services = {d["metadata"]["name"]: d["spec"] for d in by_kind(documents, "Service")}
     assert services["gitea-db-rw"]["selector"] == {"app": "gitea-db", "region": "east"}
-    receiver = next(d for d in by_kind(documents, "Deployment") if d["metadata"]["name"] == RECEIVER)["spec"]
+    receiver = next(d for d in by_kind(GiteaMySQLApplication().receiver_documents(), "Deployment"))["spec"]
     assert receiver["template"]["metadata"]["labels"]["region"] == "west"
     assert receiver["template"]["spec"]["automountServiceAccountToken"] is False
 
 
 def test_relay_queues_beside_gitea_and_forwards_across_regions():
-    documents = GiteaMySQLApplication().render()
-    relay = next(d for d in by_kind(documents, "Deployment") if d["metadata"]["name"] == RELAY)["spec"]["template"]
+    app = GiteaMySQLApplication()
+    assert not any(d["metadata"]["name"] in (RECEIVER, RELAY) for d in app.render())
+    documents = app.relay_documents("http://10.96.0.9/")
+    relay = next(d for d in by_kind(documents, "Deployment"))["spec"]["template"]
     assert relay["metadata"]["labels"]["region"] == "east"
     env = {e["name"]: e["value"] for e in relay["spec"]["containers"][0]["env"]}
-    assert env["TARGET"] == f"http://{RECEIVER}/"
-    assert {d["metadata"]["name"] for d in by_kind(documents, "Service")} >= {RECEIVER, RELAY}
+    assert env["TARGET"] == "http://10.96.0.9/"
+    assert [d["metadata"]["name"] for d in by_kind(documents, "Service")] == [RELAY]
+
+
+def test_the_consumer_and_the_users_run_where_the_agent_cannot_see():
+    app = GiteaMySQLApplication()
+    app.command = Mock(return_value=json.dumps({"items": []}))
+    for name in (RECEIVER, LIVE_TRAFFIC, CHECKS, DATABASE_CLIENT):
+        app.pod_identities(name)
+        assert app.command.call_args.args[:2] == ("-n", HIDDEN)
+    app.pod_identities(RELAY)
+    assert app.command.call_args.args[0] == "get"
 
 
 def test_queued_events_that_describe_the_old_history_or_repeat_are_undeliverable():
@@ -104,10 +120,21 @@ def test_tiers_differ_only_in_divergence_size():
 def test_partition_denies_only_cross_region_traffic():
     east, west = MySQLRegions(Mock(), "gitea-db", "gitea", "x", "s").partition_documents("gitea")
     assert east["spec"]["selector"] == "region == 'east'"
-    assert east["spec"]["ingress"][0] == {"action": "Deny", "source": {"selector": "region == 'west'"}}
-    assert east["spec"]["egress"][0] == {"action": "Deny", "destination": {"selector": "region == 'west'"}}
+    deny = {"selector": "region == 'west'", "namespaceSelector": "all()"}
+    assert east["spec"]["ingress"][0] == {"action": "Deny", "source": deny}
+    assert east["spec"]["egress"][0] == {"action": "Deny", "destination": deny}
     assert east["spec"]["ingress"][-1] == {"action": "Allow"}
     assert west["spec"]["selector"] == "region == 'west'"
+
+
+def test_queries_reach_each_server_by_address_from_an_outside_client():
+    command = Mock(return_value="10.244.1.7")
+    client = Mock(return_value="1\n")
+    mysql = MySQLRegions(command, "gitea-db", "gitea", "x", "s", client=(client, "db-client"))
+    assert mysql.sql("west", "SELECT 1;") == "1"
+    assert command.call_args.args[:2] == ("get", "pod")
+    assert client.call_args.args[:3] == ("exec", "-i", "deployment/db-client")
+    assert "10.244.1.7" in client.call_args.args
 
 
 def test_unreachable_target_is_reported_rather_than_raised():
@@ -124,7 +151,7 @@ def test_initialize_leaves_an_initialized_pair_alone():
 def test_missing_or_starting_pods_do_not_raise():
     app = GiteaMySQLApplication()
     app.command = Mock(return_value=json.dumps({"items": [{"metadata": {"uid": "u"}, "status": {}}]}))
-    assert app.pod_identities("app=gitea") == [("u", 0)]
+    assert app.pod_identities("gitea") == [("u", 0)]
 
 
 def test_gtid_sets_are_checked_before_interpolation():
@@ -151,13 +178,14 @@ def test_live_users_write_through_gitea_from_east_only():
     assert not any(d["metadata"]["name"] == LIVE_TRAFFIC for d in GiteaMySQLApplication().render())
     spec = next(d for d in documents if d["kind"] == "Deployment")["spec"]["template"]
     assert spec["metadata"]["labels"]["region"] == "east"
-    assert {"name": "credentials", "secret": {"secretName": "gitea-admin"}} in spec["spec"]["volumes"]
+    assert {"name": "credentials", "secret": {"secretName": MEMBER_SECRET}} in spec["spec"]["volumes"]
 
 
-def test_description_does_not_describe_the_topology():
+def test_description_states_requirements_but_not_the_regions_or_the_fault():
     for tier in DIVERGENCE_COUNTS:
         description = GiteaMySQLApplication(tier).description
-        assert not any(word in description for word in ("east", "west", "replica", "webhook", "Tier", tier))
+        assert not any(word in description for word in ("east", "west", "webhook", "partition", "Tier", tier))
+        assert all(word in description for word in ("replica", "available", "exactly once"))
 
 
 def test_reference_repair_replays_only_unreplicated_activity_then_rebuilds(monkeypatch):

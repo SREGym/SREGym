@@ -108,6 +108,11 @@ def test_a_delivery_the_primary_does_not_back_is_stale():
     assert stale_deliveries(PRIMARY, [*DELIVERED, old_comment, vacant]) == ["a-created-3", "gone-opened-None"]
 
 
+def test_an_event_the_primary_sent_stays_valid_after_its_issue_changes():
+    vacant = delivery("issues", "opened", 9, 40, "gone")
+    assert stale_deliveries(PRIMARY, [*DELIVERED, vacant], recorded={"gone-opened-None"}) == []
+
+
 def traffic(*writes, started=0, now=20):
     return {
         "started": started,

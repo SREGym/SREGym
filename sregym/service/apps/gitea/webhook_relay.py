@@ -1,5 +1,3 @@
-"""Webhook relay that queues Gitea's deliveries and forwards them in order."""
-
 import itertools
 import json
 import os
@@ -51,7 +49,6 @@ def forward_forever():
             request = urllib.request.Request(TARGET, data=item["body"], headers=item["headers"], method="POST")
             urllib.request.urlopen(request, timeout=TIMEOUT).read()
         except urllib.error.HTTPError as error:
-            # The consumer rejected the event itself; retrying cannot help.
             if error.code >= 500:
                 time.sleep(1)
                 continue
@@ -64,6 +61,9 @@ def forward_forever():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
     def do_POST(self):
         global paused
         if self.path in ("/pause", "/resume"):
@@ -84,7 +84,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_DELETE(self):
-        """``DELETE /queue/<id>,<id>`` drops queued deliveries."""
         doomed = set(self.path.rpartition("/")[2].split(","))
         with changed:
             queue[:] = [item for item in queue if str(item["id"]) not in doomed]

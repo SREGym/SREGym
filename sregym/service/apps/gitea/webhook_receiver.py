@@ -1,5 +1,3 @@
-"""Gitea webhook receiver."""
-
 import hashlib
 import hmac
 import json
@@ -11,6 +9,9 @@ deliveries = []
 
 
 class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         expected = hmac.new(SECRET, body, hashlib.sha256).hexdigest()
@@ -40,6 +41,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if self.client_address[0] != "127.0.0.1":
+            self.send_response(404)
+            self.end_headers()
+            return
         data = json.dumps(deliveries).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
