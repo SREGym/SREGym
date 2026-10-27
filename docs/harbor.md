@@ -6,7 +6,7 @@ every problem that runs on its emulated cluster.
 
 Each task is **one container**. It holds a private four-node Kubernetes
 cluster, the application, SREGym's grader and the agent. It is not
-`--privileged`: it has no devices and adds four capabilities (see
+`--privileged`: it has no devices and adds two capabilities (see
 [The cluster](#the-cluster)).
 
 **Plain Docker is the default target**: Harbor's `docker` environment, which
@@ -26,7 +26,7 @@ The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
 ## How a task works
 
 ```
-  Harbor task container (not --privileged; root inside it, four added capabilities)
+  Harbor task container (not --privileged; root inside it, two added capabilities)
   ┌───────────────────────────────────────────────────────────────────────────┐
   │ root                                                                      │
   │  k3s cluster: kind-control-plane, kind-worker, kind-worker2, kind-worker3  │
@@ -107,31 +107,35 @@ cgroups, which Docker's defaults forbid. Every task therefore ships
 `docker/harbor/local-docker.yaml` as its `environment/docker-compose.yaml`,
 which Harbor's `docker` environment merges on its own:
 
-- **Capabilities** `SYS_ADMIN` (create the nodes' namespaces and mount their
-  cgroups), `NET_ADMIN` (the network between nodes), `SYS_RESOURCE` (runc sets
-  pods' OOM scores) and `SYS_PTRACE` (runc enters the containers' namespaces).
-  No devices, not `--privileged`.
+- **Capabilities** `SYS_ADMIN` (create the nodes' user and other namespaces,
+  and mount their cgroups) and `NET_ADMIN` (the network between nodes). No
+  devices, not `--privileged`.
 - **`seccomp=unconfined`, `systempaths=unconfined`, `apparmor=unconfined`**:
   Docker's default seccomp filter blocks `unshare` and `mount`, and its masked
   `/proc` paths block the nodes' procfs mounts.
 - **Open-file limit** of 1048576: TiDB's TiKV (FleetCast) needs about 82920.
 
-With `CAP_SYS_ADMIN` the cluster creates its nodes' namespaces directly. It does
-not create a user namespace, which Ubuntu 24.04's AppArmor default
-(`kernel.apparmor_restrict_unprivileged_userns=1`) forbids for unprivileged
-containers, so stock Ubuntu hosts need no change. Without `CAP_SYS_ADMIN` it
-falls back to an identity-mapped user namespace, which Ubuntu 24.04 blocks.
-Under Sysbox the container already runs in a user namespace and the cluster
-uses it directly.
+Each node runs in its own identity-mapped user namespace (root inside is root
+outside), and each of those namespaces has a different owner uid
+(2147000001-2147000004, names `sregym-<node>` in the container's `/etc/passwd`;
+no host accounts). Two host limits make this layout necessary:
 
-**One host limit cannot be shipped.** The cluster's processes run as the host's
-root user, so their inotify instances count against the host's per-user limit,
-`fs.inotify.max_user_instances`. The four nodes plus Astronomy Shop peaked at
-177 on a GitHub runner (host processes included); the kernel's default is 128.
-Setup checks the limit first and, below 256, stops before the cluster starts
-with a message naming it, so Harbor records an error rather than a score. RHEL
-and Fedora hosts (8192), GitHub's runners (1280) and most cloud images allow
-more.
+- **Ubuntu 24.04's AppArmor default** (`kernel.apparmor_restrict_unprivileged_userns=1`)
+  forbids unprivileged user namespaces. A process holding `CAP_SYS_ADMIN` is
+  exempt, so stock Ubuntu hosts need no change.
+- **The host's per-user inotify limit**, `fs.inotify.max_user_instances`, 128 by
+  default, which no container can raise. The kernel charges inotify instances to
+  a user namespace's owner. Most of the cluster's instances belong to
+  containerd's per-pod shims and k3s: in one shared namespace, Hotel Reservation
+  peaked at 144 and Astronomy Shop near 160. With one owner per node, the
+  busiest node peaked at 47.
+
+Setup checks the limit first and, below 96, stops before the cluster starts with
+a message naming it, so Harbor records an error rather than a score. Without
+`CAP_SYS_ADMIN` the cluster falls back to one user namespace around all four
+nodes (needing 256 inotify instances, and the AppArmor restriction lifted on
+Ubuntu 24.04). Under Sysbox the container already runs in a user namespace and
+the cluster uses it directly.
 
 ## Generate tasks
 
@@ -336,7 +340,8 @@ trial, SREGym `main` at #1135:
 | Check | Result |
 |---|---|
 | Docker settings | With Docker's defaults the cluster fails (`unshare: Operation not permitted`). These sweeps passed the seccomp, masked-path and open-file settings with `--extra-docker-compose`, before the tasks shipped them and before the capabilities. `docker inspect`: `Privileged=false`. |
-| **Stock Ubuntu 24.04**, GitHub runner, no host changes (`kernel.apparmor_restrict_unprivileged_userns=1`), settings shipped in the task, plain `harbor run -e docker` | Without capabilities: setup fails (`unshare: cannot open /proc/self/setgroups: Permission denied`). With the four capabilities: self-test, `network_policy_block` and `env_variable_shadowing_astronomy_shop` 1.0. Peak inotify instances held by root: 71, 154, 177. |
+| **Stock Ubuntu 24.04**, GitHub runner, no host changes (`kernel.apparmor_restrict_unprivileged_userns=1`), settings shipped in the task, plain `harbor run -e docker` | Without capabilities: setup fails (`unshare: cannot open /proc/self/setgroups: Permission denied`). With four capabilities and no user namespaces (an earlier layout): self-test, `network_policy_block` and `env_variable_shadowing_astronomy_shop` 1.0, but root held up to 71, 154 and 177 inotify instances. |
+| Per-node user namespaces, two capabilities, this RHEL host | Self-test, `network_policy_block` and `env_variable_shadowing_astronomy_shop` 1.0. Peak inotify instances per node owner: Hotel Reservation 46/32/33/34, Astronomy Shop 46/44/47/34; root none. |
 | Oracle agent, all 200 generated tasks, up to 3 runs each | **172 pass** (154 on the first run). The rest are in the table under [Generate tasks](#generate-tasks). |
 | No-op agent, the 22 alert- and SLO-graded tasks that pass | 0.0 in all 22 (one setup error) |
 | Claude Code (Opus 5.5), 3 attempts on 171 of the passing tasks | Mean reward 0.81 over 510 attempts; 152 solved at least once. The 3 GitLab problems were never solved. |

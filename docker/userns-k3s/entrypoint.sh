@@ -1,8 +1,8 @@
 #!/bin/sh
-# Runs as container root WITHOUT --privileged and with no devices. Given
-# CAP_SYS_ADMIN (the Harbor tasks' docker-compose.yaml adds it), the nodes'
-# namespaces are created directly; otherwise everything Kubernetes needs happens
-# inside an identity-mapped user namespace.
+# Runs as container root WITHOUT --privileged and with no devices. Everything
+# Kubernetes needs happens inside identity-mapped user namespaces: one per node,
+# each with its own owner, when the container has CAP_SYS_ADMIN (the Harbor tasks'
+# docker-compose.yaml adds it; see fabric.sh), otherwise one around the fabric.
 set -e
 lib=/usr/local/lib/userns-k3s
 # Images that keep k3s's binaries outside /bin (the Harbor task image) name the
@@ -30,9 +30,8 @@ fi
 # skips this: its root already owns its namespaces, and a nested user namespace
 # cannot mount the fresh procfs every node needs.
 #
-# A container granted CAP_SYS_ADMIN skips it too: it can create the nodes'
-# namespaces directly, which works where the host forbids unprivileged user
-# namespaces (Ubuntu 24.04's AppArmor default).
+# A container granted CAP_SYS_ADMIN skips it too: fabric.sh then gives each node
+# its own user namespace instead.
 userns="--user --map-users=0:0:65536 --map-groups=0:0:65536 --setgroups=allow"
 if ! grep -qE '^ +0 +0 +4294967295$' /proc/self/uid_map; then
     userns=""

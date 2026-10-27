@@ -15,7 +15,7 @@ SREGym's grader. The agent runs as an unprivileged user and reaches the cluster
 only through a filtered Kubernetes API proxy.
 
 Run it with `harbor run ... -e docker`; the task ships the Docker settings its
-cluster needs in `environment/docker-compose.yaml` (four added capabilities, not
+cluster needs in `environment/docker-compose.yaml` (two added capabilities, not
 `--privileged`). It uses up to {{cpus}} CPUs, {{memory_mb}} MiB of memory and
 {{storage_mb}} MiB of disk, and pulls images and Helm charts before the agent
 starts. See the [Harbor guide](https://github.com/SREGym/SREGym/blob/main/docs/harbor.md).

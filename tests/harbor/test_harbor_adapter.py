@@ -190,7 +190,7 @@ def test_docker_settings_add_only_the_documented_capabilities():
     import yaml
 
     main = yaml.safe_load(adapter.DOCKER_SETTINGS.read_text())["services"]["main"]
-    assert sorted(main["cap_add"]) == ["NET_ADMIN", "SYS_ADMIN", "SYS_PTRACE", "SYS_RESOURCE"]
+    assert sorted(main["cap_add"]) == ["NET_ADMIN", "SYS_ADMIN"]
     assert not main.get("privileged") and not main.get("devices")
 
 

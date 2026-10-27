@@ -57,7 +57,23 @@ if command -v python3 >/dev/null && [ -f $lib/dns-stub.py ]; then
     export NODE_RESOLV_CONF=/etc/userns-k3s/resolv.conf
 fi
 
+# With CAP_SYS_ADMIN and no user namespace around the fabric (the Harbor tasks'
+# docker-compose.yaml), give each node its own identity-mapped user namespace,
+# owned by a distinct otherwise-unused uid. The kernel charges inotify instances
+# to a user namespace's owner, so each node gets the host's per-user limit
+# (fs.inotify.max_user_instances, 128 by default) instead of all four sharing
+# root's: containerd's per-pod shims alone exceed 128 for the larger
+# applications. Holding CAP_SYS_ADMIN exempts the namespace from Ubuntu 24.04's
+# restriction on unprivileged user namespaces.
+node_userns=""
+cap_eff=$(awk '/^CapEff:/ {print $2}' /proc/self/status)
+if grep -qE '^ +0 +0 +4294967295$' /proc/self/uid_map && [ $(( (0x$cap_eff >> 21) & 1 )) -eq 1 ]; then
+    node_caps=$(setpriv --dump | sed -n 's/^Capability bounding set: //p' | tr ',' '\n' | sed 's/^/+/' | paste -sd, -)
+    node_userns=1
+fi
+
 i=2
+owner=2147000001
 role=server
 for n in $NODES; do
     ip=10.250.0.$i; i=$((i+1))
@@ -72,7 +88,20 @@ for n in $NODES; do
         cat /sys/fs/cgroup/cpuset/cpuset.mems > /sys/fs/cgroup/cpuset/node-$n/cpuset.mems
         join="for c in $V1_CTRLS systemd; do echo \$\$ > /sys/fs/cgroup/\$c/node-$n/cgroup.procs; done"
     fi
-    sh -c "$join; exec unshare --mount --net --uts --ipc --cgroup --pid --fork --mount-proc /bin/sh $lib/node.sh $n $ip $cgroup_version $role $server_ip" \
+    userns=""
+    if [ -n "$node_userns" ]; then
+        # newuidmap, which writes the mapping, wants a name and a subordinate range.
+        if ! grep -q "^sregym-$n:" /etc/passwd; then
+            echo "sregym-$n:x:$owner:$owner::/:/usr/sbin/nologin" >> /etc/passwd
+            echo "sregym-$n:x:$owner:" >> /etc/group
+            echo "sregym-$n:0:65536" >> /etc/subuid
+            echo "sregym-$n:0:65536" >> /etc/subgid
+        fi
+        userns="setpriv --reuid=$owner --regid=$owner --clear-groups --inh-caps=$node_caps --ambient-caps=$node_caps"
+        userns="$userns unshare --user --map-users=0:0:65536 --map-groups=0:0:65536 --setgroups=allow --setuid=0 --setgid=0"
+    fi
+    owner=$((owner + 1))
+    sh -c "$join; exec $userns unshare --mount --net --uts --ipc --cgroup --pid --fork --mount-proc /bin/sh $lib/node.sh $n $ip $cgroup_version $role $server_ip" \
         > /var/log/node-$n.log 2>&1 &
     pid=$!
     until [ "$(readlink /proc/$pid/ns/net)" != "$(readlink /proc/self/ns/net)" ]; do sleep 0.1; done

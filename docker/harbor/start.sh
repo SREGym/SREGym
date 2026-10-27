@@ -21,17 +21,23 @@ fail() {
 }
 trap fail ERR
 
-# The cluster's processes run as the host's root user, so its inotify instances
-# count against the host's per-user limit. The four nodes and an application
-# such as Astronomy Shop peaked at 177 on a GitHub runner; the kernel default
-# is 128. A container cannot raise it, so stop with an explanation.
+# The kernel charges inotify instances to a user namespace's owner, against the
+# host's per-user limit (fs.inotify.max_user_instances, 128 by default), which a
+# container cannot raise. Given CAP_SYS_ADMIN, the fabric gives each node its own
+# namespace and owner: the busiest node peaked at 47 (Astronomy Shop). Otherwise
+# the whole cluster shares one owner and peaked at 177.
 stage="host check"
-inotify_needed=256
+cap_eff=$(awk '/^CapEff:/ {print $2}' /proc/self/status)
+if grep -qE '^ +0 +0 +4294967295$' /proc/self/uid_map && [ $(( (0x$cap_eff >> 21) & 1 )) -eq 1 ]; then
+    inotify_needed=96
+else
+    inotify_needed=256
+fi
 inotify_limit=$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null || echo 0)
-echo "inotify: max_user_instances=$inotify_limit max_user_watches=$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null)"
+echo "inotify: max_user_instances=$inotify_limit (needs $inotify_needed) max_user_watches=$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null)"
 if [ "$inotify_limit" -lt "$inotify_needed" ]; then
     trap - ERR
-    fail "This Docker host allows $inotify_limit inotify instances per user (fs.inotify.max_user_instances), and SREGym's Kubernetes cluster needs about $inotify_needed. Run it on a host with a higher limit, such as a GitHub runner or most cloud VMs."
+    fail "This Docker host allows $inotify_limit inotify instances per user (fs.inotify.max_user_instances), and SREGym's Kubernetes cluster needs about $inotify_needed. Run it on a host with a higher limit."
     exit 1
 fi
 

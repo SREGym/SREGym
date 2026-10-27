@@ -22,7 +22,7 @@ code. A task uses up to {{cpus}} CPUs, {{memory_mb}} MiB of memory and
 {{storage_mb}} MiB of disk; pass `-n` to run several at once.
 
 Each task ships the Docker settings its cluster needs
-(`environment/docker-compose.yaml`): four added capabilities, but not
+(`environment/docker-compose.yaml`): two added capabilities, but not
 `--privileged`. If the Docker host cannot run the cluster, setup stops with an
 explanation before the agent starts, and Harbor records an error rather than a
 score.
