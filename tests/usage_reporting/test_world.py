@@ -237,8 +237,21 @@ def test_workspace_retention_skips_unreadable_agent_files(app, tmp_path):
     secret.chmod(0)
     app.retain_workspace(workspace)
     assert (app.run_dir / "solver-work/findings.md").read_text() == "ok"
-    skipped = json.loads((app.run_dir / "solver-work-unreadable.json").read_text())
-    assert skipped == {"files": ["preserved/var/log/kern.log.2"]}
+    skipped = json.loads((app.run_dir / "solver-work-skipped.json").read_text())
+    assert skipped == {"unreadable": ["preserved/var/log/kern.log.2"], "too_large": []}
+
+
+def test_workspace_retention_skips_large_data_dumps(app, tmp_path, monkeypatch):
+    app.run_dir.mkdir(parents=True)
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    (workspace / "final-answer.md").write_text("done")
+    (workspace / "kafka-copy.tar").write_bytes(b"x" * 2048)
+    monkeypatch.setattr(world, "RETAINED_FILE_BYTES", 1024)
+    app.retain_workspace(workspace)
+    assert [p.name for p in (app.run_dir / "solver-work").iterdir()] == ["final-answer.md"]
+    skipped = json.loads((app.run_dir / "solver-work-skipped.json").read_text())
+    assert skipped == {"unreadable": [], "too_large": ["kafka-copy.tar"]}
 
 
 def test_capture_failure_still_tears_down_owned_processes(app, monkeypatch):

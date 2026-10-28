@@ -25,6 +25,7 @@ PORTS = (28310, 28320, 28311, 28330, 28390, 28391, 28392)
 ASSETS = Path(__file__).resolve().parents[2] / "conductor/problems/assets/usage_reporting"
 RUNTIME = Path(__file__).with_name("runtime.py")
 BUDGET_SECONDS = 1800
+RETAINED_FILE_BYTES = 64 * 2**20  # answer files are small; data dumps are not retained
 
 
 def require_kvm():
@@ -229,13 +230,13 @@ class UsageReportingApplication(Application):
         return self.run_dir / "end-state"
 
     def retain_workspace(self, workspace):
-        """Retain ordinary answer files; ignore links, agent authentication and unreadable files."""
+        """Retain ordinary answer files; skip links, agent authentication, unreadable files and large dumps."""
         destination = self.run_dir / "solver-work"
         destination.mkdir(exist_ok=True)
         if workspace is None:
             return
         workspace = Path(workspace)
-        unreadable = []
+        skipped = {"unreadable": [], "too_large": []}
         for source in workspace.rglob("*"):
             relative = source.relative_to(workspace)
             if source.is_symlink() or any(p.startswith(".") for p in relative.parts):
@@ -244,15 +245,20 @@ class UsageReportingApplication(Application):
                 continue
             target = destination / relative
             if source.is_file():
+                if source.stat().st_size > RETAINED_FILE_BYTES:
+                    # Recovery work can leave multi-GB data copies in the workspace;
+                    # retaining them would exhaust the host disk the capture needs.
+                    skipped["too_large"].append(str(relative))
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     shutil.copyfile(source, target)
                 except PermissionError:
                     # Agents may copy root-only files (for example host logs) into
                     # their workspace; grading must not depend on reading them.
-                    unreadable.append(str(relative))
-        if unreadable:
-            write(self.run_dir / "solver-work-unreadable.json", {"files": unreadable})
+                    skipped["unreadable"].append(str(relative))
+        if any(skipped.values()):
+            write(self.run_dir / "solver-work-skipped.json", skipped)
 
     def _stop_watcher(self):
         """Stop a capture helper that did not finish, so it cannot run alongside teardown."""
