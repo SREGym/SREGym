@@ -33,7 +33,9 @@ HARDENING_FLAGS = (
     "--security-opt=no-new-privileges",
 )
 AGENT_TOOLS_CONTAINER_PATH = "/opt/agent-tools"
-CONTAINER_PATH = f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+CONTAINER_PATH = (
+    f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
 
 
 def _docker_uses_separate_host() -> bool:
