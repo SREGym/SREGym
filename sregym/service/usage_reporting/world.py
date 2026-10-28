@@ -58,9 +58,9 @@ class UsageReportingApplication(Application):
         self.project = Path(root).resolve()
         self.states_dir = Path(os.environ.get("SREGYM_USAGE_STATES_DIR", self.project / "build/vm/states")).resolve()
         self.grader = Path(os.environ.get("SREGYM_USAGE_GRADER", self.project / "grading/grade.py")).resolve()
-        self.state = state or os.environ.get("SREGYM_USAGE_STATE", "P2")
+        self.state = state or os.environ.get("SREGYM_USAGE_STATE", "P6")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", self.state):
-            raise ValueError("Saved-world state must be a name, for example P2")
+            raise ValueError("Saved-world state must be a name, for example P6")
         default_runs = Path.home() / ".local/state/sregym/usage-worlds"
         self.runs_dir = Path(runs_dir or os.environ.get("SREGYM_USAGE_RUNS_DIR", default_runs)).resolve()
         self.run_dir = self.runs_dir / ("run-" + uuid.uuid4().hex)

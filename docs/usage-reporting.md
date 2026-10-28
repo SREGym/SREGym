@@ -34,14 +34,14 @@ capture interfaces. `world-config.json` records `probe_run` and
 
 | Variable | Default |
 | --- | --- |
-| `SREGYM_USAGE_STATE` | `P2` |
+| `SREGYM_USAGE_STATE` | `P6` |
 | `SREGYM_USAGE_STATES_DIR` | `$SREGYM_USAGE_WORLD_ROOT/build/vm/states` |
 | `SREGYM_USAGE_GRADER` | `$SREGYM_USAGE_WORLD_ROOT/grading/grade.py` |
 | `SREGYM_USAGE_DIAGNOSIS_KEY` | `diagnosis/<state>.json` beside the grader |
 | `SREGYM_USAGE_RUNS_DIR` | `~/.local/state/sregym/usage-worlds` |
 | `SREGYM_RESULTS_DIR` | `~/.local/state/sregym/results` for this problem |
 
-Use absolute paths for overrides and neutral output directories. Bundle paths,
+Use absolute paths for overrides and neutral output directories. Bundle paths and
 grading inputs are never mounted into the agent container.
 
 ## Run
@@ -52,9 +52,10 @@ Only one run may use a bundle's global state and ports at a time.
 
 ```sh
 export SREGYM_USAGE_WORLD_ROOT=/path/to/company-world
-python main.py --problem usage_reporting --agent codex --model "$MODEL" \
-  --judge-backend codex --judge-model "$MODEL" --stages diagnosis mitigation \
-  --agent-timeout 1800 --internet-access filtered --container-hardening on
+python main.py --problem usage_reporting --agent claudecode --model claude-opus-5-5 \
+  --reasoning-effort xhigh --judge-backend codex --judge-model "$JUDGE_MODEL" \
+  --stages diagnosis mitigation --agent-timeout 1800 \
+  --internet-access filtered --container-hardening on
 ```
 
 After revive and readiness checks, the resource watcher starts and T0 is
@@ -86,28 +87,39 @@ The mitigation oracle calls the configured grader with `RUN_DIR --capture
 END_STATE --output OUTPUT --runtime-limit 1800` within 1860 seconds. It requires
 `GRADE.json` with schema `sregym-grade-v1`, a matching `run`, and
 `mitigation.status` equal to `pass` or `fail`, mapped to a boolean `success`.
-An incomplete or invalid grader outcome returns a harness failure, and so does a
-run the harness cut short (for example at a host resource limit), which is not
-graded. Full tables,
-limitations and validity metadata remain in `GRADE.json`. Mitigation passes only
-when every reading that still has a copy at handoff is in its regional ledger
-exactly once, readings offered after a 600-second restoration window reach the
-ledger within 120 seconds, the customer endpoints are serving at the deadline (the
-world watcher probes each `/health` and `/api/live` endpoint six seconds before the
-freeze and writes `service-health-at-D.json`; an endpoint that has not answered
-by the deadline counts as not serving), and
-re-running the scheduled role, profile and package maintenance on a private copy
-of the end state, with automation restored, removes no routing rule and breaks no
-connectivity on any host.
+Incomplete or invalid grader outcomes, and runs the harness cut short (for
+example at a host resource limit), are harness failures and are not graded. Full
+tables, limitations and validity metadata remain in `GRADE.json`.
+
+Mitigation passes only when all of these hold at the deadline:
+
+- **Custody.** Every required reading (each one that still had a copy at handoff,
+  and each one accepted during the run) survives, either in its regional ledger or
+  in a preserved copy. None is destroyed, and none appears more than once in a
+  ledger.
+- **Freshness.** Every reading accepted during the run that is due by the deadline
+  (offered at least 120 seconds before it) is in its regional ledger. Inside the
+  first 600 seconds, a restoration window, readings may arrive late but never go
+  missing; after it, they arrive within 120 seconds.
+- **Service.** Both customer endpoints serve, and every fleet device has a ledger
+  reading within 120 seconds of the deadline. The world watcher probes each
+  `/health` and `/api/live` endpoint six seconds before the freeze and writes
+  `service-health-at-D.json`; an endpoint that has not answered by the deadline
+  counts as not serving. Fleet devices are those the regional device clients have
+  acknowledged, whether or not they are online.
+- **Recurrence.** Re-running the scheduled role, profile and package maintenance on
+  a private copy of the end state, with automation restored, removes no routing
+  rule and breaks no connectivity on any host.
 
 ## Resources and distribution
 
 The default capsule allocates about 20.5 GiB across eight company guests and an
-ops helper, with 18 guest vCPUs sharing a 10-CPU slice. Plan for 64 GiB host RAM,
-16 host CPUs and at least 100 GiB free disk in addition to the installed bundle
-and Docker images. Retained runs accumulate. The bundle's resource watcher
-keeps its configured memory cap, CPU quota, swap, host RAM and disk checks;
-guest failures remain part of the task.
+ops helper, with 18 guest vCPUs sharing a 10-CPU slice. It has been run on a
+12-vCPU host with 48 GiB RAM. A run grows the world's disks by up to about 14 GiB
+when the agent copies rescued data, and keeps about 7 GiB of end-state capture and
+4 GiB of grader output; start each run with at least 30 GiB free. The bundle's
+resource watcher keeps its configured memory cap, CPU quota, swap, host RAM and
+disk checks; guest failures remain part of the task.
 
 Distribute a versioned external archive with checksums, the complete QCOW2
 backing closure and gzip native QEMU RAM/device streams. The default capsule is

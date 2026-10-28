@@ -23,13 +23,13 @@ from sregym.run_artifacts import RunArtifacts
 def problem(tmp_path, monkeypatch):
     monkeypatch.delenv("SREGYM_USAGE_DIAGNOSIS_KEY", raising=False)
     bundle = tmp_path / "bundle"
-    key = bundle / "grading/diagnosis/P2.json"
+    key = bundle / "grading/diagnosis/P6.json"
     key.parent.mkdir(parents=True)
     key.write_text(
         json.dumps(
             {
                 "schema": "usage-diagnosis-v1",
-                "saved_state": "P2",
+                "saved_state": "P6",
                 "root_cause": {"component": "reporting-control", "description": "private-evidence"},
             }
         )
@@ -71,7 +71,7 @@ def test_single_root_cause_loads_from_external_bundle(problem, tmp_path, monkeyp
         json.dumps(
             {
                 "schema": "usage-diagnosis-v1",
-                "saved_state": "P2",
+                "saved_state": "P6",
                 "root_cause": {"component": "reporting-control", "description": "external-evidence"},
             }
         )
@@ -86,7 +86,7 @@ def test_single_root_cause_loads_from_external_bundle(problem, tmp_path, monkeyp
         json.dumps(
             {
                 "schema": "usage-diagnosis-v1",
-                "saved_state": "P2",
+                "saved_state": "P6",
                 "root_cause": {"component": "reporting-control", "description": ""},
             }
         )

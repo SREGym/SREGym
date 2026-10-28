@@ -17,7 +17,7 @@ def app(tmp_path, monkeypatch):
         "build/revive.sh",
         "build/companyctl",
         "grading/grade.py",
-        "build/vm/states/P2/ready.json",
+        "build/vm/states/P6/ready.json",
     ):
         path = project / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -29,7 +29,7 @@ def app(tmp_path, monkeypatch):
 
 
 def test_opening_is_the_frozen_customer_description(app):
-    assert app.state == "P2"
+    assert app.state == "P6"
     for name in ("OPENING.md", "COMPANY-TOOLS.md"):
         assert (world.ASSETS / name).read_text().strip() in app.description
     assert app.app_name == "usage-reporting"
@@ -57,15 +57,15 @@ def test_preflight_refuses_an_existing_world_without_changes(app, monkeypatch):
 def test_preflight_accepts_a_stale_pid_and_named_alias(app):
     (app.project / "build/vm/old.pid").write_text("999999999")
     app.state = "saved"
-    (app.project / "build/vm/states/aliases.json").write_text('{"saved":"P2"}')
+    (app.project / "build/vm/states/aliases.json").write_text('{"saved":"P6"}')
     app.preflight()
-    assert app.saved_state.name == "P2"
+    assert app.saved_state.name == "P6"
 
 
 def test_preflight_accepts_configured_bundle_locations(app, tmp_path, monkeypatch):
     states = tmp_path / "external-states"
-    (states / "P2").mkdir(parents=True)
-    (states / "P2/ready.json").write_text("{}")
+    (states / "P6").mkdir(parents=True)
+    (states / "P6/ready.json").write_text("{}")
     grader = tmp_path / "external-grading/grade.py"
     grader.parent.mkdir()
     grader.touch()
@@ -73,7 +73,7 @@ def test_preflight_accepts_configured_bundle_locations(app, tmp_path, monkeypatc
     monkeypatch.setenv("SREGYM_USAGE_GRADER", str(grader))
     configured = world.UsageReportingApplication(app.project, runs_dir=tmp_path / "runs")
     configured.preflight()
-    assert configured.saved_state == states / "P2"
+    assert configured.saved_state == states / "P6"
     assert configured.grader == grader
 
 
@@ -114,7 +114,7 @@ def test_deploy_charges_startup_to_one_budget_and_copies_only_public_tools(app, 
     launch = json.loads((app.run_dir / "launch.json").read_text())
     assert app.agent_deadline_monotonic == launch["start_monotonic"] + 1800
     assert launch["seconds"] == 1800
-    assert calls[0] == [str(app.project / "build/revive.sh"), "P2", str(app.run_dir)]
+    assert calls[0] == [str(app.project / "build/revive.sh"), "P6", str(app.run_dir)]
     assert "ready" in calls[1]
     assert {p.name for p in app.endpoint_access.public_dir.iterdir()} == {
         "companyctl",
