@@ -121,6 +121,69 @@ if ! kubectl wait --for=condition=Ready nodes --all --timeout=120s; then
     exit 1
 fi
 
+echo "==> Step 4c: Confirm pod sandbox creation on every Linux node"
+# Ready nodes and Calico pods do not prove that each node's CNI credentials
+# work. Create all probes before waiting so one healthy worker cannot hide a
+# broken worker, without serializing image pulls across nodes.
+NETWORK_PROBE_NAMESPACE="${NETWORK_PROBE_NAMESPACE:-kube-system}"
+NETWORK_PROBE_IMAGE="${SREGYM_NETWORK_PROBE_IMAGE:-${NETWORK_PROBE_IMAGE:-registry.k8s.io/pause:3.10}}"
+NETWORK_PROBE_TIMEOUT="${NETWORK_PROBE_TIMEOUT:-120s}"
+NETWORK_PROBE_RUN="sregym-cni-probe-${RANDOM}-${RANDOM}"
+NETWORK_PROBE_NAMES=()
+
+cleanup_network_probes() {
+    if [[ ${#NETWORK_PROBE_NAMES[@]} -gt 0 ]]; then
+        if ! kubectl delete pod "${NETWORK_PROBE_NAMES[@]}" --namespace="${NETWORK_PROBE_NAMESPACE}" \
+            --ignore-not-found --grace-period=0 --force --wait=false --request-timeout=10s >/dev/null 2>&1; then
+            echo "Could not remove network probe pods: ${NETWORK_PROBE_NAMES[*]}" >&2
+            return 1
+        fi
+    fi
+}
+trap 'cleanup_network_probes || true' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+NETWORK_PROBE_NODES=$(kubectl get nodes --selector=kubernetes.io/os=linux \
+    --field-selector=spec.unschedulable=false \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' --request-timeout=10s)
+if [[ -z "${NETWORK_PROBE_NODES}" ]]; then
+    echo "❌ Cannot check pod networking: no uncordoned Linux nodes."
+    exit 1
+fi
+
+for node in ${NETWORK_PROBE_NODES}; do
+    name="${NETWORK_PROBE_RUN}-${#NETWORK_PROBE_NAMES[@]}"
+    NETWORK_PROBE_NAMES+=("${name}")
+    printf -v overrides \
+        '{"spec":{"nodeName":"%s","automountServiceAccountToken":false,"tolerations":[{"operator":"Exists"}]}}' \
+        "${node}"
+    if ! kubectl run "${name}" --namespace="${NETWORK_PROBE_NAMESPACE}" \
+        --image="${NETWORK_PROBE_IMAGE}" --image-pull-policy=IfNotPresent --restart=Never \
+        --overrides="${overrides}" --labels="app=sregym-cni-probe,sregym-probe-run=${NETWORK_PROBE_RUN}" \
+        --request-timeout=10s; then
+        echo "❌ Could not create a network probe on ${node}."
+        exit 1
+    fi
+done
+
+for name in "${NETWORK_PROBE_NAMES[@]}"; do
+    if ! kubectl wait --for=condition=Ready "pod/${name}" \
+        --namespace="${NETWORK_PROBE_NAMESPACE}" --timeout="${NETWORK_PROBE_TIMEOUT}"; then
+        echo "❌ Pod sandbox probe ${name} did not become Ready within ${NETWORK_PROBE_TIMEOUT}."
+        echo "--- network probe pods ---"
+        kubectl get pods --namespace="${NETWORK_PROBE_NAMESPACE}" \
+            -l "sregym-probe-run=${NETWORK_PROBE_RUN}" -o wide --request-timeout=10s || true
+        kubectl describe pod "${name}" --namespace="${NETWORK_PROBE_NAMESPACE}" --request-timeout=10s || true
+        echo "--- probe events ---"
+        kubectl get events --namespace="${NETWORK_PROBE_NAMESPACE}" \
+            --field-selector="involvedObject.name=${name}" --sort-by='.lastTimestamp' --request-timeout=10s || true
+        exit 1
+    fi
+done
+cleanup_network_probes
+trap - EXIT INT TERM
+
 echo ""
 echo "✅ Cluster setup complete!"
 echo ""

@@ -45,6 +45,7 @@ def offline_port_cluster(monkeypatch):
         kube.core_v1_api.list_node.return_value = SimpleNamespace(
             items=[client.V1Node(metadata=client.V1ObjectMeta(name="worker", labels={}))]
         )
+        kube.core_v1_api.list_pod_for_all_namespaces.return_value = client.V1PodList(items=[])
 
     def execute(kube, command, *args, **kwargs):
         if "get nodes" in command:

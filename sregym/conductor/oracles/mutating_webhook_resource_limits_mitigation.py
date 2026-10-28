@@ -3,16 +3,15 @@ import time
 from kubernetes import client
 from kubernetes.utils.quantity import parse_quantity
 
-from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.service.rollout import deployment_rollout_complete
 
 
-class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
-    """Verify that a recreated target pod keeps its intended memory resources."""
+class MutatingWebhookResourceLimitsMitigationOracle(MitigationOracle):
+    """Require healthy application workloads and durable target memory resources."""
 
     importance = 1.0
-    rollout_timeout_seconds = 120
     replacement_timeout_seconds = 120
     stability_seconds = 15
     poll_interval_seconds = 2
@@ -25,20 +24,6 @@ class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
     @classmethod
     def _rollout_complete(cls, deployment) -> bool:
         return deployment_rollout_complete(deployment)
-
-    def _wait_for_current_rollout(self, deployment):
-        deadline = time.monotonic() + self.rollout_timeout_seconds
-        while True:
-            if self._rollout_complete(deployment):
-                return deployment
-            if time.monotonic() >= deadline:
-                return None
-
-            time.sleep(self.poll_interval_seconds)
-            deployment = self.problem.kubectl.get_deployment(
-                deployment.metadata.name,
-                self.problem.namespace,
-            )
 
     @staticmethod
     def _pod_ready(pod) -> bool:
@@ -199,14 +184,17 @@ class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
         namespace = self.problem.namespace
         deployment_name = self.problem.faulty_service
         try:
+            result = super().evaluate()
+            if not result.get("success"):
+                return result
+
             deployment = self.problem.kubectl.get_deployment(deployment_name, namespace)
             desired = self._desired_replicas(deployment)
             if desired < 1:
                 print(f"[FAIL] Deployment '{deployment_name}' is scaled to {desired}")
                 return self.fail("required_deployment_scaled_to_zero", deployment=deployment_name, desired=desired)
 
-            deployment = self._wait_for_current_rollout(deployment)
-            if deployment is None:
+            if not self._rollout_complete(deployment):
                 print(f"[FAIL] Deployment '{deployment_name}' is not currently fully Ready")
                 return self.fail("required_deployment_not_rolled_out", deployment=deployment_name)
 
