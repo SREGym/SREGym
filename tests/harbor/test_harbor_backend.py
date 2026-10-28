@@ -1,8 +1,9 @@
 """Tests for the Harbor sidecar backend with a fake problem session."""
 
-import hashlib
+import grp
 import json
 import os
+import pwd
 import urllib.error
 import urllib.request
 
@@ -11,7 +12,6 @@ import pytest
 from sregym.harbor import protocol
 from sregym.harbor.backend import CLUSTER_SNAPSHOT_NAME, Backend
 
-TOKEN = "reference-solution-token"
 GRADE_TOKEN = "grade-token"
 
 
@@ -58,6 +58,8 @@ class FakeSession:
 
 @pytest.fixture
 def make_backend(tmp_path):
+    solution = tmp_path / "solution" / "solve.sh"
+
     def make(recovery_settle_timeout_s=60, fault_live_timeout_s=60, **session_options):
         session = FakeSession(tmp_path, **session_options)
         backend = Backend(
@@ -65,7 +67,7 @@ def make_backend(tmp_path):
             problem_id="some_problem",
             shared_dir=tmp_path / "shared",
             output_dir=tmp_path / "output",
-            oracle_token_sha256=hashlib.sha256(TOKEN.encode()).hexdigest(),
+            solution_path=solution,
             grade_token=GRADE_TOKEN,
             recovery_settle_timeout_s=recovery_settle_timeout_s,
             recovery_settle_interval_s=0,
@@ -195,30 +197,43 @@ def test_alert_graded_problems_ignore_hidden_workloads():
     grade_visible_alerts_only(SimpleNamespace())
 
 
-@pytest.mark.parametrize(
-    ("header", "valid"),
-    [
-        (f"Bearer {TOKEN}", True),
-        (f"bearer {TOKEN}", True),
-        ("Bearer wrong", False),
-        (TOKEN, False),
-        (None, False),
-    ],
-)
-def test_token_validation(make_backend, header, valid):
-    backend, _ = make_backend()
-    assert backend.token_is_valid(header) is valid
-
-
-def test_recovery_is_disabled_without_a_configured_token(tmp_path):
+def test_oracle_solution_must_be_out_of_the_agents_reach(tmp_path, monkeypatch):
+    solution = tmp_path / "solution" / "solve.sh"
     backend = Backend(
         FakeSession(tmp_path),
         problem_id="p",
         shared_dir=tmp_path / "shared",
         output_dir=tmp_path / "output",
-        oracle_token_sha256=None,
+        solution_path=solution,
+        agent_user="agent",
     )
-    assert not backend.token_is_valid(f"Bearer {TOKEN}")
+    agent = pwd.struct_passwd(("agent", "x", 48713, 48713, "", "/home/agent", "/bin/bash"))
+    monkeypatch.setattr(pwd, "getpwnam", lambda name: agent)
+    monkeypatch.setattr(grp, "getgrall", lambda: [])
+    assert not backend.oracle_solution_present()
+    solution.parent.mkdir(mode=0o755)
+    solution.write_text("#!/bin/bash\n")
+    solution.chmod(0o755)
+    # Harbor's docker cp keeps the host user's uid; that is fine.
+    assert backend.oracle_solution_present()
+
+    real_lstat = os.lstat
+
+    def lstat_as(uid, gid, mode_bits=0):
+        def lstat(path):
+            st = real_lstat(path)
+            values = list(st)
+            values[0] = (st.st_mode & ~0o777) | 0o755 | mode_bits
+            values[4], values[5] = uid, gid
+            return os.stat_result(values)
+
+        return lstat
+
+    monkeypatch.setattr(os, "lstat", lstat_as(0, 0, 0o020))
+    assert backend.oracle_solution_present()
+    for uid, gid, mode_bits in [(48713, 0, 0), (0, 0, 0o002), (0, 48713, 0o020)]:
+        monkeypatch.setattr(os, "lstat", lstat_as(uid, gid, mode_bits))
+        assert not backend.oracle_solution_present(), (uid, gid, mode_bits)
 
 
 def _request(port: int, method: str, path: str, token: str | None = None) -> tuple[int, dict]:
@@ -241,15 +256,17 @@ def test_http_routes(make_backend):
         assert _request(public, "GET", "/status") == (200, {"state": protocol.STATE_READY})
         # Grading is only exposed on the loopback listener used by Harbor's collect hook.
         assert _request(public, "POST", "/grade")[0] == 404
+        # Recovery needs the root-owned solution Harbor's oracle agent uploads.
+        backend.oracle_solution_present = lambda: False
         assert _request(public, "POST", "/oracle/recover")[0] == 403
-        assert _request(public, "POST", "/oracle/recover", token="wrong")[0] == 403
-        assert _request(public, "POST", "/oracle/recover", token=TOKEN)[0] == 200
+        backend.oracle_solution_present = lambda: True
+        assert _request(public, "POST", "/oracle/recover")[0] == 200
         # The agent may share the loopback; grading needs the root-only grade token.
         assert _request(local, "POST", "/grade")[0] == 403
-        assert _request(local, "POST", "/grade", token=TOKEN)[0] == 403
+        assert _request(local, "POST", "/grade", token="wrong")[0] == 403
         status, grade = _request(local, "POST", "/grade", token=GRADE_TOKEN)
         assert status == 200 and grade["success"] is True
-        assert _request(public, "POST", "/oracle/recover", token=TOKEN)[0] == 409
+        assert _request(public, "POST", "/oracle/recover")[0] == 409
     finally:
         backend.stop_servers()
 

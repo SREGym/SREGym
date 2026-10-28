@@ -6,6 +6,5 @@ FROM {{backend_image}}
 # Root-only: the agent must not learn which fault was injected.
 RUN install -d -m 700 /etc/sregym \
     && echo '{{problem_id}}' > /etc/sregym/problem \
-    && echo '{{oracle_token_sha256}}' > /etc/sregym/oracle-token-sha256 \
     && echo '{{steady_state_s}}' > /etc/sregym/steady-state-seconds \
-    && chmod 600 /etc/sregym/problem /etc/sregym/oracle-token-sha256 /etc/sregym/steady-state-seconds
+    && chmod 600 /etc/sregym/problem /etc/sregym/steady-state-seconds

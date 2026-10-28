@@ -33,7 +33,7 @@ The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
   │    each node in its own namespaces and cgroup (docker/userns-k3s)         │
   │  SREGym backend: deploys the problem, injects the fault, grades it        │
   │    127.0.0.1:16443 filtered Kubernetes API proxy                          │
-  │    :8765 /oracle/recover (solution token)  127.0.0.1:8766 /grade (token)  │
+  │    :8765 /oracle/recover (oracle only)     127.0.0.1:8766 /grade (token)  │
   │                                                                           │
   │ agent (uid 48713)                                                         │
   │  kubectl ──► API proxy only. Cannot read the problem, the grader,         │
@@ -81,15 +81,11 @@ The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
    asks the backend to run the problem's own `recover_fault()`, then waits up
    to 10 minutes for the mitigation oracle to pass, as SREGym's problem
    validator does. Alert-based oracles keep failing for a few minutes after a
-   fix, until rate-based alerts clear. The endpoint needs a per-task token: an HMAC of the task name keyed by the dataset's
-   oracle secret. The task image carries only the token's SHA-256, root-only.
-   The secret reaches `solve.sh` at run time through task.toml's `[solution]
-   env`, which Harbor resolves for the oracle agent only.
-
-   The adapter reads the secret from `SREGYM_ORACLE_SECRET`. If that is unset,
-   it generates one and saves it in `.sregym-oracle-secret` at the dataset root,
-   which `harbor publish` never uploads. Export it before running the oracle
-   agent.
+   fix, until rate-based alerts clear. The backend accepts the request only
+   while `/solution/solve.sh` exists and the `agent` user cannot have written
+   it or its directory. Harbor's oracle agent copies `solution/` into the
+   container before running it; for every other agent `/solution` does not
+   exist, and the `agent` user cannot create it.
 
 The generated `instruction.md` never names the fault or problem ID.
 
@@ -227,9 +223,7 @@ tag, so a dataset pins the SREGym version that produced it.
 ```bash
 uv tool install harbor            # 0.23 or newer
 
-# Reference solution: every task should score 1.0. The oracle agent needs
-# the secret the adapter saved beside the tasks.
-export SREGYM_ORACLE_SECRET=$(cat datasets/sregym/.sregym-oracle-secret)
+# Reference solution: every task should score 1.0
 harbor run -y -p datasets/sregym/network-policy-block -a oracle -e docker
 
 # No-op agent: every task should score 0.0
@@ -239,8 +233,7 @@ harbor run -y -p datasets/sregym/network-policy-block -a nop -e docker
 harbor run -y -p datasets/sregym-lite -a claude-code -m anthropic/claude-sonnet-5 -n 4 -e docker
 ```
 
-`-y` confirms passing `SREGYM_ORACLE_SECRET` to the reference solution. Add
-`--cpus limit --memory limit` to hold each trial to the task's size (8 CPUs,
+Add `--cpus limit --memory limit` to hold each trial to the task's size (8 CPUs,
 16 GiB).
 
 **Other environments.** Cloud sandboxes see the task's compose file too: Harbor's
@@ -285,13 +278,10 @@ oracle sweep.
 
 1. **Publish the image.** Run the **Publish Harbor Image** workflow, and make
    the `sregym-harbor` GHCR package public the first time.
-2. **Generate the dataset** with the published tag. Keep the oracle secret: you
-   need it to run the oracle agent against the published dataset, and it never
-   leaves your machine.
+2. **Generate the dataset** with the published tag.
 
    ```bash
    git submodule update --init --recursive
-   export SREGYM_ORACLE_SECRET=...   # optional: omit to generate one in the dataset directory
    uv run python -m sregym.harbor.adapter --suite sregym-lite --output-dir datasets/sregym-lite \
        --backend-image ghcr.io/sregym/sregym-harbor:<tag>
    ```
@@ -320,10 +310,10 @@ oracle sweep.
 5. **Check it:**
 
    ```bash
-   SREGYM_ORACLE_SECRET=... harbor run -y -d sregym/sregym-lite@v1.0 -a oracle -l 1 -e docker
+   harbor run -y -d sregym/sregym-lite@v1.0 -a oracle -l 1 -e docker
    ```
 
-To publish an update, regenerate with a new image tag and the same secret, run
+To publish an update, regenerate with a new image tag, run
 `harbor sync`, then publish with a new tag. A leaderboard can then be added with
 `harbor hub leaderboard init --package sregym/sregym-lite`. See Harbor's
 [leaderboard guide](https://harborframework.com/docs/core-concepts/harbor-hub/leaderboards).
@@ -359,7 +349,7 @@ trial, SREGym `main` at #1135:
 | SREGym-Lite plus `taint_no_toleration_social_network`, oracle agent, Harbor on Daytona, image `2610c6277410` (after merging `main` at #1077) | 18/18 at 1.0 |
 | SREGym-Lite, oracle and no-op agents, **Harbor Oracle Sweep** workflow (`docker` environment, GitHub runners) | 17/17 at 1.0 with the oracle agent, 0.0 with the no-op agent |
 | `network_policy_block`, no-op agent, Harbor on Daytona | Reward 0.0 (`fault_still_present`) |
-| Agent isolation in a ready Daytona sandbox, probed as `agent` | Problem ID, SREGym code, cluster credentials, grade token and logs unreadable. `/grade` and `/oracle/recover` refuse without tokens. The k3s API refuses without credentials. `kubectl` works through the proxy. |
+| Agent isolation in a ready Daytona sandbox, probed as `agent` | Problem ID, SREGym code, cluster credentials, grade token and logs unreadable. `/grade` refuses without its token; `/oracle/recover` refused too (then gated by a token, now by the `/solution` only Harbor's oracle agent creates). The k3s API refuses without credentials. `kubectl` works through the proxy. |
 | Self-test, oracle and no-op agents, **Harbor Self-Test** workflow (`docker` environment, GitHub runner) | Rewards 1 and 0 |
 | `operator_overload_replicas` (FleetCast), **Harbor Oracle Sweep** (`docker` environment, GitHub amd64 runner) | 1.0 once the Docker settings raised the open-file limit; before, TiKV exited at start |
 

@@ -31,10 +31,6 @@ timeout_sec = {{grade_timeout_hook}}
 timeout_sec = {{agent_timeout}}
 user = "agent"
 
-# Only the oracle agent receives this. Export it before `harbor run -a oracle`.
-[solution]
-env = { {{oracle_secret_env}} = "${{{oracle_secret_env}}}" }
-
 [environment]
 # Covers building the task image, a thin layer over the SREGym image.
 build_timeout_sec = 1800.0

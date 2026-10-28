@@ -12,9 +12,9 @@ Interfaces (see ``sregym.harbor.protocol``):
 - ``SHARED_DIR``: ``state``, ``status.json`` and the agent ``kubeconfig``.
 - ``0.0.0.0:API_PORT``: ``GET /status``; ``POST /oracle/recover`` runs the
   problem's ``recover_fault()`` for Harbor's oracle agent, then waits until the
-  mitigation oracle passes. It requires a bearer
-  token whose SHA-256 is configured in the task image; only the task's reference
-  solution can derive the token.
+  mitigation oracle passes. It runs only when Harbor's oracle agent has copied
+  the task's solution into the container as root (``ORACLE_SOLUTION_PATH``),
+  which other agents never get and the agent user cannot create.
 - ``127.0.0.1:GRADE_PORT``: ``POST /grade`` evaluates the mitigation oracle once
   and caches the verdict. It requires the per-trial token in
   ``GRADE_TOKEN_PATH``, readable by root only; the task's verifier sends it
@@ -23,14 +23,16 @@ Interfaces (see ``sregym.harbor.protocol``):
 
 import argparse
 import asyncio
-import hashlib
+import grp
 import hmac
 import json
 import logging
 import os
+import pwd
 import secrets
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
@@ -237,8 +239,9 @@ class Backend:
         problem_id: str,
         shared_dir: Path,
         output_dir: Path,
-        oracle_token_sha256: str | None,
         grade_token: str | None = None,
+        solution_path: Path = Path(protocol.ORACLE_SOLUTION_PATH),
+        agent_user: str = protocol.AGENT_USER,
         recovery_settle_timeout_s: float = RECOVERY_SETTLE_TIMEOUT_S,
         recovery_settle_interval_s: float = RECOVERY_SETTLE_INTERVAL_S,
         fault_live_timeout_s: float = FAULT_LIVE_TIMEOUT_S,
@@ -248,7 +251,8 @@ class Backend:
         self.problem_id = problem_id
         self.shared_dir = shared_dir
         self.output_dir = output_dir
-        self.oracle_token_sha256 = (oracle_token_sha256 or "").strip().lower() or None
+        self.solution_path = solution_path
+        self.agent_user = agent_user
         self.grade_token = grade_token
         self.recovery_settle_timeout_s = recovery_settle_timeout_s
         self.recovery_settle_interval_s = recovery_settle_interval_s
@@ -400,14 +404,40 @@ class Backend:
                 return False, checks
             time.sleep(self.recovery_settle_interval_s)
 
-    def token_is_valid(self, authorization: str | None) -> bool:
-        if not self.oracle_token_sha256 or not authorization:
+    def oracle_solution_present(self) -> bool:
+        """Whether Harbor's oracle agent has placed this task's solution here.
+
+        The oracle agent copies solution/ into the container before it runs
+        solve.sh; other agents never get it, and the agent user cannot create
+        anything under /. The copy keeps the host user's uid (`docker compose
+        cp`), so this checks that the agent user cannot have written the
+        directory or the script rather than that root owns them.
+        """
+        try:
+            directory = os.lstat(self.solution_path.parent)
+            script = os.lstat(self.solution_path)
+        except OSError:
             return False
-        scheme, _, token = authorization.partition(" ")
-        if scheme.lower() != "bearer" or not token:
-            return False
-        digest = hashlib.sha256(token.strip().encode()).hexdigest()
-        return hmac.compare_digest(digest, self.oracle_token_sha256)
+        try:
+            agent = pwd.getpwnam(self.agent_user)
+            agent_uid = agent.pw_uid
+            agent_gids = {agent.pw_gid} | {g.gr_gid for g in grp.getgrall() if self.agent_user in g.gr_mem}
+        except KeyError:
+            agent_uid, agent_gids = None, set()
+
+        def agent_cannot_write(st: os.stat_result) -> bool:
+            return (
+                st.st_uid != agent_uid
+                and not st.st_mode & 0o002
+                and not (st.st_gid in agent_gids and st.st_mode & 0o020)
+            )
+
+        return (
+            stat.S_ISDIR(directory.st_mode)
+            and stat.S_ISREG(script.st_mode)
+            and agent_cannot_write(directory)
+            and agent_cannot_write(script)
+        )
 
     # -- HTTP ----------------------------------------------------------------
 
@@ -448,8 +478,8 @@ class Backend:
         return HTTPStatus.OK, body
 
     def _oracle_recover(self, request) -> tuple[int, dict]:
-        if not self.token_is_valid(request.headers.get("Authorization")):
-            return HTTPStatus.FORBIDDEN, {"error": "oracle recovery requires the task's solution token"}
+        if not self.oracle_solution_present():
+            return HTTPStatus.FORBIDDEN, {"error": "oracle recovery runs only for Harbor's oracle agent"}
         try:
             return HTTPStatus.OK, self.recover()
         except RuntimeError as exc:
@@ -538,7 +568,6 @@ def main(argv=None) -> int:
         problem_id=args.problem,
         shared_dir=args.shared_dir,
         output_dir=args.output_dir,
-        oracle_token_sha256=os.environ.get(protocol.ORACLE_TOKEN_SHA256_ENV),
         grade_token=grade_token,
     )
     for sig in (signal.SIGTERM, signal.SIGINT):

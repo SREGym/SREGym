@@ -29,19 +29,15 @@ LOG_DIR = f"{BACKEND_OUTPUT_DIR}/logs"
 # Backend configuration, read from its environment (start.sh sets these from
 # root-only files in the task image).
 PROBLEM_ID_ENV = "SREGYM_PROBLEM_ID"
-ORACLE_TOKEN_SHA256_ENV = "SREGYM_ORACLE_TOKEN_SHA256"
 # Seconds the deployed application runs before the fault is injected (the
 # Conductor's baseline_override_s, main.py's --baseline).
 STEADY_STATE_ENV = "SREGYM_STEADY_STATE_S"
 
-# Each task's oracle token is HMAC-SHA256(secret, task name). Tasks carry only
-# the token's SHA-256; the reference solution receives the secret at run time
-# through task.toml's [solution] env, which Harbor resolves for the oracle
-# agent only. Published tasks therefore hold no usable token.
-ORACLE_SECRET_ENV = "SREGYM_ORACLE_SECRET"
-# A generated secret is kept here, at the dataset root: outside every task
-# directory, so `harbor publish` never uploads it.
-ORACLE_SECRET_FILE = ".sregym-oracle-secret"
+# The unprivileged user Harbor runs agents as (task.toml [agent] user).
+AGENT_USER = "agent"
+# Harbor's oracle agent copies the task's solution/ here before running
+# solve.sh; no other agent gets it. POST /oracle/recover requires it.
+ORACLE_SOLUTION_PATH = "/solution/solve.sh"
 
 # Values of the ``state`` file.
 STATE_STARTING = "starting"
