@@ -467,6 +467,12 @@ class ContainerRunner:
             env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])
             env_vars.setdefault("TYPESAFE_API_KEY", os.environ.get("TYPESAFE_API_KEY", ""))
 
+        # Chiron MCP for any agent; set only on runs that measure Chiron.
+        if self.config.forward_host_credentials:
+            for name in ("CHIRON_MCP_URL", "CHIRON_MCP_TOKEN"):
+                if os.environ.get(name):
+                    env_vars.setdefault(name, os.environ[name])
+
         env_vars["AGENT_INTERNET_ACCESS"] = self.internet_access_mode
 
         # Docker Desktop and filtered containers cannot reach host loopback
