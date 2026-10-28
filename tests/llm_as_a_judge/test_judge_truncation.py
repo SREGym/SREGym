@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from sregym.conductor.oracles.llm_as_a_judge import judge as judge_mod
-from sregym.conductor.oracles.llm_as_a_judge.judge import DEFAULT_JUDGE_MAX_TOKENS, DiagnosisJudge
+from sregym.conductor.oracles.llm_as_a_judge.judge import DEFAULT_JUDGE_MAX_TOKENS, DiagnosisJudge, JudgeParseError
 
 
 class _FakeBackend:
@@ -71,11 +73,11 @@ def test_non_truncated_parse_failure_keeps_budget():
             return bad
 
     judge._backend = _Backend()
-    results = judge._call_llm_with_retry("diagnosis")
+    with pytest.raises(JudgeParseError):
+        judge._call_llm_with_retry("diagnosis")
 
-    assert calls == [1024, 1024]
+    assert calls == [1024] * DiagnosisJudge.MAX_PARSE_ATTEMPTS
     assert judge.max_tokens == 1024
-    assert all(item["answer"] == "No" for item in results)
 
 
 def test_was_truncated_reads_finish_reason():
@@ -83,3 +85,19 @@ def test_was_truncated_reads_finish_reason():
     assert not DiagnosisJudge._was_truncated(SimpleNamespace(response_metadata={"finish_reason": "stop"}))
     assert not DiagnosisJudge._was_truncated(SimpleNamespace(response_metadata={}))
     assert not DiagnosisJudge._was_truncated(None)
+
+
+def test_the_budget_grows_once_and_a_second_truncation_gets_the_correction():
+    """Growth sticks for every later judge call, and a second step would
+    exceed most providers' output limit, so the second truncation is
+    retried like any other parse failure."""
+    judge = DiagnosisJudge(max_tokens=1024)
+    backend = _FakeBackend(_full_answer(judge), needed=10**9, max_tokens=1024)
+    judge._backend = backend
+
+    with pytest.raises(JudgeParseError):
+        judge._call_llm_with_retry("diagnosis")
+
+    grown = 1024 * judge_mod._TRUNCATION_RETRY_FACTOR
+    assert backend.calls == [1024, grown, grown]
+    assert judge.max_tokens == grown
