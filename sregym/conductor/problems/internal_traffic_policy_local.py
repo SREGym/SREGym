@@ -38,6 +38,8 @@ local ``recommendation`` pod will fail silently.
       observable symptoms.
    d. Patch the ``recommendation`` Service:
       ``spec.internalTrafficPolicy: Local``.
+   e. Replace the backend pod so established connections cannot bypass the
+      changed policy.
 
 2. ``recover_fault``
    a. Restore ``spec.internalTrafficPolicy: Cluster`` on the Service.
@@ -204,19 +206,28 @@ class InternalTrafficPolicyLocalAstronomyShop(Problem):
         print(f"Pod node: {self.pod_node} | Victim node: {self.victim_node}")
 
         self._pin_deployment_to_node(self.FAULTY_SERVICE, self.pod_node)
-        self.kubectl.exec_command(
+        self.kubectl.exec_command_checked(
             f"kubectl rollout status deployment/{self.FAULTY_SERVICE} -n {self.namespace} --timeout=180s"
         )
         self._wait_for_pod_on_node(self.pod_node)
         print(f"{self.FAULTY_SERVICE} pod is Running on {self.pod_node}")
         self._pin_deployment_to_node(self.CALLER_SERVICE, self.victim_node)
-        self.kubectl.exec_command(
+        self.kubectl.exec_command_checked(
             f"kubectl rollout status deployment/{self.CALLER_SERVICE} -n {self.namespace} --timeout=180s"
         )
         self._wait_for_pod_on_node(self.victim_node, self.CALLER_POD_LABEL_SELECTOR)
         print(f"{self.CALLER_SERVICE} pod is Running on {self.victim_node}")
 
         self._set_internal_traffic_policy("Local")
+        # Established connections survive a Service policy change. Recreate
+        # the backend so callers must reconnect under the new policy.
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout restart deployment/{self.FAULTY_SERVICE} -n {self.namespace}"
+        )
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{self.FAULTY_SERVICE} -n {self.namespace} --timeout=300s"
+        )
+        self._wait_for_pod_on_node(self.pod_node)
         print(
             f"Patched service/{self.FAULTY_SERVICE}: internalTrafficPolicy=Local\n"
             f"Callers on {self.victim_node} will now have connections silently dropped.\n"

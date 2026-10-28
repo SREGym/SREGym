@@ -37,10 +37,11 @@ class CronJobSidecarBlocksCompletionIA(CronJobSidecarBlocksCompletionHotelReserv
                 f"cleanly, and a log-shipper sidecar ('{self.SIDECAR_CONTAINER}') that never terminates. A Job is "
                 "Complete only when every container in its pod terminates, so each pod stays Running after the "
                 "primary exits and each schedule adds another active Job that never completes; "
-                "successfulJobsHistoryLimit does not apply to active Jobs, so they accumulate. The fix is to make "
-                "the sidecar a native sidecar (an initContainer with restartPolicy: Always) so it is stopped when "
-                "the primary exits, and to clean up the accumulated active Jobs; activeDeadlineSeconds, removing "
-                "the sidecar, or deleting the CronJob are not acceptable."
+                "successfulJobsHistoryLimit does not apply to active Jobs, so they accumulate. A repair must "
+                "preserve archival and forwarding while letting each Job complete, using native sidecars "
+                "(initContainers with restartPolicy: Always) or cooperative regular-sidecar shutdown. The "
+                "accumulated active Jobs must also be cleaned up. Killing unfinished Jobs at a deadline, "
+                "removing the sidecar, or deleting the CronJob are not acceptable."
             ),
             oracle_factory=CronJobSidecarBlocksCompletionMitigationOracle,
         )

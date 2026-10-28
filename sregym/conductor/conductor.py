@@ -1397,6 +1397,9 @@ class Conductor:
                 self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
             self._baseline_captured = True
 
+        self.logger.info("[DEPLOY] Checking Kubernetes pod networking…")
+        self.kubectl.assert_pod_networking()
+
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         # metrics-server lives in kube-system, which is protected from
         # reconciliation, so it survives between problems. Re-applying it fetches

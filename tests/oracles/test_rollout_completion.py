@@ -151,7 +151,6 @@ def test_generic_wait_rechecks_until_rollout_finishes(monkeypatch):
 @pytest.mark.parametrize("total,expected", [(1, True), (2, False)])
 def test_non_lite_status_checks_use_the_same_contract(total, expected):
     from sregym.conductor.oracles.calico_route_reflector_mitigation import CalicoRouteReflectorMitigationOracle
-    from sregym.conductor.oracles.cronjob_sidecar_mitigation import CronJobSidecarBlocksCompletionMitigationOracle
     from sregym.conductor.oracles.cumulative_admission_webhook_timeout_mitigation import (
         CumulativeAdmissionWebhookTimeoutMitigationOracle,
     )
@@ -169,7 +168,6 @@ def test_non_lite_status_checks_use_the_same_contract(total, expected):
     for klass, method in [
         (CalicoRouteReflectorMitigationOracle, "_deployments_unready"),
         (PriorityPreemptionMitigationOracle, "_any_deployment_unready"),
-        (CronJobSidecarBlocksCompletionMitigationOracle, "_unhealthy_deployment"),
     ]:
         oracle = object.__new__(klass)
         if issubclass(klass, MitigationOracle):
@@ -218,12 +216,13 @@ def test_specialized_oracles_preserve_required_deployments(kind, baseline, curre
     kube = Mock()
     kube.list_deployments.return_value = SimpleNamespace(items=[replicas(baseline)])
     for api in (kube.core_v1_api, kube.apps_v1_api):
-        for kind in ("service", "persistent_volume_claim", "config_map", "stateful_set"):
-            getattr(api, f"list_namespaced_{kind}").return_value = SimpleNamespace(items=[])
-    problem = SimpleNamespace(kubectl=kube, namespace="example")
+        for resource_kind in ("service", "persistent_volume_claim", "config_map", "stateful_set"):
+            getattr(api, f"list_namespaced_{resource_kind}").return_value = SimpleNamespace(items=[])
+    problem = SimpleNamespace(kubectl=kube, namespace="example", cronjob_name="audit-log-archiver")
     if kind == "cronjob":
         oracle = CronJobSidecarBlocksCompletionMitigationOracle(problem)
-        oracle.apps_v1 = Mock()
+        oracle.batch_v1 = Mock()
+        oracle.batch_v1.list_namespaced_job.return_value = SimpleNamespace(items=[])
     else:
         oracle = FinalizerDeadlockControllerMitigationOracle(problem, "token", "cleanup", "controller")
     oracle.capture_baseline()
@@ -232,14 +231,13 @@ def test_specialized_oracles_preserve_required_deployments(kind, baseline, curre
     kube.list_pods.return_value = SimpleNamespace(
         items=[
             SimpleNamespace(
-                metadata=SimpleNamespace(name="frontend-pod", deletion_timestamp=None),
+                metadata=SimpleNamespace(name="frontend-pod", deletion_timestamp=None, owner_references=[]),
                 status=SimpleNamespace(phase="Running", container_statuses=[]),
             )
         ]
     )
     if kind == "cronjob":
-        oracle.apps_v1.list_namespaced_deployment.return_value = deployments
-        healthy = oracle._unhealthy_deployment("example") is None
+        healthy = oracle._evaluate_current_state()["success"]
     else:
         healthy, _ = oracle._check_app_healthy(kube, "example")
     assert healthy is expected

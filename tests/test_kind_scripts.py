@@ -23,6 +23,19 @@ def shell_environment(tmp_path):
         executable.write_text(
             f'#!/bin/sh\ncommand_name={command}\nprintf "%s %s\\n" "$command_name" "$*" >> "$KIND_TEST_CALL_LOG"\n'
             'if [ "${KIND_TEST_FAIL:-}" = "$command_name" ]; then exit 1; fi\n'
+            'if [ "$command_name" = kubectl ]; then\n'
+            '  case "$1 $2" in\n'
+            '    "get nodes")\n'
+            '      if [ "${KIND_TEST_NO_PROBE_NODES:-}" != true ]; then printf "worker-a\\nworker-b\\n"; fi ;;\n'
+            '    "run "*) [ "${KIND_TEST_FAIL_PROBE:-}" != run ] || exit 1 ;;\n'
+            '    "wait --for=condition=Ready")\n'
+            '      case "$3" in pod/sregym-cni-probe-*)\n'
+            '        [ "${KIND_TEST_FAIL_PROBE:-}" != wait ] || exit 1\n'
+            '        if [ "${KIND_TEST_FAIL_PROBE:-}" = interrupt ]; then kill -TERM "$PPID"; exit 143; fi ;;\n'
+            "      esac ;;\n"
+            '    "delete pod") [ "${KIND_TEST_FAIL_PROBE:-}" != delete ] || exit 1 ;;\n'
+            "  esac\n"
+            "fi\n"
         )
         executable.chmod(0o755)
     log = tmp_path / "calls.txt"
@@ -56,6 +69,39 @@ def test_kind_setup_uses_shared_config_for_default_and_legacy_aliases(shell_envi
     assert calls[1].endswith("kind-config.yaml")
     assert any("rollout status daemonset/calico-node -n kube-system --timeout=900s" in call for call in calls)
     assert any("kubectl wait --for=condition=Ready nodes --all" in call for call in calls)
+    assert any("kubectl run sregym-cni-probe-" in call for call in calls)
+    assert any("kubectl wait --for=condition=Ready pod/sregym-cni-probe-" in call for call in calls)
+
+
+def test_kind_probe_covers_each_node_and_removes_all_probes(shell_environment):
+    result, calls = shell_environment("setup_kind_cluster.sh")
+    assert result.returncode == 0, result.stderr
+    creates = [call for call in calls if call.startswith("kubectl run sregym-cni-probe-")]
+    waits = [call for call in calls if call.startswith("kubectl wait --for=condition=Ready pod/sregym-cni-probe-")]
+    deletes = [call for call in calls if call.startswith("kubectl delete pod sregym-cni-probe-")]
+    assert len(creates) == len(waits) == 2
+    assert '"nodeName":"worker-a"' in creates[0]
+    assert '"nodeName":"worker-b"' in creates[1]
+    assert calls.index(creates[1]) < calls.index(waits[0])
+    assert len(deletes) == 1
+    assert all(create.split()[2] in deletes[0] for create in creates)
+
+
+@pytest.mark.parametrize("operation", ["run", "wait", "delete", "interrupt"])
+def test_kind_probe_errors_clean_up_attempted_pods(shell_environment, operation):
+    result, calls = shell_environment("setup_kind_cluster.sh", extra_env={"KIND_TEST_FAIL_PROBE": operation})
+    assert result.returncode != 0
+    assert any(call.startswith("kubectl delete pod sregym-cni-probe-") for call in calls)
+    if operation == "wait":
+        assert any(call.startswith("kubectl describe pod sregym-cni-probe-") for call in calls)
+        assert any("get events" in call and "involvedObject.name=" in call for call in calls)
+
+
+def test_kind_probe_rejects_an_empty_node_list(shell_environment):
+    result, calls = shell_environment("setup_kind_cluster.sh", extra_env={"KIND_TEST_NO_PROBE_NODES": "true"})
+    assert result.returncode != 0
+    assert "no uncordoned Linux nodes" in result.stdout
+    assert not any(call.startswith("kubectl run ") for call in calls)
 
 
 def test_unknown_argument_fails_before_creating_cluster(shell_environment):
