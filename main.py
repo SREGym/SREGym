@@ -34,7 +34,7 @@ from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
-from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
+from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
@@ -1077,6 +1077,28 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
                 logger.error(f"⛔ Partial benchmark results for {agent_name} written to {csv_path}")
     else:
         logger.warning("⚠️ No results to write.")
+
+    # Each per-attempt CSV was published against whatever fieldnames the
+    # driver had accumulated so far, so a file from early in this run can be
+    # missing a column a later attempt's oracle introduced. Now that no more
+    # attempts will be published, whether the run completed or aborted,
+    # reconcile them all to one header.
+    if _driver_base_dir is not None:
+        try:
+            header_stabilization = stabilize_run_csv_headers(_driver_base_dir)
+            if header_stabilization.rewritten:
+                logger.info(
+                    f"🧹 Normalized headers on {len(header_stabilization.rewritten)} per-attempt result file(s)"
+                )
+            if header_stabilization.overflow_dropped:
+                logger.warning(
+                    f"⚠️ {len(header_stabilization.overflow_dropped)} result file(s) had a row with more "
+                    "values than its own header, so something wrote a malformed line. The "
+                    f"unlabeled overflow was dropped, not attributed to any column: "
+                    f"{header_stabilization.overflow_dropped}"
+                )
+        except (OSError, csv.Error) as exc:
+            logger.warning(f"⚠️ Result CSV header normalization failed (non-fatal): {exc}")
 
     if _driver_error is not None:
         if __name__ == "__main__":

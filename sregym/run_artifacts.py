@@ -289,6 +289,88 @@ def _csv_problem_ids(path: Path) -> list[str]:
         return [row.get("problem_id", "") for row in reader] if reader.fieldnames else []
 
 
+@dataclass(frozen=True)
+class HeaderStabilizationResult:
+    """rewritten: files whose header was widened to the run's union.
+    overflow_dropped: files that had at least one row with more values than
+    that file's own header -- a real bug somewhere upstream (something wrote
+    a malformed line), not benign header drift, so a caller should surface
+    it distinctly rather than folding it into a routine "normalized N
+    files" count."""
+
+    rewritten: list[Path]
+    overflow_dropped: list[Path]
+
+
+def stabilize_run_csv_headers(root: Path) -> HeaderStabilizationResult:
+    """Give every per-attempt result CSV under root the same header.
+
+    finalize_and_publish() writes each attempt's row against whatever
+    fieldnames the driver had accumulated by that point in the run, so a
+    file published early sees fewer columns than one published once some
+    later attempt's oracle has contributed a key of its own.
+
+    Call this once a run's attempts are all in. It rewrites every already-
+    published per-attempt CSV to the union of every header seen under root,
+    so a reader can trust the first line regardless of which file it opens
+    first. A column a specific row never produced comes back empty
+    (csv.DictWriter's own restval=""), distinct from a column that ran and
+    recorded False -- the row for that column is simply absent from that
+    file's original data, not written as "".
+
+    Returns which files were actually rewritten (header was not already the
+    union) and which had a ragged row's overflow dropped, so a caller can
+    log each distinctly; a run with a uniform header, or fewer than two
+    files, is left untouched.
+
+    A file that cannot be read, decoded or parsed as CSV is skipped rather
+    than aborting the whole pass: this is best-effort header normalization,
+    not a correctness-critical step. A row with more values than its file's
+    own header (a ragged row) has its unlabeled overflow dropped in the
+    rewrite: DictWriter has no fieldname to write it under, and would
+    otherwise raise. Such a file is always rewritten, so the report that
+    its overflow was dropped is true even when its header already matched.
+
+    Only the files finalize_and_publish writes are considered, at exactly
+    <agent>/<problem>/run_<n>/<problem>_results.csv. The run directory also
+    holds the agent's own artifacts, which may contain CSVs of any name and
+    symlinks pointing anywhere; neither is followed.
+    """
+    paths = sorted(
+        path
+        for path in root.glob("*/*/run_*/*_results.csv")
+        if path.name == f"{path.parent.parent.name}_results.csv" and not path.is_symlink() and path.is_file()
+    )
+    if len(paths) < 2:
+        return HeaderStabilizationResult([], [])
+
+    parsed: list[tuple[Path, list[str], list[dict[str, Any]]]] = []
+    fields: set[str] = set()
+    overflow_dropped: list[Path] = []
+    for path in paths:
+        try:
+            with path.open(newline="", encoding="utf-8") as csvfile:
+                reader = csv.DictReader(csvfile)
+                file_fields = list(reader.fieldnames or [])
+                raw_rows = list(reader)
+        except (OSError, UnicodeDecodeError, csv.Error):
+            continue
+        ragged = any(None in row for row in raw_rows)
+        if ragged:
+            overflow_dropped.append(path)
+        rows = [{k: v for k, v in row.items() if k is not None} for row in raw_rows]
+        parsed.append((path, file_fields, rows, ragged))
+        fields.update(file_fields)
+
+    union = sorted(fields)
+    rewritten = []
+    for path, file_fields, rows, ragged in parsed:
+        if file_fields != union or ragged:
+            _write_csv(path, union, rows)
+            rewritten.append(path)
+    return HeaderStabilizationResult(rewritten, overflow_dropped)
+
+
 def _write_csv(path: Path, fields: list[str], rows: list[dict[str, Any]]) -> None:
     tmp = _temp_path(path)
     try:
