@@ -226,6 +226,21 @@ def test_workspace_retention_omits_links_and_auth(app, tmp_path):
     assert [p.name for p in (app.run_dir / "solver-work").iterdir()] == ["findings.md"]
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read any file")
+def test_workspace_retention_skips_unreadable_agent_files(app, tmp_path):
+    app.run_dir.mkdir(parents=True)
+    workspace = tmp_path / "work"
+    (workspace / "preserved/var/log").mkdir(parents=True)
+    (workspace / "findings.md").write_text("ok")
+    secret = workspace / "preserved/var/log/kern.log.2"
+    secret.write_text("root only")
+    secret.chmod(0)
+    app.retain_workspace(workspace)
+    assert (app.run_dir / "solver-work/findings.md").read_text() == "ok"
+    skipped = json.loads((app.run_dir / "solver-work-unreadable.json").read_text())
+    assert skipped == {"files": ["preserved/var/log/kern.log.2"]}
+
+
 def test_capture_failure_still_tears_down_owned_processes(app, monkeypatch):
     app.run_dir.mkdir(parents=True)
     (app.project / "build/world-config.json").write_text(json.dumps({"probe_run": str(app.run_dir)}))

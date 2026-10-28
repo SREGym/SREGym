@@ -229,12 +229,13 @@ class UsageReportingApplication(Application):
         return self.run_dir / "end-state"
 
     def retain_workspace(self, workspace):
-        """Retain ordinary answer files; ignore links and agent authentication."""
+        """Retain ordinary answer files; ignore links, agent authentication and unreadable files."""
         destination = self.run_dir / "solver-work"
         destination.mkdir(exist_ok=True)
         if workspace is None:
             return
         workspace = Path(workspace)
+        unreadable = []
         for source in workspace.rglob("*"):
             relative = source.relative_to(workspace)
             if source.is_symlink() or any(p.startswith(".") for p in relative.parts):
@@ -244,7 +245,14 @@ class UsageReportingApplication(Application):
             target = destination / relative
             if source.is_file():
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, target)
+                try:
+                    shutil.copyfile(source, target)
+                except PermissionError:
+                    # Agents may copy root-only files (for example host logs) into
+                    # their workspace; grading must not depend on reading them.
+                    unreadable.append(str(relative))
+        if unreadable:
+            write(self.run_dir / "solver-work-unreadable.json", {"files": unreadable})
 
     def _stop_watcher(self):
         """Stop a capture helper that did not finish, so it cannot run alongside teardown."""
