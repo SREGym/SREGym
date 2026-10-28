@@ -13,7 +13,7 @@ from sregym.service.usage_reporting.world import BUDGET_SECONDS, UsageReportingA
 class UsageReporting(Problem):
     uses_kubernetes = False
     run_default_workload = False
-    cleanup_timeout_seconds = BUDGET_SECONDS + 1800
+    cleanup_timeout_seconds = BUDGET_SECONDS + 2700
 
     def __init__(self, *, world_root=None, state=None, runs_dir=None):
         super().__init__(UsageReportingApplication(world_root, state, runs_dir))

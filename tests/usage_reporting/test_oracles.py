@@ -106,7 +106,8 @@ def install_grader(problem, monkeypatch, status="pass", failure=None, schema="sr
         app.wait_frozen.assert_called_once()
         assert command[command.index("--capture") + 1] == str(app.run_dir / "end-state")
         assert "--no-recurrence" not in command
-        assert kwargs["timeout"] == 930
+        assert kwargs["timeout"] == 1860
+        assert command[command.index("--runtime-limit") + 1] == "1800"
         if failure:
             raise failure
         output.mkdir(parents=True)
@@ -161,7 +162,7 @@ def test_large_grader_tables_do_not_block_normal_artifact_publication(problem, m
 
 
 @pytest.mark.parametrize(
-    "failure", [subprocess.TimeoutExpired("grade", 930), subprocess.CalledProcessError(1, "grade")]
+    "failure", [subprocess.TimeoutExpired("grade", 1860), subprocess.CalledProcessError(1, "grade")]
 )
 def test_grader_errors_are_harness_failures(problem, monkeypatch, failure):
     install_grader(problem, monkeypatch, failure=failure)

@@ -14,6 +14,10 @@ from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.service.usage_reporting.runtime import write
 
+# A full frozen-world extraction plus the private client, queue and recurrence
+# forks needs about half an hour after an agent has done real recovery work.
+GRADER_SECONDS = 1860
+
 
 def run_grader(command, *, cwd, log, timeout):
     """Run the grader in its own process group so its private world copy never outlives it."""
@@ -29,8 +33,9 @@ def run_grader(command, *, cwd, log, timeout):
 
 
 class UsageMitigationOracle(Oracle):
-    # An early submission waits until D, then extraction may take 15 minutes.
-    evaluation_timeout_seconds = 3600
+    # An early submission waits for the deadline (up to 1800 s) and the capture
+    # (up to 600 s), then the grader may take up to GRADER_SECONDS.
+    evaluation_timeout_seconds = 4500
     FAILURE_CLASSES = {
         "world_grader_failed": FailureClass.HARNESS_ERROR,
         "world_run_aborted": FailureClass.HARNESS_ERROR,
@@ -64,11 +69,11 @@ class UsageMitigationOracle(Oracle):
             "--output",
             str(output),
             "--runtime-limit",
-            "870",
+            str(GRADER_SECONDS - 60),
         ]
         with (app.run_dir / "grader.log").open("w") as log:
             try:
-                run_grader(command, cwd=app.project, log=log, timeout=930)
+                run_grader(command, cwd=app.project, log=log, timeout=GRADER_SECONDS)
                 grade = json.loads((output / "GRADE.json").read_text())
                 if grade.get("schema") != "sregym-grade-v1" or Path(grade["run"]) != app.run_dir:
                     raise ValueError("Grader result schema/run does not match this attempt")

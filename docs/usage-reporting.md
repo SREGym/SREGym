@@ -83,7 +83,7 @@ mismatched truth fails before deployment. No custom checklist or per-layer
 judging is used.
 
 The mitigation oracle calls the configured grader with `RUN_DIR --capture
-END_STATE --output OUTPUT --runtime-limit 870`. It requires
+END_STATE --output OUTPUT --runtime-limit 1800` within 1860 seconds. It requires
 `GRADE.json` with schema `sregym-grade-v1`, a matching `run`, and
 `mitigation.status` equal to `pass` or `fail`, mapped to a boolean `success`.
 An incomplete or invalid grader outcome returns a harness failure, and so does a
