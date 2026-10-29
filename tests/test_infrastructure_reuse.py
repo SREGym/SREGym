@@ -20,6 +20,7 @@ def conductor():
     obj = Conductor.__new__(Conductor)
     obj.logger = logging.getLogger("test.infra")
     obj.kubectl = MagicMock()
+    obj.kubectl.assert_pod_networking = MagicMock()
     obj.kubectl.exec_command.return_value = json.dumps(
         {
             "metadata": {"generation": 1},
@@ -158,11 +159,23 @@ def test_startup_repairs_ndm_scheduling_only_in_full(startup, monkeypatch, svelt
 def test_healthy_infrastructure_is_not_patched(startup):
     with pytest.raises(ObserverSetupReached):
         startup.deploy_app()
+    startup.kubectl.assert_pod_networking.assert_called_once_with()
     startup.kubectl.core_v1_api.patch_namespaced_service.assert_not_called()
     startup.kubectl.apps_v1_api.patch_namespaced_daemon_set.assert_not_called()
     assert startup._metrics_server_configured.call_count == 2
     assert startup._openebs_ready.call_count == 2
     startup._preload_openebs_helper_image.assert_called_once_with()
+
+
+def test_networking_failure_stops_before_infrastructure_or_application(startup):
+    startup.kubectl.assert_pod_networking.side_effect = RuntimeError("worker-b: FailedCreatePodSandBox: Unauthorized")
+
+    with pytest.raises(RuntimeError, match="worker-b.*Unauthorized"):
+        startup.deploy_app()
+
+    startup._metrics_server_configured.assert_not_called()
+    startup.kubectl.exec_command.assert_not_called()
+    startup.prometheus.deploy.assert_not_called()
 
 
 @pytest.mark.parametrize("svelte", [False, True])
