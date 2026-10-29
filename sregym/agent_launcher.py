@@ -55,6 +55,12 @@ class AgentLauncher:
         """
         self._agent_kubeconfig_path = kubeconfig_path
 
+    def set_endpoint_access(self, access) -> None:
+        if access is not None and self._container_runner is None:
+            raise RuntimeError("This application requires an agent container")
+        if self._container_runner is not None:
+            self._container_runner.set_endpoint_access(access)
+
     def enable_container_isolation(
         self, force_build: bool = False, *, k8s_proxy_port: int = 16443, image: str | None = None
     ):

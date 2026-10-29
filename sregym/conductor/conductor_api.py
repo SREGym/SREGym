@@ -264,6 +264,8 @@ async def get_app():
         # Lets agents tailor their workflow, e.g. to mitigation-only problems.
         "stages": [stage["name"] for stage in getattr(_conductor, "stage_sequence", None) or []],
     }
+    if getattr(app_inst, "operator_instructions", None):
+        info["operator_instructions"] = app_inst.operator_instructions
     return info
 
 

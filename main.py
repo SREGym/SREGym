@@ -30,6 +30,7 @@ from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
@@ -274,7 +275,10 @@ def driver_loop(
                     "Benchmark interrupted by user.", [{agent_to_run: all_results_for_agent}]
                 )
 
-        base_dir = Path("results") / get_current_datetime_formatted()
+        default_results = Path("results")
+        if not getattr(getattr(conductor, "config", None), "manage_kubernetes", True):
+            default_results = Path.home() / ".local/state/sregym/results"
+        base_dir = Path(os.environ.get("SREGYM_RESULTS_DIR", default_results)) / get_current_datetime_formatted()
         base_dir.mkdir(parents=True, exist_ok=True)
         global _driver_base_dir
         _driver_base_dir = base_dir
@@ -297,10 +301,7 @@ def driver_loop(
             console.log(f"Starting agent now: {agent_to_run}")
             conductor.register_agent(agent_to_run)
 
-            # Start K8s API proxy to hide chaos engineering namespaces from the agent
-            console.log("🔒 Starting Kubernetes API proxy to hide chaos namespaces...")
-            conductor.start_k8s_proxy()
-            LAUNCHER.set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
+            # Application-specific endpoints are configured after deployment.
 
         async def finish_problem_with_deadline(timeout_reason: str) -> bool:
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
@@ -537,6 +538,14 @@ def driver_loop(
 
                 assert agent_to_run is not None
 
+                access = getattr(conductor.app, "endpoint_access", None)
+                LAUNCHER.set_endpoint_access(access)
+                if getattr(conductor.problem, "uses_kubernetes", True):
+                    conductor.start_k8s_proxy()
+                    LAUNCHER.set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
+                else:
+                    LAUNCHER.set_agent_kubeconfig(None)
+
                 run = RunArtifacts.create(
                     # Opaque artifacts must share the final output filesystem
                     # too: finalization publishes them with an atomic rename.
@@ -546,6 +555,8 @@ def driver_loop(
                     agent=agent_to_run,
                     attempt=attempt,
                 )
+                if not getattr(conductor.problem, "uses_kubernetes", True):
+                    conductor.app.agent_workspace = run.active_dir
                 agent_proc = None
                 conductor.agent_timeout_seconds = agent_timeout
 
@@ -577,7 +588,8 @@ def driver_loop(
 
                 timed_out = False
                 agent_start_time = time.monotonic()
-                conductor.agent_deadline_monotonic = agent_start_time + agent_timeout
+                if conductor.agent_deadline_monotonic is None:
+                    conductor.agent_deadline_monotonic = agent_start_time + agent_timeout
                 while not abort_campaign_after_attempt and conductor.submission_stage != "done":
                     check_interrupted()
                     if time.monotonic() > conductor.agent_deadline_monotonic:
@@ -910,6 +922,23 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         additional_allowed_endpoints=getattr(args, "allow_agent_endpoint", ()),
     )
     harden_container = args.container_hardening == "on"
+    suite = getattr(args, "suite", None)
+    selected_problem = getattr(args, "problem", None)
+    problem_selection = (selected_problem,) if selected_problem else PROBLEM_SETS.get(suite)
+    registry = ProblemRegistry()
+    manage_kubernetes = not problem_selection or any(
+        getattr(registry.get_problem(pid), "uses_kubernetes", True) for pid in problem_selection
+    )
+    for pid in problem_selection or ():
+        problem_class = registry.get_problem(pid)
+        if problem_class is not None and not getattr(problem_class, "uses_kubernetes", True):
+            if args.use_external_harness or args.noise or args.baseline or args.propagation:
+                raise ValueError("This saved-world problem uses its normal conductor stages and native schedules")
+            if args.internet_access != "filtered" or not harden_container:
+                raise ValueError("This saved-world problem requires filtered container networking and hardening")
+            if args.agent_timeout != 1800:
+                raise ValueError("This saved-world problem has one fixed 1800-second agent budget")
+            problem_class().preflight()
 
     set_profile(args.profile)
 
@@ -969,6 +998,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         stages=tuple(args.stages) if args.stages else None,
         baseline_override_s=getattr(args, "baseline", None),
         propagation_override_s=getattr(args, "propagation", None),
+        manage_kubernetes=manage_kubernetes,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)

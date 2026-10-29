@@ -225,6 +225,9 @@ Important:
 - The conductor API is available at {get_api_base_url()}
 """
 
+    if app_info.get("operator_instructions"):
+        instruction = f"{descriptions}\n\n{app_info['operator_instructions']}\n\n{workflow}"
+
     if os.environ.get(JEV_MODEL_ENV):
         instruction += jev_instruction
     logger.info(f"Built instruction:\n{instruction}")

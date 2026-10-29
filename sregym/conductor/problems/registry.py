@@ -117,6 +117,7 @@ from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.apps.train_ticket.f17 import TrainTicketF17
 from sregym.conductor.problems.apps.train_ticket.f22 import TrainTicketF22
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
+from sregym.conductor.problems.usage_reporting import UsageReporting
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
 from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
@@ -131,6 +132,7 @@ from sregym.conductor.problems.slo_problem import slo_problems
 class ProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {
+            "usage_reporting": UsageReporting,
             # ==================== APPLICATION FAULT INJECTOR ====================
             # --- CORRELATED PROBLEMS ---
             "update_incompatible_correlated": UpdateIncompatibleCorrelated,
@@ -311,13 +313,18 @@ class ProblemRegistry:
         if duplicates:
             raise ValueError(f"SLO problem IDs already registered: {', '.join(sorted(duplicates))}")
         self.PROBLEM_REGISTRY.update(slo_entries)
-        self.kubectl = KubeCtl()
+        self.kubectl = None
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
 
+        problem_class = self.PROBLEM_REGISTRY[problem_id]
+        if not getattr(problem_class, "uses_kubernetes", True):
+            return problem_class()
+        if self.kubectl is None:
+            self.kubectl = KubeCtl()
         is_emulated_cluster = self.kubectl.is_emulated_cluster()
         if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
             raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
