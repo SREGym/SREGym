@@ -10,6 +10,26 @@ AGENT_NAME = "jev_diag"
 AGENT_NAMES = {"jev_diag", "jev_agent"}  # jev_agent (clients/jev_agent) uses the same decision backends
 DEFAULT_MODEL = "jev-latest"
 
+# Settings and backend credentials forwarded only for Jev-enabled runs.
+ENV_VARS = (
+    "JEV_DIAG_BACKEND",
+    "JEV_DIAG_MODE",
+    "JEV_DIAG_START_DELAY",
+    "JEV_DIAG_TREND_INTERVAL",
+    "JEV_DIAG_EXEC_PROBES",
+    "JEV_DIAG_HTTP_TIMEOUT",
+    "JEV_DIAG_STATE_TOKEN_BUDGET",
+    "JEV_DIAG_MAX_CHOICE_OPTIONS",
+    "JEV_DIAG_V1_1_PROBES",
+    "JEV_DIAG_V1_1_TELEMETRY",
+    "JEV_DIAG_IGNORE_NAMESPACES",
+    "DECISIONS_OPENAI_API_KEY",
+    "DECISIONS_OPENROUTER_API_KEY",
+    "DECISIONS_MODEL",
+    "DECISIONS_URL",
+    "TYPESAFE_DEFAULT_MODEL",
+)
+
 
 def configure(args) -> None:
     """Take the Jev model from ``--model`` for ``--agent jev_diag`` and reject unsupported runs early.

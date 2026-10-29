@@ -53,6 +53,13 @@ SESSION_CASES = [
         "stratus",
         FIXTURES / "stratus_run" / "0704_1458_service_port_conflict_hotel_reservation_stratus_agent_trajectory.jsonl",
     ),
+    (
+        "jev_diag",
+        FIXTURES
+        / "jev_diag_run"
+        / "trajectory"
+        / "1023_1200_service_port_conflict_hotel_reservation_jev_diag_agent_trajectory.jsonl",
+    ),
 ]
 
 

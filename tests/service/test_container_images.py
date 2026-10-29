@@ -14,6 +14,21 @@ def test_cached_image_needs_no_pull_or_build(monkeypatch):
     run.assert_called_once_with(["docker", "image", "inspect", DEFAULT_AGENT_IMAGE], capture_output=True)
 
 
+@pytest.mark.parametrize("prepared", [True, False])
+def test_prepared_clis_preserve_the_image_python_environment(prepared):
+    runner = ContainerRunner(ContainerConfig())
+    if prepared:
+        runner._agent_tools_volume = "prepared-tools"
+    env = runner._build_env_vars()
+    if prepared:
+        paths = env["PATH"].split(":")
+        assert paths[0] == "/opt/agent-tools/bin"
+        assert paths.index("/opt/venv/bin") < paths.index("/usr/bin")
+        assert paths.index("/opt/venv/bin") < paths.index("/usr/local/bin")
+    else:
+        assert "PATH" not in env
+
+
 @pytest.mark.parametrize("image", [DEFAULT_AGENT_IMAGE, "example.org/custom-agent:v1"])
 def test_missing_release_is_pulled_not_rebuilt(monkeypatch, image):
     run = Mock(side_effect=[subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 0)])

@@ -148,6 +148,14 @@ def _find_session_file(run_dir: Path, tool: str) -> Path | None:
     if tool == "stratus":
         candidates = sorted(run_dir.glob("*_stratus_agent_trajectory.jsonl"))
         return max(candidates, key=lambda path: (path.name, path.stat().st_mtime)) if candidates else None
+    if tool == "jev_diag":
+        candidates = [
+            path
+            for root in (run_dir / "trajectory", run_dir)
+            for path in root.glob("*_jev_diag_agent_trajectory.jsonl")
+            if path.is_file()
+        ]
+        return max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name)) if candidates else None
     return None
 
 
@@ -352,11 +360,12 @@ def convert_run(run_dir: Path | str) -> Trajectory | None:
     if isinstance(adapter_sregym, dict):
         sregym_meta = {**adapter_sregym, **sregym_meta}
 
-    # The standalone Stratus adapter exposes neutral stage metadata. SREGym
-    # owns the domain-specific namespace, so fold it into extra.sregym here.
-    stratus_meta = other_extra.pop("stratus", None)
-    if isinstance(stratus_meta, dict):
-        sregym_meta = {**stratus_meta, **sregym_meta}
+    # Combined event streams expose neutral stage metadata. SREGym owns the
+    # domain-specific namespace, so fold it into extra.sregym here.
+    for adapter in ("stratus", "jev_diag"):
+        stage_meta = other_extra.pop(adapter, None)
+        if isinstance(stage_meta, dict):
+            sregym_meta = {**stage_meta, **sregym_meta}
 
     # Same for CloudThinker: `stages`, `selection` and the diagnosis boundary
     # belong to this run's SREGym metadata, not to a second namespace.
