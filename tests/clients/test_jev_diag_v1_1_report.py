@@ -2,6 +2,8 @@
 type, the change (old -> new), the impact the cause explains and the other party, within fixed limits and without
 raw documents, encoded data, scripts or timings as facts. Neutral fixtures; each test checks a rule, not a case."""
 
+import pytest
+
 from clients.jev_diag.v1_1.classifier import ChoiceResult, Diagnosis
 from clients.jev_diag.v1_1.collector import ClusterSnapshot
 from clients.jev_diag.v1_1.report import (
@@ -293,6 +295,32 @@ def test_the_fault_type_is_always_stated_from_the_faulty_field_with_the_category
     assert "Fault type: config value (" in build_report(_snap({"deployment/web": web}), unsure)
     nothing = _diag("deployment/web", category="other")
     assert "Fault type: not classified." in build_report(_snap({"deployment/web": web}), nothing)
+
+
+@pytest.mark.parametrize("probe_kind", ["liveness", "readiness", "startup"])
+def test_kubernetes_probe_settings_keep_the_health_probe_category(probe_kind):
+    fact = f"container app {probe_kind} probe: httpGet /health:8080 (timeoutSeconds=1)"
+    diagnosis = _diag("deployment/web", [fact], "config_value")
+
+    text = build_report(_snap({"deployment/web": _comp("web")}), diagnosis)
+
+    assert _line(text, "Fault type").startswith("Fault type: health probe config (")
+
+
+@pytest.mark.parametrize(
+    ("category", "expected"),
+    [("credentials_or_auth", "credentials or auth"), ("other", "not classified")],
+)
+def test_diagnostic_probe_does_not_invent_a_health_probe_category(category, expected):
+    fact = (
+        "probe inside deployment/backend: "
+        "`redis-cli PING` returned 'NOAUTH Authentication required.': the server requires authentication"
+    )
+    diagnosis = _diag("deployment/backend", [fact], category)
+
+    text = build_report(_snap({"deployment/backend": _comp("backend")}), diagnosis)
+
+    assert _line(text, "Fault type").startswith(f"Fault type: {expected} (")
 
 
 def test_changed_states_when_who_and_old_to_new():

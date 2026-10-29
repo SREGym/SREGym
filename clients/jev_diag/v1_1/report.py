@@ -223,7 +223,7 @@ FIELD_TYPES = (
     ("missing_object", r"\(missing\)|does not exist|no Service selects"),
     ("certificate_or_tls", r"certificate|caBundle|\bTLS\b|\btls\b|x509"),
     ("image_or_binary", r"\bimage\b"),
-    ("health_probe_config", r"\bprobe\b"),
+    ("health_probe_config", r"^container \S+ (?:liveness|readiness|startup) probe:"),
     ("scheduling_constraint", r"nodeSelector|node_selector|affinity|toleration|taint|hostPort|host port"),
     ("resource_limits", r"\b(?:limits|requests)\.(?:cpu|memory)|\bresources\b"),
     ("rollout_or_replica_config", r"\breplicas\b|maxUnavailable|maxSurge|\bstrategy\b"),
