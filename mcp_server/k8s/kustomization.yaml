@@ -18,4 +18,5 @@ commonLabels:
 images:
   - name: sregym
     newName: ghcr.io/sregym/sregym-mcp
-    newTag: latest
+    newTag: sha-f7823c958e59ee79beb53e5c7c63ce837b5095f0
+    digest: sha256:ded0859d50354730cd625520619bc9acf4e71bb3d6ae719e68e5df5f8e245093
