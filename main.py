@@ -103,11 +103,13 @@ def run_preflight_check(
     agent_name: str,
     container_runner: ContainerRunner | None = None,
     install_script: str | None = None,
+    kickoff_env: dict[str, str] | None = None,
 ) -> None:
     """Run the agent's pre-flight check inside the container."""
     agent_driver_modules = {
         "stratus": "clients.stratus.stratus_agent.driver.driver",
         "claudecode": "clients.claudecode.driver",
+        "claudecode_radar": "clients.claudecode_radar.driver",
         "codex": "clients.codex.driver",
         "copilot": "clients.copilot.driver",
         "opencode": "clients.opencode.driver",
@@ -128,7 +130,9 @@ def run_preflight_check(
     if install_script and not container_runner.has_prepared_agent_tools:
         check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
     try:
-        result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+        result = container_runner.run_sync(
+            ExecInput(command=check_cmd, env=dict(kickoff_env or {}), label="preflight", timeout=180)
+        )
     except BaseException:
         container_runner.close()
         raise
@@ -986,11 +990,15 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
                     image=agent_image,
                 )
             if agent_reg and LAUNCHER._container_runner is not None:
+                # Before the first container (tools install, preflight) starts the egress proxy,
+                # whose endpoint rules then hold for the whole run.
+                LAUNCHER._container_runner.config.cluster_access = agent_reg.cluster_access
                 LAUNCHER._container_runner.prepare_agent_tools(agent_reg.install_script, agent_reg.agent_version)
             run_preflight_check(
                 args.agent,
                 container_runner=LAUNCHER._container_runner,
                 install_script=agent_reg.install_script if agent_reg else None,
+                kickoff_env=agent_reg.kickoff_env if agent_reg else None,
             )
     except BaseException:
         LAUNCHER.cleanup_all()

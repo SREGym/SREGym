@@ -3,6 +3,7 @@ Claude Code agent implementation for SREGym.
 Based on Harbor's Claude Code agent implementation for parity experiments.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -104,13 +105,43 @@ class ClaudeCodeAgent:
         "WebSearch",
     ]
 
+    CHIRON_MCP_TOOLS = [
+        "mcp__chiron__incident_brief",
+        "mcp__chiron__k8s_changes",
+        "mcp__chiron__active_alerts",
+    ]
+
     @classmethod
     def allowed_tools(cls) -> list[str]:
         tools = list(cls.ALLOWED_TOOLS)
         if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
             tools.remove("WebFetch")
             tools.remove("WebSearch")
+        if os.environ.get("CHIRON_MCP_URL"):
+            tools += cls.CHIRON_MCP_TOOLS
         return tools
+
+    def _write_chiron_mcp_config(self) -> Path | None:
+        """Write the Chiron MCP server config when CHIRON_MCP_URL is set.
+
+        The token is referenced as ${CHIRON_MCP_TOKEN}, which Claude Code expands from its
+        environment, so it is never written to the logs dir.
+        """
+        url = os.environ.get("CHIRON_MCP_URL")
+        if not url:
+            return None
+        path = self.logs_dir / "chiron-mcp.json"
+        config = {
+            "mcpServers": {
+                "chiron": {
+                    "type": "http",
+                    "url": url,
+                    "headers": {"Authorization": "Bearer ${CHIRON_MCP_TOKEN}"},
+                }
+            }
+        }
+        path.write_text(json.dumps(config, indent=2))
+        return path
 
     def __init__(
         self,
@@ -289,6 +320,9 @@ class ClaudeCodeAgent:
         ]
         if reasoning_effort:
             command.extend(["--effort", reasoning_effort])
+        # Before --allowedTools: both options take several values.
+        if mcp_config := self._write_chiron_mcp_config():
+            command.extend(["--mcp-config", str(mcp_config)])
         command.extend(["--allowedTools", *self.allowed_tools()])
 
         logger.info(f"Executing command: {' '.join(command)}")
