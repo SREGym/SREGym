@@ -9,7 +9,7 @@ import shlex
 import time
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.product_catalog_missing_index_mitigation import (
+from sregym.conductor.oracles.product_reviews_missing_index_mitigation import (
     ProductReviewsMissingIndexMitigationOracle,
 )
 from sregym.conductor.problems.base import Problem

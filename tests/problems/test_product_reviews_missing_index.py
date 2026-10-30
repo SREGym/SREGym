@@ -11,7 +11,7 @@ import pytest
 
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.conductor.oracles.product_catalog_missing_index_mitigation import (
+from sregym.conductor.oracles.product_reviews_missing_index_mitigation import (
     ProductReviewsMissingIndexMitigationOracle,
 )
 from sregym.conductor.problems.product_reviews_missing_index import (
