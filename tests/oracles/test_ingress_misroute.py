@@ -169,7 +169,9 @@ def test_slack_consumer_uses_message_history_not_hotel_data(oracle, payload, val
 @pytest.mark.parametrize(
     "status,payload", [(200, HOTEL), (200, "unrelated page"), (302, HOTEL), (503, {"error": "no backend"})]
 )
-def test_real_api_client_preserves_json_and_http_errors(oracle, monkeypatch, status, payload):
+def test_real_api_client_preserves_json_and_http_errors(
+    oracle, monkeypatch, status, payload, allow_kubernetes_test_server
+):
     paths = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -186,6 +188,7 @@ def test_real_api_client_preserves_json_and_http_errors(oracle, monkeypatch, sta
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    allow_kubernetes_test_server(server)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     configuration = Configuration(host=f"http://127.0.0.1:{server.server_port}")

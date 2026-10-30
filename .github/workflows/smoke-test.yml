@@ -71,7 +71,7 @@ jobs:
 
       # ── Run smoke test ────────────────────────────────────────────────
       - name: Run smoke test
-        run: uv run pytest tests/integration/smoke_test.py -v -s -m integration
+        run: uv run pytest tests/integration/smoke_test.py -v -s -m integration --allow-kubernetes
 
       # ── Diagnostics on failure ────────────────────────────────────────
       - name: Dump cluster diagnostics

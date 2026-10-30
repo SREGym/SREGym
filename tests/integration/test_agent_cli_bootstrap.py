@@ -1,7 +1,7 @@
 """Install each supported CLI in an ephemeral agent container; make no model calls.
 
 Requires Docker, the agent base image, and access to the package registries.
-Run explicitly with pytest -m integration. No host credentials are mounted.
+Run explicitly with pytest -m integration --allow-kubernetes. No host credentials are mounted.
 """
 
 from pathlib import Path

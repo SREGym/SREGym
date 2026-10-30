@@ -3,6 +3,8 @@ import pytest
 from sregym.service.apps.gitlab.recovery import GitLabRecoveryApplication
 from sregym.service.apps.stripe.configuration import StripeConfigApplication
 
+pytestmark = pytest.mark.usefixtures("offline_kubectl")
+
 
 @pytest.mark.parametrize("tier,members", [("single", 1), ("replicated", 3)])
 def test_archives_and_configuration_have_independent_storage(tier, members):

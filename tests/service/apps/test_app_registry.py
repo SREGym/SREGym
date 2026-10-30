@@ -119,7 +119,7 @@ def test_missing_deployment_fails_explicitly():
         app.deploy()
 
 
-def test_notification_preset_preserves_the_existing_combination():
+def test_notification_preset_preserves_the_existing_combination(offline_kubectl):
     preset = GitLabNotificationApplication("replicated", preset=UNANNOUNCED_AMBIGUOUS_NOTIFICATIONS)
     compatibility = GitLabNotificationUnannouncedAmbiguityApplication("replicated")
     assert preset.render() == compatibility.render()
