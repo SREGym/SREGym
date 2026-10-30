@@ -6,7 +6,7 @@ import time
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
@@ -294,4 +294,47 @@ def test_deployment_retries_only_transient_failures(
     conductor.bind_phase_ledger.assert_called_once()
     assert results == [
         {None: [{"problem_id": "problem", "attempt": 1, "deployment_profile": "full", "deploy_failed": True}]}
+    ]
+
+
+def test_timed_out_agent_gets_the_normal_exit_reap_grace(monkeypatch, tmp_path):
+    benchmark_main = _load_main_module()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(benchmark_main, "get_profile", lambda: "full")
+    monkeypatch.setattr(benchmark_main, "list_agents", lambda path: {"agent": object()})
+    monkeypatch.setattr(benchmark_main.trace_postprocess, "write_trajectory", lambda _run_dir: None)
+    run = Mock(finalize_and_publish=Mock(return_value=tmp_path / "run"))
+    monkeypatch.setattr(benchmark_main, "RunArtifacts", SimpleNamespace(create=Mock(return_value=run)))
+    cleanup_agent = Mock()
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_agent", cleanup_agent)
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "set_agent_kubeconfig", Mock())
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "internet_policy_result", Mock(return_value={}))
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "_procs", {})
+    conductor = SimpleNamespace(
+        problems=Mock(get_problem_ids=Mock(return_value=["problem"])),
+        results={},
+        phases=None,
+        stage_sequence=[],
+        submission_stage="running",
+        register_agent=Mock(),
+        start_k8s_proxy=Mock(),
+        stop_k8s_proxy=Mock(),
+        get_agent_kubeconfig_path=Mock(return_value="kubeconfig"),
+        bind_phase_ledger=Mock(),
+        start_problem=AsyncMock(),
+        close_submissions=Mock(return_value=False),
+        missing_submission_stages=Mock(return_value=False),
+        finish_problem_in_background=Mock(),
+        wait_for_submission_work=AsyncMock(),
+        finalize_attempt_status=Mock(return_value="incomplete"),
+    )
+
+    # A negative budget puts the deadline in the past before the first poll.
+    benchmark_main.driver_loop(conductor, agent_to_run="agent", agent_timeout=-1)
+
+    assert conductor.results["timed_out"] is True
+    assert cleanup_agent.call_args_list == [
+        call("agent", timeout=benchmark_main.AGENT_REAP_GRACE_SECONDS),
+        call("agent"),
     ]

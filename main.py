@@ -49,6 +49,9 @@ _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
 EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
+# Seconds the agent process gets to exit and flush its logs before it is
+# reaped. Used by both the normal completion path and the timeout path.
+AGENT_REAP_GRACE_SECONDS = 60
 # Namespace deletion may itself wait 300 seconds, after fault recovery and Helm
 # teardown have already consumed part of the cleanup budget. Keep the outer
 # watchdog long enough for those bounded steps to finish and allow slower hosts
@@ -588,7 +591,8 @@ def driver_loop(
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         submission_work = conductor.close_submissions()
-                        LAUNCHER.cleanup_agent(agent_to_run)
+                        # Same grace to flush output as a normal exit, then kill.
+                        LAUNCHER.cleanup_agent(agent_to_run, timeout=AGENT_REAP_GRACE_SECONDS)
                         conductor.results["timed_out"] = True
                         conductor.results["agent_timeout_seconds"] = agent_timeout
                         evaluation_failed = False
@@ -708,7 +712,7 @@ def driver_loop(
                     agent_proc = LAUNCHER._procs.get(agent_to_run) or agent_proc
                     if agent_proc and not timed_out and not abort_campaign_after_attempt:
                         console.log("⏳ Waiting for agent process to complete...")
-                        timeout = 60  # seconds
+                        timeout = AGENT_REAP_GRACE_SECONDS
                         elapsed = 0
                         while elapsed < timeout:
                             check_interrupted()
