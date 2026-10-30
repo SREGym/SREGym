@@ -193,6 +193,13 @@ class MySQLRegions:
                 timeout=timeout + 20,
             )
 
+    def restart(self, region, timeout=120):
+        """Replace one server pod and wait for its replacement to be Ready."""
+        pod = f"pod/{self.pod(region)}"
+        self.command("delete", pod, "--wait=true", f"--timeout={timeout}s", timeout=timeout + 20)
+        self.command("wait", "--for=create", pod, f"--timeout={timeout}s", timeout=timeout + 20)
+        self.command("wait", "--for=condition=Ready", pod, f"--timeout={timeout}s", timeout=timeout + 20)
+
     def initialize(self, replication_password):
         # A promoted region has no replication channel but must not be reset.
         replicator = "SELECT COUNT(*) FROM mysql.user WHERE user = 'replicator';"
@@ -232,7 +239,9 @@ class MySQLRegions:
 
     def applies_everything(self, region):
         """No replication filters or skipped errors that would let a replica drift silently."""
-        filters = self.sql(region, "SELECT COUNT(*) FROM performance_schema.replication_applier_filters;")
+        filters = self.sql(
+            region, "SELECT COUNT(*) FROM performance_schema.replication_applier_filters WHERE FILTER_RULE <> '';"
+        )
         modes = self.sql(region, "SELECT @@GLOBAL.replica_skip_errors, @@GLOBAL.replica_exec_mode;")
         return filters == "0" and modes.split() == ["OFF", "STRICT"]
 

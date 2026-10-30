@@ -16,7 +16,6 @@ from sregym.service.apps.gitea.mysql_failover import (
     LIVE_TRAFFIC,
     LIVE_TRAFFIC_REPOSITORY,
     RECEIVER,
-    RELAY,
     repository_names,
     undeliverable,
 )
@@ -65,10 +64,11 @@ def issue_events(state, issues, updates):
     return events, lost
 
 
-def duplicated_comments(state, updates):
+def duplicated_comments(state, events):
     """Acknowledged comments the primary holds more than once."""
-    counts = Counter(r["content"] for r in state["comments"])
-    return [u["comment"] for u in updates if "comment" in u and counts[u["comment"]] > 1]
+    counts = Counter((r["issue_id"], r["content"]) for r in state["comments"])
+    expected = Counter((e[4], e[8]) for e in events if e[0] == "issue_comment")
+    return [text for (issue_id, text), count in expected.items() if counts[issue_id, text] > count]
 
 
 def stale_deliveries(state, deliveries, recorded=frozenset()):
@@ -143,7 +143,10 @@ def delivery_report(deliveries, events):
                 f"{d['repository']}#{d['number']}"
                 for d in deliveries
                 if (key := ((d["repository"] or "").lower(), d["number"])) in issues
-                and (d["issue_id"], d["title"], d["body"]) != issues[key]
+                and (
+                    (d["issue_id"], d["title"], d["body"]) != issues[key]
+                    or (d["action"] == "closed" and d.get("state") != "closed")
+                )
             }
         ),
     }
@@ -155,7 +158,6 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         "database_route_bypassed": FailureClass.AGENT_ERROR,
         "repository_volume_replaced": FailureClass.AGENT_ERROR,
         "webhook_receiver_replaced": FailureClass.AGENT_ERROR,
-        "webhook_relay_replaced": FailureClass.AGENT_ERROR,
         "webhook_backlog_not_drained": FailureClass.AGENT_ERROR,
         "live_traffic_replaced": FailureClass.AGENT_ERROR,
         "service_interrupted": FailureClass.AGENT_ERROR,
@@ -197,8 +199,6 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             return self.fail("repository_volume_replaced")
         if self.problem.receiver is not None and app.pod_identities(RECEIVER) != self.problem.receiver:
             return self.fail("webhook_receiver_replaced")
-        if self.problem.relay is not None and app.pod_identities(RELAY) != self.problem.relay:
-            return self.fail("webhook_relay_replaced")
         if self.problem.live_users is not None and app.pod_identities(LIVE_TRAFFIC) != self.problem.live_users:
             return self.fail("live_traffic_replaced")
         return None
@@ -274,7 +274,7 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         )
         if lost:
             return self.fail("acknowledged_updates_lost", updates=lost)
-        if duplicated := duplicated_comments(state, problem.updates):
+        if duplicated := duplicated_comments(state, events):
             return self.fail("acknowledged_writes_duplicated", comments=duplicated)
         app.wait_for_webhook_attempts(primary)
         relay = app.wait_for_relay()
@@ -335,6 +335,11 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             if traffic is not None and (failed := self.check_live_traffic(primary, traffic)):
                 return failed
             if problem.shared is not None and (failed := self.check_divergence(primary, traffic)):
+                return failed
+            # Runtime-only fencing must not let the former primary become writable after a restart.
+            app.mysql.restart(other(primary))
+            primary, failed = self.check_replication()
+            if failed:
                 return failed
         except Exception as exc:
             return self.fail_from_exception(exc)

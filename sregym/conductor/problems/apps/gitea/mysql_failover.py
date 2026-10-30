@@ -20,7 +20,6 @@ from sregym.service.apps.gitea.mysql_failover import (
     DELIVER_TIMEOUT,
     LIVE_TRAFFIC,
     RECEIVER,
-    RELAY,
     GiteaMySQLApplication,
 )
 from sregym.utils.decorators import mark_fault_injected
@@ -66,7 +65,6 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.expected_git = None
         self.repository_ids = {}
         self.receiver = None
-        self.relay = None
         self.live_users = None
         self.failover_performed = False
         self.root_cause = self.build_structured_root_cause(
@@ -75,9 +73,11 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
             description="A network partition between region-east and region-west made the failover promote the "
             "west MySQL replica. The east primary had acknowledged issues, comments and closes during the partition "
             "that never replicated, and their webhook events queued in the relay, which could not reach the west "
-            "receiver. Delivery was then paused. After promotion the west primary accepted new issues and comments, "
-            "reusing issue numbers east had already handed out, so the paused backlog holds current events next to "
-            "events that describe east's history. Recovery must keep both histories, drain the backlog so each event "
+            "receiver. Delivery was then paused. After promotion, users resubmitted some lost issues through Gitea, "
+            "and west also accepted independent new issues and comments. West reused issue numbers east had already "
+            "handed out. The paused backlog therefore mixes events from both histories, including repeated creation "
+            "events for resubmitted issues. Recovery must keep both histories, reconcile resubmissions without "
+            "duplicating logical issues, drain the backlog so each logical event "
             "arrives once under the issue's current number, and rebuild east as a clean replica of west without "
             "interrupting the live west primary or Gitea.",
         )
@@ -210,7 +210,6 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.receiver = app.pod_identities(RECEIVER)
         if len(self.receiver) != 1:
             raise RuntimeError("Expected one webhook receiver pod")
-        self.relay = app.pod_identities(RELAY)
         app.start_live_traffic()
         self.live_users = app.pod_identities(LIVE_TRAFFIC)
 

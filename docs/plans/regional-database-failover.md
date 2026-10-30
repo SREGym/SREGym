@@ -57,11 +57,12 @@ Receipts live in the conductor, outside the cluster, so the agent cannot read or
 
 In order, stopping at the first failure:
 
-1. Gitea serves, keeps one replica, and still uses `gitea-db-rw`. The repository volume, receiver, relay and live users pods are unchanged.
+1. Gitea serves, keeps one replica, and still uses `gitea-db-rw`. The repository volume, receiver and live users pods are unchanged.
 2. A fresh write round-trips through Gitea and Git.
 3. Exactly one writable region, the write service selects it, the other region replicates from it with no filters or skipped errors, table checksums match, and issue counters and comment and closed counts agree with the rows.
 4. Every issue from both histories is on both regions. Every comment and close is present. The relay is resumed and empty. Every event implied by the primary's rows was delivered once, with no duplicates or conflicting payloads. A delivery the primary has no record of sending, such as one of the stale side's events, must still match the primary. Events the primary sent stay valid if their issue changes later, so an agent's own test issues do not count against it. Recovered issues and comments are in Gitea's search index.
 5. No acknowledged live user write was lost, and no gap without one was longer than 10 seconds. The oracle pauses the users while it grades and does not count that pause.
+6. The non-serving MySQL replica remains read-only and replicating after a pod restart.
 
 Rows written straight into MySQL are not indexed and do not move counters, so they fail.
 

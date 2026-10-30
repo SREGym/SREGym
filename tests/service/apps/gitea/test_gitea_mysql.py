@@ -142,6 +142,38 @@ def test_unreachable_target_is_reported_rather_than_raised():
     assert MySQLRegions(command, "gitea-db", "gitea", "x", "s").reachable("west", "east") is False
 
 
+@pytest.mark.parametrize(
+    "filters,modes,expected",
+    [
+        ("0", "OFF\tSTRICT", True),
+        ("1", "OFF\tSTRICT", False),
+        ("0", "1062\tSTRICT", False),
+        ("0", "OFF\tIDEMPOTENT", False),
+    ],
+)
+def test_only_active_filters_and_skipped_changes_fail(filters, modes, expected):
+    mysql = MySQLRegions(Mock(), "gitea-db", "gitea", "x", "s")
+    mysql.sql = Mock(side_effect=[filters, modes])
+    assert mysql.applies_everything("east") is expected
+    assert "WHERE FILTER_RULE <> ''" in mysql.sql.call_args_list[0].args[1]
+
+
+def test_restart_waits_for_a_new_ready_pod_and_propagates_errors():
+    command = Mock()
+    mysql = MySQLRegions(command, "gitea-db", "gitea", "x", "s")
+    mysql.restart("east", timeout=20)
+    assert [call.args[:2] for call in command.call_args_list] == [
+        ("delete", "pod/gitea-db-east-0"),
+        ("wait", "--for=create"),
+        ("wait", "--for=condition=Ready"),
+    ]
+    command.reset_mock()
+    command.side_effect = subprocess.CalledProcessError(1, ["kubectl", "delete"])
+    with pytest.raises(subprocess.CalledProcessError):
+        mysql.restart("east")
+    assert command.call_count == 1
+
+
 def test_initialize_leaves_an_initialized_pair_alone():
     command = Mock(return_value="1")
     MySQLRegions(command, "gitea-db", "gitea", "x", "s").initialize("ab")
