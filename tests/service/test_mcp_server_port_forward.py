@@ -1,9 +1,9 @@
-"""start_port_forward accepts a forward only once it serves traffic.
+"""Port-forward readiness and process cleanup without a cluster."""
 
-Control flow over three seams (the probe, Popen and the clock), so none of
-these needs a cluster.
-"""
-
+import os
+import signal
+import subprocess
+import sys
 from unittest import mock
 
 import pytest
@@ -13,12 +13,12 @@ from sregym.service.mcp_server import MCPServer
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
-    """start_port_forward exports MCP_SERVER_PORT and MCP_SERVER_URL on
-    success. Start each test without them so the assertions below see only
-    what the test itself did, and so nothing leaks into the next test."""
-    monkeypatch.delenv("MCP_SERVER_PORT", raising=False)
-    monkeypatch.delenv("MCP_SERVER_URL", raising=False)
+def _clean_env():
+    """Restore variables that start_port_forward writes directly."""
+    with mock.patch.dict(os.environ):
+        os.environ.pop("MCP_SERVER_PORT", None)
+        os.environ.pop("MCP_SERVER_URL", None)
+        yield
 
 
 def _server(healthy):
@@ -88,6 +88,12 @@ def test_start_port_forward_waits_for_traffic_before_accepting(monkeypatch):
     assert s._is_port_forward_healthy.call_count == 3
     s.stop_port_forward.assert_not_called()
     assert mcp_server.os.environ["MCP_SERVER_PORT"] == "9954"
+    mcp_server.subprocess.Popen.assert_called_once_with(
+        ["kubectl", "port-forward", "svc/mcp-server", "9954:9954", "-n", "sregym", "--address", "0.0.0.0"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
 
 
 def test_start_port_forward_gives_up_when_the_forward_never_serves(monkeypatch):
@@ -121,3 +127,31 @@ def test_start_port_forward_stops_waiting_when_the_process_dies(monkeypatch):
     assert s._is_port_forward_healthy.call_count == 1
     assert mcp_server.subprocess.Popen.call_count == 3  # each exit is retried
     assert s.stop_port_forward.call_count == 3
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Uses POSIX signal handling")
+@pytest.mark.parametrize("ignore_term", [False, True])
+def test_stop_port_forward_reaps_the_process(ignore_term):
+    code = (
+        "import signal,time; "
+        f"signal.signal(signal.SIGTERM, {'signal.SIG_IGN' if ignore_term else 'signal.SIG_DFL'}); "
+        "print('ready', flush=True); time.sleep(60)"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-u", "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    server = object.__new__(MCPServer)
+    server.port_forward_process = process
+    try:
+        assert process.stdout.readline().strip() == "ready"
+
+        server.stop_port_forward()
+
+        assert process.returncode == -(signal.SIGKILL if ignore_term else signal.SIGTERM)
+        assert process.stdout.closed and process.stderr.closed
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+        process.stdout.close()
+        process.stderr.close()

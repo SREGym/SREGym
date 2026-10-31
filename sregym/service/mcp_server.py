@@ -18,10 +18,8 @@ logger = logging.getLogger("all.sregym.mcp_server")
 MCP_ROLLOUT_TIMEOUT_SECONDS = int(os.getenv("MCP_ROLLOUT_TIMEOUT_SECONDS", str(WAIT_FOR_POD_READY_TIMEOUT)))
 MCP_ROLLOUT_ATTEMPTS = int(os.getenv("MCP_ROLLOUT_ATTEMPTS", "2"))
 MCP_ROLLOUT_RETRY_DELAY_SECONDS = int(os.getenv("MCP_ROLLOUT_RETRY_DELAY_SECONDS", "5"))
-# How long a freshly started port-forward gets to answer an HTTP request
-# before it is torn down and retried. A floor, not a ceiling: the probe
-# itself waits up to 5s for a reply and the loop sleeps 2s between probes,
-# so one attempt can run about 7s past this.
+# Readiness window for a new forward. An in-flight health probe and the
+# polling interval can extend the total wait beyond this window.
 PORT_FORWARD_READY_TIMEOUT = int(os.getenv("PORT_FORWARD_READY_TIMEOUT", "20"))
 
 
@@ -254,9 +252,8 @@ class MCPServer:
         Returns early when the port already serves traffic. The reclaim below
         is destructive, so running it before checking tore down a working
         forward and, when all three attempts then failed, left none at all.
-        A forward accepted this way is not owned by this object:
-        `port_forward_process` stays None and `stop_port_forward` will not
-        end it.
+        Reusing another object's forward does not transfer ownership, so
+        `stop_port_forward` will not end that borrowed forward.
         """
         if self._is_port_forward_healthy():
             logger.info(f"Port-forward on {self.port} is already serving; leaving it in place.")
@@ -264,10 +261,7 @@ class MCPServer:
             return
 
         for attempt in range(3):
-            # Every attempt, not only the first: the command runs under
-            # `shell=True`, and `stop_port_forward` signals the shell. A
-            # kubectl the shell did not exec outlives it and holds the port,
-            # which would turn the remaining attempts into "port in use".
+            # Also reclaim forwards left by earlier runs before each retry.
             self._kill_stale_port_forward()
 
             if self.is_port_in_use(self.port):
@@ -277,12 +271,18 @@ class MCPServer:
                 time.sleep(3)
                 continue
 
-            command = (
-                f"kubectl port-forward svc/{self.service_name} {self.port}:9954 -n {self.namespace} --address 0.0.0.0"
-            )
+            command = [
+                "kubectl",
+                "port-forward",
+                f"svc/{self.service_name}",
+                f"{self.port}:9954",
+                "-n",
+                self.namespace,
+                "--address",
+                "0.0.0.0",
+            ]
             self.port_forward_process = subprocess.Popen(
                 command,
-                shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -331,6 +331,7 @@ class MCPServer:
             except subprocess.TimeoutExpired:
                 logger.warning("Port-forward process did not terminate in time, killing...")
                 self.port_forward_process.kill()
+                self.port_forward_process.wait(timeout=5)
 
             if self.port_forward_process.stdout:
                 self.port_forward_process.stdout.close()
