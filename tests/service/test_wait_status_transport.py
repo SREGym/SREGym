@@ -15,7 +15,7 @@ from sregym.service.kubectl import KubeCtl
 
 
 @pytest.fixture
-def status_api():
+def status_api(allow_kubernetes_test_server):
     state = SimpleNamespace(delay=0, errors=[], requests=[], read_body_delay=0)
 
     class Handler(BaseHTTPRequestHandler):
@@ -57,6 +57,7 @@ def status_api():
                 pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    allow_kubernetes_test_server(server)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     configuration = client.Configuration()
@@ -118,11 +119,12 @@ def test_a_status_request_can_take_longer_than_ten_seconds(status_api, method):
 
 
 @pytest.mark.parametrize("method", ["wait_for_namespace_deletion", "wait_for_stable"])
-def test_refused_connection_is_retried_only_until_the_outer_deadline(status_api, method):
+def test_refused_connection_is_retried_only_until_the_outer_deadline(status_api, method, allow_kubernetes_test_server):
     subject, _state = status_api
     # Bind a port without listening so connection refusal is deterministic.
     with contextlib.closing(socket.socket()) as closed_port:
         closed_port.bind(("127.0.0.1", 0))
+        allow_kubernetes_test_server(closed_port)
         subject.core_v1_api.api_client.configuration.host = f"http://127.0.0.1:{closed_port.getsockname()[1]}"
         started = time.monotonic()
         with pytest.raises(Exception, match="Timeout"):

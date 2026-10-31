@@ -5,6 +5,8 @@ import pytest
 
 from sregym.service.apps.gitlab.recovery import GitLabRecoveryApplication
 
+pytestmark = pytest.mark.usefixtures("offline_kubectl")
+
 
 def test_gitlab_workload_uses_public_route_without_relaxing_readiness():
     app = GitLabRecoveryApplication()

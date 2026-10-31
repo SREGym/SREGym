@@ -7,6 +7,8 @@ import pytest
 from sregym.service.apps.gitea.recovery import GiteaRecoveryApplication
 from sregym.service.apps.gitea.recovery_workflow import reconcile_issues
 
+pytestmark = pytest.mark.usefixtures("offline_kubectl")
+
 
 @pytest.fixture
 def receipt():

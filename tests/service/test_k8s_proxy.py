@@ -1196,21 +1196,27 @@ def test_resolve_upstream_kubeconfig_honors_env_and_skips_agent_proxy_files(monk
     assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == str(cluster_cfg)
 
 
-def test_explicit_missing_kubeconfig_does_not_select_another_cluster(monkeypatch, tmp_path):
+def test_explicit_missing_kubeconfig_does_not_select_another_cluster(
+    monkeypatch, tmp_path, allow_kubernetes_test_config
+):
     missing = tmp_path / "missing.yaml"
+    allow_kubernetes_test_config(missing)
     monkeypatch.setenv("KUBECONFIG", str(missing))
     assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == str(missing)
     with pytest.raises(config.ConfigException):
         KubernetesAPIProxy()
 
 
-def test_upstream_kubeconfig_merges_files_and_resolves_relative_certificates(monkeypatch, tmp_path):
+def test_upstream_kubeconfig_merges_files_and_resolves_relative_certificates(
+    monkeypatch, tmp_path, allow_kubernetes_test_config
+):
     import yaml
 
     context = tmp_path / "context.yaml"
     credentials_dir = tmp_path / "credentials"
     credentials_dir.mkdir()
     credentials = credentials_dir / "cluster.yaml"
+    allow_kubernetes_test_config(context, credentials)
     (credentials_dir / "ca.pem").write_text("test-ca")
     (credentials_dir / "cert.pem").write_text("test-cert")
     (credentials_dir / "key.pem").write_text("test-key")
