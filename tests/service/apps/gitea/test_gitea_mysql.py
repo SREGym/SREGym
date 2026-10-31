@@ -207,6 +207,21 @@ def test_rebuild_success_still_reconfigures_and_checks_replication(caplog):
     mysql.rebuild("east", "west", "ab")
 
     command.assert_called_once()
+    assert command.call_args.args == (
+        "exec",
+        "gitea-db-east-0",
+        "-c",
+        "mysql",
+        "--",
+        "sh",
+        "-c",
+        'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; set -o pipefail; '
+        'mysqldump -h "$1" -uroot --single-transaction --set-gtid-purged=ON --databases "$2" '
+        "| mysql --protocol=TCP -h127.0.0.1 -uroot",
+        "rebuild",
+        "gitea-db-west",
+        "gitea",
+    )
     assert command.call_args.kwargs == {"timeout": 900}
     mysql.replicate.assert_called_once_with("east", "west", "ab")
     mysql.converged.assert_called_once_with("east", "west")

@@ -402,7 +402,8 @@ class MySQLRegions:
                 "sh",
                 "-c",
                 'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; set -o pipefail; '
-                'mysqldump -h "$1" -uroot --single-transaction --set-gtid-purged=ON --databases "$2" | mysql -uroot',
+                'mysqldump -h "$1" -uroot --single-transaction --set-gtid-purged=ON --databases "$2" '
+                "| mysql --protocol=TCP -h127.0.0.1 -uroot",
                 "rebuild",
                 self.service(source),
                 self.database,
