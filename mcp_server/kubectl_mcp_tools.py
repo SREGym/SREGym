@@ -1,5 +1,6 @@
 import logging
 
+import anyio.to_thread
 from fastmcp import Context, FastMCP
 from yarl import URL
 
@@ -52,7 +53,7 @@ def get_tools(session_id: str) -> KubectlToolSet:
 
 
 @kubectl_mcp.tool()
-def exec_kubectl_cmd_safely(cmd: str, ctx: Context) -> str:
+async def exec_kubectl_cmd_safely(cmd: str, ctx: Context) -> str:
     """
     Use this function to execute kubectl commands.
     Args:
@@ -65,14 +66,24 @@ def exec_kubectl_cmd_safely(cmd: str, ctx: Context) -> str:
     kubctl_tool = get_tools(ssid)
     logger.debug(f'session {ssid} is using tool "exec_kubectl_cmd_safely"; Command: {cmd}.')
 
-    result = kubctl_tool.cmd_runner.exec_kubectl_cmd_safely(cmd)
+    # exec_kubectl_cmd_safely shells out to kubectl and can run for the
+    # length of the kubectl-command timeout (default 300s, see
+    # kubectl_server_helper/kubectl.py). FastMCP calls a sync tool function
+    # inline on the single uvicorn worker (fastmcp/tools/tool.py,
+    # FunctionTool.run), so running it directly here would block every other
+    # request on this process: every other session's tool calls, and the
+    # health probe the conductor's MCPServer runs against the port-forward
+    # (sregym/service/mcp_server.py), which then reads a busy server as a
+    # dead forward. anyio.to_thread.run_sync moves the call to a worker
+    # thread and frees the event loop for the duration.
+    result = await anyio.to_thread.run_sync(kubctl_tool.cmd_runner.exec_kubectl_cmd_safely, cmd)
     assert isinstance(result, str)
     logger.info(f"[ACTION_STACK] after exec ssid={ssid!r}: {kubctl_tool.action_stack}")
     return result
 
 
 @kubectl_mcp.tool()
-def rollback_command(ctx: Context) -> str:
+async def rollback_command(ctx: Context) -> str:
     """
     Use this function to roll back the last kubectl command
     you successfully executed with the "exec_kubectl_cmd_safely" tool.
@@ -83,7 +94,8 @@ def rollback_command(ctx: Context) -> str:
     ssid = extract_session_id(ctx)
     kubectl_tool = get_tools(ssid)
     logger.debug(f'session {ssid} is using tool "rollback_command".')
-    result = kubectl_tool.rollback_tool.rollback()
+    # Same blocking-subprocess shape as exec_kubectl_cmd_safely above.
+    result = await anyio.to_thread.run_sync(kubectl_tool.rollback_tool.rollback)
     assert isinstance(result, str)
     return f"{result}, action_stack: {kubectl_tool.rollback_tool.action_stack}"
 
