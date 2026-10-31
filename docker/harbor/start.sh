@@ -41,6 +41,32 @@ if [ "$inotify_limit" -lt "$inotify_needed" ]; then
     exit 1
 fi
 
+# Optional image-only bundle. Copy it once onto the fresh cluster volume, where
+# the nodes can hard-link archives rather than each copying them from overlayfs.
+# No Kubernetes databases, credentials, snapshots or oracle state are restored.
+if [ -d /opt/sregym-preload ]; then
+    stage="preloaded images"
+    bundle_arch=$(python3 -c 'import json; print(json.load(open("/opt/sregym-preload/bundle.json"))["architecture"])')
+    case $(uname -m) in
+        x86_64) runtime_arch=amd64 ;;
+        aarch64|arm64) runtime_arch=arm64 ;;
+        *) runtime_arch=unsupported ;;
+    esac
+    if [ "$bundle_arch" != "$runtime_arch" ]; then
+        echo "Image bundle architecture $bundle_arch does not match runtime $runtime_arch" >&2
+        false
+    fi
+    install -d -m 700 /var/lib/rancher/k3s/airgap/workers
+    for role in common workers; do
+        source=/opt/sregym-preload/$role.tar
+        [ -f "$source" ] || continue
+        target=/var/lib/rancher/k3s/airgap/$role.tar
+        [ "$role" = workers ] && target=/var/lib/rancher/k3s/airgap/workers/workers.tar
+        echo "Staging $role image archive on the fresh cluster volume"
+        cp "$source" "$target"
+    done
+fi
+
 stage="image-pull proxy"
 python3 /usr/local/lib/userns-k3s/egress-proxy.py --listen 127.0.0.1 --port 3128 >"$out/logs/egress.log" 2>&1 &
 
@@ -54,6 +80,11 @@ timeout 300 bash -c 'until [ "$(kubectl get nodes --no-headers 2>/dev/null | gre
 timeout 120 bash -c 'until [ -z "$(kubectl get node kind-control-plane -o jsonpath="{.metadata.labels.node-role\.kubernetes\.io/control-plane}")" ]; do sleep 2; done'
 kubectl get nodes
 
+if [ -d /opt/sregym-preload ]; then
+    stage="preloaded image references"
+    python3 /usr/local/lib/userns-k3s/preload-aliases.py wait
+fi
+
 stage="SREGym backend"
 trap - ERR
 cd /opt/sregym
@@ -62,4 +93,4 @@ cd /opt/sregym
 export SREGYM_FIXED_MAC_ADDRESS=02:42:ac:11:00:02
 SREGYM_PROBLEM_ID=$(cat /etc/sregym/problem) \
 SREGYM_STEADY_STATE_S=$(cat /etc/sregym/steady-state-seconds 2>/dev/null || echo 0) \
-    exec python -m sregym.harbor.backend --advertise-host 127.0.0.1 --shared-dir "$shared" --output-dir "$out"
+    exec python -u -m sregym.harbor.backend --advertise-host 127.0.0.1 --shared-dir "$shared" --output-dir "$out"

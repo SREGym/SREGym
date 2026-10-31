@@ -46,7 +46,14 @@ mkdir -p $d/k3s/agent/images $d/kubelet $d/etc-rancher $d/log $d/cni $d/openebs 
 touch /etc/machine-id
 mount --bind $d/machine-id /etc/machine-id
 # Air-gapped image tarballs; k3s imports agent/images/*.tar at startup.
-for t in /var/lib/rancher/k3s/airgap/*.tar; do [ -f "$t" ] && ln -f "$t" $d/k3s/agent/images/ 2>/dev/null || cp -n "$t" $d/k3s/agent/images/ 2>/dev/null || true; done
+archives="/var/lib/rancher/k3s/airgap/*.tar"
+# Application images are needed on every worker, but not on the tainted server.
+[ "$role" = server ] || archives="$archives /var/lib/rancher/k3s/airgap/workers/*.tar"
+for t in $archives; do
+    [ -f "$t" ] || continue
+    echo "[$name] staging image archive $(basename "$t")"
+    ln -f "$t" "$d/k3s/agent/images/" 2>/dev/null || cp "$t" "$d/k3s/agent/images/"
+done
 mount --bind $d/kubelet /var/lib/kubelet
 mount --bind $d/etc-rancher /etc/rancher
 mount --bind $d/log /var/log
@@ -86,6 +93,12 @@ if [ -n "${NODE_RESOLV_CONF:-}" ]; then
     # Upstream for pods with dnsPolicy Default, CoreDNS among them.
     common="$common --resolv-conf=$NODE_RESOLV_CONF"
 fi
+if [ -f /opt/sregym-preload/bundle.json ]; then
+    # k3s's archive retagger accepts tags only. Restore canonical references
+    # through the node's own containerd, without any additional capabilities.
+    python3 /usr/local/lib/userns-k3s/preload-aliases.py restore --manifest /opt/sregym-preload/bundle.json --role "$role" &
+fi
+
 if [ "$role" = server ]; then
     # KIND/kubeadm mark the control plane with an empty label value; k3s uses
     # "true". SREGym's charts select the KIND form. Kubelets cannot set

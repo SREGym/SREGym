@@ -1,7 +1,7 @@
 # Single-container, unprivileged Harbor task image: a four-node k3s cluster
 # (docker/userns-k3s), the SREGym backend that deploys and grades the problem,
-# and the agent's tools. Needs no --privileged, capabilities or devices; see
-# docs/harbor.md for the hosts it runs on.
+# and the agent's tools. Not --privileged and no devices; the task adds
+# SYS_ADMIN and NET_ADMIN (see local-docker.yaml and docs/harbor.md).
 FROM rancher/k3s:v1.32.5-k3s1@sha256:b75eac801bbc91b4584769c840f346683c7740d72f83e630088370f8e1eb2c8a AS k3s
 FROM ghcr.io/astral-sh/uv:0.8.22 AS uv
 FROM ubuntu:24.04
@@ -28,7 +28,8 @@ COPY --from=k3s /bin /opt/k3s/bin
 RUN mv /opt/k3s/bin/runc /opt/k3s/bin/runc.real
 COPY docker/userns-k3s/runc-wrapper /opt/k3s/bin/runc
 COPY docker/userns-k3s/entrypoint.sh docker/userns-k3s/fabric.sh docker/userns-k3s/node.sh \
-    docker/userns-k3s/egress-proxy.py docker/userns-k3s/dns-stub.py /usr/local/lib/userns-k3s/
+    docker/userns-k3s/egress-proxy.py docker/userns-k3s/dns-stub.py \
+    docker/userns-k3s/preload-aliases.py /usr/local/lib/userns-k3s/
 COPY docker/userns-k3s/registries.yaml /etc/userns-k3s/registries.yaml
 
 WORKDIR /opt/sregym
@@ -36,6 +37,12 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 RUN test -f SREGym-applications/README.md && uv sync --frozen --no-dev --no-build-isolation
+
+# Fetch static subcharts once; every trial still installs its own application.
+# The helper requires Chart.lock and fails if Helm changes its pinned versions.
+RUN /opt/sregym/.venv/bin/python -m sregym.harbor.preload_charts \
+    /opt/sregym/SREGym-applications/astronomy-shop/charts/opentelemetry-demo \
+    && rm -rf /root/.cache/helm
 
 COPY docker/harbor/start.sh /usr/local/lib/sregym-harbor/start.sh
 COPY docker/harbor/sregym-ready /usr/local/bin/sregym-ready
