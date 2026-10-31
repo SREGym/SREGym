@@ -52,7 +52,13 @@ class IngressNginx:
                     [
                         "helm",
                         "list",
-                        "--all",
+                        # Explicit status filters work on both Helm 3 and 4.
+                        "--deployed",
+                        "--failed",
+                        "--pending",
+                        "--uninstalled",
+                        "--uninstalling",
+                        "--superseded",
                         "--namespace",
                         self.namespace,
                         "--filter",

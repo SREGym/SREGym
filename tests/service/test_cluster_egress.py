@@ -174,3 +174,38 @@ def test_boundary_fails_closed_when_service_subnet_is_unknown():
 
     with pytest.raises(RuntimeError, match="Service subnet"):
         boundary.start()
+
+
+def _egress_rules(monkeypatch, namespace, egress):
+    for name, value in (("SREGYM_TELEMETRY_NAMESPACE", namespace), ("SREGYM_TELEMETRY_EGRESS", egress)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    custom_api = FakeCustomObjectsAPI()
+    ClusterEgressBoundary(SimpleNamespace(), custom_api=custom_api, core_api=FakeCoreAPI()).start()
+    return custom_api.created[0][1]["spec"]["egress"]
+
+
+def test_telemetry_namespace_passes_only_to_its_collector_endpoints(monkeypatch):
+    egress = _egress_rules(monkeypatch, "telemetry", "10.0.0.3/32:4317,10.0.0.4/32:4318")
+
+    selector = "projectcalico.org/name == 'telemetry'"
+    telemetry = [rule for rule in egress if rule.get("source", {}).get("namespaceSelector") == selector]
+    assert [(rule["action"], rule["protocol"], rule["destination"]) for rule in telemetry] == [
+        ("Pass", "TCP", {"nets": ["10.0.0.3/32"], "ports": [4317]}),
+        ("Pass", "TCP", {"nets": ["10.0.0.4/32"], "ports": [4318]}),
+    ]
+    first_deny = next(i for i, rule in enumerate(egress) if rule["action"] == "Deny")
+    assert all(egress.index(rule) < first_deny for rule in telemetry)
+
+
+def test_no_telemetry_rules_unless_both_settings_are_set(monkeypatch):
+    for namespace, egress in (("telemetry", None), (None, "10.0.0.3/32:4317"), (None, None)):
+        rules = _egress_rules(monkeypatch, namespace, egress)
+        assert not [rule for rule in rules if "namespaceSelector" in rule.get("source", {})]
+
+
+def test_malformed_telemetry_destination_fails_closed(monkeypatch):
+    with pytest.raises(ValueError):
+        _egress_rules(monkeypatch, "telemetry", "not-a-cidr:4317")
