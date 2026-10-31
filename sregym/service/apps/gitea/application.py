@@ -185,7 +185,6 @@ class GiteaApplication(KubernetesCommands, Application):
 
     def deploy(self):
         self.command("get", "storageclass", self.storage_class)
-        ensure_operator(self.command)
         self.create_namespace()
         for name, username in (("gitea-database", "gitea"), ("gitea-admin", "service-admin")):
             if not self.command("get", "secret", name, "--ignore-not-found", "-o", "name").strip():
@@ -201,9 +200,8 @@ class GiteaApplication(KubernetesCommands, Application):
                     ]
                 )
         documents = self.render()
-        self.apply([d for d in documents if d["kind"] == "Cluster"])
-        self.wait_database()
-        self.apply([d for d in documents if d["kind"] != "Cluster"])
+        database = self.deploy_database(documents)
+        self.apply([d for d in documents if d not in database])
         self.command("rollout", "status", "deployment/gitea", "--timeout=900s", timeout=920)
         self.command("wait", "--for=condition=Ready", "pod/application-client", "--timeout=300s", timeout=320)
         if not self.command("get", "configmap", "business-data-seeded", "--ignore-not-found", "-o", "name").strip():
@@ -242,6 +240,13 @@ class GiteaApplication(KubernetesCommands, Application):
                 ]
             )
         self.check_workflow()
+
+    def deploy_database(self, documents):
+        ensure_operator(self.command)
+        database = [d for d in documents if d["kind"] == "Cluster"]
+        self.apply(database)
+        self.wait_database()
+        return database
 
     def cluster(self):
         return self.postgres.get()
