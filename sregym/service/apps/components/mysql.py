@@ -1,9 +1,12 @@
 """Two MySQL servers in separate regions joined by asynchronous GTID replication."""
 
 import json
+import logging
 import subprocess
 import time
 from collections.abc import Callable
+
+logger = logging.getLogger("all.sregym.mysql")
 
 MYSQL_IMAGE = "mysql:8.4.6"
 REGIONS = ("east", "west")
@@ -389,21 +392,31 @@ class MySQLRegions:
         """Discard the replica's data and history, then reload it from the source."""
         self.sql(replica, "STOP REPLICA;\nRESET REPLICA ALL;\nSET PERSIST super_read_only = OFF;")
         self.sql(replica, f"DROP DATABASE IF EXISTS `{self.database}`;\nRESET BINARY LOGS AND GTIDS;")
-        self.command(
-            "exec",
-            self.pod(replica),
-            "-c",
-            "mysql",
-            "--",
-            "sh",
-            "-c",
-            'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; set -o pipefail; '
-            'mysqldump -h "$1" -uroot --single-transaction --set-gtid-purged=ON --databases "$2" | mysql -uroot',
-            "rebuild",
-            self.service(source),
-            self.database,
-            timeout=900,
-        )
+        try:
+            self.command(
+                "exec",
+                self.pod(replica),
+                "-c",
+                "mysql",
+                "--",
+                "sh",
+                "-c",
+                'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; set -o pipefail; '
+                'mysqldump -h "$1" -uroot --single-transaction --set-gtid-purged=ON --databases "$2" | mysql -uroot',
+                "rebuild",
+                self.service(source),
+                self.database,
+                timeout=900,
+            )
+        except subprocess.CalledProcessError as exc:
+            logger.error(
+                "MySQL rebuild of %s from %s failed (exit %s). stderr: %s",
+                replica,
+                source,
+                exc.returncode,
+                exc.stderr or "(empty)",
+            )
+            raise
         self.replicate(replica, source, replication_password)
         deadline = time.monotonic() + 120
         while not self.converged(replica, source):

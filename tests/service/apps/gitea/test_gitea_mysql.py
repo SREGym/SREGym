@@ -180,6 +180,39 @@ def test_initialize_leaves_an_initialized_pair_alone():
     assert command.call_count == 1
 
 
+@pytest.mark.parametrize("stderr", ["mysqldump: connection failed", ""])
+def test_rebuild_logs_dump_import_stderr_and_preserves_failure(caplog, stderr):
+    error = subprocess.CalledProcessError(1, ["kubectl", "exec"], stderr=stderr)
+    mysql = MySQLRegions(Mock(side_effect=error), "gitea-db", "gitea", "x", "s")
+    mysql.sql = Mock()
+    mysql.replicate = Mock()
+
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        mysql.rebuild("east", "west", "replication-password")
+
+    assert caught.value is error
+    assert "MySQL rebuild of east from west failed (exit 1)" in caplog.text
+    assert (stderr or "(empty)") in caplog.text
+    assert "replication-password" not in caplog.text
+    mysql.replicate.assert_not_called()
+
+
+def test_rebuild_success_still_reconfigures_and_checks_replication(caplog):
+    command = Mock(return_value="")
+    mysql = MySQLRegions(command, "gitea-db", "gitea", "x", "s")
+    mysql.sql = Mock()
+    mysql.replicate = Mock()
+    mysql.converged = Mock(return_value=True)
+
+    mysql.rebuild("east", "west", "ab")
+
+    command.assert_called_once()
+    assert command.call_args.kwargs == {"timeout": 900}
+    mysql.replicate.assert_called_once_with("east", "west", "ab")
+    mysql.converged.assert_called_once_with("east", "west")
+    assert not caplog.records
+
+
 def test_missing_or_starting_pods_do_not_raise():
     app = GiteaMySQLApplication()
     app.command = Mock(return_value=json.dumps({"items": [{"metadata": {"uid": "u"}, "status": {}}]}))
