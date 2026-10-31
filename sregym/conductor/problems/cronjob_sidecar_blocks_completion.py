@@ -40,12 +40,10 @@ Simulation in SREGym
 A CronJob named ``audit-log-archiver`` is deployed into the Hotel Reservation
 namespace. Its pod template contains:
 
-* A primary container (``archiver``) that simulates a short, well-behaved audit
-  log archival step — it logs, sleeps 1 second, and exits 0.
-* A sidecar container (``fluent-bit-sidecar``) that simulates a fluent-bit log
-  shipper running as a regular (non-native) sidecar — it logs and sleeps in an
-  infinite loop, exactly as a real fluent-bit process would when configured to
-  forward logs to a remote endpoint.
+* A primary container (``archiver``) that sends an audit record to a local
+  forwarding socket, checks the echo, and exits 0 after its archival step.
+* A sidecar container (``fluent-bit-sidecar``) that receives and echoes the
+  record. Its listener runs indefinitely as a regular container.
 
 The CronJob's ``schedule`` is ``* * * * *`` (every minute). Each scheduled Job
 runs the primary, which exits, but the sidecar keeps the pod alive forever.
@@ -55,26 +53,23 @@ and ``fluent-bit-sidecar`` ``Running``.
 
 Accepted mitigation (enforced by the oracle)
 --------------------------------------------
-Convert the sidecar to the Kubernetes 1.28+ native sidecar pattern: move
-it from ``spec.containers`` into ``spec.initContainers`` and set
-``restartPolicy: Always`` on it. This is the architecturally correct fix
-per KEP-753 -- K8s itself auto-terminates the sidecar after the primary
-container exits, so the Pod reaches ``Succeeded`` and the Job reaches
-``Complete``.
+Keep the scheduled archival and forwarding work, and make each Job complete
+after that work finishes. Native sidecars (``initContainers`` with
+``restartPolicy: Always``) are the reference repair. Cooperative shutdown of
+a regular sidecar is also valid when forwarding still works.
 
 Rejected mitigations
 ~~~~~~~~~~~~~~~~~~~~
-* Adding ``activeDeadlineSeconds`` to the jobTemplate. Time-bombs the
-  workload rather than fixing the lifecycle bug. Real archival runs that
-  exceed the deadline are killed mid-flight.
+* Killing the Job at a deadline instead of completing its work successfully.
 * Removing the sidecar container. Silently breaks audit-log forwarding
   to the SIEM.
 * Deleting the CronJob. Removes the workload, not the bug.
 
 Whichever fix the agent applies, it must also clean up the already-
 accumulated active Jobs. The oracle rejects any active Job that still uses the
-old regular-sidecar template, while allowing brief schedule-boundary activity
-from the repaired template.
+old blocking template, while allowing brief schedule-boundary activity from
+the repaired template. Forwarding here is a local simulation, not delivery to
+an external SIEM or a durable archive.
 """
 
 import time
@@ -101,6 +96,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
     PRIMARY_CONTAINER = "archiver"
     SIDECAR_CONTAINER = "fluent-bit-sidecar"
     SIDECAR_PORT = 24224
+    WORKLOAD_IMAGE = "busybox:1.36"
     SCHEDULE = "* * * * *"
 
     # Wait until at least this many Jobs from the CronJob exist before
@@ -144,13 +140,12 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
                 "'successfulJobsHistoryLimit' does not apply to active Jobs, so they "
                 "accumulate without bound, visible as Jobs stuck at COMPLETIONS=0/1 "
                 "and pods whose primary container shows Terminated/Completed while "
-                "the sidecar shows Running. The acceptable fix is to convert the "
-                "sidecar to the Kubernetes 1.28+ native pattern by moving it to "
-                "initContainers with restartPolicy=Always (KEP-753); the kubelet "
-                "then SIGTERMs the sidecar after the primary exits, allowing the "
-                "Pod to reach Succeeded and the Job to reach Complete. "
-                "activeDeadlineSeconds (time-bombs the workload), removing the "
-                "sidecar container (silently breaks log forwarding to the SIEM), "
+                "the sidecar shows Running. A repair must preserve archival and "
+                "log forwarding while letting each Job complete. Native sidecars "
+                "(initContainers with restartPolicy=Always, KEP-753) or cooperative "
+                "shutdown of the regular sidecar can provide this lifecycle. "
+                "Killing unfinished Jobs at a deadline, removing the "
+                "sidecar container (breaks log forwarding), "
                 "and deleting the CronJob entirely (removes the workload) are all "
                 "rejected. The agent must also clean up the already-accumulated "
                 "active Jobs."
@@ -232,9 +227,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
         # legitimately schedule going forward.
         accumulated = [j.metadata.name for j in self._list_owned_jobs()]
 
-        # Apply the only accepted fix: convert the sidecar to the K8s 1.28+
-        # native pattern (move it to initContainers with
-        # restartPolicy=Always). The cleanest way to apply this is to
+        # Apply the reference native-sidecar repair. The cleanest way is to
         # delete and recreate the CronJob with the native-sidecar body,
         # which also covers the case where the agent's rejected mitigation
         # already deleted the CronJob.
@@ -282,10 +275,12 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
         # Realistic primary container: simulates an audit-log archive step.
         primary_cmd = (
             "set -eu\n"
+            'record="${AUDIT_ARCHIVE_RECORD:-audit-archive-ready}"\n'
             "echo \"[$(date -u '+%FT%TZ')] archiver: starting audit log archive\"\n"
             "echo \"[$(date -u '+%FT%TZ')] archiver: bundling /var/log/audit\"\n"
             "attempt=0\n"
-            f"until printf 'audit-archive-ready\\n' | nc -w 2 127.0.0.1 {self.SIDECAR_PORT} >/dev/null; do\n"
+            f'until reply=$(printf "%s\\n" "$record" | nc -w 2 127.0.0.1 {self.SIDECAR_PORT}) '
+            '&& [ "$reply" = "$record" ]; do\n'
             "  attempt=$((attempt + 1))\n"
             '  if [ "$attempt" -ge 10 ]; then\n'
             '    echo "archiver: log forwarding unavailable" >&2\n'
@@ -295,7 +290,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
             "done\n"
             "echo \"[$(date -u '+%FT%TZ')] archiver: audit record forwarded\"\n"
             "sleep 1\n"
-            "echo \"[$(date -u '+%FT%TZ')] archiver: upload complete (0 bytes archived)\"\n"
+            "echo \"[$(date -u '+%FT%TZ')] archiver: upload complete (0 bytes archived); record=$record\"\n"
         )
         # Realistic sidecar: a network listener bound to the fluent-bit forward
         # port (24224). In production this would be the actual fluent-bit binary
@@ -343,7 +338,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
                                 "containers": [
                                     {
                                         "name": self.PRIMARY_CONTAINER,
-                                        "image": "busybox:1.36",
+                                        "image": self.WORKLOAD_IMAGE,
                                         "command": ["sh", "-c", primary_cmd],
                                         "resources": {
                                             "requests": {"cpu": "10m", "memory": "16Mi"},
@@ -352,7 +347,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
                                     },
                                     {
                                         "name": self.SIDECAR_CONTAINER,
-                                        "image": "busybox:1.36",
+                                        "image": self.WORKLOAD_IMAGE,
                                         "command": ["sh", "-c", sidecar_cmd],
                                         "ports": [
                                             {
@@ -381,8 +376,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
 
     def _build_cronjob_body_with_native_sidecar(self) -> dict:
         """Same workload, but with the sidecar moved to ``initContainers`` and
-        given ``restartPolicy: Always``. This is the Path 3 (KEP-753) shape
-        that the oracle accepts. Used by ``recover_fault``."""
+        given ``restartPolicy: Always``. Used by ``recover_fault``."""
         body = self._build_cronjob_body()
         pod_spec = body["spec"]["jobTemplate"]["spec"]["template"]["spec"]
 

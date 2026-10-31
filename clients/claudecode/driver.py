@@ -202,6 +202,11 @@ Important:
 - You can query metrics and traces through the available observability tools
 - The conductor API is available at {get_api_base_url()}
 """
+    if os.environ.get("CHIRON_MCP_URL"):
+        instruction += (
+            "- A Chiron MCP server is available. Its incident_brief tool summarizes current symptoms "
+            "and the most likely recent cause for a namespace.\n"
+        )
 
     logger.info(f"Built instruction:\n{instruction}")
     return instruction
