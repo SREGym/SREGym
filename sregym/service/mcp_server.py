@@ -138,10 +138,17 @@ class MCPServer:
 
     def _is_port_forward_healthy(self) -> bool:
         """Check if the port-forward is actually serving traffic, not just bound."""
+        base_url = f"http://127.0.0.1:{self.port}"
         try:
-            resp = requests.get(f"http://127.0.0.1:{self.port}/kubectl/sse", stream=True, timeout=5)
+            resp = requests.get(f"{base_url}/healthz", timeout=5)
             resp.close()
-            # SSE endpoint returns 200 with text/event-stream
+            if resp.status_code != 404:
+                return resp.status_code == 200
+
+            # deploy() preserves running images, including older versions that
+            # do not expose /healthz. Keep their existing connectivity check.
+            resp = requests.get(f"{base_url}/kubectl/sse", stream=True, timeout=5)
+            resp.close()
             return resp.status_code == 200
         except Exception:
             return False
