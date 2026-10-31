@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +24,8 @@ def test_submission_mcp_forwards_the_stage(monkeypatch, answer, stage, expected_
 
     monkeypatch.setattr(submit_server.requests, "post", post)
 
-    response = submit_server.submit.fn(answer, stage=stage)
+    # submit is an async handler that offloads the POST to a thread.
+    response = asyncio.run(submit_server.submit.fn(answer, stage=stage))
 
     assert response["status"] == "200"
     assert request["json"] == expected_payload
