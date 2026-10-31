@@ -42,5 +42,6 @@ ORACLE_SOLUTION_PATH = "/solution/solve.sh"
 # Values of the ``state`` file.
 STATE_STARTING = "starting"
 STATE_DEPLOYING = "deploying"
+STATE_CHECKING_FAULT = "checking_fault"
 STATE_READY = "ready"
 STATE_FAILED = "failed"

@@ -145,12 +145,24 @@ def test_setup_waits_until_the_oracle_sees_the_fault(make_backend):
     assert backend.grade()["mitigation"]["reason"] == "fault_present"
 
 
+def test_readiness_checker_does_not_replace_or_cache_final_grading(make_backend):
+    backend, session = make_backend()
+    session.check_fault = lambda: {"success": False, "reason": "fault_present", "failure_class": "agent_error"}
+    assert backend.setup()
+    assert session.grades == 0
+    assert backend.grade()["mitigation"]["reason"] == "fault_present"
+    assert session.grades == 1
+
+
 @pytest.mark.parametrize(
     "unseen_verdict",
     [
         {"success": True},
         {"success": False, "reason": "prometheus_unreachable", "failure_class": "environment_error"},
         {"success": False, "reason": "oracle_raised", "failure_class": "harness_error"},
+        {"success": False, "reason": "slo_incomplete_measurement", "failure_class": "ambiguous"},
+        {"success": False, "reason": "slo_no_rounds", "failure_class": "ambiguous"},
+        {"success": False, "reason": "slo_incomplete_measurement"},
     ],
 )
 def test_setup_fails_when_the_oracle_never_sees_the_fault(make_backend, unseen_verdict):
@@ -162,6 +174,14 @@ def test_setup_fails_when_the_oracle_never_sees_the_fault(make_backend, unseen_v
     assert ("any agent would" in error) == unseen_verdict["success"]
     if not unseen_verdict["success"]:
         assert unseen_verdict["reason"] in error
+
+
+def test_legacy_ambiguous_rollout_keeps_original_readiness_and_grade(make_backend):
+    verdict = {"success": False, "reason": "deployment_replicas_unready", "failure_class": "ambiguous"}
+    backend, session = make_backend(fault_seen_after=None, unseen_verdict=verdict)
+    assert backend.setup()
+    assert backend.grade()["mitigation"] == verdict
+    assert session.grades == 2
 
 
 def test_recovery_stops_waiting_at_the_timeout(make_backend):
