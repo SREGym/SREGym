@@ -23,6 +23,16 @@ agents:
     kickoff_env: null
     install_script: install-claudecode.sh
     agent_version: null
+  # Claude Code with the Radar MCP server; see clients/claudecode_radar/README.md.
+  # Radar runs on the host; RADAR_MCP_URL is its endpoint as the container sees it.
+  - name: claudecode_radar
+    kickoff_command: python -m clients.claudecode_radar.driver
+    kickoff_workdir: .
+    kickoff_env:
+      RADAR_MCP_URL: "http://host.docker.internal:9283/mcp"
+    cluster_access: false  # no kubeconfig, no egress to the API proxy or SREGym's MCP server
+    install_script: install-claudecode.sh
+    agent_version: "2.1.301"  # >=2.1.296 keeps 4,096 chars of MCP server instructions
   - name: "debug"
     kickoff_command: "python -c \"import signal; signal.pause()\""
     install_script: null

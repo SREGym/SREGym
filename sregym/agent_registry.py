@@ -16,6 +16,10 @@ class AgentRegistration:
     install_script: str | None = None
     agent_version: str | None = None
     container_isolation: bool = True
+    # False: the agent container gets no kubeconfig and no egress to the API proxy or to SREGym's
+    # MCP server (its /kubectl tools), so its only route to the cluster is whatever MCP server it
+    # is given (e.g. Radar). Default unchanged.
+    cluster_access: bool = True
 
 
 def _ensure_file(path: Path):
@@ -36,6 +40,7 @@ def list_agents(path: Path = DEFAULT_REG_PATH) -> dict[str, AgentRegistration]:
             install_script=a.get("install_script"),
             agent_version=a.get("agent_version"),
             container_isolation=a.get("container_isolation", True),
+            cluster_access=a.get("cluster_access", True),
         )
     return out
 

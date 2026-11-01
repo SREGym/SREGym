@@ -227,6 +227,12 @@ def test_workload_node_and_agent_use_the_recorded_releases():
     assert [node["image"] for node in config["nodes"]] == [IMAGES["kind-node"]] * 4
 
 
+def test_mcp_server_uses_the_recorded_release():
+    config = yaml.safe_load((ROOT / "mcp_server/k8s/kustomization.yaml").read_text())
+    image = next(image for image in config["images"] if image["name"] == "sregym")
+    assert f"{image['newName']}:{image['newTag']}@{image['digest']}" == IMAGES["sregym-mcp"]
+
+
 def test_fleetcast_loads_the_published_backend_override():
     with patch("sregym.service.apps.fleet_cast.KubeCtl"), patch.object(FleetCast, "create_namespace"):
         app = FleetCast()

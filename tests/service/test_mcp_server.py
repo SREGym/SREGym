@@ -1,6 +1,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 import yaml
 
 from sregym.paths import MCP_SERVER_K8S
@@ -145,3 +146,45 @@ def test_mcp_diagnostic_failures_remain_bounded_and_do_not_hide_rollout_error(mo
     diagnostics = server.kubectl.exec_command_checked.call_args_list[1:]
     assert len(diagnostics) == 2
     assert all(call.kwargs["timeout"] == 10 for call in diagnostics)
+
+
+@pytest.mark.parametrize("status", [200, 204, 401, 500, 503])
+def test_port_forward_health_uses_healthz_without_opening_sse(status):
+    server = object.__new__(MCPServer)
+    server.port = 19954
+    response = Mock(status_code=status)
+    with patch("sregym.service.mcp_server.requests.get", return_value=response) as get:
+        assert server._is_port_forward_healthy() is (status == 200)
+    get.assert_called_once_with("http://127.0.0.1:19954/healthz", timeout=5)
+    response.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("legacy_status", [200, 404, 500])
+def test_port_forward_health_preserves_older_running_mcp_images(legacy_status):
+    server = object.__new__(MCPServer)
+    server.port = 19954
+    missing_route = Mock(status_code=404)
+    legacy_response = Mock(status_code=legacy_status)
+    with patch("sregym.service.mcp_server.requests.get", side_effect=[missing_route, legacy_response]) as get:
+        assert server._is_port_forward_healthy() is (legacy_status == 200)
+    assert [call.args[0] for call in get.call_args_list] == [
+        "http://127.0.0.1:19954/healthz",
+        "http://127.0.0.1:19954/kubectl/sse",
+    ]
+    assert get.call_args_list[1].kwargs == {"stream": True, "timeout": 5}
+    missing_route.close.assert_called_once_with()
+    legacy_response.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("error", [requests.ConnectionError, requests.Timeout])
+def test_port_forward_health_rejects_disconnected_and_unresponsive_servers(legacy, error):
+    server = object.__new__(MCPServer)
+    server.port = 19954
+    missing_route = Mock(status_code=404)
+    responses = [missing_route, error("unavailable")] if legacy else [error("unavailable")]
+    with patch("sregym.service.mcp_server.requests.get", side_effect=responses) as get:
+        assert server._is_port_forward_healthy() is False
+    assert get.call_count == (2 if legacy else 1)
+    if legacy:
+        missing_route.close.assert_called_once_with()
