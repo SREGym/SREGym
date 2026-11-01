@@ -179,7 +179,7 @@ def test_main_sets_custom_k8s_port_before_agent_preflight(monkeypatch):
     monkeypatch.setattr(benchmark, "get_container_host_bind_address", lambda: "172.17.0.1")
     monkeypatch.setattr(ContainerRunner, "ensure_image_exists", lambda self: None)
 
-    def preflight(agent, *, container_runner, install_script):
+    def preflight(agent, *, container_runner, install_script, kickoff_env=None):
         assert container_runner.config.k8s_proxy_port == 17443
         raise StopBeforeDeployment
 

@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 
+import anyio.to_thread
 from fastmcp import FastMCP
 
 from mcp_server.utils import ObservabilityClient
@@ -10,14 +11,7 @@ logger.info("Starting Jaeger MCP Server")
 mcp = FastMCP("Jaeger MCP Server")
 
 
-@mcp.tool(name="get_services")
-def get_services() -> str:
-    """Retrieve the list of service names from the Grafana instance.
-
-    Returns:
-        str: String of a list of service names available in Grafana or error information.
-    """
-
+def _get_services_sync() -> str:
     logger.debug("[ob_mcp] get_services called, getting jaeger services")
 
     jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
@@ -38,17 +32,23 @@ def get_services() -> str:
         return err_str
 
 
-@mcp.tool(name="get_operations")
-def get_operations(service: str) -> str:
-    """Query available operations for a specific service from the Grafana instance.
-
-    Args:
-        service (str): The name of the service whose operations should be retrieved.
+@mcp.tool(name="get_services")
+async def get_services() -> str:
+    """Retrieve the list of service names from the Grafana instance.
 
     Returns:
-        str: String of a list of operation names associated with the specified service or error information.
+        str: String of a list of service names available in Grafana or error information.
     """
+    # ObservabilityClient.make_request is a blocking `requests` call (up to
+    # REQUEST_TIMEOUT=120s, plus retries). FastMCP calls a sync tool function
+    # inline on the single uvicorn worker, so running it directly here would
+    # block every other request on this process, including the conductor's
+    # port-forward health probe and every other session's calls. See the
+    # matching comment on exec_kubectl_cmd_safely in mcp_server/kubectl_mcp_tools.py.
+    return await anyio.to_thread.run_sync(_get_services_sync)
 
+
+def _get_operations_sync(service: str) -> str:
     logger.debug("[ob_mcp] get_operations called, getting jaeger operations")
 
     jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
@@ -68,18 +68,20 @@ def get_operations(service: str) -> str:
         return err_str
 
 
-@mcp.tool(name="get_traces")
-def get_traces(service: str, last_n_minutes: int) -> str:
-    """Get Jaeger traces for a given service in the last n minutes.
+@mcp.tool(name="get_operations")
+async def get_operations(service: str) -> str:
+    """Query available operations for a specific service from the Grafana instance.
 
     Args:
-        service (str): The name of the service for which to retrieve trace data.
-        last_n_minutes (int): The time range (in minutes) to look back from the current time.
+        service (str): The name of the service whose operations should be retrieved.
 
     Returns:
-        str: String of Jaeger traces or error information
+        str: String of a list of operation names associated with the specified service or error information.
     """
+    return await anyio.to_thread.run_sync(_get_operations_sync, service)
 
+
+def _get_traces_sync(service: str, last_n_minutes: int) -> str:
     logger.debug("[ob_mcp] get_traces called, getting jaeger traces")
 
     jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
@@ -108,16 +110,21 @@ def get_traces(service: str, last_n_minutes: int) -> str:
         return err_str
 
 
-@mcp.tool(name="get_dependency_graph")
-def get_dependency_graph(last_n_minutes: int = 30) -> str:
-    """
-    Get service dependency graph from Jaeger's native dependencies API.
-    Args:
-        last_n_minutes (int): The time range (in minutes) to look back from the current time.
-    Returns:
-        str: JSON object representing the dependency graph.
-    """
+@mcp.tool(name="get_traces")
+async def get_traces(service: str, last_n_minutes: int) -> str:
+    """Get Jaeger traces for a given service in the last n minutes.
 
+    Args:
+        service (str): The name of the service for which to retrieve trace data.
+        last_n_minutes (int): The time range (in minutes) to look back from the current time.
+
+    Returns:
+        str: String of Jaeger traces or error information
+    """
+    return await anyio.to_thread.run_sync(_get_traces_sync, service, last_n_minutes)
+
+
+def _get_dependency_graph_sync(last_n_minutes: int) -> str:
     jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     client = ObservabilityClient(jaeger_url)
     end_time = int(datetime.now().timestamp() * 1000)
@@ -130,3 +137,15 @@ def get_dependency_graph(last_n_minutes: int = 30) -> str:
     result = str(response.json())
 
     return result
+
+
+@mcp.tool(name="get_dependency_graph")
+async def get_dependency_graph(last_n_minutes: int = 30) -> str:
+    """
+    Get service dependency graph from Jaeger's native dependencies API.
+    Args:
+        last_n_minutes (int): The time range (in minutes) to look back from the current time.
+    Returns:
+        str: JSON object representing the dependency graph.
+    """
+    return await anyio.to_thread.run_sync(_get_dependency_graph_sync, last_n_minutes)
