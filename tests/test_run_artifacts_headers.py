@@ -17,6 +17,8 @@ means a real content difference rather than an incidental column reorder.
 import csv
 from pathlib import Path
 
+import pytest
+
 from sregym.run_artifacts import stabilize_run_csv_headers
 
 
@@ -230,3 +232,40 @@ def test_agent_artifacts_inside_the_run_directory_are_left_alone(tmp_path):
     assert _header(narrow) == ["Mitigation.success", "attempt", "problem_id"]
     assert agents_own.read_text() == "agent_column\nx\n"
     assert other_name.read_text() == "stray\n1\n"
+
+
+@pytest.mark.parametrize("link_depth", [1, 2, 3, 4], ids=["agent", "problem", "run", "csv"])
+def test_symlinked_path_components_do_not_include_or_rewrite_external_results(tmp_path, link_depth):
+    campaign = tmp_path / "campaign"
+    narrow = _publish(campaign, "agent", "p1", 0, "attempt,problem_id\n0,p1\n")
+    full = _publish(campaign, "agent", "p2", 0, "Mitigation.success,attempt,problem_id\nFalse,0,p2\n")
+
+    archive = tmp_path / "archive"
+    external = _publish(archive, "linked-agent", "linked-problem", 0, "external_only,problem_id\nkeep,linked-problem\n")
+    external_before = (external.read_bytes(), external.stat().st_mtime_ns)
+    parts = external.relative_to(archive).parts[:link_depth]
+    link = campaign.joinpath(*parts)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(archive.joinpath(*parts), target_is_directory=link_depth < 4)
+
+    result = stabilize_run_csv_headers(campaign)
+
+    assert result.rewritten == [narrow]
+    assert result.overflow_dropped == []
+    assert _header(narrow) == _header(full) == ["Mitigation.success", "attempt", "problem_id"]
+    assert _rows(full)[0]["Mitigation.success"] == "False"
+    assert (external.read_bytes(), external.stat().st_mtime_ns) == external_before
+    assert link.is_symlink()
+
+
+def test_caller_selected_campaign_root_may_be_a_symlink(tmp_path):
+    campaign = tmp_path / "campaign"
+    narrow = _publish(campaign, "agent", "p1", 0, "attempt,problem_id\n0,p1\n")
+    _publish(campaign, "agent", "p2", 0, "Mitigation.success,attempt,problem_id\nTrue,0,p2\n")
+    selected_root = tmp_path / "selected-campaign"
+    selected_root.symlink_to(campaign, target_is_directory=True)
+
+    result = stabilize_run_csv_headers(selected_root)
+
+    assert result.rewritten == [selected_root / narrow.relative_to(campaign)]
+    assert _header(narrow) == ["Mitigation.success", "attempt", "problem_id"]

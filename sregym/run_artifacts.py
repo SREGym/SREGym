@@ -336,15 +336,18 @@ def stabilize_run_csv_headers(root: Path) -> HeaderStabilizationResult:
     holds the agent's own artifacts, which may contain CSVs of any name and
     symlinks pointing anywhere; neither is followed.
     """
+    # Check the CSV and its run/problem/agent directories, not the caller-selected root.
     paths = sorted(
         path
         for path in root.glob("*/*/run_*/*_results.csv")
-        if path.name == f"{path.parent.parent.name}_results.csv" and not path.is_symlink() and path.is_file()
+        if path.name == f"{path.parent.parent.name}_results.csv"
+        and not any(component.is_symlink() for component in (path, *path.parents[:3]))
+        and path.is_file()
     )
     if len(paths) < 2:
         return HeaderStabilizationResult([], [])
 
-    parsed: list[tuple[Path, list[str], list[dict[str, Any]]]] = []
+    parsed: list[tuple[Path, list[str], list[dict[str, Any]], bool]] = []
     fields: set[str] = set()
     overflow_dropped: list[Path] = []
     for path in paths:
