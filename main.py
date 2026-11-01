@@ -34,7 +34,7 @@ from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
-from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
+from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
@@ -49,6 +49,9 @@ _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
 EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
+# Seconds the agent process gets to exit and flush its logs before it is
+# reaped. Used by both the normal completion path and the timeout path.
+AGENT_REAP_GRACE_SECONDS = 60
 # Namespace deletion may itself wait 300 seconds, after fault recovery and Helm
 # teardown have already consumed part of the cleanup budget. Keep the outer
 # watchdog long enough for those bounded steps to finish and allow slower hosts
@@ -588,7 +591,8 @@ def driver_loop(
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         submission_work = conductor.close_submissions()
-                        LAUNCHER.cleanup_agent(agent_to_run)
+                        # Same grace to flush output as a normal exit, then kill.
+                        LAUNCHER.cleanup_agent(agent_to_run, timeout=AGENT_REAP_GRACE_SECONDS)
                         conductor.results["timed_out"] = True
                         conductor.results["agent_timeout_seconds"] = agent_timeout
                         evaluation_failed = False
@@ -708,7 +712,7 @@ def driver_loop(
                     agent_proc = LAUNCHER._procs.get(agent_to_run) or agent_proc
                     if agent_proc and not timed_out and not abort_campaign_after_attempt:
                         console.log("⏳ Waiting for agent process to complete...")
-                        timeout = 60  # seconds
+                        timeout = AGENT_REAP_GRACE_SECONDS
                         elapsed = 0
                         while elapsed < timeout:
                             check_interrupted()
@@ -1085,6 +1089,28 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
                 logger.error(f"⛔ Partial benchmark results for {agent_name} written to {csv_path}")
     else:
         logger.warning("⚠️ No results to write.")
+
+    # Each per-attempt CSV was published against whatever fieldnames the
+    # driver had accumulated so far, so a file from early in this run can be
+    # missing a column a later attempt's oracle introduced. Now that no more
+    # attempts will be published, whether the run completed or aborted,
+    # reconcile them all to one header.
+    if _driver_base_dir is not None:
+        try:
+            header_stabilization = stabilize_run_csv_headers(_driver_base_dir)
+            if header_stabilization.rewritten:
+                logger.info(
+                    f"🧹 Normalized headers on {len(header_stabilization.rewritten)} per-attempt result file(s)"
+                )
+            if header_stabilization.overflow_dropped:
+                logger.warning(
+                    f"⚠️ {len(header_stabilization.overflow_dropped)} result file(s) had a row with more "
+                    "values than its own header, so something wrote a malformed line. The "
+                    f"unlabeled overflow was dropped, not attributed to any column: "
+                    f"{header_stabilization.overflow_dropped}"
+                )
+        except (OSError, csv.Error) as exc:
+            logger.warning(f"⚠️ Result CSV header normalization failed (non-fatal): {exc}")
 
     if _driver_error is not None:
         if __name__ == "__main__":
