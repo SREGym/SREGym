@@ -95,8 +95,9 @@ class Loki:
         """Add Grafana Helm repository for Loki chart."""
         self.logger.info("Adding Grafana Helm repository...")
         try:
-            KubeCtl().exec_command("helm repo add grafana https://grafana.github.io/helm-charts")
-            KubeCtl().exec_command("helm repo update")
+            kubectl = KubeCtl()
+            kubectl.exec_command_checked("helm repo add grafana https://grafana.github.io/helm-charts", timeout=30)
+            kubectl.exec_command_checked("helm repo update grafana", timeout=60)
         except Exception as e:
             self.logger.warning(f"Failed to add Grafana Helm repo (may already exist): {e}")
 

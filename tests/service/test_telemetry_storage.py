@@ -38,3 +38,19 @@ def test_loki_storage_is_managed_by_its_helm_chart():
     assert persistence["enabled"] is True
     assert persistence["storageClass"] == "openebs-hostpath"
     assert persistence["size"] == "10Gi"
+
+
+def test_loki_updates_only_grafana_repo_with_bounded_commands(monkeypatch):
+    calls = []
+
+    class Kubectl:
+        def exec_command_checked(self, command, timeout=None):
+            calls.append((command, timeout))
+
+    monkeypatch.setattr("sregym.service.telemetry.loki.KubeCtl", Kubectl)
+    Loki()._add_grafana_helm_repo()
+
+    assert calls == [
+        ("helm repo add grafana https://grafana.github.io/helm-charts", 30),
+        ("helm repo update grafana", 60),
+    ]
