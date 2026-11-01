@@ -126,6 +126,16 @@ def test_kind_setup_accepts_dind_config_and_node_image(shell_environment, tmp_pa
     assert calls[1] == f"kind create cluster --config {config} --image sregym-kind:local --retain"
 
 
+def test_kind_setup_names_the_cluster_from_the_environment(shell_environment):
+    result, calls = shell_environment("setup_kind_cluster.sh", extra_env={"KIND_CLUSTER_NAME": "sregym-2"})
+    assert result.returncode == 0, result.stderr
+    assert calls[1].startswith("kind create cluster --config ")
+    assert calls[1].endswith(" --name sregym-2")
+    # Every later kind command must address the same cluster, or it acts on
+    # the default one.
+    assert "kind get nodes --name sregym-2" in calls
+
+
 def test_kind_setup_clears_baseline_in_default_cache_dir(shell_environment):
     result, calls = shell_environment("setup_kind_cluster.sh")
     assert result.returncode == 0, result.stderr
