@@ -5,6 +5,13 @@
 # Usage (from repo root):
 #   bash kind/setup_kind_cluster.sh [auto|arm|x86]
 #
+# Environment:
+#   KIND_CLUSTER_NAME  Name of the cluster to create. Unset, kind uses its
+#                      default ("kind"). Two clusters on one host need
+#                      distinct names, or the second create fails. The name
+#                      is passed to every kind command here, since kind
+#                      otherwise addresses the default cluster.
+#
 # Requirements:
 #   - kind
 #   - kubectl
@@ -45,6 +52,9 @@ fi
 if [[ ${KIND_RETAIN_ON_FAILURE:-false} == true ]]; then
     CREATE_ARGS+=(--retain)
 fi
+if [[ -n ${KIND_CLUSTER_NAME:-} ]]; then
+    CREATE_ARGS+=(--name "${KIND_CLUSTER_NAME}")
+fi
 kind create cluster "${CREATE_ARGS[@]}"
 
 echo "==> Step 2b: Drop host DNS search domains from the nodes"
@@ -56,7 +66,8 @@ echo "==> Step 2b: Drop host DNS search domains from the nodes"
 # foreign address and every request fails with 503. Pods only need the cluster
 # search domains, which kubelet adds on its own.
 CONTAINER_CLI="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
-for node in $(kind get nodes 2>/dev/null); do
+# shellcheck disable=SC2086 # the expansion is empty or exactly two words
+for node in $(kind get nodes ${KIND_CLUSTER_NAME:+--name "${KIND_CLUSTER_NAME}"} 2>/dev/null); do
     # /etc/resolv.conf is a bind mount: rewrite the content, not the inode.
     "${CONTAINER_CLI}" exec "${node}" sh -c \
         'awk "!/^search /" /etc/resolv.conf > /tmp/resolv.conf.sregym && cat /tmp/resolv.conf.sregym > /etc/resolv.conf'
