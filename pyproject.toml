@@ -216,6 +216,14 @@ docstring-code-format = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Import the checkout under test, not the one the virtualenv was built from.
+# An editable install registers a finder that maps each package to the
+# checkout it was installed from. pytest does not put the project root on
+# sys.path (tests/ has no __init__.py), so in any other checkout that shares
+# the environment, a git worktree for instance, every test imports the
+# original checkout's code and passes against it. This also makes the
+# top-level mcp_server package importable, which tests/mcp needs.
+pythonpath = ["."]
 addopts = ["--ignore=docker/apps/stripe/backend/vendor"]
 markers = [
     "integration: end-to-end tests requiring a running Kubernetes cluster",
