@@ -28,7 +28,24 @@ class ChecklistParseError(Exception):
 
 
 class JudgeParseError(Exception):
-    """Raised after all retries are exhausted when parsing checklist results."""
+    """Raised after all retries are exhausted when parsing checklist results.
+
+    Carries the judge's last reply so the caller can record it. Nothing else
+    in a run keeps that text, and without it an unscored attempt cannot be
+    explained or re-judged after the run.
+    """
+
+    def __init__(self, message: str, *, raw_response: str = "", attempts: int = 0):
+        super().__init__(message)
+        self.raw_response = raw_response
+        self.attempts = attempts
+
+
+# Values of JudgmentReport.unscored_reason, and of the Diagnosis.unscored_reason
+# column they reach the results CSV as. An unscored attempt is not a zero: the
+# judge produced no verdict, so there is nothing to grade.
+UNSCORED_JUDGE_PARSE_FAILURE = "judge_parse_failure"
+UNSCORED_BACKEND_UNAVAILABLE = "judge_backend_unavailable"
 
 
 # Reasoning models (Gemini 2.5+/3.x, o-series, Claude with extended thinking)
@@ -269,6 +286,7 @@ fences, no preamble, no commentary.
         self.max_tokens = max_tokens
 
         self._backend = None
+        self._truncation_budget_grown = False
 
         # Load checklist config
         if checklist_path is None:
@@ -357,13 +375,7 @@ fences, no preamble, no commentary.
         if self.backend is None:
             error_msg = "LLM judge backend is not initialized - skipping evaluation"
             print(f"Warning: {error_msg}")
-            return JudgmentReport(
-                verdict=None,
-                reasoning=error_msg,
-                composite_score=0.0,
-                checklist_version=self._checklist_version,
-                evaluator_model=self._evaluator_model(),
-            )
+            return self._unscored_report(UNSCORED_BACKEND_UNAVAILABLE, error_msg)
 
         # Handle empty / "I don't know" answers
         if not solution or not solution.strip():
@@ -371,7 +383,15 @@ fences, no preamble, no commentary.
 
         # Build and send prompt
         user_msg = self._build_user_message(solution, expectation)
-        raw_results = self._call_llm_with_retry(user_msg)
+        try:
+            raw_results = self._call_llm_with_retry(user_msg)
+        except JudgeParseError as exc:
+            # Unscored, not zero. Returned rather than raised because
+            # LLMAsAJudgeOracle.evaluate wraps this call in a bare
+            # `except Exception` that records success=False, which is the
+            # silent zero this path exists to stop.
+            print(f"Warning: {exc}")
+            return self._unscored_report(UNSCORED_JUDGE_PARSE_FAILURE, str(exc), raw_response=exc.raw_response)
 
         # Build question lookup from config
         q_lookup: dict[str, dict] = {}
@@ -479,57 +499,78 @@ fences, no preamble, no commentary.
         lines.append("]")
         return "\n".join(lines)
 
-    def _call_llm_with_retry(self, user_msg: str) -> list[dict]:
-        """Call the LLM and parse the response, retrying up to once per failure mode."""
-        messages = [
-            SystemMessage(content=self._system_prompt),
-            HumanMessage(content=user_msg),
-        ]
+    # Three calls, not two. At temperature 0.0 a retry that resends the
+    # identical prompt is close to a repeat of the call that just failed, so
+    # the old second attempt bought little; every retry now carries a
+    # correction naming the failure, and there is one more of them.
+    MAX_PARSE_ATTEMPTS = 3
 
+    def _retry_correction(self, error: Exception) -> str:
+        """The instruction appended to the prompt after a failed parse.
+
+        The old loop only corrected a missing-question response, gated on
+        ``"missing" in str(e)`` or the question count appearing anywhere in
+        the message. An "Invalid JSON" error matched neither, so the one case
+        that needs a format correction most got the same prompt back.
+        """
+        return (
+            f"\n\nYour previous response could not be parsed: {error}. "
+            f"Respond with a single JSON array of exactly {self._num_questions} "
+            "objects and nothing else: no markdown fences, no preamble, no "
+            "commentary. Every question id listed above must appear exactly once."
+        )
+
+    def _call_llm_with_retry(self, user_msg: str) -> list[dict]:
+        """Call the LLM and parse the response, correcting and retrying on failure.
+
+        A reply cut off at ``max_tokens`` is retried once with a larger
+        budget and the same prompt, since the budget caused that failure.
+        Any other parse failure, and a second truncation, is retried with a
+        correction naming it. The budget grows once because the growth
+        sticks for every later call on this judge, and a second step would
+        exceed most providers' output limit.
+
+        Raises ``JudgeParseError`` once every attempt has failed. It used to
+        return all-No answers instead, which scored the attempt 0.0 on every
+        dimension and made a judge that never answered look exactly like an
+        agent that answered wrongly.
+        """
         last_error: Exception | None = None
-        for attempt in range(2):
-            response = None
+        last_raw = ""
+        prompt = user_msg
+        for attempt in range(self.MAX_PARSE_ATTEMPTS):
+            messages = [
+                SystemMessage(content=self._system_prompt),
+                HumanMessage(content=prompt),
+            ]
+            response = self.backend.inference(messages)
+            last_raw = LLMJudge._content_text(response.content)
             try:
-                response = self.backend.inference(messages)
-                response_text = LLMJudge._content_text(response.content)
-                results = self._parse_response(response_text, self._all_question_ids)
-                return results
+                return self._parse_response(last_raw, self._all_question_ids)
             except ChecklistParseError as e:
                 last_error = e
-                print(f"Checklist parse attempt {attempt + 1} failed: {e}")
-                if attempt == 0:
-                    if self._was_truncated(response):
-                        # The budget, not the model, caused the failure. Repeating
-                        # the same request would truncate again.
-                        new_budget = self.max_tokens * _TRUNCATION_RETRY_FACTOR
-                        print(
-                            f"Judge response hit max_tokens={self.max_tokens} "
-                            f"(finish_reason=length); retrying with max_tokens={new_budget}"
-                        )
-                        self.max_tokens = new_budget
-                        self.backend.max_tokens = new_budget
-                    elif "missing" in str(e).lower() or str(self._num_questions) in str(e):
-                        messages = [
-                            SystemMessage(content=self._system_prompt),
-                            HumanMessage(
-                                content=(
-                                    user_msg + f"\n\nYour previous response was missing some "
-                                    f"questions. Respond with all {self._num_questions}."
-                                )
-                            ),
-                        ]
+                print(f"Checklist parse attempt {attempt + 1} of {self.MAX_PARSE_ATTEMPTS} failed: {e}")
+                if attempt + 1 == self.MAX_PARSE_ATTEMPTS:
+                    break
+                if self._was_truncated(response) and not self._truncation_budget_grown:
+                    # The budget, not the model, caused the failure. Repeating
+                    # the same request would truncate again.
+                    self._truncation_budget_grown = True
+                    new_budget = self.max_tokens * _TRUNCATION_RETRY_FACTOR
+                    print(
+                        f"Judge response hit max_tokens={self.max_tokens} "
+                        f"(finish_reason=length); retrying with max_tokens={new_budget}"
+                    )
+                    self.max_tokens = new_budget
+                    self.backend.max_tokens = new_budget
+                else:
+                    prompt = user_msg + self._retry_correction(e)
 
-        # After 2 failures, return defaults for missing questions
-        print(f"JudgeParseError: all retries exhausted – {last_error}")
-        return [
-            {
-                "id": qid,
-                "answer": "No",
-                "evidence": "parse failure — defaulting to No",
-                "confidence": "Low",
-            }
-            for qid in self._all_question_ids
-        ]
+        raise JudgeParseError(
+            f"judge response unparseable after {self.MAX_PARSE_ATTEMPTS} attempts: {last_error}",
+            raw_response=last_raw,
+            attempts=self.MAX_PARSE_ATTEMPTS,
+        )
 
     @staticmethod
     def _was_truncated(response) -> bool:
@@ -592,7 +633,12 @@ fences, no preamble, no commentary.
                 raise ChecklistParseError("Each checklist item must be an object")
             qid = item.get("id")
             if not isinstance(qid, str) or qid not in expected_ids:
-                raise ChecklistParseError(f"Invalid question ID: {qid!r}")
+                # This message also enters retry prompts and result CSVs.
+                # The complete model reply is retained separately.
+                preview = repr(qid)
+                if len(preview) > 160:
+                    preview = preview[:157] + "..."
+                raise ChecklistParseError(f"Invalid question ID: {preview}")
             if qid in received_ids:
                 raise ChecklistParseError(f"Duplicate question ID: {qid}")
             answer = item.get("answer")
@@ -608,6 +654,26 @@ fences, no preamble, no commentary.
                 f"Expected {len(expected_ids)} questions, got {len(candidate)}. Missing: {sorted(missing)}"
             )
         return candidate
+
+    def _unscored_report(self, reason: str, message: str, raw_response: str = ""):
+        """A report with no verdict, for an attempt the judge could not score.
+
+        Distinct from ``_empty_report``: that one is a real 0.0 for an agent
+        that submitted nothing, which is a graded failure. This one says the
+        judge never produced an answer, so there is nothing to grade and the
+        attempt belongs out of both the numerator and the denominator.
+        """
+        from sregym.conductor.oracles.llm_as_a_judge.models import JudgmentReport
+
+        return JudgmentReport(
+            verdict=None,
+            reasoning=message,
+            composite_score=0.0,
+            checklist_version=self._checklist_version,
+            evaluator_model=self._evaluator_model(),
+            unscored_reason=reason,
+            raw_response=raw_response,
+        )
 
     def _empty_report(self):
         """Return a report where all questions score No (empty/unknown answer)."""

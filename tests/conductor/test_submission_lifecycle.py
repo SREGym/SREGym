@@ -911,6 +911,31 @@ def test_final_status_is_complete_only_when_every_stage_has_a_result():
     assert conductor.results["run_status"] == "complete"
 
 
+@pytest.mark.parametrize("unscored", [("diagnosis",), ("mitigation",), ("diagnosis", "mitigation")])
+def test_submitted_but_unscored_stages_make_attempt_incomplete(unscored):
+    conductor = _conductor()
+    conductor.submission_stage = "done"
+    for stage in ("diagnosis", "mitigation"):
+        conductor.results[stage.capitalize()] = {"success": None if stage in unscored else True}
+
+    assert conductor.missing_submission_stages() == []
+    assert conductor.finalize_attempt_status() == "incomplete"
+    assert conductor.results["incomplete_reason"] == "unscored_stage_results"
+    assert conductor.results["incomplete_stage"] == unscored[0]
+    assert conductor.results["unscored_stages"] == ",".join(unscored)
+    assert conductor.results["missing_stages"] == ""
+
+
+@pytest.mark.parametrize("stage", ["diagnosis", "mitigation"])
+@pytest.mark.parametrize("success", [True, False])
+def test_final_status_preserves_scored_single_stage_runs(stage, success):
+    conductor = _conductor()
+    conductor.stage_sequence = [{"name": stage}]
+    conductor.results[stage.capitalize()] = {"success": success}
+
+    assert conductor.finalize_attempt_status() == "complete"
+
+
 def test_cleanup_failure_makes_a_fully_graded_attempt_incomplete():
     conductor = _conductor()
     conductor.results["Diagnosis"] = {"success": True}
