@@ -1,5 +1,7 @@
 """Regression tests for #1138: litellm errors must reach the litellm handlers in the retry loop."""
 
+import json
+
 import litellm
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -12,10 +14,10 @@ OK = AIMessage(content="ok")
 RETRY_INFO = {"error": {"details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "45s"}]}}
 
 
-def rate_limit(body=None):
-    error = litellm.RateLimitError(message="rate limited", llm_provider="gemini", model=MODEL)
-    error.body = body  # litellm discards the passed response, so feed the provider payload via body
-    return error
+def rate_limit(payload=None):
+    """Build the error the way litellm does: provider body embedded in a prefixed message."""
+    message = "rate limited" if payload is None else f"VertexAIException - {json.dumps(payload)}"
+    return litellm.RateLimitError(message=message, llm_provider="gemini", model=MODEL)
 
 
 def trimmed(call):
@@ -72,3 +74,9 @@ def test_service_unavailable_waits_sixty_seconds_and_trims(run):
 
 def test_extract_retry_delay_returns_none_without_retry_info():
     assert _extract_retry_delay_seconds_from_exception(rate_limit()) is None
+
+
+def test_extract_retry_delay_from_litellm_prefixed_message():
+    error = rate_limit(RETRY_INFO)
+    assert error.message.startswith("litellm.RateLimitError: VertexAIException - ")
+    assert _extract_retry_delay_seconds_from_exception(error) == 45.0

@@ -1,4 +1,3 @@
-import contextlib
 import json
 import logging
 import os
@@ -246,6 +245,28 @@ def _parse_duration_to_seconds(duration: Any) -> float | None:
     return None
 
 
+def _json_in_text(text: str | bytes) -> Any | None:
+    """Parse ``text`` as JSON, tolerating a text prefix.
+
+    litellm keeps the provider's error body only inside a prefixed message such
+    as ``litellm.RateLimitError: VertexAIException - {...}``, so a plain
+    ``json.loads`` fails. Fall back to decoding from the first ``{``.
+    """
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    start = text.find("{")
+    if start == -1:
+        return None
+    try:
+        return json.JSONDecoder().raw_decode(text, start)[0]
+    except ValueError:
+        return None
+
+
 def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | None:
     candidates: list[Any] = []
 
@@ -261,7 +282,8 @@ def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | N
         try:
             text = getattr(response, "text", None)
             if isinstance(text, (str, bytes)):
-                candidates.append(json.loads(text))
+                if (parsed := _json_in_text(text)) is not None:
+                    candidates.append(parsed)
         except Exception:
             pass
 
@@ -271,7 +293,8 @@ def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | N
             if isinstance(val, (dict, list)):
                 candidates.append(val)
             elif isinstance(val, (str, bytes)):
-                candidates.append(json.loads(val))
+                if (parsed := _json_in_text(val)) is not None:
+                    candidates.append(parsed)
         except Exception:
             pass
 
@@ -280,8 +303,8 @@ def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | N
             if isinstance(arg, (dict, list)):
                 candidates.append(arg)
             elif isinstance(arg, (str, bytes)):
-                with contextlib.suppress(Exception):
-                    candidates.append(json.loads(arg))
+                if (parsed := _json_in_text(arg)) is not None:
+                    candidates.append(parsed)
     except Exception:
         pass
 
