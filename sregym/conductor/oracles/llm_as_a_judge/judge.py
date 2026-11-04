@@ -286,6 +286,7 @@ fences, no preamble, no commentary.
         self.max_tokens = max_tokens
 
         self._backend = None
+        self._truncation_budget_grown = False
 
         # Load checklist config
         if checklist_path is None:
@@ -537,7 +538,6 @@ fences, no preamble, no commentary.
         last_error: Exception | None = None
         last_raw = ""
         prompt = user_msg
-        budget_grown = False
         for attempt in range(self.MAX_PARSE_ATTEMPTS):
             messages = [
                 SystemMessage(content=self._system_prompt),
@@ -550,10 +550,12 @@ fences, no preamble, no commentary.
             except ChecklistParseError as e:
                 last_error = e
                 print(f"Checklist parse attempt {attempt + 1} of {self.MAX_PARSE_ATTEMPTS} failed: {e}")
-                if self._was_truncated(response) and not budget_grown:
+                if attempt + 1 == self.MAX_PARSE_ATTEMPTS:
+                    break
+                if self._was_truncated(response) and not self._truncation_budget_grown:
                     # The budget, not the model, caused the failure. Repeating
                     # the same request would truncate again.
-                    budget_grown = True
+                    self._truncation_budget_grown = True
                     new_budget = self.max_tokens * _TRUNCATION_RETRY_FACTOR
                     print(
                         f"Judge response hit max_tokens={self.max_tokens} "
@@ -631,7 +633,12 @@ fences, no preamble, no commentary.
                 raise ChecklistParseError("Each checklist item must be an object")
             qid = item.get("id")
             if not isinstance(qid, str) or qid not in expected_ids:
-                raise ChecklistParseError(f"Invalid question ID: {qid!r}")
+                # This message also enters retry prompts and result CSVs.
+                # The complete model reply is retained separately.
+                preview = repr(qid)
+                if len(preview) > 160:
+                    preview = preview[:157] + "..."
+                raise ChecklistParseError(f"Invalid question ID: {preview}")
             if qid in received_ids:
                 raise ChecklistParseError(f"Duplicate question ID: {qid}")
             answer = item.get("answer")
