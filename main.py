@@ -785,6 +785,7 @@ def driver_loop(
                     else:
                         snapshot[stage] = outcome
 
+                snapshot = run.save_judge_responses(snapshot)
                 fieldnames = sorted({key for row in [*all_results_for_agent, snapshot] for key in row})
                 ownership_image = LAUNCHER.container_image
                 try:
@@ -798,6 +799,8 @@ def driver_loop(
                     snapshot["artifact_staging_path"] = str(run.active_dir)
                     if run.network_audit_path.exists():
                         snapshot["internet_audit_staging_path"] = str(run.network_audit_path)
+                    if run.judge_responses_path.exists():
+                        snapshot["judge_responses_staging_path"] = str(run.judge_responses_path)
                     logger.error(
                         "Artifact finalization failed for %s attempt %s; staging retained at %s: %s",
                         pid,

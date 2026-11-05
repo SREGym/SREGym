@@ -315,6 +315,7 @@ def test_timed_out_agent_gets_the_normal_exit_reap_grace(monkeypatch, tmp_path):
     monkeypatch.setattr(benchmark_main, "list_agents", lambda path: {"agent": object()})
     monkeypatch.setattr(benchmark_main.trace_postprocess, "write_trajectory", lambda _run_dir: None)
     run = Mock(finalize_and_publish=Mock(return_value=tmp_path / "run"))
+    run.save_judge_responses.side_effect = lambda snapshot: snapshot
     monkeypatch.setattr(benchmark_main, "RunArtifacts", SimpleNamespace(create=Mock(return_value=run)))
     cleanup_agent = Mock()
     monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_agent", cleanup_agent)
