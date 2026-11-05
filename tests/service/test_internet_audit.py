@@ -192,7 +192,19 @@ def test_save_failure_does_not_leave_partial_json(tmp_path, monkeypatch):
     assert not list(run.active_dir.parent.glob("*.tmp"))
 
 
-@pytest.mark.parametrize("scenario", ["complete", "exit", "timeout", "cleanup_error", "artifact_error", "save_error"])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "complete",
+        "exit",
+        "timeout",
+        "cleanup_error",
+        "artifact_error",
+        "save_error",
+        "judge_unscored",
+        "judge_artifact_error",
+    ],
+)
 def test_driver_persists_audit_before_shutdown(audit_runner, tmp_path, monkeypatch, scenario):
     path = Path(__file__).resolve().parents[2] / "main.py"
     spec = importlib.util.spec_from_file_location("audit_driver_test", path)
@@ -221,6 +233,10 @@ def test_driver_persists_audit_before_shutdown(audit_runner, tmp_path, monkeypat
         conductor.results.update(run_status="incomplete", incomplete_reason=reason, **fields)
 
     def finalize():
+        if scenario in ("judge_unscored", "judge_artifact_error"):
+            from sregym.conductor.conductor import Conductor
+
+            return Conductor.finalize_attempt_status(conductor)
         return conductor.results.setdefault("run_status", "complete")
 
     async def start_agent(_reg):
@@ -228,8 +244,20 @@ def test_driver_persists_audit_before_shutdown(audit_runner, tmp_path, monkeypat
         process.egress_blocked_start = runner.blocked_request_count()
         append(log, record(f"attempt-{process.egress_blocked_start}.test"))
         launcher._procs[process.name] = process
-        if scenario == "artifact_error":
+        if scenario in ("artifact_error", "judge_artifact_error"):
             (Path(os.environ["AGENT_LOGS_DIR"]) / "exposure.txt").write_text("test_fault")
+        if scenario in ("judge_unscored", "judge_artifact_error"):
+            conductor.stage_sequence = [{"name": "diagnosis"}, {"name": "mitigation"}]
+            conductor.missing_submission_stages.return_value = []
+            conductor.results.update(
+                Diagnosis={
+                    "success": None,
+                    "accuracy": None,
+                    "unscored_reason": "judge_parse_failure",
+                    "judge_raw_response": "long malformed reply\n" * 10000,
+                },
+                Mitigation={"success": True},
+            )
         return process
 
     conductor.start_problem = start_problem
@@ -262,7 +290,7 @@ def test_driver_persists_audit_before_shutdown(audit_runner, tmp_path, monkeypat
         if scenario == "save_error":
             assert row["internet_audit_error"] == "could not save blocked-request records"
             continue
-        if scenario == "artifact_error":
+        if scenario in ("artifact_error", "judge_artifact_error"):
             audit_path = Path(row["internet_audit_staging_path"])
             assert row["artifact_finalization_failed"]
         else:
@@ -272,3 +300,21 @@ def test_driver_persists_audit_before_shutdown(audit_runner, tmp_path, monkeypat
         audit = json.loads(audit_path.read_text())
         assert audit["blocked_requests"] == len(audit["blocked_request_details"]) == 1
         assert audit["blocked_request_details"][0]["host"] == f"attempt-{row['attempt']}.test"
+        if scenario in ("judge_unscored", "judge_artifact_error"):
+            assert row["run_status"] == "incomplete"
+            assert row["incomplete_stage"] == "diagnosis"
+            assert "Diagnosis.judge_raw_response" not in row
+            assert row["Diagnosis.judge_raw_response_artifact"] == "judge_responses.json#Diagnosis.judge_raw_response"
+            reply_path = (
+                Path(row["judge_responses_staging_path"])
+                if scenario == "judge_artifact_error"
+                else audit_path.with_name("judge_responses.json")
+            )
+            replies = json.loads(reply_path.read_text())
+            assert replies["Diagnosis.judge_raw_response"] == "long malformed reply\n" * 10000
+    if scenario in ("judge_unscored", "judge_artifact_error"):
+        import csv
+
+        for path in (tmp_path / "results").rglob("*_results.csv"):
+            with path.open(newline="") as stream:
+                assert all(row["Diagnosis.success"] == "" for row in csv.DictReader(stream))
