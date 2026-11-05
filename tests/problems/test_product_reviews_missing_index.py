@@ -28,11 +28,23 @@ PARALLEL_SEQ_PLAN = """Gather  (cost=1000.00..7622.99 rows=104 width=91)
   ->  Parallel Seq Scan on productreviews  (cost=0.00..6612.59 rows=43 width=91)"""
 
 
+TABLE_RULES = {
+    "id": "true|true|true",
+    "product_id": "true|false|false",
+    "username": "true|false|false",
+    "description": "false|false|false",
+    "score": "true|false|false",
+    "(table)": "false|p|false",
+}
+
+
 @pytest.fixture
 def problem():
     problem = Problem.__new__(Problem)
     problem.namespace = "astronomy-shop"
     problem._qualified = "reviews.productreviews"
+    problem.index_column = "product_id"
+    problem.index_name = "product_id_index"
     problem.kubectl = SimpleNamespace(exec_command=Mock(), exec_command_checked=Mock())
     problem.catalog_ids = ["OLJCESPC7Z", "66VCHSJNUP"]
     problem.probe_reviews = [("stargazer", "Great views, it's sharp.")]
@@ -125,13 +137,14 @@ def test_seed_fails_loudly_when_copy_is_short(problem):
 
 def test_lookup_plans_splits_one_psql_call(problem):
     problem._psql = Mock(
-        return_value="".join(f"---PLAN {i}\n{PARALLEL_SEQ_PLAN if i == 3 else BITMAP_PLAN}\n" for i in range(6))
+        return_value="".join(f"---PLAN {i}\n{PARALLEL_SEQ_PLAN if i == 3 else BITMAP_PLAN}\n" for i in range(8))
     )
     plans = problem.lookup_plans()
     assert problem._psql.call_count == 1
-    # 2 catalog products + 1 discontinued product, 2 queries each
-    assert len(plans) == 6
+    # 2 catalog products + 1 discontinued product + 1 with no reviews yet, 2 queries each
+    assert len(plans) == 8
     assert any(Problem.history_product_id(1) in sql for sql in plans)
+    assert any(Problem.history_product_id(Problem.HISTORY_PRODUCTS + 1) in sql for sql in plans)
     scanning = [sql for sql, plan in plans.items() if not Problem.plan_uses_index_scan(plan)]
     assert scanning == ["SELECT AVG(score) FROM reviews.productreviews WHERE product_id= '66VCHSJNUP'"]
 
@@ -153,7 +166,7 @@ def test_lookup_costs_runs_through_the_apps_own_connection(problem):
     assert "options=" not in script  # must not override the app's own connection options
     assert "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)" in script
     assert "pg_postmaster_start_time()" in script
-    assert [costs[sql]["buffers"] for sql in statements] == [6, 5000, 6, 6, 5100, 6]
+    assert [costs[sql]["buffers"] for sql in statements] == [6, 5000, 6, 6, 5100, 6, 6, 6]
     assert costs[statements[4]]["nodes"] == ["Gather", "Seq Scan"]
 
 
@@ -162,6 +175,70 @@ def test_lookup_costs_raises_when_it_cannot_read_plans(problem, output):
     problem.kubectl.exec_command.return_value = output
     with pytest.raises(RuntimeError):
         problem.lookup_costs()
+
+
+def test_table_rules_reads_every_column(problem):
+    problem._psql = Mock(return_value="id|true|true|true\nproduct_id|true|false|false\n")
+    assert problem.table_rules() == {"id": "true|true|true", "product_id": "true|false|false"}
+
+
+def test_table_rules_raises_on_sql_error(problem):
+    problem._psql = Mock(return_value='ERROR:  relation "reviews.productreviews" does not exist')
+    with pytest.raises(RuntimeError, match="does not exist"):
+        problem.table_rules()
+
+
+def test_recreate_index_replaces_whatever_is_there(problem):
+    problem.product_id_indexes = Mock(return_value=["reviews.atk_brin"])
+    problem._psql = Mock(return_value="")
+    problem._run_ddl = Mock()
+    problem._recreate_index()
+    assert [call.args[0] for call in problem._run_ddl.call_args_list] == [
+        "DROP INDEX reviews.atk_brin;",
+        "CREATE INDEX product_id_index ON reviews.productreviews (product_id);",
+    ]
+
+
+def test_wait_for_reviews_ready_only_accepts_an_empty_table_when_told_to(problem):
+    problem._READY_TIMEOUT_SECONDS = 0.01
+    problem._READY_POLL_SECONDS = 0
+    problem._psql = Mock(return_value="0\n")
+    with pytest.raises(RuntimeError, match="queryable"):
+        problem._wait_for_reviews_ready()
+    problem._READY_TIMEOUT_SECONDS = 5
+    problem._wait_for_reviews_ready(min_rows=0)
+
+
+@pytest.fixture
+def recovering(problem):
+    problem.fault_injected = True
+    problem._namespace_exists = Mock(return_value=True)
+    problem._wait_for_reviews_ready = Mock()
+    problem._recreate_index = Mock()
+    problem._analyze = Mock()
+    problem.heap_pages = Mock(return_value=5_594)
+    problem.lookup_plans = Mock(return_value={"q1": BITMAP_PLAN})
+    return problem
+
+
+def test_recovery_raises_when_lookups_still_scan_a_large_table(recovering):
+    recovering.lookup_plans.return_value = {"q1": PARALLEL_SEQ_PLAN}
+    with pytest.raises(RuntimeError, match="still don't use it"):
+        recovering.recover_fault()
+    assert recovering.fault_injected is True
+
+
+def test_recovery_accepts_a_seq_scan_on_a_tiny_table(recovering):
+    recovering.heap_pages.return_value = 2
+    recovering.lookup_plans.return_value = {"q1": "Seq Scan on productreviews"}
+    assert recovering.recover_fault() is True
+    assert recovering.fault_injected is False
+
+
+def test_recovery_does_not_raise_when_the_agent_destroyed_the_table(recovering):
+    recovering._wait_for_reviews_ready.side_effect = RuntimeError("did not become queryable")
+    assert recovering.recover_fault() is False
+    recovering._recreate_index.assert_not_called()
 
 
 def test_lookup_plans_raises_on_sql_error(problem):
@@ -216,6 +293,10 @@ def healthy(problem, monkeypatch):
     problem.postgres_identity = {"uid": "a", "restarts": 0, "last_reason": None}
     problem.current_postgres_identity = Mock(return_value={"uid": "a", "restarts": 0, "last_reason": None})
     problem.original_reviews_intact = Mock(return_value=(True, "intact"))
+    problem.postgres_pod_count = Mock(return_value=1)
+    problem.missing_catalog_products = Mock(return_value=[])
+    problem.table_rules_at_inject = dict(TABLE_RULES)
+    problem.table_rules = Mock(return_value=dict(TABLE_RULES))
     problem.costs = {
         "q1": {"buffers": 6, "nodes": ["Bitmap Heap Scan", "Bitmap Index Scan"]},
         "q2": {"buffers": 9, "nodes": ["Aggregate", "Bitmap Heap Scan"]},
@@ -319,7 +400,70 @@ def test_oracle_rejects_lost_original_reviews(healthy):
     assert verdict(healthy)["reason"] == "original_reviews_not_preserved"
 
 
-@pytest.mark.parametrize("check", ["history_fingerprint", "original_reviews_intact", "lookup_costs"])
+@pytest.mark.parametrize(
+    "column,rule",
+    [
+        ("id", "true|true|false"),  # primary key dropped, or replaced by one that isn't on id alone
+        ("id", "true|false|true"),  # identity lost
+        ("product_id", "false|false|false"),  # NOT NULL lost
+        ("score", None),  # column gone
+        ("(table)", "true|p|false"),  # row-level security can hide the history from the app
+        ("(table)", "false|u|false"),  # unlogged
+        ("(table)", "false|p|true"),  # rows can sit in a child table, outside the primary key
+    ],
+)
+def test_oracle_rejects_a_table_that_stopped_enforcing_its_rules(healthy, column, rule):
+    healthy.table_rules.return_value = {**TABLE_RULES, column: rule}
+    result = verdict(healthy)
+    assert (result["reason"], result["failure_class"]) == ("review_table_rules_changed", FailureClass.AGENT_ERROR)
+    assert column in result["detail"]["message"]
+
+
+def test_oracle_rejects_a_second_postgres(healthy):
+    healthy.postgres_pod_count.return_value = 2
+    result = verdict(healthy)
+    assert (result["reason"], result["failure_class"]) == ("postgres_scaled_out", FailureClass.AGENT_ERROR)
+
+
+def test_postgres_pod_count_ignores_terminating_pods(problem):
+    pods = [{"metadata": {"uid": "a"}}, {"metadata": {"uid": "b", "deletionTimestamp": "now"}}]
+    problem.kubectl.exec_command.return_value = json.dumps({"items": pods})
+    assert problem.postgres_pod_count() == 1
+
+
+def test_postgres_pod_count_raises_when_it_cannot_list_pods(problem):
+    problem.kubectl.exec_command.return_value = "Unable to connect to the server"
+    with pytest.raises(RuntimeError, match="postgres pods"):
+        problem.postgres_pod_count()
+
+
+def test_oracle_rejects_lost_catalog_products(healthy):
+    healthy.missing_catalog_products.return_value = ["66VCHSJNUP"]
+    result = verdict(healthy)
+    assert (result["reason"], result["failure_class"]) == ("catalog_products_not_preserved", FailureClass.AGENT_ERROR)
+
+
+def test_missing_catalog_products_ignores_new_ones(problem):
+    problem._catalog_ids = Mock(return_value=["OLJCESPC7Z", "NEWPRODUCT"])
+    assert problem.missing_catalog_products() == ["66VCHSJNUP"]
+
+
+def test_oracle_ignores_a_column_added_after_injection(healthy):
+    healthy.table_rules.return_value = {**TABLE_RULES, "extra": "false|false|false"}
+    assert verdict(healthy) == {"success": True}
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        "postgres_pod_count",
+        "history_fingerprint",
+        "original_reviews_intact",
+        "missing_catalog_products",
+        "table_rules",
+        "lookup_costs",
+    ],
+)
 def test_oracle_blames_nobody_when_postgres_does_not_answer(healthy, check):
     getattr(healthy, check).side_effect = RuntimeError("ERROR: connection to server at 127.0.0.1 failed")
     result = verdict(healthy)

@@ -16,12 +16,25 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
 
       1. The application is healthy: no deployment deleted, scaled to 0, or left
          with unready pods (inherited from MitigationOracle).
-      2. The review history seeded at injection is still there, row for row and
+
+      2. Postgres still runs as one pod. It has no shared storage, so a second replica
+         is a separate database that only holds what init.sql loaded.
+
+      3. The review history seeded at injection is still there, row for row and
          unchanged (count + content checksum over its id range). Deleting,
          truncating or archiving the history makes the scans cheap without fixing
          anything, and a postgres restart wipes it (the pod has no volume).
-      3. The original reviews are still there and unchanged.
-      4. For every catalog product and one discontinued product, both
+
+      4. The original reviews are still there and unchanged, and so is every catalog product.
+
+      5. The table still enforces what it did at injection: id stays unique, every
+         column keeps its NOT NULL and its default or identity, and the table gains no
+         row-level security, unlogged storage or inheritance children. A rebuild keeps
+         every row but can lose these, a table partitioned by product_id can't keep id
+         unique on its own, and row-level security can hide the history from the app
+         while these superuser checks still see it.
+
+      6. For every catalog product, one discontinued product and one with no reviews yet, both
          product-reviews queries, run from the product-reviews pod over the app's
          own DB_CONNECTION_STRING under EXPLAIN (ANALYZE, BUFFERS), touch only a
          small fraction of the pages the table had at injection.
@@ -33,11 +46,12 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
          A partial index over today's catalog ids fails on the discontinued product.
          The app must still be reading the database the history checks read
          (same server and database name). Any real fix passes, whatever the index
-         name or type, and so does partitioning by product_id. No row threshold.
-      5. The frontend still serves the probe product and its original reviews.
+         name or type. No row threshold.
+
+      7. The frontend still serves the probe product and its original reviews.
     """
 
-    # A lookup may touch at most 1/20 of the heap's pages at injection (280 of 5,594 here);
+    # A lookup may touch at most 1/20 of the heap's pages at injection (279 of 5,594 here);
     # a real index lookup touches about 4, the fault the whole table. The floor is for tiny tables.
     LOOKUP_BUFFER_FRACTION = 20
     MIN_LOOKUP_BUFFERS = 64
@@ -51,9 +65,13 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
         "review_history_lost_postgres_replaced": FailureClass.AGENT_ERROR,
         "review_history_lost_postgres_restarted": FailureClass.AGENT_ERROR,
         "review_table_missing": FailureClass.AGENT_ERROR,
+        # Only a rebuild or ALTER TABLE changes these, and injection doesn't do either
+        "review_table_rules_changed": FailureClass.AGENT_ERROR,
         # Only a spec or env edit repoints the app's database connection
         "review_app_database_changed": FailureClass.AGENT_ERROR,
         "original_reviews_not_preserved": FailureClass.AGENT_ERROR,
+        "catalog_products_not_preserved": FailureClass.AGENT_ERROR,
+        "postgres_scaled_out": FailureClass.AGENT_ERROR,
         # An OOM kill wipes the data too. The raised limit makes it unlikely, but an
         # agent's heavy queries could also cause it, so it can't be pinned on either.
         "review_history_lost_postgres_oom": FailureClass.AMBIGUOUS,
@@ -92,6 +110,13 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
 
     def _database_failure(self, p) -> dict | None:
         """Raises RuntimeError when the database can't be read"""
+        # A second postgres is a second database, and the app's reads land on either one.
+        pods = p.postgres_pod_count()
+        if pods > 1:
+            reason = f"postgres runs {pods} pods, each with its own separate data"
+            logger.info(reason)
+            return self.fail("postgres_scaled_out", message=reason)
+
         # The review history must survive.
         rows, checksum = p.history_fingerprint()
         if rows != p.history_rows:
@@ -110,6 +135,21 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
             reason = f"The original reviews were not preserved: {detail}"
             logger.info(reason)
             return self.fail("original_reviews_not_preserved", message=reason)
+
+        # The frontend check below only reads one product.
+        missing = p.missing_catalog_products()
+        if missing:
+            reason = f"{len(missing)} of {len(p.catalog_ids)} catalog products are gone"
+            logger.info(reason)
+            return self.fail("catalog_products_not_preserved", message=reason)
+
+        # The table must still enforce what it did at injection. These can go while every row survives.
+        rules = p.table_rules()
+        changed = sorted(column for column, rule in p.table_rules_at_inject.items() if rules.get(column) != rule)
+        if changed:
+            reason = f"reviews.productreviews no longer enforces what it did at injection on: {', '.join(changed)}"
+            logger.info(reason)
+            return self.fail("review_table_rules_changed", message=reason)
 
         # Every lookup the app runs must be a real index lookup again, on the same database
         # the checks above read (not an app repointed at a trimmed copy).

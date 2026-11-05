@@ -57,8 +57,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
 
     # 2,700 discontinued products with 20 to 200 reviews each: 293,823 rows, a 44 MB heap. Measured at
     # steady state (local kind cluster, 512Mi): a lookup goes from ~0.05 ms to ~20 ms in Postgres and the
-    # frontend median of the review endpoints from ~8 ms to ~17 ms. Twice the history doubles the frontend
-    # effect but takes postgres to its 512Mi limit.
+    # frontend median of the review endpoints from ~8 ms to ~17 ms.
     HISTORY_PRODUCTS = 2_700
     MIN_REVIEWS_PER_PRODUCT = 20
     MAX_REVIEWS_PER_PRODUCT = 200
@@ -234,6 +233,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         self.catalog_ids: list[str] = []
         self.baseline_review_ids: list[int] = []
         self.baseline_review_sig: str = ""
+        self.table_rules_at_inject: dict[str, str] = {}
         self.probe_reviews: list[tuple[str, str]] = []
         self.probe_product_name: str = ""
         self.history_range: tuple[int, int] | None = None
@@ -308,7 +308,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
             f"{description}: could not acquire a lock on {self._qualified} after {self._DDL_ATTEMPTS} attempts"
         )
 
-    def _wait_for_reviews_ready(self) -> None:
+    def _wait_for_reviews_ready(self, min_rows: int = 1) -> None:
         deadline = time.monotonic() + self._READY_TIMEOUT_SECONDS
         consecutive = 0
         while time.monotonic() < deadline:
@@ -319,7 +319,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
                     timeout=self._PROBE_TIMEOUT_SECONDS,
                 )
             )
-            consecutive = consecutive + 1 if rows else 0
+            consecutive = consecutive + 1 if rows is not None and rows >= min_rows else 0
             if consecutive >= self._READY_CONSECUTIVE_OK:
                 return
             time.sleep(self._READY_POLL_SECONDS)
@@ -346,6 +346,10 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         if _sql_failed(out):
             raise RuntimeError(f"Could not read catalog.products: {out.strip()}")
         return [line.strip() for line in out.splitlines() if line.strip()]
+
+    def missing_catalog_products(self) -> list[str]:
+        """Products in the catalog at injection that are gone now"""
+        return sorted(set(self.catalog_ids) - set(self._catalog_ids()))
 
     def _max_review_id(self) -> int:
         value = _first_int(self._psql(f"SELECT COALESCE(max(id), 0) FROM {self._qualified};", tuples_only=True))
@@ -439,18 +443,14 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         except (ValueError, IndexError) as exc:
             raise RuntimeError(f"Could not fingerprint the review history: {out.strip()[:300]}") from exc
 
-    def product_id_indexes(self, valid_only: bool = True) -> list[str]:
-        """
-        Indexes on the table whose leading column is product_id (by default only ones that serve every product).
-
-        A failed CREATE INDEX CONCURRENTLY leaves an invalid index behind that the planner ignores,
-        and a partial index only covers some products.
-        """
-        validity = " AND i.indisvalid AND i.indpred IS NULL" if valid_only else ""
+    def product_id_indexes(self) -> list[str]:
+        """Indexes on the table whose leading column is product_id, plus any index holding the name product_id_index."""
         out = self._psql(
             "SELECT i.indexrelid::regclass::text FROM pg_index i "
-            "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0] "
-            f"WHERE i.indrelid = '{self._qualified}'::regclass AND a.attname = '{self.index_column}'{validity};",
+            "JOIN pg_class c ON c.oid = i.indexrelid "
+            "LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0] "
+            f"WHERE i.indrelid = '{self._qualified}'::regclass "
+            f"AND (a.attname = '{self.index_column}' OR c.relname = '{self.index_name}');",
             tuples_only=True,
         )
         if _sql_failed(out):
@@ -458,7 +458,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         return [line.strip() for line in out.splitlines() if line.strip()]
 
     def _drop_index(self) -> None:
-        for index in self.product_id_indexes(valid_only=False):
+        for index in self.product_id_indexes():
             constraint = self._psql(
                 f"SELECT conname FROM pg_constraint WHERE conindid = '{index}'::regclass;", tuples_only=True
             ).strip()
@@ -471,23 +471,23 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
                 self._run_ddl(f"DROP INDEX {index};", f"dropping index {index}")
 
     def _recreate_index(self) -> None:
-        if self.product_id_indexes():
-            return
-        self._drop_index()  # invalid or partial leftovers, including one already named product_id_index
+        # An index on product_id doesn't prove the lookups work: a BRIN index still reads
+        # most of the table, an invalid one is ignored, and a partial one only covers some products.
+        self._drop_index()
         self._run_ddl(
-            f"CREATE INDEX IF NOT EXISTS {self.index_name} ON {self._qualified} ({self.index_column});",
+            f"CREATE INDEX {self.index_name} ON {self._qualified} ({self.index_column});",
             "creating the product_id index",
         )
 
     def plan_product_ids(self) -> list[str]:
         """
-        Every catalog product, plus one discontinued product.
+        Every catalog product, one discontinued product, and one that has no reviews yet.
 
-        The discontinued one makes an index limited to today's catalog (a partial index
-        WHERE product_id IN (...current ids...)) fail: the next product added would scan again.
+        The last two make an index limited to known products (a partial index
+        WHERE product_id IN (...ids...)) fail: the next product added would scan again.
         """
         extra = next(pid for n in range(1, 100) if (pid := self.history_product_id(n)) not in self.catalog_ids)
-        return [*self.catalog_ids, extra]
+        return [*self.catalog_ids, extra, self.history_product_id(self.HISTORY_PRODUCTS + 1)]
 
     def lookup_plans(self) -> dict[str, str]:
         """EXPLAIN of both product-reviews queries for every product in plan_product_ids(), keyed by query."""
@@ -620,6 +620,32 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         ids = [int(line.strip()) for line in out.splitlines() if line.strip().isdigit()]
         return ids, self._review_data_signature(ids)
 
+    def table_rules(self) -> dict[str, str]:
+        """
+        Per column: NOT NULL, a default or identity, and uniqueness. For the table:
+        row-level security, logged storage, and whether rows can sit in an inheritance child.
+
+        Uniqueness needs a live, non-partial unique index with that column as its only key (normally
+        productreviews_pkey). A table rebuilt without these keeps every row, so the data checks can't see the
+        loss, and they run as the superuser, which row-level security doesn't apply to. A child table sits
+        outside the primary key.
+        """
+        out = self._psql(
+            "SELECT a.attname || '|' || a.attnotnull || '|' || (a.atthasdef OR a.attidentity <> '') || '|' || EXISTS ("
+            "SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisunique AND i.indisvalid "
+            "AND i.indisready AND i.indislive AND i.indpred IS NULL AND i.indnkeyatts = 1 "
+            "AND i.indkey[0] = a.attnum) "
+            f"FROM pg_attribute a WHERE a.attrelid = '{self._qualified}'::regclass "
+            "AND a.attnum > 0 AND NOT a.attisdropped "
+            "UNION ALL SELECT '(table)|' || c.relrowsecurity || '|' || c.relpersistence::text || '|' || "
+            "(c.relkind = 'r' AND EXISTS (SELECT 1 FROM pg_inherits h WHERE h.inhparent = c.oid)) "
+            f"FROM pg_class c WHERE c.oid = '{self._qualified}'::regclass;",
+            tuples_only=True,
+        )
+        if _sql_failed(out):
+            raise RuntimeError(f"Could not read the rules on {self._qualified}: {out.strip()[:300]}")
+        return dict(line.strip().split("|", 1) for line in out.splitlines() if "|" in line)
+
     def original_reviews_intact(self) -> tuple[bool, str]:
         """True if every original review still exists unchanged"""
         if not self.baseline_review_ids:
@@ -659,14 +685,23 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         )
         return output.strip() == "reviews-read-ok"
 
-    def current_postgres_identity(self) -> dict | None:
-        """uid, restart count and last termination reason of the running postgres pod"""
+    def _postgres_pods(self) -> list[dict] | None:
         out = self.kubectl.exec_command(f"kubectl get pods -n {self.namespace} -l {self.POSTGRES_SELECTOR} -o json")
         try:
-            pods = [p for p in json.loads(out)["items"] if not p["metadata"].get("deletionTimestamp")]
+            return [p for p in json.loads(out)["items"] if not p["metadata"].get("deletionTimestamp")]
         except (ValueError, KeyError):
             return None
-        if len(pods) != 1:
+
+    def postgres_pod_count(self) -> int:
+        pods = self._postgres_pods()
+        if pods is None:
+            raise RuntimeError("Could not list the postgres pods")
+        return len(pods)
+
+    def current_postgres_identity(self) -> dict | None:
+        """uid, restart count and last termination reason of the running postgres pod"""
+        pods = self._postgres_pods()
+        if pods is None or len(pods) != 1:
             return None
         status = (pods[0].get("status", {}).get("containerStatuses") or [{}])[0]
         return {
@@ -694,6 +729,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         self._recreate_index()
 
         self.baseline_review_ids, self.baseline_review_sig = self._capture_review_baseline()
+        self.table_rules_at_inject = self.table_rules()
         self.probe_reviews = self._reviews_for(self.PROBE_PRODUCT_ID)
         self.probe_product_name = self._psql(
             f"SELECT name FROM catalog.products WHERE id = '{self.PROBE_PRODUCT_ID}';", tuples_only=True
@@ -723,20 +759,30 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         )
         return True
 
-    @mark_fault_injected
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         logger.info("Recovering from product-reviews missing-index fault...")
         if not self._namespace_exists():
             logger.info("Namespace '%s' not present; nothing to recover", self.namespace)
             return True
 
-        self._wait_for_reviews_ready()
+        # A failed recovery marks the attempt incomplete, which would hide an agent's failure. If the agent
+        # dropped the table or scaled postgres to 0 there's nothing to rebuild, and the app is undeployed next.
+        try:
+            self._wait_for_reviews_ready(min_rows=0)
+        except RuntimeError as exc:
+            logger.warning("Could not reach %s to recover it: %s", self._qualified, exc)
+            return False
+
         self._recreate_index()
         self._analyze()
 
-        plans = self.lookup_plans()
-        if not all(self.plan_uses_index_scan(plan) for plan in plans.values()):
-            raise RuntimeError(f"Index restored but the lookups still don't use it:\n{plans}")
+        # A table of a few pages (init.sql's 50 rows after a postgres restart) is read with a Seq Scan
+        # whatever its indexes, and the oracle allows that too.
+        if self.heap_pages() > ProductReviewsMissingIndexMitigationOracle.MIN_LOOKUP_BUFFERS:
+            plans = self.lookup_plans()
+            if not all(self.plan_uses_index_scan(plan) for plan in plans.values()):
+                raise RuntimeError(f"Index restored but the lookups still don't use it:\n{plans}")
 
         # NOTE: the memory limit is not restored. Restoring it restarts postgres,
         # which wipes the tables, and astronomy-shop is redeployed fresh every run.
