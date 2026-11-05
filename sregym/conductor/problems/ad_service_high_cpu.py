@@ -1,5 +1,7 @@
 """Otel demo adServiceHighCpu feature flag fault."""
 
+import json
+
 from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -37,13 +39,27 @@ class AdServiceHighCpu(Problem):
         print("== Fault Injection ==")
         self.injector.inject_fault(self.feature_flag)
         # Set a tight CPU limit so the high-CPU flag causes observable throttling.
-        patch = (
-            '{"spec":{"template":{"spec":{"containers":[{"name":"ad",'
-            f'"resources":{{"limits":{{"cpu":"{self.cpu_limit}"}}}}}}]}}}}'
+        patch = json.dumps(
+            {
+                "spec": {
+                    "template": {
+                        "spec": {"containers": [{"name": "ad", "resources": {"limits": {"cpu": self.cpu_limit}}}]}
+                    }
+                }
+            }
         )
-        self.kubectl.exec_command(
+        self.kubectl.exec_command_checked(
             f"kubectl patch deployment {self.faulty_service} -n {self.namespace} --type=strategic -p '{patch}'"
         )
+        applied = self.kubectl.exec_command_checked(
+            f"kubectl get deployment {self.faulty_service} -n {self.namespace} "
+            "-o jsonpath='{.spec.template.spec.containers[?(@.name==\"ad\")].resources.limits.cpu}'"
+        )
+        applied = applied.strip()
+        if applied != self.cpu_limit:
+            raise RuntimeError(
+                f"ad cpu limit patch did not take: expected {self.cpu_limit}, deployment reads {applied!r}"
+            )
         print(f"Fault: AdServiceHighCpu | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
@@ -52,6 +68,6 @@ class AdServiceHighCpu(Problem):
         self.injector.recover_fault(self.feature_flag)
         # Remove the CPU limit added during injection.
         patch = '[{"op":"remove","path":"/spec/template/spec/containers/0/resources/limits/cpu"}]'
-        self.kubectl.exec_command(
+        self.kubectl.exec_command_checked(
             f"kubectl patch deployment {self.faulty_service} -n {self.namespace} --type=json -p '{patch}'"
         )
