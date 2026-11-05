@@ -26,7 +26,7 @@ from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_
 from clients.jev.config import configure as configure_jev
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
-from sregym.agent_registry import get_agent, list_agents
+from sregym.agent_registry import get_agent, list_agents, registry_path
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.problem_sets import PROBLEM_SETS
@@ -319,7 +319,7 @@ def driver_loop(
             # so do not let stale local-run state affect them.
             conductor.clear_cluster_egress_boundary()
         else:
-            available_agents = list_agents(path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml").keys()
+            available_agents = list_agents(path=registry_path(Path(os.path.dirname(os.path.abspath(__file__))))).keys()
             if agent_to_run not in available_agents:
                 console.log(f"⚠️ Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}")
                 sys.exit(1)
@@ -590,7 +590,7 @@ def driver_loop(
                     with _artifact_environment(run):
                         reg = get_agent(
                             agent_to_run,
-                            path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
+                            path=registry_path(Path(os.path.dirname(os.path.abspath(__file__)))),
                         )
                         if reg:
                             check_interrupted()
@@ -981,7 +981,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
-        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+        get_agent(args.agent, path=registry_path(Path(os.path.dirname(os.path.abspath(__file__)))))
         if args.agent
         else None
     )
