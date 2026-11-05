@@ -150,26 +150,6 @@ class LiteLLMBackend:
                     logger.info(f"Trimming the {trim_sum}/{len(prompt_messages)} messages")
                     prompt_messages = new_prompt_messages
                 return self._invoke(llm, prompt_messages, usage_type)
-            except openai.BadRequestError as e:
-                logger.error(f"Bad request error - request is malformed: {e}")
-                logger.error(f"Error details: {_safe_response_details(e)}")
-                logger.error("This often happens when tool_calls don't have matching tool response messages.")
-                logger.error(
-                    f"Last few messages: {prompt_messages[-3:] if len(prompt_messages) >= 3 else prompt_messages}"
-                )
-                raise
-            except (openai.RateLimitError, HTTPError):
-                logger.warning(
-                    f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
-                )
-                time.sleep(retry_delay)
-                retry_delay *= 2
-            except openai.APIError as e:
-                logger.warning(
-                    f"OpenAI API error occurred: {e}. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
-                )
-                time.sleep(retry_delay)
-                retry_delay *= 2
             except litellm.RateLimitError as e:
                 provider_delay = _extract_retry_delay_seconds_from_exception(e)
                 if provider_delay is not None and provider_delay > 0:
@@ -191,7 +171,26 @@ class LiteLLMBackend:
                 )
                 time.sleep(60)
                 trim_message = True
-
+            except openai.BadRequestError as e:
+                logger.error(f"Bad request error - request is malformed: {e}")
+                logger.error(f"Error details: {_safe_response_details(e)}")
+                logger.error("This often happens when tool_calls don't have matching tool response messages.")
+                logger.error(
+                    f"Last few messages: {prompt_messages[-3:] if len(prompt_messages) >= 3 else prompt_messages}"
+                )
+                raise
+            except (openai.RateLimitError, HTTPError):
+                logger.warning(
+                    f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            except openai.APIError as e:
+                logger.warning(
+                    f"OpenAI API error occurred: {e}. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2
             except IndexError as e:
                 logger.warning(
                     f"IndexError occurred on Gemini Server Side: {e}, keep calm for a while... {attempt + 1}/{LLM_QUERY_MAX_RETRIES}"
