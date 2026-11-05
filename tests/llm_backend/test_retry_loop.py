@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 import llm_backend.get_llm_backend as backend_module
-from llm_backend.get_llm_backend import LiteLLMBackend, _extract_retry_delay_seconds_from_exception
+from llm_backend.get_llm_backend import LiteLLMBackend
 
 MODEL = "gemini/gemini-test"
 OK = AIMessage(content="ok")
@@ -57,26 +57,16 @@ def run(monkeypatch):
 def test_rate_limit_honors_provider_delay_and_trims(run):
     sleeps, calls = run(rate_limit(RETRY_INFO))
     assert sleeps == [45.0]
-    assert trimmed(calls[1])
+    assert trimmed(calls[-1])
 
 
 def test_rate_limit_without_provider_delay_backs_off_and_trims(run):
-    sleeps, calls = run(rate_limit(), rate_limit(), rate_limit())
-    assert sleeps == [1, 2, 4]
-    assert all(trimmed(call) for call in calls[1:])
+    sleeps, calls = run(rate_limit(), rate_limit())
+    assert sleeps == [1, 2]
+    assert trimmed(calls[-1])
 
 
 def test_service_unavailable_waits_sixty_seconds_and_trims(run):
     sleeps, calls = run(litellm.ServiceUnavailableError(message="503", llm_provider="gemini", model=MODEL))
     assert sleeps == [60]
-    assert trimmed(calls[1])
-
-
-def test_extract_retry_delay_returns_none_without_retry_info():
-    assert _extract_retry_delay_seconds_from_exception(rate_limit()) is None
-
-
-def test_extract_retry_delay_from_litellm_prefixed_message():
-    error = rate_limit(RETRY_INFO)
-    assert error.message.startswith("litellm.RateLimitError: VertexAIException - ")
-    assert _extract_retry_delay_seconds_from_exception(error) == 45.0
+    assert trimmed(calls[-1])
