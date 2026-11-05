@@ -1172,7 +1172,18 @@ class Conductor:
         if self.missing_submission_stages():
             self.record_incomplete_attempt("missing_stage_results")
         else:
-            self.results["run_status"] = "complete"
+            unscored = [
+                stage["name"]
+                for stage in self.stage_sequence
+                if isinstance(outcome := self.results[stage["name"].capitalize()], dict)
+                and outcome.get("success") is None
+            ]
+            if unscored:
+                self.record_incomplete_attempt("unscored_stage_results")
+                self.results["incomplete_stage"] = unscored[0]
+                self.results["unscored_stages"] = ",".join(unscored)
+            else:
+                self.results["run_status"] = "complete"
         return self.results["run_status"]
 
     @staticmethod
