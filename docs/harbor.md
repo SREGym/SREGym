@@ -109,7 +109,7 @@ which Harbor's `docker` environment merges on its own:
 - **`seccomp=unconfined`, `systempaths=unconfined`, `apparmor=unconfined`**:
   Docker's default seccomp filter blocks `unshare` and `mount`, and its masked
   `/proc` paths block the nodes' procfs mounts.
-- **Open-file limit** of 1048576: TiDB's TiKV (FleetCast) needs about 82920.
+- **Open-file limit** of 524288: TiDB's TiKV (FleetCast) needs about 82920. This is also the hard limit Daytona sandboxes allow.
 
 Each node runs in its own identity-mapped user namespace (root inside is root
 outside), and each of those namespaces has a different owner uid

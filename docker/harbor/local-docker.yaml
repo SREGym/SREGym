@@ -11,8 +11,10 @@
 # count against the host's per-user limit separately (see fabric.sh).
 # Docker's seccomp filter and masked /proc paths block unshare and the nodes'
 # procfs mounts. The open-file limit is a resource limit: TiKV (FleetCast's TiDB)
-# needs about 82920 open files. This file is the source the adapter copies into
-# each task; tests/harbor checks they match.
+# needs about 82920 open files, so 524288 leaves ample headroom. It is also the
+# hard limit Daytona sandboxes allow, so the limit can be set without
+# CAP_SYS_RESOURCE. This file is the source the adapter copies into each task;
+# tests/harbor checks they match.
 services:
   main:
     cap_add:
@@ -25,5 +27,5 @@ services:
     cgroup: private
     ulimits:
       nofile:
-        soft: 1048576
-        hard: 1048576
+        soft: 524288
+        hard: 524288
