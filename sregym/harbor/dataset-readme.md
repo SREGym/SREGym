@@ -27,6 +27,36 @@ Each task ships the Docker settings its cluster needs
 explanation before the agent starts, and Harbor records an error rather than a
 score.
 
+## Sandbox requirements
+
+Each task needs a sandbox of at least **{{cpus}} CPUs, {{memory_mb}} MiB of
+memory and {{storage_mb}} MiB of disk**. A smaller sandbox
+either fails at creation or starts a cluster that never becomes ready, and the
+task then fails after the healthcheck times out. Plan for a sandbox at these
+sizes, not the defaults.
+
+- **Open files:** the sandbox must allow a container open-file limit of
+  `524288`, which the shipped compose file requests. A lower hard limit makes
+  `docker compose up` fail with `operation not permitted`.
+- **Inotify (local Docker):** every node in a cluster uses inotify instances, and
+  they count against the host's per-user limit. The default
+  `fs.inotify.max_user_instances=128` runs out with a few concurrent tasks, which
+  crash-loops the cluster's pods. Set it to at least `1024` (see
+  [`kind/README.md`](https://github.com/SREGym/SREGym/blob/main/kind/README.md)).
+- **Concurrency:** setup takes a long time, roughly 30–45 minutes per task on a
+  64-core host, and each task uses about 10 GB of Docker volumes. Start with a
+  low `-n` and watch disk space before raising it.
+
+Platforms we tested, and what went wrong:
+
+- **Daytona:** on our account, sandboxes were capped at 4 CPUs, 8 GiB of memory
+  and 10 GB of disk, so these tasks could not start. Account limits are set per
+  organization, so check yours before you run.
+- **E2B:** on our account, the template memory limit was 8192 MiB, so these tasks
+  could not be built at full size. Check your team's limit before you run.
+- **Local Docker:** one task passed the oracle on a 64-core, 125 GiB host.
+  Concurrent runs need the inotify setting above.
+
 ## Grading
 
 The reward is binary. It is 1.0 when the problem's mitigation oracle finds the
