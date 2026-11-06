@@ -32,8 +32,10 @@ timeout_sec = {{agent_timeout}}
 user = "agent"
 
 [environment]
-# Covers building the task image, a thin layer over the SREGym image.
+# Covers building the task image, a thin layer over the SREGym image. When
+# docker_image is set, providers pull that prebuilt image instead of building.
 build_timeout_sec = 1800.0
+{{docker_image_line}}
 # Sized for the four-node cluster and the application, all in this container.
 cpus = {{cpus}}
 memory_mb = {{memory_mb}}

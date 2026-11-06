@@ -288,6 +288,17 @@ oracle sweep.
 
    The adapter writes the dataset `README.md` that the Hub shows, plus a
    `README.md` for each task.
+
+   To ship prebuilt task images, as Terminal-Bench does, add
+   `--task-image-repo ghcr.io/sregym/sregym-harbor-task`. Each `task.toml` then
+   names `docker_image` (`<repo>:<task>-<backend tag>`), so providers pull it
+   instead of building `environment/Dockerfile` for every trial. The Dockerfile
+   stays, so `harbor run --force-build` still builds locally. Build and push the
+   images, then make the GHCR package public the first time:
+
+   ```bash
+   uv run python -m sregym.harbor.build_images datasets/sregym-lite --push
+   ```
 3. **Create the manifest.** `dataset init` adds every task in the directory and
    keeps the generated README:
 

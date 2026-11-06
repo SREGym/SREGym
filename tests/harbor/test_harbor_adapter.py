@@ -150,6 +150,46 @@ def test_tasks_ship_the_docker_settings(task_dir):
     assert shipped.read_bytes() == adapter.DOCKER_SETTINGS.read_bytes()
 
 
+def test_tasks_build_their_image_unless_a_task_image_repo_is_given(task_dir):
+    environment = tomllib.loads((task_dir / "task.toml").read_text())["environment"]
+    assert "docker_image" not in environment
+
+
+def test_task_image_repo_names_a_prebuilt_image_per_task(tmp_path):
+    generator = SREGymAdapter(
+        tmp_path, backend_image="ghcr.io/sregym/sregym-harbor:fabe04c6eb5f", task_image_repo="example.test/tasks"
+    )
+    task = generator.generate_task(_info())
+    environment = tomllib.loads((task / "task.toml").read_text())["environment"]
+    assert environment["docker_image"] == "example.test/tasks:wrong-service-selector-hotel-reservation-fabe04c6eb5f"
+    # The Dockerfile stays, so `harbor run --force-build` can still build locally.
+    assert (task / "environment" / "Dockerfile").exists()
+
+
+def test_task_image_repo_needs_a_tagged_backend_image(tmp_path):
+    generator = SREGymAdapter(tmp_path, backend_image="localhost:5000/sregym", task_image_repo="example.test/tasks")
+    with pytest.raises(ValueError, match="must name a tag"):
+        generator.generate_task(_info())
+
+
+def test_build_images_builds_each_task_from_its_environment_dir(tmp_path):
+    from sregym.harbor import build_images
+
+    SREGymAdapter(tmp_path, backend_image="example.test/sregym:1", task_image_repo="example.test/tasks").generate_task(
+        _info()
+    )
+    SREGymAdapter(tmp_path, backend_image="example.test/sregym:1").generate_task(
+        _info(problem_id="network_policy_block")
+    )
+    environment_dir = tmp_path / "wrong-service-selector-hotel-reservation" / "environment"
+    image = "example.test/tasks:wrong-service-selector-hotel-reservation-1"
+    assert build_images.commands(tmp_path, push=True) == [
+        ["docker", "build", "--tag", image, str(environment_dir)],
+        ["docker", "push", image],
+    ]
+    assert build_images.commands(tmp_path, push=False) == [["docker", "build", "--tag", image, str(environment_dir)]]
+
+
 def test_docker_settings_add_only_the_documented_capabilities():
     import yaml
 

@@ -324,6 +324,7 @@ class SREGymAdapter:
         memory_mb: int = DEFAULT_MEMORY_MB,
         storage_mb: int = DEFAULT_STORAGE_MB,
         dataset_name: str = DEFAULT_DATASET_NAME,
+        task_image_repo: str | None = None,
     ):
         self.output_dir = output_dir
         self.limit = limit
@@ -336,6 +337,19 @@ class SREGymAdapter:
         self.memory_mb = memory_mb
         self.storage_mb = storage_mb
         self.dataset_name = dataset_name
+        self.task_image_repo = task_image_repo
+
+    def task_image(self, info: ProblemInfo) -> str | None:
+        """Prebuilt image for a task, tagged with its name and the backend image it builds on."""
+        if not self.task_image_repo:
+            return None
+        _, _, backend_tag = self.backend_image.rpartition(":")
+        if not backend_tag or "/" in backend_tag:
+            raise ValueError(f"--backend-image must name a tag to derive task image tags: {self.backend_image}")
+        tag = f"{task_name(info.problem_id)}-{backend_tag}"
+        if len(tag) > 128:
+            raise ValueError(f"Task image tag is longer than Docker allows (128): {tag}")
+        return f"{self.task_image_repo}:{tag}"
 
     def _values(self, info: ProblemInfo) -> dict[str, str]:
         if len(info.namespaces) > 1:
@@ -346,7 +360,9 @@ class SREGymAdapter:
         else:
             namespace_block = f"Namespace: {info.namespaces[0]}"
         app_slug = task_name(info.app_name)
+        image = self.task_image(info)
         return {
+            "docker_image_line": f'docker_image = "{image}"' if image else "",
             "task_name": task_name(info.problem_id),
             "problem_id": info.problem_id,
             "steady_state_s": str(info.steady_state_s),
@@ -466,6 +482,13 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--storage-mb", type=int, default=DEFAULT_STORAGE_MB, help="Disk requested for the task container"
     )
+    parser.add_argument(
+        "--task-image-repo",
+        default=None,
+        help="Registry repository for prebuilt task images (e.g. ghcr.io/sregym/sregym-harbor-task). "
+        "Each task.toml then names docker_image, so providers pull instead of building; "
+        "build and push them with python -m sregym.harbor.build_images",
+    )
     args = parser.parse_args(argv)
 
     task_ids = list(PROBLEM_SETS[args.suite]) if args.suite else args.task_ids
@@ -489,6 +512,7 @@ def main(argv=None) -> int:
         memory_mb=args.memory_mb,
         storage_mb=args.storage_mb,
         dataset_name=dataset_name,
+        task_image_repo=args.task_image_repo,
     )
     try:
         written, skipped = adapter.run()
