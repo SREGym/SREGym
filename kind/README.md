@@ -52,6 +52,8 @@ The cluster is now ready to run SREGym.
 
 ## Troubleshooting
 
+Start with `uv run main.py --doctor`, adding the flags you plan to run with. It checks Docker, the cluster nodes, `/run/udev`, the Calico tier, and your credentials, and prints a fix for each problem.
+
 ### Docker issues
 
 Ensure Docker is running and accessible to your user:
@@ -84,7 +86,9 @@ All KIND nodes share the host's `fs.inotify.max_user_instances` limit. When this
 ### Resource allocation
 
 On macOS, allocate at least 16 GB to Docker Desktop or OrbStack's Linux VM for
-the full Lite profile. Leave additional RAM for macOS and the agent.
+the full Lite profile. Leave additional RAM for macOS and the agent. Docker
+Desktop on Linux also runs a VM with its own memory limit. `--doctor` warns when
+Docker has less memory than SREGym-Lite needs.
 
 WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.
 

@@ -1233,6 +1233,19 @@ if __name__ == "__main__":
         help="Enable experimental Jev decision support for Codex (e.g. jev-latest). Requires TYPESAFE_API_KEY and --force-build.",
     )
     parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help=(
+            "Check that this machine is ready for a run with the other flags given (tools, Docker, cluster, "
+            "network policy, agent and judge credentials), print how to fix each problem, and exit"
+        ),
+    )
+    parser.add_argument(
+        "--doctor-offline",
+        action="store_true",
+        help="With --doctor, check judge credentials without sending the judge a test request",
+    )
+    parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
     )
     parser.add_argument(
@@ -1325,5 +1338,24 @@ if __name__ == "__main__":
         parser.error("--propagation must be a non-negative integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
+
+    if args.doctor:
+        from sregym.doctor import DoctorOptions, run_doctor
+
+        sys.exit(
+            run_doctor(
+                DoctorOptions(
+                    agent=args.agent,
+                    model=args.model,
+                    judge_model=args.judge_model,
+                    judge_backend=args.judge_backend,
+                    profile=args.profile,
+                    internet_access=args.internet_access,
+                    use_external_harness=args.use_external_harness,
+                    live_judge=not args.doctor_offline,
+                ),
+                console=console,
+            )
+        )
 
     main(args)

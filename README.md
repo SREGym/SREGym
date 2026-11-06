@@ -87,6 +87,16 @@ For existing clusters, see the [upgrade and baseline instructions](./docs/networ
 
 ### Running an Agent
 
+#### Check your setup first
+
+Add `--doctor` to the command you plan to run. It checks the tools, Docker, the cluster, the network policy, and the agent and judge credentials for that exact configuration, prints a fix for each problem, and exits without changing anything:
+
+```bash
+uv run main.py --doctor --agent codex --model gpt-5 --profile svelte
+```
+
+It exits non-zero when a run would fail. Add `--doctor-offline` to skip the one-line test request it sends to the judge.
+
 #### Quick Start
 
 To get started with the included Stratus agent:
