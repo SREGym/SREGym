@@ -89,7 +89,7 @@ For existing clusters, see the [upgrade and baseline instructions](./docs/networ
 
 #### Check your setup first
 
-Add `--doctor` to the command you plan to run. It checks the tools, Docker, the cluster, the network policy, and the agent and judge credentials for that exact configuration, prints a fix for each problem, and exits without changing anything:
+Add `--doctor` to the command you plan to run. It checks the tools, Docker, the cluster, the network policy, whether agent containers can reach the host, and the agent and judge credentials for that exact configuration. It prints a fix for each problem and exits without changing anything (the host check starts one throwaway container from the agent image):
 
 ```bash
 uv run main.py --doctor --agent codex --model gpt-5 --profile svelte

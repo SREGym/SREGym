@@ -274,6 +274,7 @@ def test_doctor_never_runs_mutating_commands(repo, monkeypatch):
         "docker info": (0, json.dumps({"NCPU": 16, "MemTotal": 32 * 1024**3})),
         "docker image inspect": (0, "[]"),
         "docker exec": (0, ""),
+        "docker run": (0, "8000 open\n9954 open\n16443 open\n"),
         "kubectl get tiers": (0, "tier/adminnetworkpolicy"),
         **cluster([READY_NODE]),
     }
@@ -285,6 +286,8 @@ def test_doctor_never_runs_mutating_commands(repo, monkeypatch):
         verb = call.split()[:2]
         assert verb[0] in {"uv", "docker", "kubectl", "kind"}
         assert not any(word in call.split() for word in ("apply", "delete", "create", "pull", "start", "patch"))
+        if call.startswith("docker run"):  # the reachability probe: throwaway, never pulls
+            assert "--rm" in call.split() and "--pull=never" in call.split()
 
 
 def _all_good(repo, monkeypatch, **overrides):
@@ -292,6 +295,7 @@ def _all_good(repo, monkeypatch, **overrides):
     responses = {
         "docker info": (0, json.dumps({"NCPU": 16, "MemTotal": 32 * 1024**3})),
         "docker exec": (0, ""),
+        "docker run": (0, "8000 open\n9954 open\n16443 open\n"),
         "kubectl get tiers": (0, "tier/adminnetworkpolicy"),
         **cluster([READY_NODE]),
         **overrides,
@@ -413,3 +417,61 @@ def test_stopped_node_is_named_with_a_start_command_and_no_udev_false_alarm(repo
     assert "not Ready: kind-worker2" in result.detail
     assert result.fix == "docker start kind-worker2"
     assert check.check_udev().status == Status.OK
+
+
+def _docker_up():
+    return {"docker info": (0, json.dumps({"NCPU": 16, "MemTotal": 32 * 1024**3}))}
+
+
+def test_firewalled_host_ports_block_with_a_ufw_fix(repo):
+    responses = {
+        **_docker_up(),
+        "docker run": (0, "8000 blocked\n9954 blocked\n16443 open\n"),
+        "systemctl is-active ufw": (0, "active\n"),
+    }
+    check, _ = make(repo, responses)
+    check.check_docker()
+    result = check.check_host_reachable()
+    assert result.status == Status.FAIL
+    assert "8000, 9954" in result.detail and "16443" not in result.detail
+    assert "sudo ufw allow from 172.16.0.0/12 to any port 8000,9954 proto tcp" in result.fix
+
+
+def test_firewall_fix_without_ufw_is_generic(repo):
+    responses = {**_docker_up(), "docker run": (0, "8000 blocked\n9954 open\n16443 open\n")}
+    check, _ = make(repo, responses)
+    check.check_docker()
+    result = check.check_host_reachable()
+    assert result.status == Status.FAIL
+    assert "ufw" not in result.fix and "172.16.0.0/12" in result.fix
+
+
+def test_reachable_host_ports_pass_and_follow_env_overrides(repo):
+    responses = {**_docker_up(), "docker run": (0, "8100 open\n9954 open\n16443 open\n")}
+    check, runner = make(repo, responses, env={"API_PORT": "8100"})
+    check.check_docker()
+    assert check.check_host_reachable().status == Status.OK
+    [probe] = [c for c in runner.calls if c.startswith("docker run")]
+    assert probe.endswith(" 8100 9954 16443")
+
+
+def test_reachability_is_skipped_when_image_is_not_pulled(repo):
+    responses = {**_docker_up(), "docker run": (125, "docker: Error response from daemon: No such image: x")}
+    check, _ = make(repo, responses)
+    check.check_docker()
+    assert check.check_host_reachable().status == Status.SKIP
+
+
+def test_reachability_is_skipped_without_agent_containers(repo):
+    check, runner = make(repo, _docker_up(), use_external_harness=True)
+    check.check_docker()
+    assert check.check_host_reachable().status == Status.SKIP
+    assert not [c for c in runner.calls if c.startswith("docker run")]
+
+
+def test_firewalled_host_ports_block_a_run(repo, monkeypatch):
+    responses = _all_good(repo, monkeypatch, **{"docker run": (0, "8000 blocked\n9954 open\n16443 open\n")})
+    check, _ = make(repo, responses, env={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
+    check.options.pre_run = True
+    reach = next(r for r in check.run_all() if r.name == "Container to host")
+    assert reach.status == Status.FAIL

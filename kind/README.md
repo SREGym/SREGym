@@ -52,7 +52,7 @@ The cluster is now ready to run SREGym.
 
 ## Troubleshooting
 
-Start with `uv run main.py --doctor`, adding the flags you plan to run with. It checks Docker, the cluster nodes, `/run/udev`, the Calico tier, and your credentials, and prints a fix for each problem.
+Start with `uv run main.py --doctor`, adding the flags you plan to run with. It checks Docker, the cluster nodes, `/run/udev`, the Calico tier, whether agent containers can reach the host, and your credentials, and prints a fix for each problem. On Docker Engine with `ufw` enabled, the firewall drops traffic from containers to the host, so the agent never reaches the run API and waits until `--agent-timeout`. The doctor detects this and prints the `ufw allow` rule.
 
 ### Docker issues
 

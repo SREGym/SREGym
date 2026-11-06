@@ -62,7 +62,28 @@ PRE_RUN_BLOCKERS = {
     "Calico adminnetworkpolicy tier",
     "Agent",
     "Filtered network allowlist",
+    "Container to host",
 }
+# Runs inside a throwaway agent container. A refused connection proves the
+# packets reached the host (nothing listens before a run starts); a timeout
+# means a firewall on the host dropped them.
+_REACH_SCRIPT = """
+import socket, sys
+for port in sys.argv[1:]:
+    s = socket.socket()
+    s.settimeout(3)
+    try:
+        s.connect(("host.docker.internal", int(port)))
+        state = "open"
+    except ConnectionRefusedError:
+        state = "open"
+    except OSError as exc:
+        state = "blocked" if isinstance(exc, TimeoutError) or "timed out" in str(exc) else "error:" + str(exc)
+    finally:
+        s.close()
+    print(port, state)
+"""
+
 # Agents that send model traffic to AGENT_API_BASE when it is set.
 CUSTOM_ENDPOINT_AGENTS = {"codex", "stratus", "mini-sre"}
 # Agents that need no model at all.
@@ -466,6 +487,58 @@ class Doctor:
             )
         return CheckResult("Host ports", Status.OK, "8000, 9954 and 16443 are free (or moved via env)")
 
+    def check_host_reachable(self) -> CheckResult:
+        """Can an agent container open a connection back to the host's run ports?
+
+        Containerized agents reach the run's API, MCP server, and Kubernetes
+        proxy at host.docker.internal. A host firewall such as ufw drops that
+        traffic on native Docker Engine, and the agent then waits silently
+        until the agent timeout.
+        """
+        name = "Container to host"
+        reg = self._agent_reg
+        if self.options.use_external_harness or (reg is not None and not reg.container_isolation):
+            return CheckResult(name, Status.SKIP, "the agent does not run in a container")
+        if not self._docker_ok:
+            return CheckResult(name, Status.SKIP, "Docker is not reachable")
+        from sregym.service.container_runner import DEFAULT_AGENT_IMAGE
+
+        image = self.env.get("SREGYM_AGENT_IMAGE") or DEFAULT_AGENT_IMAGE
+        ports = {variable: int(self.env.get(variable) or default) for variable, default in HOST_PORTS}
+        command = shlex.join(["python3", "-c", _REACH_SCRIPT, *map(str, ports.values())])
+        code, out = self.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--pull=never",
+                "--network=bridge",
+                "--add-host=host.docker.internal:host-gateway",
+                image,
+                command,
+            ],
+            60,
+        )
+        if code != 0 and re.search(r"No such image|Unable to find image", out, re.IGNORECASE):
+            return CheckResult(name, Status.SKIP, "agent image is not pulled yet, so this was not tested")
+        states = dict(line.split(" ", 1) for line in out.splitlines() if re.match(r"^\d+ \S", line))
+        if code != 0 or len(states) != len(ports):
+            return CheckResult(name, Status.WARN, "could not test: " + (_first_line(out) or f"exit {code}"))
+        blocked = [port for port in map(str, ports.values()) if states.get(port) == "blocked"]
+        errors = [f"{port} ({state[6:]})" for port, state in states.items() if state.startswith("error:")]
+        if blocked:
+            listed = ", ".join(blocked)
+            return CheckResult(
+                name,
+                Status.FAIL,
+                f"connections from containers to host.docker.internal:{listed} time out; "
+                "the agent could not reach the run API and would wait until --agent-timeout",
+                _firewall_fix(blocked, self.run),
+            )
+        if errors:
+            return CheckResult(name, Status.WARN, "could not reach host.docker.internal: " + "; ".join(errors))
+        return CheckResult(name, Status.OK, f"agent containers can reach host ports {', '.join(states)}")
+
     # --------------------------------------------------------------------- run
 
     def run_all(self) -> list[CheckResult]:
@@ -482,6 +555,7 @@ class Doctor:
         results.extend(self.check_agent())
         results.append(self.check_judge())
         results.append(self.check_ports())
+        results.append(self.check_host_reachable())
         if self.options.pre_run:
             results = [self._pre_run_severity(r) for r in results]
         return results
@@ -504,6 +578,14 @@ class Doctor:
 
 
 # ----------------------------------------------------------------------- helpers
+
+
+def _firewall_fix(ports: list[str], run: Runner) -> str:
+    ufw_active = run(["systemctl", "is-active", "ufw"], 10)[1].strip() == "active"
+    allow = f"sudo ufw allow from 172.16.0.0/12 to any port {','.join(ports)} proto tcp"
+    if ufw_active:
+        return f"ufw is active and drops this traffic. Allow Docker's networks to reach these ports: {allow}"
+    return f"A host firewall drops traffic from Docker networks. Allow 172.16.0.0/12 to TCP {', '.join(ports)}"
 
 
 def _uses_custom_endpoint(agent: str, model: str) -> bool:
