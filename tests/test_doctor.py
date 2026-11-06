@@ -387,3 +387,29 @@ def test_memory_advice_fits_the_host(repo, monkeypatch, host_gb, docker_gb, expe
     check, _ = make(repo, {"docker info": (0, json.dumps(info))}, profile="svelte")
     size = next(r for r in check.check_docker() if r.name == "Machine size")
     assert expected in size.fix
+
+
+def test_kubectl_json_before_the_error_is_skipped():
+    output = '{\n    "apiVersion": "v1",\n    "items": [],\n}\nThe connection to the server 127.0.0.1:37659 was refused - did you specify the right host or port?'
+    assert doctor._summarize_kubectl_error(output) == "127.0.0.1:37659 refused the connection"
+    assert (
+        doctor._summarize_kubectl_error('{\n"items": []\n}\nerror: You must be logged in')
+        == "error: You must be logged in"
+    )
+
+
+def test_stopped_node_is_named_with_a_start_command_and_no_udev_false_alarm(repo):
+    responses = {
+        **cluster([READY_NODE, NOT_READY_NODE]),
+        "docker info": (0, "{}"),
+        "docker ps -a --filter status=exited": (0, "kind-worker2\n"),
+        "docker exec kind-worker ": (0, ""),
+        "docker exec kind-worker2": (1, "Error response from daemon: container abc is not running"),
+    }
+    check, _ = make(repo, responses)
+    check.check_docker()
+    result = check.check_cluster()
+    assert result.status == Status.FAIL
+    assert "not Ready: kind-worker2" in result.detail
+    assert result.fix == "docker start kind-worker2"
+    assert check.check_udev().status == Status.OK

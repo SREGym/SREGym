@@ -234,7 +234,17 @@ class Doctor:
         detail = f"{len(ready)}/{len(nodes)} nodes Ready" + (f" (context {context})" if context else "")
         if nodes and len(ready) == len(nodes):
             return CheckResult("Kubernetes cluster", Status.OK, detail)
-        return CheckResult("Kubernetes cluster", Status.FAIL, detail, "kubectl get nodes; kubectl describe node <name>")
+        down = [n.get("metadata", {}).get("name", "") for n in nodes if not _node_ready(n)]
+        if not nodes:
+            return CheckResult("Kubernetes cluster", Status.FAIL, detail, "kubectl get nodes")
+        detail += "; not Ready: " + ", ".join(down)
+        code, out = self.run(["docker", "ps", "-a", "--filter", "status=exited", "--format", "{{.Names}}"], 15)
+        stopped = [name for name in down if code == 0 and name in out.split()]
+        if stopped:
+            return CheckResult(
+                "Kubernetes cluster", Status.FAIL, detail + " (container stopped)", "docker start " + " ".join(stopped)
+            )
+        return CheckResult("Kubernetes cluster", Status.FAIL, detail, f"kubectl describe node {down[0]}")
 
     def _diagnose_unreachable_cluster(self, error: str) -> CheckResult:
         name = "Kubernetes cluster"
@@ -287,6 +297,8 @@ class Doctor:
                 checked += 1
             elif "No such container" in out or code == 127:
                 continue  # not a kind node; the check does not apply
+            elif "is not running" in out:
+                continue  # a stopped node is reported by the cluster check, not as missing /run/udev
             else:
                 checked += 1
                 missing.append(node)
@@ -504,18 +516,22 @@ def _first_line(text: str) -> str:
 
 def _summarize_kubectl_error(text: str) -> str:
     """Reduce kubectl's multi-line client-go noise to the part a person needs."""
-    match = re.search(r'Get \\?"(https?://[^/"\\]+)', text or "")
+    text = text or ""
+    match = re.search(r'Get \\?"(https?://[^/"\\]+)', text) or re.search(r"connection to the server (\S+) was", text)
     server = match.group(1) if match else "the API server"
     for needle, message in (
         ("connection refused", f"{server} refused the connection"),
+        ("was refused", f"{server} refused the connection"),
         ("i/o timeout", f"{server} did not answer"),
         ("no such host", f"{server} does not resolve"),
         ("Unauthorized", "credentials were rejected"),
         ("certificate", "TLS certificate was rejected"),
     ):
-        if needle in (text or ""):
+        if needle in text:
             return message
-    return _first_line(text)[:160] or "not reachable"
+    # `kubectl -o json` prints an empty list before its error; skip the JSON.
+    lines = [line.strip() for line in text.splitlines() if line.strip() and line.strip()[0] not in '{}[]"']
+    return lines[0][:160] if lines else "not reachable"
 
 
 def _host_memory_gb() -> float | None:
