@@ -89,7 +89,7 @@ def test_small_docker_vm_explains_the_cap(repo, monkeypatch):
     check, _ = make(repo, {"docker info": (0, json.dumps(info))})
     size = next(r for r in check.check_docker() if r.name == "Machine size")
     assert size.status == Status.WARN
-    assert "Docker's VM is capped" in size.detail
+    assert "this host has 15 GB" in size.detail
     assert "Docker Desktop settings" in size.fix
     assert "--profile svelte" in size.fix
 
@@ -355,3 +355,35 @@ def test_docker_is_not_required_without_agent_containers(repo, monkeypatch):
     check.options.use_external_harness = True
     docker_result = next(r for r in check.run_all() if r.name == "Docker")
     assert docker_result.status == Status.WARN
+
+
+def test_custom_endpoint_is_ignored_for_agents_that_do_not_use_it(repo):
+    env = {"AGENT_API_BASE": "https://api.groq.com/openai/v1", "AGENT_API_KEY": "k"}
+    check, _ = make(repo, env=env, agent="codex", model="anthropic/claude-sonnet-4-6")
+    check.options.agent = "claudecode"
+    creds = check._check_agent_credentials()
+    assert creds.status == Status.FAIL
+    assert "ANTHROPIC_API_KEY" in creds.fix
+
+
+def test_judge_names_the_endpoint_it_will_use(repo):
+    env = {"JUDGE_API_BASE": "https://api.groq.com/openai/v1", "JUDGE_API_KEY": "k"}
+    result = make(repo, env=env, judge_model="anthropic/claude-sonnet-4-6")[0].check_judge()
+    assert result.status == Status.OK
+    assert "via https://api.groq.com/openai/v1" in result.detail
+
+
+@pytest.mark.parametrize(
+    ("host_gb", "docker_gb", "expected"),
+    [
+        (32.0, 8.0, "to about 16 GB"),
+        (15.3, 3.7, "to about 11 GB"),
+        (15.3, 10.2, "as much memory as this host can spare"),
+    ],
+)
+def test_memory_advice_fits_the_host(repo, monkeypatch, host_gb, docker_gb, expected):
+    monkeypatch.setattr(doctor, "_host_memory_gb", lambda: host_gb)
+    info = {"NCPU": 12, "MemTotal": int(docker_gb * 1024**3), "OperatingSystem": "Docker Desktop"}
+    check, _ = make(repo, {"docker info": (0, json.dumps(info))}, profile="svelte")
+    size = next(r for r in check.check_docker() if r.name == "Machine size")
+    assert expected in size.fix

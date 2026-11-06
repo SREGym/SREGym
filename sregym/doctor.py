@@ -36,6 +36,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MIN_CPUS = 8
 MIN_MEMORY_GB = 16
 MIN_DISK_GB = 100
+# Memory a Docker VM should leave for the host itself.
+HOST_RESERVE_GB = 4
 
 # Host ports a run listens on, with the variable that moves each one.
 HOST_PORTS = (("API_PORT", 8000), ("MCP_SERVER_PORT", 9954), ("K8S_PROXY_PORT", 16443))
@@ -61,6 +63,8 @@ PRE_RUN_BLOCKERS = {
     "Agent",
     "Filtered network allowlist",
 }
+# Agents that send model traffic to AGENT_API_BASE when it is set.
+CUSTOM_ENDPOINT_AGENTS = {"codex", "stratus", "mini-sre"}
 # Agents that need no model at all.
 MODEL_FREE_AGENTS = {"autosubmit", "debug", "demo"}
 
@@ -166,14 +170,19 @@ class Doctor:
         else:
             fix = f"SREGym-Lite needs at least {MIN_CPUS} CPUs and {MIN_MEMORY_GB} GB."
             host_gb = _host_memory_gb()
-            if _is_docker_vm(info) and host_gb and host_gb > memory_gb * 1.5:
-                detail += f" (this host has {host_gb:.0f} GB, but Docker's VM is capped)"
-                fix = (
-                    f"Raise the memory limit in {info.get('OperatingSystem')} settings (Resources); "
-                    "kind runs inside that VM. " + fix
-                )
-            if self.options.profile != SVELTE:
-                fix += " On a smaller machine try --profile svelte."
+            vm = info.get("OperatingSystem") if _is_docker_vm(info) else None
+            if vm and host_gb:
+                # Leave the host room for its own desktop, browser, and the agent.
+                target_gb = min(MIN_MEMORY_GB, host_gb - HOST_RESERVE_GB)
+                detail += f" (this host has {host_gb:.0f} GB)"
+                if memory_gb < target_gb * 0.9:
+                    fix = f"Raise the memory limit in {vm} settings (Resources) to about {target_gb:.0f} GB. " + fix
+                else:
+                    fix = f"{vm} already has as much memory as this host can spare. " + fix
+            if self.options.profile == SVELTE:
+                fix += " --profile svelte is the right choice here; expect slower deploys."
+            else:
+                fix += " On a smaller machine use --profile svelte."
             results.append(CheckResult("Machine size", Status.WARN, detail, fix))
 
         root = info.get("DockerRootDir")
@@ -353,7 +362,7 @@ class Doctor:
         agent, model = self.options.agent, self.options.model
         if agent in MODEL_FREE_AGENTS:
             return CheckResult(name, Status.SKIP, f"'{agent}' does not call a model")
-        if self.env.get("AGENT_API_BASE"):
+        if self.env.get("AGENT_API_BASE") and _uses_custom_endpoint(agent, model):
             if self.env.get("AGENT_API_KEY"):
                 return CheckResult(name, Status.OK, f"AGENT_API_KEY set for {self.env['AGENT_API_BASE']}")
             return CheckResult(
@@ -394,15 +403,17 @@ class Doctor:
                 return CheckResult(
                     name, Status.FAIL, f"judge endpoint {base} has no API key", "export JUDGE_API_KEY=..."
                 )
+            source = f"{judge_model} via {base}"
         else:
             creds = _litellm_credentials(name, judge_model, env)
             if creds.status == Status.FAIL:
                 return creds
+            source = judge_model
         if not opts.live_judge:
-            return CheckResult(name, Status.OK, f"credentials found for {judge_model} (not contacted)")
-        return self._ping_judge(judge_model)
+            return CheckResult(name, Status.OK, f"credentials found for {source} (not contacted)")
+        return self._ping_judge(judge_model, source)
 
-    def _ping_judge(self, judge_model: str) -> CheckResult:
+    def _ping_judge(self, judge_model: str, source: str) -> CheckResult:
         """Send the same one-line request the run's judge preflight sends."""
         name = "Judge"
         try:
@@ -421,10 +432,10 @@ class Doctor:
             return CheckResult(
                 name,
                 Status.FAIL,
-                f"{judge_model} did not answer: {_first_line(str(exc))[:200]}",
+                f"{source} did not answer: {_first_line(str(exc))[:200]}",
                 "Check credit/quota and --judge-model, or use --judge-backend codex",
             )
-        return CheckResult(name, Status.OK, f"{judge_model} answered a test request")
+        return CheckResult(name, Status.OK, f"{source} answered a test request")
 
     # ------------------------------------------------------------------- ports
 
@@ -481,6 +492,10 @@ class Doctor:
 
 
 # ----------------------------------------------------------------------- helpers
+
+
+def _uses_custom_endpoint(agent: str, model: str) -> bool:
+    return agent in CUSTOM_ENDPOINT_AGENTS or (agent == "opencode" and model.startswith("local/"))
 
 
 def _first_line(text: str) -> str:
