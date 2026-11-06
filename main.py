@@ -28,7 +28,7 @@ from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
-from sregym.conductor.conductor_api import request_shutdown, run_api
+from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
@@ -963,6 +963,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     # Assigning unconditionally here would clobber the caller's value, which
     # then surfaces far away as a connection to the wrong service.
     os.environ.setdefault("API_PORT", "8000")
+    check_api_port_available()
     os.environ.setdefault("MCP_SERVER_PORT", "9954")
     # Derived, never duplicated: a literal here silently disagrees with
     # MCP_SERVER_PORT, and consumers prefer the URL over the parts.
