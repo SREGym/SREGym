@@ -34,7 +34,7 @@ from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
-from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
+from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
@@ -164,6 +164,29 @@ def _problem_result_paths(base_dir: Path, agent: str, problem_id: str) -> tuple[
     final_path = base_dir / agent / problem_id / f"{problem_id}_{agent}_results.csv"
     final_path.parent.mkdir(parents=True, exist_ok=True)
     return final_path.with_name(f"_running_{final_path.name}"), final_path
+
+
+# Exit status when a problem exhausted its deploy retries. Distinct from the
+# 1 a campaign abort exits with, so a caller can tell the two apart.
+EXIT_DEPLOY_EXHAUSTED = 2
+
+
+def _deploy_exhausted_problems(results: list[dict[str, list[dict]]]) -> set[str]:
+    """Problem ids with a deploy_failed marker row in `results`, the list of
+    {agent: rows} driver_loop returns. Every deploy retry for that attempt
+    was spent, so the attempt was never run; with more than one attempt per
+    problem, an earlier attempt may still have scored.
+
+    driver_loop() writes the marker as a bool. The string form is accepted
+    too, so a row that passed through a CSV reads the same.
+    """
+    return {
+        str(row["problem_id"])
+        for entry in results
+        for rows in entry.values()
+        for row in rows
+        if row.get("problem_id") is not None and row.get("deploy_failed") in (True, "True")
+    }
 
 
 def get_current_datetime_formatted():
@@ -451,8 +474,14 @@ def driver_loop(
                 max_deploy_retries = 3
                 result = None
                 deploy_cleanup_failed = False
+                # How many deploys this attempt cost. Recorded on the result
+                # row because a retry is expensive and otherwise invisible:
+                # start_problem waits out pod readiness before it raises, and
+                # the retry then tears down and redeploys the whole problem.
+                deploy_attempts = 0
                 for deploy_attempt in range(1, max_deploy_retries + 1):
                     check_interrupted()
+                    deploy_attempts = deploy_attempt
                     try:
                         result = await conductor.start_problem()
                         break  # Success — exit retry loop
@@ -498,6 +527,7 @@ def driver_loop(
                         "attempt": attempt,
                         "deployment_profile": get_profile(),
                         "deploy_failed": True,
+                        "deploy_attempts": deploy_attempts,
                     }
                     for stage, outcome in conductor.results.items():
                         if isinstance(outcome, dict):
@@ -735,6 +765,7 @@ def driver_loop(
                     "attempt": attempt,
                     "deployment_profile": get_profile(),
                     "judge_backend": judge_backend,
+                    "deploy_attempts": deploy_attempts,
                 }
                 if os.environ.get("AGENT_JEV_MODEL"):
                     snapshot["jev_model"] = os.environ["AGENT_JEV_MODEL"]
@@ -754,6 +785,7 @@ def driver_loop(
                     else:
                         snapshot[stage] = outcome
 
+                snapshot = run.save_judge_responses(snapshot)
                 fieldnames = sorted({key for row in [*all_results_for_agent, snapshot] for key in row})
                 ownership_image = LAUNCHER.container_image
                 try:
@@ -767,6 +799,8 @@ def driver_loop(
                     snapshot["artifact_staging_path"] = str(run.active_dir)
                     if run.network_audit_path.exists():
                         snapshot["internet_audit_staging_path"] = str(run.network_audit_path)
+                    if run.judge_responses_path.exists():
+                        snapshot["judge_responses_staging_path"] = str(run.judge_responses_path)
                     logger.error(
                         "Artifact finalization failed for %s attempt %s; staging retained at %s: %s",
                         pid,
@@ -1090,14 +1124,45 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     else:
         logger.warning("⚠️ No results to write.")
 
+    # Each per-attempt CSV was published against whatever fieldnames the
+    # driver had accumulated so far, so a file from early in this run can be
+    # missing a column a later attempt's oracle introduced. Now that no more
+    # attempts will be published, whether the run completed or aborted,
+    # reconcile them all to one header.
+    if _driver_base_dir is not None:
+        try:
+            header_stabilization = stabilize_run_csv_headers(_driver_base_dir)
+            if header_stabilization.rewritten:
+                logger.info(
+                    f"🧹 Normalized headers on {len(header_stabilization.rewritten)} per-attempt result file(s)"
+                )
+            if header_stabilization.overflow_dropped:
+                logger.warning(
+                    f"⚠️ {len(header_stabilization.overflow_dropped)} result file(s) had a row with more "
+                    "values than its own header, so something wrote a malformed line. The "
+                    f"unlabeled overflow was dropped, not attributed to any column: "
+                    f"{header_stabilization.overflow_dropped}"
+                )
+        except (OSError, csv.Error) as exc:
+            logger.warning(f"⚠️ Result CSV header normalization failed (non-fatal): {exc}")
+
     if _driver_error is not None:
         if __name__ == "__main__":
             raise SystemExit(1) from _driver_error
         raise RuntimeError("Benchmark campaign did not complete") from _driver_error
 
+    deploy_exhausted = _deploy_exhausted_problems(results or [])
+    if deploy_exhausted:
+        logger.error(
+            f"❌ Deploy retries exhausted for {len(deploy_exhausted)} problem(s), "
+            f"at least one attempt was not run: {sorted(deploy_exhausted)}"
+        )
+
     if __name__ == "__main__":
-        # separate run, use exit
-        sys.exit(0)
+        # separate run, use exit. Non-zero when a problem exhausted its deploy
+        # retries: an attempt was never run, which is not a clean run, and
+        # nothing else reports it to the caller.
+        sys.exit(EXIT_DEPLOY_EXHAUSTED if deploy_exhausted else 0)
     else:
         # function call run, return results
         return results

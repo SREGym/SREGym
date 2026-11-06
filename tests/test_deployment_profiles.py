@@ -271,6 +271,7 @@ def test_driver_records_profile_in_result_rows(tmp_path, monkeypatch, selected_p
     monkeypatch.setattr(benchmark, "LAUNCHER", launcher)
     run = MagicMock()
     run.finalize_and_publish.return_value = None
+    run.save_judge_responses.side_effect = lambda snapshot: snapshot
     monkeypatch.setattr(benchmark.RunArtifacts, "create", lambda **kwargs: run)
     conductor = MagicMock()
     conductor.problem = None
