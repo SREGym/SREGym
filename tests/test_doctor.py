@@ -285,3 +285,73 @@ def test_doctor_never_runs_mutating_commands(repo, monkeypatch):
         verb = call.split()[:2]
         assert verb[0] in {"uv", "docker", "kubectl", "kind"}
         assert not any(word in call.split() for word in ("apply", "delete", "create", "pull", "start", "patch"))
+
+
+def _all_good(repo, monkeypatch, **overrides):
+    monkeypatch.setattr(doctor, "_port_in_use", lambda port: False)
+    responses = {
+        "docker info": (0, json.dumps({"NCPU": 16, "MemTotal": 32 * 1024**3})),
+        "docker exec": (0, ""),
+        "kubectl get tiers": (0, "tier/adminnetworkpolicy"),
+        **cluster([READY_NODE]),
+        **overrides,
+    }
+    return responses
+
+
+def test_pre_run_blocks_on_a_certain_failure(repo, monkeypatch):
+    responses = _all_good(repo, monkeypatch, **{"kubectl get tiers": (1, "NotFound")})
+    check, _ = make(repo, responses, env={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
+    check.options.pre_run = True
+    tier = next(r for r in check.run_all() if r.name == "Calico adminnetworkpolicy tier")
+    assert tier.status == Status.FAIL
+
+
+def test_pre_run_only_warns_on_inferred_credentials(repo, monkeypatch):
+    responses = _all_good(repo, monkeypatch)
+    check, _ = make(repo, responses, env={}, model="anthropic/claude-sonnet-4-6")
+    check.options.pre_run = True
+    results = check.run_all()
+    assert not [r for r in results if r.status == Status.FAIL], results
+    creds = next(r for r in results if r.name == "Agent credentials")
+    assert creds.status == Status.WARN
+
+
+def test_pre_run_skips_uv_and_image_and_judge_request(repo, monkeypatch):
+    def no_judge_requests():
+        raise AssertionError("the run's own judge preflight sends the test request")
+
+    monkeypatch.setattr("llm_backend.init_backend.get_llm_backend_for_judge", no_judge_requests)
+    responses = _all_good(repo, monkeypatch)
+    runner = FakeRunner(responses)
+    options = DoctorOptions(environment={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
+    monkeypatch.setattr(doctor, "Doctor", lambda opts: Doctor(opts, runner=runner, repo_root=repo))
+    from rich.console import Console
+
+    console = Console(record=True, width=120)
+    assert doctor.run_pre_run_doctor(options, console=console) is True
+    assert "setup checks passed" in console.export_text()
+    assert not [c for c in runner.calls if c.startswith(("uv ", "docker image"))]
+
+
+def test_pre_run_stops_and_explains_how_to_skip(repo, monkeypatch):
+    responses = _all_good(repo, monkeypatch, **{"kubectl get nodes": (1, "connection refused")})
+    runner = FakeRunner(responses)
+    monkeypatch.setattr(doctor, "Doctor", lambda opts: Doctor(opts, runner=runner, repo_root=repo))
+    from rich.console import Console
+
+    console = Console(record=True, width=120)
+    assert doctor.run_pre_run_doctor(DoctorOptions(environment={}), console=console) is False
+    text = console.export_text()
+    assert "--skip-doctor" in text
+    assert "Kubernetes cluster" in text
+    assert "Applications submodule" not in text  # passing checks are not listed
+
+
+def test_docker_is_not_required_without_agent_containers(repo, monkeypatch):
+    responses = _all_good(repo, monkeypatch, **{"docker info": (1, "Cannot connect to the Docker daemon")})
+    check, _ = make(repo, responses, env={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
+    check.options.pre_run = True
+    check.options.use_external_harness = True
+    docker_result = next(r for r in check.run_all() if r.name == "Docker")
+    assert docker_result.status == Status.WARN

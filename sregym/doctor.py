@@ -49,6 +49,18 @@ SUBSCRIPTION_CREDENTIALS = {
     "cursor": ("CURSOR_API_KEY",),
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"),
 }
+# Checks that, when they fail, mean a benchmark run would certainly fail too.
+# Each mirrors an error the run raises later (deploy, egress boundary, agent
+# lookup, allowlist). Every other failure only warns before a run.
+PRE_RUN_BLOCKERS = {
+    "Applications submodule",
+    "Docker",
+    "Kubernetes cluster",
+    "/run/udev on kind nodes",
+    "Calico adminnetworkpolicy tier",
+    "Agent",
+    "Filtered network allowlist",
+}
 # Agents that need no model at all.
 MODEL_FREE_AGENTS = {"autosubmit", "debug", "demo"}
 
@@ -78,6 +90,8 @@ class DoctorOptions:
     internet_access: str = "filtered"
     use_external_harness: bool = False
     live_judge: bool = True
+    # Set when the doctor runs automatically at the start of a benchmark run.
+    pre_run: bool = False
     environment: dict[str, str] = field(default_factory=lambda: dict(os.environ))
 
 
@@ -103,6 +117,7 @@ class Doctor:
         self.env = options.environment
         self._docker_ok: bool | None = None
         self._cluster_nodes: list[dict] | None = None
+        self._agent_reg = None
 
     # ----------------------------------------------------------------- tooling
 
@@ -300,6 +315,7 @@ class Doctor:
 
         agents = list_agents(self.repo_root / "agents.yaml")
         reg = agents.get(self.options.agent)
+        self._agent_reg = reg
         if reg is None:
             return [
                 CheckResult(
@@ -431,17 +447,37 @@ class Doctor:
 
     def run_all(self) -> list[CheckResult]:
         results: list[CheckResult] = []
-        results.append(self.check_uv())
+        if not self.options.pre_run:  # `uv run` already enforces the version
+            results.append(self.check_uv())
         results.append(self.check_submodule())
         results.extend(self.check_docker())
-        results.append(self.check_agent_image())
+        if not self.options.pre_run:
+            results.append(self.check_agent_image())
         results.append(self.check_cluster())
         results.append(self.check_udev())
         results.append(self.check_calico_tier())
         results.extend(self.check_agent())
         results.append(self.check_judge())
         results.append(self.check_ports())
+        if self.options.pre_run:
+            results = [self._pre_run_severity(r) for r in results]
         return results
+
+    def _pre_run_severity(self, result: CheckResult) -> CheckResult:
+        """Before a run, block only on what the run itself would certainly fail on.
+
+        Credential checks infer what an agent or judge needs, so before a run
+        they only warn: the run's own agent and judge preflights test the real
+        credentials. Docker is required only when the agent runs in a container.
+        """
+        if result.status != Status.FAIL:
+            return result
+        if result.name == "Docker":
+            reg = self._agent_reg
+            blocks = not self.options.use_external_harness and (reg is None or reg.container_isolation)
+        else:
+            blocks = result.name in PRE_RUN_BLOCKERS
+        return result if blocks else CheckResult(result.name, Status.WARN, result.detail, result.fix)
 
 
 # ----------------------------------------------------------------------- helpers
@@ -580,6 +616,29 @@ def render(results: Iterable[CheckResult], options: DoctorOptions, console=None)
         console.print(f"[green bold]Ready to run[/] with {warns} warning(s).")
     else:
         console.print("[green bold]Ready to run.[/]")
+
+
+def run_pre_run_doctor(options: DoctorOptions, console=None) -> bool:
+    """Check the machine at the start of a run; return False if the run must stop.
+
+    Prints one line when everything passes, otherwise only the problems.
+    """
+    from rich.console import Console
+
+    console = console or Console()
+    options.pre_run = True
+    options.live_judge = False  # the run's own judge preflight sends the test request
+    results = Doctor(options).run_all()
+    problems = [r for r in results if r.status in (Status.FAIL, Status.WARN)]
+    passed = sum(r.status == Status.OK for r in results)
+    if not problems:
+        console.print(f"[green]✅ Doctor: {passed} setup checks passed[/]")
+        return True
+    render(problems, options, console)
+    blocked = any(r.status == Status.FAIL for r in problems)
+    if blocked:
+        console.print("Stopping before deployment. Re-run with --skip-doctor to start anyway.")
+    return not blocked
 
 
 def run_doctor(options: DoctorOptions, console=None) -> int:

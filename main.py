@@ -1241,6 +1241,15 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--skip-doctor",
+        action="store_true",
+        default=os.environ.get("SREGYM_SKIP_DOCTOR") == "1",
+        help=(
+            "Do not run the setup checks at the start of a run (also SREGYM_SKIP_DOCTOR=1). By default a run "
+            "stops before deployment when a check shows it would fail"
+        ),
+    )
+    parser.add_argument(
         "--doctor-offline",
         action="store_true",
         help="With --doctor, check judge credentials without sending the judge a test request",
@@ -1357,5 +1366,20 @@ if __name__ == "__main__":
                 console=console,
             )
         )
+
+    if not args.skip_doctor:
+        from sregym.doctor import DoctorOptions, run_pre_run_doctor
+
+        doctor_options = DoctorOptions(
+            agent=args.agent,
+            model=args.model,
+            judge_model=args.judge_model,
+            judge_backend=args.judge_backend,
+            profile=args.profile,
+            internet_access=args.internet_access,
+            use_external_harness=args.use_external_harness,
+        )
+        if not run_pre_run_doctor(doctor_options, console=console):
+            sys.exit(1)
 
     main(args)

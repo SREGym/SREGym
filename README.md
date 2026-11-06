@@ -97,6 +97,8 @@ uv run main.py --doctor --agent codex --model gpt-5 --profile svelte
 
 It exits non-zero when a run would fail. Add `--doctor-offline` to skip the one-line test request it sends to the judge.
 
+Every run also does these checks before it deploys anything. If a check shows the run would fail, for example the cluster is unreachable or filtered internet access has no Calico tier, the run stops right away and prints the fix. Credential problems only produce a warning there, because the run's own preflight tests the real credentials. Pass `--skip-doctor` (or set `SREGYM_SKIP_DOCTOR=1`) to turn the checks off.
+
 #### Quick Start
 
 To get started with the included Stratus agent:
