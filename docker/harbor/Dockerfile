@@ -38,6 +38,8 @@ COPY . .
 RUN test -f SREGym-applications/README.md && uv sync --frozen --no-dev --no-build-isolation
 
 COPY docker/harbor/start.sh /usr/local/lib/sregym-harbor/start.sh
+# The ENV below, for login shells on providers that do not apply it (E2B).
+COPY docker/harbor/sregym-env.sh /etc/profile.d/sregym-env.sh
 COPY docker/harbor/sregym-ready /usr/local/bin/sregym-ready
 # The agent runs as this user (task.toml [agent] user). Problem code, grading,
 # cluster state and admin credentials stay root-only; the agent reaches the

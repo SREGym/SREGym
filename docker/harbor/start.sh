@@ -5,6 +5,8 @@
 # sregym-ready starts this once. A failure before the backend runs is written to
 # the shared state, so the healthcheck stops at once.
 set -euo pipefail
+# The image's ENV, which some providers (E2B) do not apply.
+. /etc/profile.d/sregym-env.sh
 shared=/run/sregym
 out=/sregym-harbor
 kubeconfig=/var/lib/rancher/k3s/nodes/kind-control-plane/etc-rancher/k3s/k3s.yaml
@@ -45,6 +47,17 @@ stage="image-pull proxy"
 python3 /usr/local/lib/userns-k3s/egress-proxy.py --listen 127.0.0.1 --port 3128 >"$out/logs/egress.log" 2>&1 &
 
 stage="cluster"
+# The fabric delegates cgroup v2 controllers from the cgroup it starts in, after
+# which the kernel refuses to start processes there (EBUSY). In a container that
+# cgroup is the container's own. On a VM sandbox (E2B), commands run in a cgroup
+# shared with the sandbox's process manager, which keeps starting the agent's and
+# healthcheck's processes there, so give the cluster its own cgroup first.
+start_cgroup=$(cut -d: -f3 /proc/self/cgroup)
+if [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ] && [ "$start_cgroup" != / ] &&
+    mkdir -p /sys/fs/cgroup/sregym-cluster 2>/dev/null; then
+    echo $$ > /sys/fs/cgroup/sregym-cluster/cgroup.procs
+    echo "cluster cgroup: /sregym-cluster (started in shared cgroup $start_cgroup)"
+fi
 EGRESS_PROXY=127.0.0.1:3128 /bin/sh /usr/local/lib/userns-k3s/entrypoint.sh >"$out/logs/cluster.log" 2>&1 &
 timeout 300 bash -c "until [ -s $kubeconfig ]; do sleep 2; done"
 cp "$kubeconfig" /root/.kube/config
