@@ -4,7 +4,7 @@ The unit tests pin down the injection contract without a cluster: the patch has
 to name `frontend` (the hostname the frontend-proxy actually dials), and
 recovery has to remove it. The integration test runs the real
 inject -> oracle fails -> recover -> oracle passes lifecycle and is skipped
-unless `-m integration` is selected against a live cluster.
+unless `-m integration --allow-kubernetes` is selected against a live cluster.
 """
 
 import os

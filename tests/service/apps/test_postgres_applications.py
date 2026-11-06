@@ -19,6 +19,8 @@ from sregym.service.apps.mattermost.application import MattermostApplication
 from sregym.service.apps.mattermost.workflow import workflow as mattermost_workflow
 from sregym.service.apps.stripe.application import StripeApplication
 
+pytestmark = pytest.mark.usefixtures("offline_kubectl")
+
 
 @pytest.mark.parametrize("cls", [GitLabApplication, MattermostApplication, StripeApplication])
 @pytest.mark.parametrize("tier,members", [("single", 1), ("replicated", 3)])
