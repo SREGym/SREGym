@@ -101,7 +101,12 @@ if [ "$role" = server ]; then
     # the workers only. It matters for NetworkPolicy too: traffic from a pod's
     # own node is always allowed, so the API server, which runs in this node's
     # network, would reach pods scheduled here that a policy isolates.
+    # --embedded-registry: nodes fetch images from each other (Spegel) before
+    # the registry, so each image crosses the image-pull proxy about once per
+    # cluster instead of once per node. It mirrors the registries listed in
+    # registries.yaml.
     exec k3s server $common --disable=traefik,servicelb,metrics-server,local-storage \
+        --embedded-registry \
         --node-taint=node-role.kubernetes.io/control-plane:NoSchedule \
         --write-kubeconfig-mode=600 --tls-san=${K3S_TLS_SAN:-kubernetes}
 else

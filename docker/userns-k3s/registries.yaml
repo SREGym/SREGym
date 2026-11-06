@@ -22,3 +22,6 @@ mirrors:
       - "https://gcr.io"
     rewrite:
       "^([a-z0-9-]+)/(.*)$": "k8s-staging-$1/$2"
+  # Every other registry: no mirrors, but listing it lets k3s's embedded
+  # registry (node.sh) share its images between nodes.
+  "*":
