@@ -59,6 +59,25 @@ mount -t tmpfs tmpfs /tmp
 mkdir -p /run/udev
 mount --make-rshared /
 
+# On a small disk, drop each image's compressed layers once they are unpacked.
+# An Astronomy Shop cluster holds about 5 GB of them, enough to fill a 23 GB
+# E2B sandbox. The cost: peers cannot fetch those images from this node
+# (--embedded-registry). DISCARD_UNPACKED_LAYERS=1 or 0 overrides the size check.
+discard=${DISCARD_UNPACKED_LAYERS:-}
+if [ -z "$discard" ]; then
+    disk_kib=$(df -Pk /var/lib/rancher/k3s | awk 'NR == 2 {print $2}')
+    discard=$([ "${disk_kib:-0}" -lt $((64 * 1024 * 1024)) ] && echo 1 || echo 0)
+fi
+if [ "$discard" = 1 ]; then
+    # k3s renders this template in place of its own; the base template already
+    # defines the images table, so the setting comes in through an import.
+    c=/var/lib/rancher/k3s/agent/etc/containerd
+    mkdir -p $c
+    printf "version = 3\n[plugins.'io.containerd.cri.v1.images']\n  discard_unpacked_layers = true\n" > $c/sregym-discard.toml
+    printf 'imports = ["%s/sregym-discard.toml"]\n{{ template "base" . }}\n' $c > $c/config-v3.toml.tmpl
+    echo "[$name] discarding unpacked image layers (disk $((${disk_kib:-0} / 1048576)) GiB)"
+fi
+
 if [ -f /etc/userns-k3s/registries.yaml ]; then
     # Registry mirrors and rewrites for containerd (k3s registries.yaml format).
     mkdir -p /etc/rancher/k3s
