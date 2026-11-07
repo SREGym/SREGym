@@ -1,0 +1,11 @@
+# Jev-as-a-Judge, frozen 2026-11-06.
+#
+#   jev     pass iff score >= cut_jev_alone
+#   mixed   the LLM judge decides if band_low <= score <= band_high; otherwise pass iff score > band_high
+#
+# model_release is the jev-latest release the thresholds were chosen with. jev-latest is an alias and can move.
+model: jev-latest
+model_release: "2026-10-22T02:00:00+00:00"
+band_low: 0.3278
+band_high: 0.7522
+cut_jev_alone: 0.62

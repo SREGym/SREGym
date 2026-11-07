@@ -327,6 +327,7 @@ SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings dire
 | `--model` | `gpt-5` | Sets both agent and judge model; for `jev_diag`, the Jev model (default `jev-latest`) |
 | `--judge-model` | (same as `--model`) | Override just the judge evaluator model; required for `jev_diag` |
 | `--judge-backend` | `api` | Judge access through the existing API endpoint, or `codex`, `claudecode`, `copilot`, or `cursor` |
+| `--judge-mode` | `llm` | Diagnosis judge: LLM-as-a-Judge (`llm`), Jev-as-a-Judge (`jev`), or the Mixed Judge (`mixed`) |
 
 Set the required environment variable for your provider before running:
 
@@ -434,6 +435,27 @@ uv run main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20
 See the full list of supported providers and model strings in the [LiteLLM docs](https://docs.litellm.ai/docs/providers).
 
 </details>
+
+### Judge modes
+
+Choose who judges the diagnosis with `--judge-mode` (default `llm`, or set `JUDGE_MODE`):
+
+| Judge mode | Who judges the diagnosis |
+| --- | --- |
+| `llm` (default) | LLM-as-a-Judge, the judge set by `--judge-model` and `--judge-backend` |
+| `jev` | Jev-as-a-Judge, which asks TypeSafe's Jev model the checklist questions and decides alone |
+| `mixed` | The Mixed Judge, which asks Jev-as-a-Judge first and lets LLM-as-a-Judge decide the diagnoses Jev-as-a-Judge is unsure about |
+
+For `jev` and `mixed`, set `TYPESAFE_API_KEY` and run:
+
+```bash
+export TYPESAFE_API_KEY="..."
+uv run main.py --suite sregym-lite --agent stratus --model gpt-5 --judge-mode mixed
+```
+
+`JUDGE_JEV_MODEL` overrides the Jev model (default `jev-latest`). In `mixed` mode, LLM-as-a-Judge also decides when
+the Jev request fails. Jev's score, its P(yes) for each question, and whether the diagnosis went to LLM-as-a-Judge
+are recorded in the `jev` field of the results JSON.
 
 ## Cite This
 If our work is useful for you, please cite it:
