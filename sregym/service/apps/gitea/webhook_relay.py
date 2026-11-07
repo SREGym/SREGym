@@ -16,29 +16,6 @@ changed = threading.Condition()
 paused = False
 
 
-def summary(item):
-    try:
-        payload = json.loads(item["body"])
-    except ValueError:
-        payload = {}
-    issue = payload.get("issue") or {}
-    comment = payload.get("comment") or {}
-    return {
-        "id": item["id"],
-        "delivery": item["headers"].get("X-Gitea-Delivery"),
-        "event": item["headers"].get("X-Gitea-Event"),
-        "action": payload.get("action"),
-        "repository": (payload.get("repository") or {}).get("full_name"),
-        "issue_id": issue.get("id"),
-        "number": issue.get("number"),
-        "title": issue.get("title"),
-        "body": issue.get("body"),
-        "state": issue.get("state"),
-        "comment_id": comment.get("id"),
-        "comment": comment.get("body"),
-    }
-
-
 def forward_forever():
     while True:
         with changed:
@@ -92,7 +69,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         with changed:
-            data = json.dumps({"paused": paused, "queued": [summary(item) for item in queue]}).encode()
+            items = [{"id": i["id"], "headers": i["headers"], "body": i["body"].decode()} for i in queue]
+            data = json.dumps({"paused": paused, "queued": items}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))

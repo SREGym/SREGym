@@ -5,6 +5,7 @@ import secrets
 import time
 from collections import Counter
 from math import inf
+from statistics import median
 
 from sregym.conductor.oracles.apps.gitea.divergent_recovery import GiteaDivergentRecoveryOracle, gitea_keys
 from sregym.conductor.oracles.apps.gitlab.divergent_recovery import divergence_report
@@ -15,7 +16,9 @@ from sregym.service.apps.gitea.application import FIXTURES
 from sregym.service.apps.gitea.mysql_failover import (
     LIVE_TRAFFIC,
     LIVE_TRAFFIC_REPOSITORY,
+    ORCHESTRATOR,
     RECEIVER,
+    issue_details,
     repository_names,
     undeliverable,
 )
@@ -25,6 +28,12 @@ REPOSITORY_VOLUME = "gitea-repositories"
 SEARCH_TIMEOUT_SECONDS = 60
 #: Longest stretch without an acknowledged user write that still counts as staying online.
 MAX_OUTAGE_SECONDS = 10
+#: Users' issues must open about as fast as before the incident, with Gitea and its primary in one region.
+MAX_WRITE_SECONDS = 1.5
+#: How many of the users' latest writes that speed is measured over.
+RESPONSIVENESS_WRITES = 10
+#: Writes that set an issue detail and emit no webhook event.
+DETAILS = ("label", "assignee", "milestone", "reaction")
 
 
 def issue_events(state, issues, updates):
@@ -39,6 +48,7 @@ def issue_events(state, issues, updates):
     comment_ids = {}
     for comment in state["comments"]:
         comment_ids.setdefault((comment["issue_id"], comment["content"]), []).append(comment["id"])
+    details = issue_details(state)
     events, lost = [], []
     for record in [*issues, *updates]:
         repository = record["repository"].lower()
@@ -59,6 +69,16 @@ def issue_events(state, issues, updates):
                 lost.append(record["title"])
                 continue
             events.append(("issues", "closed", *issue, None, None))
+        elif kind := next((k for k in DETAILS if k in record), None):
+            held = details[row["id"]]
+            present = {
+                "label": record.get("label") in held["labels"],
+                "assignee": record.get("assignee") in held["assignees"],
+                "milestone": held["milestone"] == record.get("milestone"),
+                "reaction": record.get("reaction") in {t for t, _ in held["reactions"]},
+            }[kind]
+            if not present:
+                lost.append(f"{record['title']} ({kind} {record[kind]})")
         else:
             events.append(("issues", "opened", *issue, None, None))
     return events, lost
@@ -118,6 +138,12 @@ def live_traffic_report(traffic, issues, repository_id, graded=()):
     }
 
 
+def responsiveness_report(traffic):
+    """How long users waited for their latest issues to open."""
+    recent = [w["took"] for w in traffic["acknowledged"] if "took" in w][-RESPONSIVENESS_WRITES:]
+    return {"writes": len(recent), "median": median(recent) if recent else inf}
+
+
 def delivery_report(deliveries, events):
     """Each implied event must arrive exactly once; no delivery may describe a number's issue wrongly."""
     received = Counter(
@@ -174,6 +200,12 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         "webhook_events_conflicting": FailureClass.AGENT_ERROR,
         "webhook_events_undelivered": FailureClass.AGENT_ERROR,
         "webhook_events_duplicated": FailureClass.AGENT_ERROR,
+        "acknowledged_writes_duplicated": FailureClass.AGENT_ERROR,
+        "acknowledged_git_data_changed": FailureClass.AGENT_ERROR,
+        "writes_slow": FailureClass.AGENT_ERROR,
+        "repository_lost": FailureClass.AGENT_ERROR,
+        "branch_heads_stale": FailureClass.AGENT_ERROR,
+        "orchestrator_disagrees": FailureClass.AGENT_ERROR,
     }
 
     graded = ()
@@ -226,6 +258,46 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             return self.fail("service_interrupted", seconds=round(report["longest_outage"]))
         if report["lost"]:
             return self.fail("live_writes_lost", writes=report["lost"])
+        speed = responsiveness_report(traffic)
+        if speed["writes"] < RESPONSIVENESS_WRITES or speed["median"] > MAX_WRITE_SECONDS:
+            return self.fail("writes_slow", writes=speed["writes"], median_seconds=round(speed["median"], 2))
+        return None
+
+    def check_orchestrator(self, primary):
+        """Orchestrator runs, records the serving primary as master, and may recover it again."""
+        app = self.problem.app
+        found = app.command("get", "deployment", ORCHESTRATOR, "--ignore-not-found", "-o", "json").strip()
+        running = bool(found and json.loads(found)["status"].get("readyReplicas"))
+        state = app.orchestrator_state()
+        if not running or state["master"] != app.mysql.pod(primary) or not state["recoveries_enabled"]:
+            return self.fail(
+                "orchestrator_disagrees",
+                running=running,
+                master=state["master"],
+                recoveries_enabled=state["recoveries_enabled"],
+            )
+        return None
+
+    def check_new_repository(self, primary):
+        """The repository created during the partition, with its files, issues and comments, each once."""
+        problem, app = self.problem, self.problem.app
+        created = problem.new_repository
+        if not created:
+            return None
+        files = app.recovery_client(
+            "read", files=[{"repository": created["repository"], "path": path} for path in created["files"]]
+        )
+        if files != list(created["files"].values()):
+            return self.fail("repository_lost", repository=created["repository"])
+        state = app.snapshot(primary)
+        names = repository_names(state)
+        counts = Counter((names[r["repo_id"]], r["name"], r["content"]) for r in state["issues"])
+        wrong = [r["title"] for r in created["issues"] if counts[(created["repository"], r["title"], r["body"])] != 1]
+        if wrong:
+            return self.fail("repository_lost", repository=created["repository"], issues=wrong)
+        _, lost = issue_events(state, created["issues"], created["updates"])
+        if lost:
+            return self.fail("acknowledged_updates_lost", updates=lost)
         return None
 
     def check_replication(self):
@@ -296,6 +368,10 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         for repository, files in problem.expected_git.items():
             if any(git.get(repository, {}).get(path) != digest for path, digest in files.items()):
                 return self.fail("acknowledged_git_data_changed", repository=repository)
+        if failed := self.check_new_repository(primary):
+            return failed
+        if stale := app.stale_branches():
+            return self.fail("branch_heads_stale", repositories=stale)
         return None
 
     def evaluate(self):
@@ -335,6 +411,8 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
             if traffic is not None and (failed := self.check_live_traffic(primary, traffic)):
                 return failed
             if problem.shared is not None and (failed := self.check_divergence(primary, traffic)):
+                return failed
+            if problem.shared is not None and (failed := self.check_orchestrator(primary)):
                 return failed
             # Runtime-only fencing must not let the former primary become writable after a restart.
             app.mysql.restart(other(primary))

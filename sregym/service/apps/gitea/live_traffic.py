@@ -37,7 +37,7 @@ def open_issue(title, body):
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=3) as response:
+    with urllib.request.urlopen(request, timeout=15) as response:
         return json.loads(response.read())["number"]
 
 
@@ -53,7 +53,8 @@ def write_forever():
             pass
         else:
             with lock:
-                acknowledged.append({"number": number, "title": title, "body": body, "at": time.time()})
+                now = time.time()
+                acknowledged.append({"number": number, "title": title, "body": body, "at": now, "took": now - started})
         pause = INTERVAL * (0.75 + secrets.randbelow(51) / 100)
         time.sleep(max(0.0, pause - (time.time() - started)))
 

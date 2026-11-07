@@ -265,54 +265,110 @@ def test_description_states_requirements_but_not_the_regions_or_the_fault():
     for tier in DIVERGENCE_COUNTS:
         description = GiteaMySQLApplication(tier).description
         assert not any(word in description for word in ("east", "west", "webhook", "partition", "Tier", tier))
-        assert all(word in description for word in ("replica", "available", "exactly once"))
+        assert all(word in description for word in ("replica", "available", "Orchestrator", "responsive"))
 
 
-def test_reference_repair_replays_only_unreplicated_activity_then_rebuilds(monkeypatch):
-    mysql = Mock()
+def test_reference_repair_fails_back_then_replays_only_unreplicated_activity(monkeypatch):
+    steps = Mock()
+    mysql = steps.mysql
     mysql.write_region.return_value = "west"
+    mysql.pod.side_effect = lambda region: f"gitea-db-{region}-0"
     monkeypatch.setattr(GiteaMySQLApplication, "mysql", property(lambda self: mysql))
     app = GiteaMySQLApplication()
-    users = [{"id": 1, "lower_name": "zoo"}]
+    users = [{"id": 1, "lower_name": "zoo"}, {"id": 2, "lower_name": "admin"}]
     repositories = [{"id": 5, "owner_id": 1, "lower_name": "pets"}]
 
-    def issue(id, index, name, content, closed=False):
-        return {"id": id, "repo_id": 5, "index": index, "name": name, "content": content, "is_closed": closed}
+    def issue(id, index, name, content, closed=False, milestone=0):
+        return {
+            "id": id,
+            "repo_id": 5,
+            "index": index,
+            "name": name,
+            "content": content,
+            "is_closed": closed,
+            "milestone_id": milestone,
+        }
 
-    snapshots = {
-        "west": {
-            "users": users,
-            "repositories": repositories,
-            "issues": [issue(1, 1, "shared", "a"), issue(2, 2, "post", "c")],
-            "comments": [{"id": 1, "issue_id": 1, "content": "seen in west"}],
-        },
-        "east": {
-            "users": users,
-            "repositories": repositories,
-            "issues": [issue(1, 1, "shared", "a", closed=True), issue(2, 2, "orphan", "b")],
-            "comments": [
-                {"id": 1, "issue_id": 1, "content": "seen in east"},
-                {"id": 2, "issue_id": 2, "content": "orphan note"},
-            ],
-        },
+    west = {
+        "users": users,
+        "repositories": repositories,
+        "issues": [issue(1, 1, "shared", "a"), issue(2, 2, "post", "c")],
+        "comments": [{"id": 1, "issue_id": 1, "content": "seen in west"}],
+        "labels": [{"issue_id": 1, "name": "bug"}],
+        "assignees": [],
+        "milestones": [{"id": 7, "name": "2026.11"}],
+        "reactions": [],
     }
-    app.snapshot = lambda region=None: snapshots[region]
-    app.recovery_client = Mock(
-        side_effect=lambda mode, **arguments: [{**arguments["records"][0], "number": 3}] if mode == "create" else []
+    east = {
+        "users": users,
+        "repositories": [*repositories, {"id": 6, "owner_id": 1, "lower_name": "notes"}],
+        "issues": [issue(1, 1, "shared", "a", closed=True, milestone=7), issue(2, 2, "orphan", "b")],
+        "comments": [
+            {"id": 1, "issue_id": 1, "content": "seen in east"},
+            {"id": 2, "issue_id": 2, "content": "orphan note"},
+        ],
+        "labels": [{"issue_id": 1, "name": "bug"}, {"issue_id": 1, "name": "regression"}],
+        "assignees": [{"issue_id": 2, "user": "zoo"}],
+        "milestones": [{"id": 7, "name": "2026.11"}],
+        "reactions": [{"issue_id": 2, "type": "heart", "user": "admin"}, {"issue_id": 2, "type": "+1", "user": "zoo"}],
+    }
+    app.snapshot = lambda region=None: east if region == "east" else west
+    app.recovery_client = steps.recovery_client
+    app.recovery_client.side_effect = lambda mode, **arguments: (
+        [{**arguments["records"][0], "number": 3}] if mode == "create" else []
     )
     app.secret_value = Mock(return_value="ab")
-    app.relay = Mock(return_value={"paused": True, "queued": []})
+    app.relay = steps.relay
+    app.queued_events = Mock(return_value=[])
+    app.orchestrator = steps.orchestrator
+    app.sync_branches = steps.sync_branches
+    app.redeliver_stuck_webhooks = steps.redeliver_stuck_webhooks
+    app.admin_username = Mock(return_value="admin")
     monkeypatch.setattr("sregym.service.apps.gitea.mysql_failover.time.sleep", lambda seconds: None)
     app.reference_repair()
-    assert app.relay.call_args_list[-1].args == ("resume",)
-    assert app.recovery_client.call_args_list[0].kwargs == {
-        "records": [{"repository": "zoo/pets", "title": "orphan", "body": "b"}]
-    }
-    assert app.recovery_client.call_args_list[1].kwargs == {
+
+    steps_taken = (
+        "orchestrator",
+        "relay",
+        "mysql.rebuild",
+        "recovery_client",
+        "sync_branches",
+        "redeliver_stuck_webhooks",
+    )
+    order = [c[0] for c in steps.mock_calls if c[0] in steps_taken]
+    assert order == [
+        "orchestrator",
+        "relay",
+        "mysql.rebuild",
+        "orchestrator",
+        "orchestrator",
+        "recovery_client",
+        "recovery_client",
+        "recovery_client",
+        "sync_branches",
+        "redeliver_stuck_webhooks",
+        "relay",
+    ]
+    assert [c.args[0] for c in steps.orchestrator.call_args_list] == [
+        "disable-global-recoveries",
+        "graceful-master-takeover-auto/gitea/gitea-db-east-0/3306",
+        "enable-global-recoveries",
+    ]
+    assert [c.args for c in steps.relay.call_args_list] == [("pause",), ("resume",)]
+    mysql.rebuild.assert_called_once_with("east", "west", "ab")
+    adopt, create, update = steps.recovery_client.call_args_list
+    assert adopt.kwargs == {"repositories": ["zoo/notes"]}
+    assert create.kwargs == {"records": [{"repository": "zoo/pets", "title": "orphan", "body": "b"}]}
+    shared = {"repository": "zoo/pets", "title": "shared", "body": "a", "number": 1}
+    orphan = {"repository": "zoo/pets", "title": "orphan", "body": "b", "number": 3}
+    assert update.kwargs == {
         "updates": [
-            {"repository": "zoo/pets", "number": 1, "comment": "seen in east"},
-            {"repository": "zoo/pets", "number": 1, "close": True},
-            {"repository": "zoo/pets", "number": 3, "comment": "orphan note"},
+            {**shared, "comment": "seen in east"},
+            {**shared, "close": True},
+            {**shared, "label": "regression"},
+            {**shared, "milestone": "2026.11"},
+            {**orphan, "comment": "orphan note"},
+            {**orphan, "assignee": "zoo"},
+            {**orphan, "reaction": "heart"},
         ]
     }
-    mysql.rebuild.assert_called_once_with("east", "west", "ab")

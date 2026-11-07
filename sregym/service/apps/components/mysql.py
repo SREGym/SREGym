@@ -10,6 +10,8 @@ logger = logging.getLogger("all.sregym.mysql")
 
 MYSQL_IMAGE = "mysql:8.4.6"
 REGIONS = ("east", "west")
+#: Node label naming the region a node is in; each region's pods run only on its own nodes.
+REGION_LABEL = "topology.kubernetes.io/region"
 SERVER_IDS = {"east": 1, "west": 2}
 GTID_CHARACTERS = set("0123456789abcdef:,-")
 TABLE_CHARACTERS = set("abcdefghijklmnopqrstuvwxyz0123456789_")
@@ -56,15 +58,16 @@ class MySQLRegions:
     def labels(self, region):
         return {"app": self.name, "region": region}
 
+    def write_service_document(self, region):
+        return {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": self.write_service, "labels": {"app": self.name}},
+            "spec": {"selector": self.labels(region), "ports": [{"port": 3306, "targetPort": 3306}]},
+        }
+
     def render(self, user_secret):
-        documents = [
-            {
-                "apiVersion": "v1",
-                "kind": "Service",
-                "metadata": {"name": self.write_service, "labels": {"app": self.name}},
-                "spec": {"selector": self.labels("east"), "ports": [{"port": 3306, "targetPort": 3306}]},
-            }
-        ]
+        documents = [self.write_service_document("east")]
         for region in REGIONS:
             secret = {"name": self.secret, "key": "root-password"}
             documents += [
@@ -87,6 +90,7 @@ class MySQLRegions:
                             "spec": {
                                 "automountServiceAccountToken": False,
                                 "terminationGracePeriodSeconds": 30,
+                                "nodeSelector": {REGION_LABEL: region},
                                 "containers": [
                                     {
                                         "name": "mysql",
@@ -341,14 +345,8 @@ class MySQLRegions:
         self.sql(region, "STOP REPLICA IO_THREAD;\nSTART REPLICA IO_THREAD;")
 
     def route_writes(self, region):
-        self.command(
-            "patch",
-            "service",
-            self.write_service,
-            "--type=merge",
-            "-p",
-            json.dumps({"spec": {"selector": self.labels(region)}}),
-        )
+        # Applied whole, as a failover tool would, so the Service's recorded configuration names the new primary.
+        self.command("apply", "-f", "-", input_text=json.dumps(self.write_service_document(region)))
 
     def partition_documents(self, namespace):
         return [
@@ -380,11 +378,29 @@ class MySQLRegions:
             for region in REGIONS
         ]
 
+    def isolation_documents(self, namespace, region, watcher):
+        """Cut ``region``'s pods off from pods matching the ``watcher`` selector too, ahead of the region policy."""
+        return [
+            {
+                "apiVersion": "crd.projectcalico.org/v1",
+                "kind": "NetworkPolicy",
+                "metadata": {"name": f"default.region-{region}-isolated", "namespace": namespace},
+                "spec": {
+                    "tier": "default",
+                    "order": 50,
+                    "selector": f"region == '{region}'",
+                    "types": ["Ingress"],
+                    "ingress": [{"action": "Deny", "source": {"selector": watcher, "namespaceSelector": "all()"}}],
+                },
+            }
+        ]
+
     def heal(self):
         self.command(
             "delete",
             "networkpolicies.crd.projectcalico.org",
             *[f"default.region-{region}" for region in REGIONS],
+            *[f"default.region-{region}-isolated" for region in REGIONS],
             "--ignore-not-found",
         )
 

@@ -1,11 +1,12 @@
 """A partition between two MySQL regions ends with a promoted replica and two histories.
 
 Modelled on GitHub's 21 October 2018 incident. While the regions cannot reach
-each other, Gitea keeps writing issues, comments and closes to the east primary,
-and their webhook events pile up in the relay, which cannot reach the west
-consumer. Delivery is paused, the west replica is promoted, writes are routed
-there, and new issues reuse the numbers east already handed out, so the backlog
-mixes current events with events that describe the old history.
+each other, Gitea keeps writing to the east primary: issues, comments, closes,
+labels, assignees, milestones, reactions, Git pushes and a new repository. Their
+webhook events pile up in the relay, which cannot reach the west consumer.
+Delivery is paused and Orchestrator promotes the west replica across regions, so
+Gitea, which stays in east, now reaches its database over the cross-country link,
+and new issues reuse the numbers east already handed out.
 """
 
 import json
@@ -18,7 +19,11 @@ from sregym.conductor.problems.base import Problem
 from sregym.service.apps.gitea.application import FIXTURES
 from sregym.service.apps.gitea.mysql_failover import (
     DELIVER_TIMEOUT,
+    LABELS,
     LIVE_TRAFFIC,
+    MILESTONES,
+    ORCHESTRATOR,
+    REACTIONS,
     RECEIVER,
     GiteaMySQLApplication,
 )
@@ -48,6 +53,20 @@ REMARKS = (
     "Attached logs from the affected tenant",
     "Could be related to the last migration",
 )
+#: Users who can be assigned issues in each repository: its owner, or the owning organisation's team.
+ASSIGNEES = {
+    "alice/hello-zoo": ("alice",),
+    "bob/zoo-api-client": ("bob",),
+    "zoo-labs/zoo-utilities": ("alice", "bob"),
+    "community/awesome-zoo": ("charlie",),
+    "charlie/zoo-docker-templates": ("charlie",),
+}
+NEW_REPOSITORY = ("zoo-labs", "release-notes")
+NEW_REPOSITORY_FILES = {
+    "README.md": "# Release notes\n\nCustomer-facing notes for each Zoo release.\n",
+    "CHANGELOG.md": "## 2026.11\n\n- Faster search on archived projects\n- CSV export keeps every row\n",
+    "docs/rollout.md": "Roll out to 5% of tenants, watch error rates for an hour, then continue.\n",
+}
 
 
 class GiteaMySQLRegionalFailoverProblem(Problem):
@@ -66,29 +85,35 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.repository_ids = {}
         self.receiver = None
         self.live_users = None
+        self.new_repository = None
         self.failover_performed = False
         self.root_cause = self.build_structured_root_cause(
             component="gitea-db",
             namespace=self.namespace,
-            description="A network partition between region-east and region-west made the failover promote the "
-            "west MySQL replica. The east primary had acknowledged issues, comments and closes during the partition "
-            "that never replicated, and their webhook events queued in the relay, which could not reach the west "
-            "receiver. Delivery was then paused. After promotion, users resubmitted some lost issues through Gitea, "
-            "and west also accepted independent new issues and comments. West reused issue numbers east had already "
-            "handed out. The paused backlog therefore mixes events from both histories, including repeated creation "
-            "events for resubmitted issues. Recovery must keep both histories, reconcile resubmissions without "
-            "duplicating logical issues, drain the backlog so each logical event "
-            "arrives once under the issue's current number, and rebuild east as a clean replica of west without "
-            "interrupting the live west primary or Gitea.",
+            description="A network partition between region-east and region-west made Orchestrator promote the "
+            "west MySQL replica across regions. The east primary had acknowledged writes during the partition that "
+            "never replicated: issues, comments, closes, labels, assignees, milestones, reactions, Git pushes whose "
+            "branch records west lacks, and a repository that exists on disk but not in west's database. Their "
+            "webhook events queued in the relay, which could not reach the west receiver, and delivery was paused. "
+            "After promotion users resubmitted some lost issues and west accepted new writes, reusing issue numbers "
+            "east had handed out, so the backlog mixes events from both histories. Gitea stays in east, so every "
+            "query now crosses the cross-country link and writes are slow. Orchestrator still holds west as master "
+            "and keeps routing writes to it. Recovery must keep both histories, re-accept east's activity through "
+            "Gitea, drain the backlog so each event arrives once with current details, rebuild east from west, and "
+            "move the primary back to east beside Gitea with Orchestrator's agreement, without interrupting writes.",
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = GiteaMySQLFailoverOracle(problem=self)
         self.app.create_workload()
 
-    def records(self, count):
-        """Ordinary-looking issues; which phase wrote them is known only to the conductor."""
+    @staticmethod
+    def repositories():
         fixture = json.loads((FIXTURES / "import-data.json").read_text())
-        repositories = [r["owner"] + "/" + r["name"] for r in fixture["repositories"]]
+        return [r["owner"] + "/" + r["name"] for r in fixture["repositories"]]
+
+    def records(self, count, repositories=None):
+        """Ordinary-looking issues; which phase wrote them is known only to the conductor."""
+        repositories = repositories or self.repositories()
         records = []
         for _ in range(count):
             reference = secrets.token_hex(3)
@@ -113,6 +138,25 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         updates += [{**issue, "close": True} for issue in chosen[comments : comments + closes]]
         return updates
 
+    @staticmethod
+    def details_for(issues, counts):
+        """Labels, assignees, milestones and reactions on issues drawn from ``issues``, each pair at most once."""
+        updates = []
+        for kind, choices in (("labels", LABELS), ("reactions", REACTIONS)):
+            pairs = sorted({(i, c) for i in range(len(issues)) for c in choices}, key=lambda _: secrets.randbits(32))
+            key = kind[:-1]
+            updates += [{**issues[i], key: c} for i, c in pairs[: counts.get(kind, 0)]]
+        chosen = sorted(issues, key=lambda _: secrets.randbits(32))
+        updates += [
+            {**issue, "assignee": secrets.choice(ASSIGNEES[issue["repository"]])}
+            for issue in chosen[: counts.get("assignees", 0)]
+        ]
+        chosen = sorted(issues, key=lambda _: secrets.randbits(32))
+        updates += [
+            {**issue, "milestone": secrets.choice(MILESTONES)} for issue in chosen[: counts.get("milestones", 0)]
+        ]
+        return updates
+
     def require_delivered(self, region, issues, updates):
         events, lost = issue_events(self.app.snapshot(region), issues, updates)
         report = delivery_report(self.app.webhook_deliveries(), events)
@@ -122,7 +166,7 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
     def require_queued(self, region, issues, updates):
         events, lost = issue_events(self.app.snapshot(region), issues, updates)
         # A resubmitted issue gets the id and number its lost original had, so both events may be queued.
-        queued = delivery_report(self.app.relay()["queued"], events)
+        queued = delivery_report(self.app.queued_events(), events)
         delivered = delivery_report(self.app.webhook_deliveries(), events)
         if lost or queued["undelivered"] or len(delivered["undelivered"]) != len(events):
             raise RuntimeError(f"Post-failover events are not held in the paused relay: {lost} {queued}")
@@ -164,11 +208,28 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         app.apply(mysql.partition_documents(self.namespace))
         self.wait_for_partition()
         self.orphaned = app.recovery_client("create", records=self.records(orphan_count))
+        writes, git = app.partition_writes, app.partition_git
+        targets = [*self.orphaned, *self.shared_receipts]
         partition_updates = app.recovery_client(
             "update",
-            updates=self.updates_for(self.orphaned, orphan_count // 2, 0)
-            + self.updates_for(self.shared_receipts, orphan_count // 2, orphan_count // 4),
+            updates=self.updates_for(targets, writes["comments"], writes["closes"]) + self.details_for(targets, writes),
         )
+        app.recovery_client(
+            "push",
+            pushes=[
+                {"repository": secrets.choice(self.repositories()), "path": f"notes/{ref}.md", "content": f"{ref}\n"}
+                for ref in (secrets.token_hex(4) for _ in range(git["pushes"]))
+            ],
+        )
+        owner, name = NEW_REPOSITORY
+        app.recovery_client("repository", owner=owner, name=name, files=NEW_REPOSITORY_FILES)
+        new_issues = app.recovery_client("create", records=self.records(git["issues"], [f"{owner}/{name}"]))
+        self.new_repository = {
+            "repository": f"{owner}/{name}",
+            "files": NEW_REPOSITORY_FILES,
+            "issues": new_issues,
+            "updates": app.recovery_client("update", updates=self.updates_for(new_issues, git["issues"] // 2, 0)),
+        }
         app.wait_for_webhook_attempts("east")
         titles = {r["title"] for r in self.orphaned}
         remarks = {r["comment"] for r in partition_updates if "comment" in r}
@@ -178,15 +239,18 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         west = app.snapshot("west")
         if titles & {r["name"] for r in west["issues"]} or remarks & {r["content"] for r in west["comments"]}:
             raise RuntimeError("Partition writes reached the west replica")
-        if len(app.relay()["queued"]) < len(self.orphaned) + len(partition_updates):
+        if len(app.relay()["queued"]) < len(self.orphaned) + writes["comments"] + writes["closes"]:
             raise RuntimeError("Partition webhooks did not queue in the relay")
         # Delivery stops before the network heals; an attempt already in flight times out first.
         app.relay("pause")
         time.sleep(DELIVER_TIMEOUT + 1)
-        mysql.promote("west")
+        # Orchestrator now loses sight of east too, declares it dead, promotes west and routes writes there.
+        app.apply(mysql.isolation_documents(self.namespace, "east", f"app == '{ORCHESTRATOR}'"))
+        app.wait_for_orchestrator_master("west")
+        if not mysql.writable("west"):
+            raise RuntimeError("Orchestrator did not make west writable")
 
         mysql.heal()
-        mysql.route_writes("west")
         app.restart_gitea()
 
         # Users whose issues vanished open some of them again on the promoted primary.
@@ -197,7 +261,11 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
             ],
         )
         self.accepted_after_promotion = app.recovery_client("create", records=self.records(post_count))
-        post_updates = app.recovery_client("update", updates=self.updates_for(self.shared_receipts, post_count // 2, 0))
+        later = app.post_promotion_writes
+        targets = [*self.shared_receipts, *self.accepted_after_promotion]
+        post_updates = app.recovery_client(
+            "update", updates=self.updates_for(targets, later["comments"], 0) + self.details_for(targets, later)
+        )
         app.wait_for_webhook_attempts("west")
         self.require_queued("west", [*resubmitted, *self.accepted_after_promotion], post_updates)
         self.updates = partition_updates + post_updates
@@ -210,6 +278,8 @@ class GiteaMySQLRegionalFailoverProblem(Problem):
         self.receiver = app.pod_identities(RECEIVER)
         if len(self.receiver) != 1:
             raise RuntimeError("Expected one webhook receiver pod")
+        # From here Gitea, still in east, reaches its new primary across the cross-country link.
+        app.install_wan()
         app.start_live_traffic()
         self.live_users = app.pod_identities(LIVE_TRAFFIC)
 

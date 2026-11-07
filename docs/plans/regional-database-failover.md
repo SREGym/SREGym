@@ -16,41 +16,50 @@ This problem keeps the Gitea app, the workload client and the divergence checks 
 
 ## Layout
 
-One namespace, `gitea`. Regions are a `region` pod label, and the partition is a Calico policy that denies traffic between the two labels. No Chaos Mesh.
+One namespace, `gitea`. Regions are a `region` pod label, and each region's pods are pinned to its own Kind worker (`topology.kubernetes.io/region=east|west`), so traffic between regions crosses a link. The partition is a Calico policy that denies traffic between the two labels. No Chaos Mesh.
 
 ```
-region=east:  MySQL gitea-db-east  --- async GTID replication --->  region=west: MySQL gitea-db-west
-              Gitea (writes go through the gitea-db-rw service)       webhook receiver
-              webhook relay  ------------------------------------->
-              application client, live users
+region=east node:  MySQL gitea-db-east  --- async GTID replication --->  region=west node: MySQL gitea-db-west
+                   Gitea (writes go through gitea-db-rw)                    webhook receiver (hidden)
+                   webhook relay  ------------------------------------->    Orchestrator
+                   application client, live users (hidden)
 ```
 
-- `components/mysql.py`: one StatefulSet per region on the official `mysql:8.4.6` image, the `gitea-db-rw` service, replication, promotion, the partition, and checks.
+- `components/mysql.py`: one StatefulSet per region on the official `mysql:8.4.6` image, the `gitea-db-rw` service, replication, the partition, and checks.
 - Gitea runs on MySQL through `GITEA__database__DB_TYPE=mysql`.
-- Gitea sends its webhooks to a relay beside it, standing in for GitHub's job queue. The relay forwards them in order, and can be paused, resumed, listed and have items dropped.
+- **Orchestrator** (`orchestrator.py`, visible) watches both servers from the west node, as GitHub's did. It keeps `gitea-db-rw` pointed at the master it records, the way GitHub's load balancers followed Orchestrator through Consul. It recovers a dead master after three failed checks, and is blocked for an hour after a recovery (`RecoveryPeriodBlockSeconds`). Its API follows the real one: topology, analysis, audit, global recovery switches, downtime, candidates, relocate, replica start/stop/reset, read-only switches, `graceful-master-takeover[-auto]`, and `force-master-failover`/`force-master-takeover`. Its state lives in the hidden namespace, as its own backend database would.
+- **Cross-region latency**: hidden privileged pods put a 10 ms netem delay on each worker's traffic to the other region's node and pod CIDRs. Gitea creates an issue in about 0.5 s beside its database and about 3.7 s across the link, because it makes about 170 round trips per issue. A delay closer to GitHub's 60-70 ms round trip makes each write take longer than the outage budget.
+- Gitea sends its webhooks to a relay beside it, standing in for GitHub's job queue. The relay forwards them in order, can be paused, resumed and have items dropped, and lists the raw queued deliveries (headers and payload) with no summary.
 - The webhook receiver checks Gitea's HMAC signature and records each delivery with the issue id, number and comment id.
-- A live users pod opens an issue about every 2 seconds through Gitea, as a non-admin member with write access to one repository, with varied titles and bodies, so downtime is measurable.
-- The receiver and the live users run in the hidden `khaos` namespace, so the agent cannot read their code, logs or records. The relay reaches the receiver by its service IP, and the partition policy matches it across namespaces.
-- Setup and grading run their Gitea and MySQL checks from two idle client pods in `khaos`, so nothing the agent changes in `gitea` sits on the grading path. MySQL is queried by pod IP, so a re-pointed service cannot answer for a server.
-- The agent's kubectl proxy refuses node proxying, which reaches every pod's kubelet, and refuses minting service account tokens, which would work without the proxy. It also blanks Calico IPAM entries that name pods in hidden namespaces.
+- A live users pod opens an issue about every 2 seconds through Gitea, as a non-admin member with write access to one repository, and records how long each took.
+- The receiver, live users, latency pods and Orchestrator's state run in the hidden `khaos` namespace, so the agent cannot read their code, logs or records.
+- Setup and grading run their Gitea and MySQL checks from two idle client pods in `khaos`. MySQL is queried by pod IP, so a re-pointed service cannot answer for a server.
+- The agent's kubectl proxy refuses node proxying, minting service account tokens, and privileged, hostNetwork and hostPath pods. It also blanks Calico IPAM entries that name pods in hidden namespaces.
 
 ## Fault lifecycle
 
-1. Deploy, seed, add webhooks, and write shared issues. Wait until west has every GTID and every webhook was delivered.
-2. Apply the partition. Wait for three failed probes in a row, standing in for Orchestrator.
-3. Gitea keeps writing to east: new issues, comments on new and shared issues, and closes of shared issues. Their events queue in the relay, which cannot reach the receiver.
-4. Pause the relay, as GitHub paused webhook delivery. Promote west, heal the network, point `gitea-db-rw` at west, restart Gitea. East is left writable with its writes.
-5. Users open some lost issues again on west, and new issues and comments land there, reusing issue numbers east already handed out. Their events join the paused backlog, so it now holds current events, events that describe east's history under numbers west reused, and repeats of the same event.
-6. Start the live users and record the identity of the helper pods.
+1. Deploy, seed, add webhooks, labels and milestones, and start Orchestrator watching east. Write shared issues; wait until west has every GTID and every webhook was delivered.
+2. Apply the partition between the regions. Orchestrator still sees both servers.
+3. Gitea keeps writing to east, about 950 writes in the small tier:
+   - issues, comments, closes, labels, assignees, milestones and reactions on new and shared issues;
+   - Git pushes, so branch records drift from Git;
+   - a new repository with files, issues and comments.
 
-Receipts live in the conductor, outside the cluster, so the agent cannot read or edit them. The agent sees a short app description that says the database keeps a live replica in a second region, that users expect the service to stay up, and that consumers expect each issue event once with current details. It does not name the regions, the webhook path or the fault.
+   Their events queue in the relay, which cannot reach the receiver.
+4. Pause the relay, as GitHub paused webhook delivery. Cut east off from Orchestrator too: it declares east dead, promotes west across regions and routes writes there by itself. Heal the network and restart Gitea. East is left writable with its writes.
+5. Users open some lost issues again on west, and new issues, comments, labels and reactions land there, reusing issue numbers east already handed out. Their events join the paused backlog.
+6. Add the cross-region latency and start the live users. Gitea, still in east, now reaches its database across the link.
+
+Receipts live in the conductor, outside the cluster. The agent sees a short app description: a live replica in a second region managed by Orchestrator, users who expect it to stay available and responsive and to keep everything they do, and downstream systems that act on every issue event. It does not name the regions, the webhook path or the fault.
 
 ## What the agent has to do
 
-- Keep one writable primary and the write service on it.
-- Bring east's lost issues, comments and closes back through Gitea, under the numbers the primary gives them.
-- Drain the webhook backlog so each event arrives once under the issue's current number: resuming as is delivers wrong and repeated events, and clearing it loses current ones.
-- Rebuild east as a clean replica.
+- Keep one writable primary, the write service on it, and Orchestrator in agreement.
+- Bring east's lost writes back through Gitea under the numbers the primary gives them: issues, comments, closes, labels, assignees, milestones, reactions. Adopt the repository that exists on disk but not in the database, with its issues and comments.
+- Make Gitea's branch records match Git again.
+- Drain the webhook backlog so each event arrives once under the issue's current number. Resuming it as is delivers wrong and repeated events; clearing it loses current ones.
+- Rebuild east from west and move the primary back to east, beside Gitea, without Orchestrator undoing it, and leave recoveries enabled.
+- Replay any webhook Gitea could not mark delivered while the old primary turned read-only during the switch.
 - Do it without taking down the live database or Gitea.
 
 ## Grading
@@ -59,24 +68,49 @@ In order, stopping at the first failure:
 
 1. Gitea serves, keeps one replica, and still uses `gitea-db-rw`. The repository volume, receiver and live users pods are unchanged.
 2. A fresh write round-trips through Gitea and Git.
-3. Exactly one writable region, the write service selects it, the other region replicates from it with no filters or skipped errors, table checksums match, and issue counters and comment and closed counts agree with the rows.
-4. Every issue from both histories is on both regions. Every comment and close is present. The relay is resumed and empty. Every event implied by the primary's rows was delivered once, with no duplicates or conflicting payloads. A delivery the primary has no record of sending, such as one of the stale side's events, must still match the primary. Events the primary sent stay valid if their issue changes later, so an agent's own test issues do not count against it. Recovered issues and comments are in Gitea's search index.
-5. No acknowledged live user write was lost, and no gap without one was longer than 10 seconds. The oracle pauses the users while it grades and does not count that pause.
-6. The non-serving MySQL replica remains read-only and replicating after a pod restart.
+3. Replication and counters:
+   - exactly one region is writable, and the write service selects it;
+   - the other region replicates from it with no filters or skipped errors, and table checksums match;
+   - issue counters, comment and closed counts, and label and milestone counters agree with the rows.
+4. No acknowledged live user write was lost, no gap without one was longer than 10 seconds, and the median of the last 10 writes took at most 1.5 s.
+5. Data and delivery:
+   - every issue from both histories is on both regions, with every comment, close, label, assignee, milestone and reaction;
+   - the relay is resumed and empty;
+   - every event implied by the primary's rows was delivered once, with no duplicates or conflicting payloads;
+   - recovered issues and comments are in Gitea's search index;
+   - the repository created in the partition serves its files and holds each of its issues once, with their comments;
+   - branch records match Git.
+6. Orchestrator is running, records the serving primary as master, and has recoveries enabled.
+7. The non-serving MySQL replica remains read-only and replicating after a pod restart.
 
 Rows written straight into MySQL are not indexed and do not move counters, so they fail.
 
 ## Reference repair
 
-Reads only the two databases and the relay. It pauses the relay, drops queued events that no longer match the primary or repeat an earlier one, re-creates issues, comments and closes that exist only on the stale side through the API, resumes the relay, then reloads the stale side from a dump of the primary and starts replication.
+Follows GitHub's order:
+
+1. Disable Orchestrator's recoveries and pause the relay.
+2. Save what only east has.
+3. Drop queued events that no longer match the primary or repeat one.
+4. Rebuild east from west.
+5. Run `graceful-master-takeover-auto` to east, persist east writable and west read-only, and re-enable recoveries.
+6. Adopt the new repository and write the saved activity again through the API.
+7. Sync branch records with the admin dashboard's "Sync missed branches" action.
+8. Replay deliveries the switch left stuck undelivered.
+9. Resume the relay.
 
 ## Scale
 
-Tiers set the number of shared, orphaned and post-failover issues: small is 30, 12, 12 and large is 200, 80, 80. Both fit the standard Kind cluster.
+Tiers set the shared, orphaned and post-failover issues and the partition's other writes:
+
+| Tier | Shared / orphaned / post-failover issues | Other partition writes |
+|---|---|---|
+| small | 200 / 120 / 60 | 200 comments, 60 closes, 200 labels, 120 assignees, 120 milestones, 100 reactions, 20 pushes, a repository with 8 issues |
+| large | 600 / 360 / 180 | about three times the small tier |
 
 ## Validation
 
-On CloudLab: no-op scores 0 and reference repair scores 1 on both tiers. Restarting Gitea stops writes for 17 seconds and restarting the live database for 54, so both score 0 on availability.
+On CloudLab (Kind, 3 workers): no-op scores 0 and the reference repair scores 1. See the PR for timings.
 
 ## Not in this PR
 

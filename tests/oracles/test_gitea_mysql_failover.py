@@ -10,6 +10,7 @@ from sregym.conductor.oracles.apps.gitea.mysql_failover import (
     duplicated_comments,
     issue_events,
     live_traffic_report,
+    responsiveness_report,
     search_queries,
     stale_deliveries,
 )
@@ -73,6 +74,39 @@ def test_every_acknowledged_write_maps_to_the_primarys_current_row():
     assert lost == ["c"]
     assert ("issues", "opened", "zoo/pets", 2, 11, "b", "b", None, None) in events
     assert ("issue_comment", "created", "zoo/pets", 1, 10, "a", "b", 7, "hi") in events
+
+
+def test_issue_details_must_be_present_but_emit_no_event():
+    detailed = {
+        **state([{**issue(10, 1, "a"), "milestone_id": 3}]),
+        "labels": [{"issue_id": 10, "name": "bug"}],
+        "assignees": [{"issue_id": 10, "user": "zoo"}],
+        "milestones": [{"id": 3, "name": "2026.11"}],
+        "reactions": [{"issue_id": 10, "type": "heart", "user": "admin"}],
+    }
+    held = [
+        receipt("a", label="bug"),
+        receipt("a", assignee="zoo"),
+        receipt("a", milestone="2026.11"),
+        receipt("a", reaction="heart"),
+    ]
+    assert issue_events(detailed, [], held) == ([], [])
+    missing = [
+        receipt("a", label="regression"),
+        receipt("a", assignee="bob"),
+        receipt("a", milestone="2026.12"),
+        receipt("a", reaction="+1"),
+    ]
+    assert len(issue_events(detailed, [], missing)[1]) == 4
+    assert len(issue_events(state([issue(10, 1, "a")]), [], held)[1]) == 4
+
+
+def test_responsiveness_uses_the_latest_writes_only():
+    old = [{"at": 0, "took": 9.0}] * 20
+    recent = [{"at": 100 + i, "took": t} for i, t in enumerate([0.2, 0.3, 0.4, 5.0, 0.3] * 2)]
+    assert responsiveness_report({"now": 120, "acknowledged": old + recent}) == {"writes": 10, "median": 0.3}
+    assert responsiveness_report({"now": 120, "acknowledged": recent[:3]})["writes"] == 3
+    assert responsiveness_report({"now": 120, "acknowledged": old})["median"] == 9.0
 
 
 def test_comments_and_closes_missing_on_the_primary_are_lost():
