@@ -145,6 +145,7 @@ def test_interrupt_stops_agent_before_driver_owned_teardown(monkeypatch):
     monkeypatch.setattr(benchmark_main, "Conductor", lambda **kwargs: conductor)
     monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
     monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
     monkeypatch.setattr(benchmark_main, "driver_loop", driver)
     monkeypatch.setattr(benchmark_main, "run_api", interrupt)
     monkeypatch.setattr(benchmark_main, "request_shutdown", Mock())
@@ -222,6 +223,7 @@ def test_judge_preflight_is_deferred_until_effective_stages_are_known(monkeypatc
     monkeypatch.setattr(benchmark_main, "init_logger", lambda: None)
     monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
     monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
     monkeypatch.setattr(benchmark_main, "run_judge_preflight_check", lambda: calls.append(True))
 
     class ReachedConductor(Exception):
@@ -293,7 +295,17 @@ def test_deployment_retries_only_transient_failures(
     )
     conductor.bind_phase_ledger.assert_called_once()
     assert results == [
-        {None: [{"problem_id": "problem", "attempt": 1, "deployment_profile": "full", "deploy_failed": True}]}
+        {
+            None: [
+                {
+                    "problem_id": "problem",
+                    "attempt": 1,
+                    "deployment_profile": "full",
+                    "deploy_failed": True,
+                    "deploy_attempts": expected_attempts,
+                }
+            ]
+        }
     ]
 
 
@@ -305,6 +317,7 @@ def test_timed_out_agent_gets_the_normal_exit_reap_grace(monkeypatch, tmp_path):
     monkeypatch.setattr(benchmark_main, "list_agents", lambda path: {"agent": object()})
     monkeypatch.setattr(benchmark_main.trace_postprocess, "write_trajectory", lambda _run_dir: None)
     run = Mock(finalize_and_publish=Mock(return_value=tmp_path / "run"))
+    run.save_judge_responses.side_effect = lambda snapshot: snapshot
     monkeypatch.setattr(benchmark_main, "RunArtifacts", SimpleNamespace(create=Mock(return_value=run)))
     cleanup_agent = Mock()
     monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_agent", cleanup_agent)

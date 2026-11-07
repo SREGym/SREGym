@@ -36,6 +36,39 @@ class RunArtifacts:
         """Retain the audit even if agent artifact validation later fails."""
         _write_json(self.network_audit_path, audit)
 
+    @property
+    def judge_responses_path(self) -> Path:
+        return self.active_dir.with_name(f"{self.artifact_id}.judge-responses.json")
+
+    def save_judge_responses(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Keep full replies outside the agent mount and CSV-size limits.
+
+        Includes replies nested in multi-cause results. The returned snapshot
+        contains artifact references; the caller's evaluation remains intact.
+        """
+        responses: dict[str, str] = {}
+
+        def extract(value: Any, location: str) -> Any:
+            if isinstance(value, dict):
+                result = {}
+                for key, item in value.items():
+                    path = f"{location}.{key}" if location else key
+                    if key == "judge_raw_response" or key.endswith(".judge_raw_response"):
+                        if item:
+                            responses[path] = item
+                        result[f"{key}_artifact"] = f"judge_responses.json#{path}" if item else ""
+                    else:
+                        result[key] = extract(item, path)
+                return result
+            if isinstance(value, list):
+                return [extract(item, f"{location}[{i}]") for i, item in enumerate(value)]
+            return value
+
+        row = extract(snapshot, "")
+        if responses:
+            _write_json(self.judge_responses_path, responses)
+        return row
+
     @classmethod
     def create(
         cls,
@@ -93,13 +126,14 @@ class RunArtifacts:
                 raise ArtifactFinalizationError(f"invalid per-attempt CSV: {attempt_csv}")
             if any(self.artifact_id in path.name for path in _walk(self.active_dir)):
                 raise ArtifactFinalizationError("opaque artifact name remains after canonicalization")
-            if self.network_audit_path.exists():
-                # Add trusted metadata only after validating agent artifacts.
-                # Atomic replacement does not follow an agent-created symlink.
-                _write_json(
-                    self.active_dir / "internet_audit.json",
-                    json.loads(self.network_audit_path.read_text(encoding="utf-8")),
-                )
+            # Add trusted metadata only after validating agent artifacts.
+            # Atomic replacement does not follow an agent-created symlink.
+            for name, source in (
+                ("internet_audit.json", self.network_audit_path),
+                ("judge_responses.json", self.judge_responses_path),
+            ):
+                if source.exists():
+                    _write_json(self.active_dir / name, json.loads(source.read_text(encoding="utf-8")))
         except ArtifactFinalizationError:
             raise
         except (OSError, csv.Error, ValueError) as exc:
@@ -112,8 +146,9 @@ class RunArtifacts:
         except OSError as exc:
             raise ArtifactFinalizationError(f"could not publish artifact directory: {exc}") from exc
         # A leftover host copy must not turn successful publication into failure.
-        with contextlib.suppress(OSError):
-            self.network_audit_path.unlink(missing_ok=True)
+        for source in (self.network_audit_path, self.judge_responses_path):
+            with contextlib.suppress(OSError):
+                source.unlink(missing_ok=True)
         _remove_empty_parents(self.active_dir.parent, self.staging_root.parent)
         return self.final_dir
 

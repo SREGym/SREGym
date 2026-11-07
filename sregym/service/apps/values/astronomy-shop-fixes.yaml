@@ -168,6 +168,15 @@ components:
       limits:
         memory: 64Mi
   flagd:
+    # The pinned chart exposes flagd on 8013 (gRPC) only. The 2.2.0
+    # load-generator evaluates flags over OFREP at FLAGD_OFREP_PORT (default
+    # 8016), which flagd serves inside the pod but the Service never exposed.
+    # Every OFREP call failed and the SDK returned the flag's default, so
+    # loadGeneratorFloodHomepage never produced a flood. Expose the port; the
+    # chart keeps 8013 from service.port beside it.
+    ports:
+      - name: ofrep
+        value: 8016
     # KIND/containerd can give pods a NOFILE limit of 1,073,741,816. Erlang
     # allocates memory against that limit at startup and is OOMKilled even
     # with 2 GiB. Cap only this UI process, retaining its upstream 250 MiB

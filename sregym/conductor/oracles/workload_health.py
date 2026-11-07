@@ -22,6 +22,7 @@ class LoadgenHealthOracle(Oracle):
     BASELINE_FACTOR = 2.0
     SLACK = 0.02
     MAX_CEILING = 0.15
+    BASELINE_TIMEOUT_S = 600.0
 
     def __init__(self, problem, window_s: float | None = None, soak_s: float | None = None):
         super().__init__(problem)
@@ -84,16 +85,27 @@ class LoadgenHealthOracle(Oracle):
         return OutcomeSpec(thresholds, tolerance=0.0)
 
     def capture_baseline(self) -> None:
-        state = self._state(minimum=self.window_s)
-        until = float(state["latest_sent_s"])
-        self.baseline = self._completed_window(until - self.window_s, until, state["episode_id"])
-        checks = evaluate_outcome(self.baseline, self._spec(self.baseline))
-        if not self.baseline.get("by_driver") or any(not check.passed for check in checks):
+        deadline = time.monotonic() + self.BASELINE_TIMEOUT_S
+        while True:
+            state = self._state(minimum=self.window_s)
+            until = float(state["latest_sent_s"])
+            self.baseline = self._completed_window(until - self.window_s, until, state["episode_id"])
+            checks = evaluate_outcome(self.baseline, self._spec(self.baseline))
+            if self.baseline.get("by_driver") and all(check.passed for check in checks):
+                print(
+                    f"[LoadgenHealth] baseline: {self.baseline['offered']} requests; "
+                    f"error_rate={self.baseline['error_rate']}"
+                )
+                return
+            for check in checks:
+                if not check.passed:
+                    print(f"[LoadgenHealth] baseline not ready: {check.name}: {check.detail}")
             self.baseline = None
-            raise RuntimeError("The pre-injection workload baseline is not healthy and complete")
-        print(
-            f"[LoadgenHealth] baseline: {self.baseline['offered']} requests; error_rate={self.baseline['error_rate']}"
-        )
+            # Keep the same health gate. Let startup requests and newly queued
+            # work age out rather than tear down a healthy, still-warming app.
+            if time.monotonic() + self.problem.app.WORKLOAD_COMPLETION_TIMEOUT_S + 5 >= deadline:
+                raise RuntimeError("The pre-injection workload baseline is not healthy and complete")
+            time.sleep(5)
 
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Load generator health ==")

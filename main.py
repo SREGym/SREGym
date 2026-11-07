@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import csv
 import importlib
+import itertools
 import logging
 import os
 import sys
@@ -26,9 +27,9 @@ from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_
 from clients.jev.config import configure as configure_jev
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
-from sregym.agent_registry import get_agent, list_agents
+from sregym.agent_registry import get_agent, list_agents, registry_path
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
-from sregym.conductor.conductor_api import request_shutdown, run_api
+from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
@@ -166,10 +167,49 @@ def _problem_result_paths(base_dir: Path, agent: str, problem_id: str) -> tuple[
     return final_path.with_name(f"_running_{final_path.name}"), final_path
 
 
+# Exit status when a problem exhausted its deploy retries. Distinct from the
+# 1 a campaign abort exits with, so a caller can tell the two apart.
+EXIT_DEPLOY_EXHAUSTED = 2
+
+
+def _deploy_exhausted_problems(results: list[dict[str, list[dict]]]) -> set[str]:
+    """Problem ids with a deploy_failed marker row in `results`, the list of
+    {agent: rows} driver_loop returns. Every deploy retry for that attempt
+    was spent, so the attempt was never run; with more than one attempt per
+    problem, an earlier attempt may still have scored.
+
+    driver_loop() writes the marker as a bool. The string form is accepted
+    too, so a row that passed through a CSV reads the same.
+    """
+    return {
+        str(row["problem_id"])
+        for entry in results
+        for rows in entry.values()
+        for row in rows
+        if row.get("problem_id") is not None and row.get("deploy_failed") in (True, "True")
+    }
+
+
 def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
+
+
+def claim_results_dir(root: Path = Path("results")) -> Path:
+    """Create this run's results directory, named for the current minute.
+
+    If another run already has that name, use <name>_2, <name>_3 and so on. mkdir without
+    exist_ok is the claim, so two runs started in the same minute cannot share a directory.
+    """
+    name = get_current_datetime_formatted()
+    root.mkdir(parents=True, exist_ok=True)
+    for candidate in itertools.chain([name], (f"{name}_{n}" for n in itertools.count(2))):
+        try:
+            (root / candidate).mkdir()
+            return root / candidate
+        except FileExistsError:
+            continue
 
 
 def _restore_env_var(name: str, previous_value: str | None) -> None:
@@ -281,8 +321,7 @@ def driver_loop(
                     "Benchmark interrupted by user.", [{agent_to_run: all_results_for_agent}]
                 )
 
-        base_dir = Path("results") / get_current_datetime_formatted()
-        base_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = claim_results_dir()
         global _driver_base_dir
         _driver_base_dir = base_dir
         # give the API a moment to bind
@@ -296,7 +335,7 @@ def driver_loop(
             # so do not let stale local-run state affect them.
             conductor.clear_cluster_egress_boundary()
         else:
-            available_agents = list_agents(path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml").keys()
+            available_agents = list_agents(path=registry_path(Path(os.path.dirname(os.path.abspath(__file__))))).keys()
             if agent_to_run not in available_agents:
                 console.log(f"⚠️ Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}")
                 sys.exit(1)
@@ -451,8 +490,14 @@ def driver_loop(
                 max_deploy_retries = 3
                 result = None
                 deploy_cleanup_failed = False
+                # How many deploys this attempt cost. Recorded on the result
+                # row because a retry is expensive and otherwise invisible:
+                # start_problem waits out pod readiness before it raises, and
+                # the retry then tears down and redeploys the whole problem.
+                deploy_attempts = 0
                 for deploy_attempt in range(1, max_deploy_retries + 1):
                     check_interrupted()
+                    deploy_attempts = deploy_attempt
                     try:
                         result = await conductor.start_problem()
                         break  # Success — exit retry loop
@@ -498,6 +543,7 @@ def driver_loop(
                         "attempt": attempt,
                         "deployment_profile": get_profile(),
                         "deploy_failed": True,
+                        "deploy_attempts": deploy_attempts,
                     }
                     for stage, outcome in conductor.results.items():
                         if isinstance(outcome, dict):
@@ -560,7 +606,7 @@ def driver_loop(
                     with _artifact_environment(run):
                         reg = get_agent(
                             agent_to_run,
-                            path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
+                            path=registry_path(Path(os.path.dirname(os.path.abspath(__file__)))),
                         )
                         if reg:
                             check_interrupted()
@@ -735,6 +781,7 @@ def driver_loop(
                     "attempt": attempt,
                     "deployment_profile": get_profile(),
                     "judge_backend": judge_backend,
+                    "deploy_attempts": deploy_attempts,
                 }
                 if os.environ.get("AGENT_JEV_MODEL"):
                     snapshot["jev_model"] = os.environ["AGENT_JEV_MODEL"]
@@ -754,6 +801,7 @@ def driver_loop(
                     else:
                         snapshot[stage] = outcome
 
+                snapshot = run.save_judge_responses(snapshot)
                 fieldnames = sorted({key for row in [*all_results_for_agent, snapshot] for key in row})
                 ownership_image = LAUNCHER.container_image
                 try:
@@ -767,6 +815,8 @@ def driver_loop(
                     snapshot["artifact_staging_path"] = str(run.active_dir)
                     if run.network_audit_path.exists():
                         snapshot["internet_audit_staging_path"] = str(run.network_audit_path)
+                    if run.judge_responses_path.exists():
+                        snapshot["judge_responses_staging_path"] = str(run.judge_responses_path)
                     logger.error(
                         "Artifact finalization failed for %s attempt %s; staging retained at %s: %s",
                         pid,
@@ -929,6 +979,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     # Assigning unconditionally here would clobber the caller's value, which
     # then surfaces far away as a connection to the wrong service.
     os.environ.setdefault("API_PORT", "8000")
+    check_api_port_available()
     os.environ.setdefault("MCP_SERVER_PORT", "9954")
     # Derived, never duplicated: a literal here silently disagrees with
     # MCP_SERVER_PORT, and consumers prefer the URL over the parts.
@@ -947,7 +998,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
-        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+        get_agent(args.agent, path=registry_path(Path(os.path.dirname(os.path.abspath(__file__)))))
         if args.agent
         else None
     )
@@ -1117,9 +1168,18 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
             raise SystemExit(1) from _driver_error
         raise RuntimeError("Benchmark campaign did not complete") from _driver_error
 
+    deploy_exhausted = _deploy_exhausted_problems(results or [])
+    if deploy_exhausted:
+        logger.error(
+            f"❌ Deploy retries exhausted for {len(deploy_exhausted)} problem(s), "
+            f"at least one attempt was not run: {sorted(deploy_exhausted)}"
+        )
+
     if __name__ == "__main__":
-        # separate run, use exit
-        sys.exit(0)
+        # separate run, use exit. Non-zero when a problem exhausted its deploy
+        # retries: an attempt was never run, which is not a clean run, and
+        # nothing else reports it to the caller.
+        sys.exit(EXIT_DEPLOY_EXHAUSTED if deploy_exhausted else 0)
     else:
         # function call run, return results
         return results
