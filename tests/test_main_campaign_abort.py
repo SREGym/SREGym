@@ -145,6 +145,7 @@ def test_interrupt_stops_agent_before_driver_owned_teardown(monkeypatch):
     monkeypatch.setattr(benchmark_main, "Conductor", lambda **kwargs: conductor)
     monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
     monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
     monkeypatch.setattr(benchmark_main, "driver_loop", driver)
     monkeypatch.setattr(benchmark_main, "run_api", interrupt)
     monkeypatch.setattr(benchmark_main, "request_shutdown", Mock())
@@ -222,6 +223,7 @@ def test_judge_preflight_is_deferred_until_effective_stages_are_known(monkeypatc
     monkeypatch.setattr(benchmark_main, "init_logger", lambda: None)
     monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
     monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
     monkeypatch.setattr(benchmark_main, "run_judge_preflight_check", lambda: calls.append(True))
 
     class ReachedConductor(Exception):
