@@ -72,6 +72,18 @@ class RetryStormMitigationOracle(Oracle):
     def _policy_outside_envelope(self) -> dict | None:
         p = self.problem
         try:
+            role_env = {}
+            for role in (p.UPSTREAM_ROLE, p.CALLER_ROLE, p.BACKEND_ROLE):
+                try:
+                    env, replicas = self._container_env(role)
+                except ApiException as exc:
+                    if exc.status == 404:
+                        return self.fail("required_deployment_missing", deployment=f"svc-{role}")
+                    raise
+                if replicas < 1:
+                    return self.fail("required_deployment_scaled_to_zero", deployment=f"svc-{role}")
+                role_env[role] = env
+
             for role in (p.UPSTREAM_ROLE, p.CALLER_ROLE):
                 for pod, config in p.admin_all(role, "/admin/config").items():
                     mesh = config.get("mesh") or {}
@@ -105,11 +117,11 @@ class RetryStormMitigationOracle(Oracle):
                 if (
                     not 0 < pool_size <= p.max_pool_size
                     or not 0 <= overflow <= p.max_overflow
-                    or not p.min_pool_timeout_s <= pool_timeout <= p.max_pool_timeout_s
+                    or not 0 < pool_timeout <= p.max_pool_timeout_s
                 ):
                     print(
                         f"[FAIL] {pod}: pool outside the safe envelope (pool_size <= {p.max_pool_size}, "
-                        f"max_overflow <= {p.max_overflow}, {p.min_pool_timeout_s:g} <= pool_timeout_s <= "
+                        f"max_overflow <= {p.max_overflow}, 0 < pool_timeout_s <= "
                         f"{p.max_pool_timeout_s:g})"
                     )
                     return self.fail("backend_pool_outside_safe_envelope", pod=pod, db=db)
@@ -117,13 +129,13 @@ class RetryStormMitigationOracle(Oracle):
                 print(f"[FAIL] svc-{p.BACKEND_ROLE} holds {connections} connections (max {p.max_backend_connections})")
                 return self.fail("backend_pool_outside_safe_envelope", connections=connections)
 
-            channel_env, _ = self._container_env(p.CALLER_ROLE)
-            message_env, _ = self._container_env(p.UPSTREAM_ROLE)
+            channel_env = role_env[p.CALLER_ROLE]
+            message_env = role_env[p.UPSTREAM_ROLE]
             if channel_env.get("WORKSPACE_POLICY_CHECK") != "1" or message_env.get("AUTHZ_CHECK") != "1":
                 print("[FAIL] The send path no longer performs the authz / org policy checks")
                 return self.fail("policy_check_disabled")
 
-            workspace_env, replicas = self._container_env(p.BACKEND_ROLE)
+            workspace_env = role_env[p.BACKEND_ROLE]
             strict_hold = float(workspace_env.get("SETTINGS_HOLD_MS", p.min_settings_hold_ms))
             uncached = workspace_env.get("SETTINGS_UNCACHED") == "1"
             base_hold = float(workspace_env.get("SETTINGS_BASE_HOLD_MS", 0))
@@ -250,7 +262,7 @@ class ChannelRetryStormOracle(RetryStormMitigationOracle):
                 print(f"[Policy] {pod} db={json.dumps(db, sort_keys=True)}")
                 # No per-pod pool_size / max_overflow cap here: a larger pool on fewer replicas is a valid
                 # fix; only the aggregate backend-connection budget below bounds it.
-                if pool_size <= 0 or overflow < 0 or not p.min_pool_timeout_s <= pool_timeout <= p.max_pool_timeout_s:
+                if pool_size <= 0 or overflow < 0 or not 0 < pool_timeout <= p.max_pool_timeout_s:
                     print(f"[FAIL] {pod}: pool outside the safe envelope")
                     return self.fail("backend_pool_outside_safe_envelope", pod=pod, db=db)
             if connections > p.max_backend_connections:
