@@ -68,13 +68,13 @@ def save_state(state):
     )
 
 
-def connect(name):
+def connect(name, read_timeout=10):
     return pymysql.connect(
         host=INSTANCES[name]["host"],
         user="root",
         password=ROOT_PASSWORD,
         connect_timeout=3,
-        read_timeout=10,
+        read_timeout=read_timeout,
         write_timeout=10,
         ssl=TLS,
         cursorclass=pymysql.cursors.DictCursor,
@@ -82,8 +82,8 @@ def connect(name):
     )
 
 
-def query(name, *statements):
-    connection = connect(name)
+def query(name, *statements, read_timeout=10):
+    connection = connect(name, read_timeout)
     try:
         with connection.cursor() as cursor:
             rows = None
@@ -238,10 +238,16 @@ def takeover(designated, start_replication):
             raise APIError(f"GracefulMasterTakeover: errant GTID {found} found on {designated}")
         log("INFO", f"GracefulMasterTakeover: setting {master} read_only; designated {designated}")
         query(master, "SET GLOBAL read_only = ON;")
-        gtid = probe(master)["ExecutedGtidSet"]
-        if query(designated, f"SELECT WAIT_FOR_EXECUTED_GTID_SET('{gtid}', 30) AS waited;")[0]["waited"] != 0:
+        try:
+            gtid = probe(master)["ExecutedGtidSet"]
+            waited = query(designated, f"SELECT WAIT_FOR_EXECUTED_GTID_SET('{gtid}', 30) AS waited;", read_timeout=45)[
+                0
+            ]["waited"]
+        except Exception as exc:
+            waited = exc
+        if waited != 0:
             query(master, "SET GLOBAL read_only = OFF;")
-            raise APIError(f"GracefulMasterTakeover: {designated} did not catch up with {master}")
+            raise APIError(f"GracefulMasterTakeover: {designated} did not catch up with {master}: {waited}")
         promote(state, "GracefulMasterTakeover", master, designated)
         point(master, designated, start_replication)
         message = f"{designated} is master of {CLUSTER}; {master} is set to replicate from it"

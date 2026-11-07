@@ -366,8 +366,17 @@ class GiteaMySQLApplication(GiteaApplication):
         )
         if len(workers) < len(REGIONS):
             raise RuntimeError(f"The regions need {len(REGIONS)} worker nodes; the cluster has {len(workers)}")
+        # Never replace a region the cluster's own provider set; only this environment's values are ours.
+        foreign = {
+            n["metadata"]["name"]: value
+            for n in nodes
+            if (value := n["metadata"].get("labels", {}).get(REGION_LABEL)) and value not in REGIONS
+        }
+        if foreign:
+            raise RuntimeError(f"Nodes already carry {REGION_LABEL}: {foreign}")
+        self.unlabel_regions()
         for region, node in zip(REGIONS, workers, strict=False):
-            self.command("label", "node", node, f"{REGION_LABEL}={region}", "--overwrite")
+            self.command("label", "node", node, f"{REGION_LABEL}={region}")
 
     def unlabel_regions(self):
         for node in json.loads(self.command("get", "nodes", "-o", "json"))["items"]:
@@ -441,7 +450,15 @@ class GiteaMySQLApplication(GiteaApplication):
         # The nodes outlive this namespace; take the delay off them even if a pod's own cleanup did not run.
         for name in WAN:
             with contextlib.suppress(subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                self.hidden("exec", f"deployment/{name}", "--", "tc", "qdisc", "del", "dev", "eth0", "root", timeout=30)
+                self.hidden(
+                    "exec",
+                    f"deployment/{name}",
+                    "--",
+                    "sh",
+                    "-c",
+                    'tc qdisc del dev "$(cat /tmp/wan-dev)" root',
+                    timeout=30,
+                )
 
     def orchestrator_documents(self, state):
         secret = {"name": "gitea-mysql"}
@@ -651,6 +668,9 @@ class GiteaMySQLApplication(GiteaApplication):
             *(f"{kind}/{name}" for name in HIDDEN_DEPLOYMENTS for kind in ("deployment", "service", "configmap")),
             *(f"secret/{name}" for name in (*SHARED_SECRETS, MEMBER_SECRET)),
             "configmap/gitea-wan",
+            f"configmap/{ORCHESTRATOR_STATE}",
+            f"role/{ORCHESTRATOR}",
+            f"rolebinding/{ORCHESTRATOR}",
         ]
         with contextlib.suppress(subprocess.CalledProcessError, subprocess.TimeoutExpired):
             # Foreground, so no old pod is left for an exec to land on once the new ones are applied.

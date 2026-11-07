@@ -32,6 +32,8 @@ MAX_OUTAGE_SECONDS = 10
 MAX_WRITE_SECONDS = 1.5
 #: How many of the users' latest writes that speed is measured over.
 RESPONSIVENESS_WRITES = 10
+#: Live issues that may lack a webhook task because they were in flight while a primary turned read-only.
+MAX_UNQUEUED_LIVE_EVENTS = 3
 #: Writes that set an issue detail and emit no webhook event.
 DETAILS = ("label", "assignee", "milestone", "reaction")
 
@@ -351,11 +353,14 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         # events are owed only once Gitea queued them. A queued event it never sent is still owed.
         queued = app.opened_issue_ids(primary)
         titles = {w["title"] for w in live}
-        events = [
+        unqueued = [
             e
             for e in events
-            if not (e[1] == "opened" and e[2] == LIVE_TRAFFIC_REPOSITORY.lower() and e[5] in titles) or e[4] in queued
+            if e[1] == "opened" and e[2] == LIVE_TRAFFIC_REPOSITORY.lower() and e[5] in titles and e[4] not in queued
         ]
+        # Only a handful of writes can be in flight during one switch; more is lost webhook state.
+        if len(unqueued) <= MAX_UNQUEUED_LIVE_EVENTS:
+            events = [e for e in events if e not in unqueued]
         if duplicated := duplicated_comments(state, events):
             return self.fail("acknowledged_writes_duplicated", comments=duplicated)
         app.wait_for_webhook_attempts(primary)
