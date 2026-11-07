@@ -868,6 +868,16 @@ class GiteaMySQLApplication(GiteaApplication):
         """The X-Gitea-Delivery id of every webhook delivery Gitea recorded."""
         return set(self.mysql.sql(region, "SELECT uuid FROM hook_task;").split())
 
+    def opened_issue_ids(self, region):
+        """Issues whose creation event Gitea queued for delivery."""
+        rows = self.mysql.sql(
+            region,
+            "SELECT CAST(JSON_EXTRACT(payload_content, '$.issue.id') AS UNSIGNED) FROM hook_task "
+            "WHERE event_type = 'issues' AND JSON_VALID(payload_content) "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(payload_content, '$.action')) = 'opened';",
+        )
+        return {int(row) for row in rows.split()}
+
     def stuck_webhooks(self, region, age=WEBHOOK_STALL_SECONDS):
         """Deliveries Gitea saved but never attempted, such as one it could not mark while the primary moved."""
         rows = self.mysql.sql(
@@ -978,6 +988,8 @@ class GiteaMySQLApplication(GiteaApplication):
             self.orchestrator(f"graceful-master-takeover-auto/gitea/{self.mysql.pod(stale)}/3306")
             self.mysql.sql(stale, "SET PERSIST read_only = OFF;\nSET PERSIST super_read_only = OFF;")
             self.mysql.sql(primary, "SET PERSIST super_read_only = ON;")
+            # Gitea's pooled connections to the old primary expire within its CONN_MAX_LIFETIME.
+            time.sleep(10)
         self.orchestrator("enable-global-recoveries")
         if plan["repositories"]:
             self.recovery_client("adopt", repositories=plan["repositories"])

@@ -346,6 +346,16 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         )
         if lost:
             return self.fail("acknowledged_updates_lost", updates=lost)
+        # A live write in flight while the old primary turned read-only can commit without the webhook task
+        # Gitea writes after it, so Gitea never emits that event. Live writes measure availability; their
+        # events are owed only once Gitea queued them. A queued event it never sent is still owed.
+        queued = app.opened_issue_ids(primary)
+        titles = {w["title"] for w in live}
+        events = [
+            e
+            for e in events
+            if not (e[1] == "opened" and e[2] == LIVE_TRAFFIC_REPOSITORY.lower() and e[5] in titles) or e[4] in queued
+        ]
         if duplicated := duplicated_comments(state, events):
             return self.fail("acknowledged_writes_duplicated", comments=duplicated)
         app.wait_for_webhook_attempts(primary)
