@@ -94,11 +94,19 @@ class Loki:
     def _add_grafana_helm_repo(self):
         """Add Grafana Helm repository for Loki chart."""
         self.logger.info("Adding Grafana Helm repository...")
-        try:
-            KubeCtl().exec_command("helm repo add grafana https://grafana.github.io/helm-charts")
-            KubeCtl().exec_command("helm repo update")
-        except Exception as e:
-            self.logger.warning(f"Failed to add Grafana Helm repo (may already exist): {e}")
+        # An existing entry can reject add but still needs its cache refreshed.
+        for command, timeout in (
+            (["helm", "repo", "add", "grafana", "https://grafana.github.io/helm-charts"], 30),
+            (["helm", "repo", "update", "grafana"], 60),
+        ):
+            try:
+                # Run Helm directly so a timeout kills and reaps Helm, not a shell.
+                subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout)
+            except (OSError, subprocess.SubprocessError) as exc:
+                detail = str(exc)
+                if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+                    detail = exc.stderr.strip()
+                self.logger.warning("Helm repo %s failed: %s", command[2], detail)
 
     def teardown(self):
         """Teardown the Loki deployment."""

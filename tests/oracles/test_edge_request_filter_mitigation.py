@@ -1,4 +1,10 @@
+import shutil
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
+
+import pytest
 
 from sregym.conductor.oracles.edge_request_filter_mitigation import (
     EdgeRequestFilterMitigationOracle,
@@ -140,6 +146,55 @@ def test_accepts_safe_regex_after_runtime_probes_succeed():
     assert "-T 3 -t 1" in script
     assert "a" * 5000 + "!" in script
     assert "/tmp/normal" in script
+    assert "(400|403|413|414)" in script
+    assert "2>/tmp/crafted-headers" in script
+
+
+@pytest.mark.skipif(shutil.which("wget") is None, reason="wget is not installed")
+@pytest.mark.parametrize(
+    "crafted_status,normal_status,expected",
+    [
+        (200, 200, True),
+        (400, 200, True),
+        (403, 200, True),
+        (413, 200, True),
+        (414, 200, True),
+        (500, 200, False),
+        (502, 200, False),
+        (400, 500, False),
+    ],
+)
+def test_real_probe_script_accepts_safe_rejection_but_not_broken_traffic(
+    tmp_path, crafted_status, normal_status, expected
+):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            status = crafted_status if "?waf=" in self.path else normal_status
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(b"application response")
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        core_v1 = _CoreV1()
+        oracle = _oracle(_KubeCtl(core_v1=core_v1))
+        oracle._filter_probe_failed()
+        script = core_v1.created_pods[0][1].spec.containers[0].command[-1]
+        script = script.replace(
+            "frontend-proxy.astronomy-shop.svc.cluster.local:8080", f"127.0.0.1:{server.server_port}"
+        )
+        script = script.replace("/tmp/", f"{tmp_path}/")
+        result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=10)
+        assert (result.returncode == 0) is expected, (result.stdout, result.stderr)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def test_accepts_exactly_disabled_bad_rule():
