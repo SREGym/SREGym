@@ -49,6 +49,7 @@ app:
 
 sregym:
   enabled: true
+  loadgenProgram: sregym_loadgen.py
   loadgenLabels:
     app: load-generator
   loadgenEnv:
