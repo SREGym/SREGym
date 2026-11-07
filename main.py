@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import csv
 import importlib
+import itertools
 import logging
 import os
 import sys
@@ -195,6 +196,22 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
+def claim_results_dir(root: Path = Path("results")) -> Path:
+    """Create this run's results directory, named for the current minute.
+
+    If another run already has that name, use <name>_2, <name>_3 and so on. mkdir without
+    exist_ok is the claim, so two runs started in the same minute cannot share a directory.
+    """
+    name = get_current_datetime_formatted()
+    root.mkdir(parents=True, exist_ok=True)
+    for candidate in itertools.chain([name], (f"{name}_{n}" for n in itertools.count(2))):
+        try:
+            (root / candidate).mkdir()
+            return root / candidate
+        except FileExistsError:
+            continue
+
+
 def _restore_env_var(name: str, previous_value: str | None) -> None:
     if previous_value is None:
         os.environ.pop(name, None)
@@ -304,8 +321,7 @@ def driver_loop(
                     "Benchmark interrupted by user.", [{agent_to_run: all_results_for_agent}]
                 )
 
-        base_dir = Path("results") / get_current_datetime_formatted()
-        base_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = claim_results_dir()
         global _driver_base_dir
         _driver_base_dir = base_dir
         # give the API a moment to bind
