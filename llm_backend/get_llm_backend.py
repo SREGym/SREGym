@@ -163,14 +163,11 @@ class LiteLLMBackend:
                     )
                     time.sleep(retry_delay)
                     retry_delay *= 2
-
-                trim_message = True
             except litellm.ServiceUnavailableError:
                 logger.warning(
                     f"Service unavailable (mostly 503). Retrying in 60 seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                 )
                 time.sleep(60)
-                trim_message = True
             except openai.BadRequestError as e:
                 logger.error(f"Bad request error - request is malformed: {e}")
                 logger.error(f"Error details: {_safe_response_details(e)}")
