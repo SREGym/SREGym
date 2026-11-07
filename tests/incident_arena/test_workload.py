@@ -1,3 +1,5 @@
+import runpy
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,6 +9,19 @@ import sregym.generators.workload.incident_arena as workload_module
 from sregym.generators.workload.incident_arena import IncidentArenaLoadgen
 from sregym.service.apps.saleor.application import Saleor
 from sregym.service.helm import Helm
+
+
+@pytest.mark.parametrize("program", [None, "sregym_loadgen.py"])
+def test_slack_session_entrypoint_preserves_session_setup_and_selects_program(monkeypatch, tmp_path, program):
+    calls = []
+    monkeypatch.setenv("GRADER_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["entrypoint.py", *([program] if program else [])])
+    monkeypatch.setattr("os.execv", lambda executable, argv: calls.append((executable, argv)))
+    path = Path(__file__).resolve().parents[2] / "SREGym-applications/slack-spine/chart/files/loadgen-session.py"
+    runpy.run_path(str(path), run_name="__main__")
+    assert calls == [(sys.executable, [sys.executable, program or "loadgen_sidecar.py"])]
+    assert (tmp_path / "current").resolve().is_dir()
+    assert (tmp_path / "current").resolve().parent == tmp_path
 
 
 class FakeClock:

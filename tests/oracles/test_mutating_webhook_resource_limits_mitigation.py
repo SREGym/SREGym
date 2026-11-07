@@ -225,7 +225,9 @@ def test_accepts_stable_replacement_with_deployment_resources_and_endpoint():
     unrelated = _pod("maintenance", "other-uid", replica_set="other-rs")
 
     assert _oracle(_KubeCtl(core_v1=core_v1, unrelated_pods=[unrelated])).evaluate()["success"] is True
-    assert core_v1.deletions == [("nginx-old", "social-network", 0)]
+    # A fresh pod is required, but the application keeps its shutdown grace
+    # period so its database transactions can finish before the old pod exits.
+    assert core_v1.deletions == [("nginx-old", "social-network", None)]
 
 
 def test_accepts_equivalent_kubernetes_memory_quantities():
