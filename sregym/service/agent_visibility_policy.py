@@ -102,6 +102,14 @@ def sanitize_visible_resource(resource: dict) -> dict:
     fields = metadata.get("managedFields")
     if isinstance(fields, list):
         metadata["managedFields"] = [field for field in fields if not mentions_chaos_mesh(json.dumps(field))]
+    # Calico IPAM blocks name the pod behind each address, including pods in hidden namespaces.
+    spec = resource.get("spec")
+    attributes = spec.get("attributes") if isinstance(spec, dict) else None
+    if isinstance(attributes, list):
+        for attribute in attributes:
+            secondary = attribute.get("secondary") if isinstance(attribute, dict) else None
+            if isinstance(secondary, dict) and secondary.get("namespace") in HIDDEN_NAMESPACES:
+                attribute["secondary"] = {}
     return resource
 
 

@@ -1,0 +1,12 @@
+{
+  "Name": "Gitea",
+  "Namespace": "gitea",
+  "Desc": "A Gitea server with persistent Git repositories on MySQL. Seeded users, organizations and repositories come from The Zoo benchmark. Its MySQL database keeps a live replica in a second region, and Orchestrator manages which of the two is the primary. Users work in it around the clock and expect it to stay available and responsive and to keep everything they do. Downstream systems act on every issue event it sends.",
+  "frontend_service": "gitea",
+  "frontend_port": 3000,
+  "Supported Operations": [
+    "Browse and update Git repositories",
+    "Create and read issues",
+    "Query and command Orchestrator over its HTTP API"
+  ]
+}

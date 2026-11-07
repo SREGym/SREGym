@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,7 +16,7 @@ def api(path, method="GET", data=None, missing_ok=False):
     password = Path("/credentials/password").read_text().strip()
     auth = base64.b64encode(f"{username}:{password}".encode()).decode()
     request = urllib.request.Request(
-        "http://gitea:3000/api/v1" + path,
+        os.environ.get("GITEA_URL", "http://gitea:3000") + "/api/v1" + path,
         data=json.dumps(data).encode() if data is not None else None,
         headers={"Authorization": "Basic " + auth, "Content-Type": "application/json"},
         method=method,
