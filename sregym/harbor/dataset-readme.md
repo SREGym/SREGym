@@ -2,8 +2,8 @@
 
 [SREGym](https://github.com/SREGym/SREGym) is a live benchmark for AI site
 reliability engineering (SRE) agents. Each task deploys a real microservice
-application on a private Kubernetes cluster and injects a failure modeled on
-production incidents. The agent must then mitigate it using `kubectl`.
+application on a Kubernetes cluster and injects a failure modeled on
+production incidents.
 
 {{dataset_summary}}
 
