@@ -487,6 +487,8 @@ class ScaledSocialNetworkApplication(ScaledApplication, SocialNetwork):
                 self.helm_configs["chart_path"],
                 "--namespace",
                 self.namespace,
+                "-f",
+                self.helm_configs["values_file"],
             ],
             check=True,
             text=True,

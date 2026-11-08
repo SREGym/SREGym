@@ -3,6 +3,7 @@ import json
 from unittest.mock import Mock
 
 import pytest
+import yaml
 
 from sregym.service.apps.deathstarbench.application import (
     LABEL,
@@ -100,6 +101,22 @@ def test_social_uses_pinned_multiarch_frontend_without_changing_the_source(tier)
     container = next(c for c in deployment["spec"]["template"]["spec"]["containers"] if c["name"] == "nginx-thrift")
     assert container["image"] == OPENRESTY_IMAGE
     assert original == app.source_documents()
+
+
+def test_scaled_social_uses_the_same_central_tracing_configuration():
+    app = ScaledSocialNetworkApplication()
+    configurations = [
+        yaml.safe_load(content)
+        for document in app.source_documents()
+        if document.get("kind") == "ConfigMap"
+        for filename, content in document.get("data", {}).items()
+        if filename in {"jaeger-config.json", "jaeger-config.yml"}
+    ]
+    assert len(configurations) == 18
+    assert all(
+        config["reporter"]["localAgentHostPort"] == "otel-collector.observe.svc.cluster.local:6831"
+        for config in configurations
+    )
 
 
 def test_authenticated_members_have_private_key_and_bounded_cache():
