@@ -28,12 +28,6 @@ concurrently.
 The reward is 1.0 if the application is healthy after the agent stops, and 0.0
 otherwise.
 
-## Tasks
-
-| Task | Application |
-|---|---|
-{{task_rows}}
-
 ## Citation
 
 ```bibtex

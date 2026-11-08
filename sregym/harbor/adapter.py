@@ -166,14 +166,11 @@ SELFTEST_DATASET_NAME = "sregym/harbor-selftest"
 _DATASET_TEXT = {
     "sregym/sregym": (
         "SREGym",
-        "This dataset holds the SREGym problems that run reliably as single-container "
-        "Harbor tasks: {count} tasks across microservice applications, fault types and "
-        "difficulty levels. Every task's reference solution scored 1.0 on plain Docker.",
+        "This dataset contains {count} SREGym problems across {apps}.",
     ),
     "sregym/sregym-lite": (
         "SREGym-Lite",
-        "SREGym-Lite is a curated set of {count} problems with varied difficulty and "
-        "failure mechanisms, chosen to run reliably. It is the recommended starting point.",
+        "SREGym-Lite is a curated set of {count} SREGym problems across {apps}.",
     ),
     SELFTEST_DATASET_NAME: (
         "SREGym Harbor self-test",
@@ -415,11 +412,8 @@ class SREGymAdapter:
 
     def write_dataset_readme(self) -> Path:
         """Write the dataset README that Harbor Hub shows, listing every task in the directory."""
-        rows = []
-        for config_path in sorted(self.output_dir.glob("*/task.toml")):
-            config = tomllib.loads(config_path.read_text())
-            name = config.get("task", {}).get("name", config_path.parent.name)
-            rows.append(f"| `{name}` | {config.get('metadata', {}).get('application', '')} |")
+        configs = [tomllib.loads(p.read_text()) for p in sorted(self.output_dir.glob("*/task.toml"))]
+        apps = {c.get("metadata", {}).get("application", "") for c in configs}
         title, summary = _DATASET_TEXT.get(self.dataset_name, (self.dataset_name, "{count} SREGym tasks."))
         readme = self.output_dir / "README.md"
         readme.write_text(
@@ -427,12 +421,11 @@ class SREGymAdapter:
                 DATASET_README.read_text(),
                 {
                     "dataset_title": title,
-                    "dataset_summary": summary.format(count=len(rows)),
+                    "dataset_summary": summary.format(count=len(configs), apps=f"{len(apps)} application" + ("s" if len(apps) != 1 else "")),
                     "dataset_name": self.dataset_name,
                     "cpus": str(self.cpus),
                     "memory_mb": str(self.memory_mb),
                     "storage_mb": str(self.storage_mb),
-                    "task_rows": "\n".join(rows),
                 },
             )
         )

@@ -131,16 +131,15 @@ def test_existing_tasks_require_overwrite(tmp_path):
     SREGymAdapter(tmp_path, overwrite=True).generate_task(_info())
 
 
-def test_dataset_readme_lists_every_task_for_harbor_hub(tmp_path):
+def test_dataset_readme_summarizes_the_dataset_for_harbor_hub(tmp_path):
     generator = SREGymAdapter(tmp_path, dataset_name="sregym/sregym-lite")
     generator.generate_task(_info())
     generator.generate_task(_info(problem_id="network_policy_block"))
     readme = generator.write_dataset_readme().read_text()
     assert readme.startswith("# SREGym-Lite\n")
     assert "harbor run -d sregym/sregym-lite " in readme
-    assert "| `sregym/network-policy-block` | Hotel Reservation |" in readme
-    assert "| `sregym/wrong-service-selector-hotel-reservation` | Hotel Reservation |" in readme
-    assert "2 problems" in readme
+    assert "2 SREGym problems across 1 application" in readme
+    assert "| `sregym/network-policy-block`" not in readme
     assert "@article{sregym:26" in readme
 
 
