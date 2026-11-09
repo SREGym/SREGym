@@ -383,6 +383,7 @@ SREGym is used by researchers and engineers at organizations including:
   <a href="https://www.nofire.ai/"><img src="assets/who-uses/light/nofire.png#gh-light-mode-only" alt="NOFire" width="180" height="60"><img src="assets/who-uses/dark/nofire.png#gh-dark-mode-only" alt="NOFire" width="180" height="60"></a>
   <a href="https://chironvision.ai/"><img src="assets/who-uses/light/chiron.png#gh-light-mode-only" alt="Chiron" width="180" height="60"><img src="assets/who-uses/dark/chiron.png#gh-dark-mode-only" alt="Chiron" width="180" height="60"></a>
   <a href="https://radarhq.io/"><img src="assets/who-uses/light/skyhook.png#gh-light-mode-only" alt="Skyhook, makers of Radar" width="180" height="60"><img src="assets/who-uses/dark/skyhook.png#gh-dark-mode-only" alt="Skyhook, makers of Radar" width="180" height="60"></a>
+  <a href="https://ciroos.ai/"><img src="assets/who-uses/light/ciroos.png#gh-light-mode-only" alt="Ciroos" width="180" height="60"><img src="assets/who-uses/dark/ciroos.png#gh-dark-mode-only" alt="Ciroos" width="180" height="60"></a>
 </p>
 <p align="center">
   <a href="https://www.washington.edu/"><img src="assets/who-uses/light/washington.png#gh-light-mode-only" alt="University of Washington" width="216" height="90"><img src="assets/who-uses/dark/washington.png#gh-dark-mode-only" alt="University of Washington" width="216" height="90"></a>

@@ -14,6 +14,7 @@ The README lists organizations whose researchers or engineers have publicly docu
 | CloudThinker | CloudThinker's [SREGym results article](https://cloudthinker.io/blogs/your-on-call-has-not-met-astra-yet) describes both its submitted results and an internal evaluation campaign. |
 | NOFire | NOFire's [benchmark article](https://www.nofire.ai/blog/sregym-benchmark-nofire-results) describes its own diagnosis evaluation using SREGym-Lite. |
 | Skyhook | The [Radar team's SREGym article](https://radarhq.io/blog/sregym-leaderboard), written by Skyhook's CEO, documents its evaluation and upstream client. The logo names Radar underneath Skyhook and links to Radar's website. |
+| Ciroos | Niall Murphy [requested adding Ciroos Inc](https://github.com/SREGym/SREGym/pull/1173#issuecomment-6746459317) in the README pull request, and the author acknowledged the request. |
 
 The Rootconf talk linked in the reference describes someone evaluating OpenSRE, HolmesGPT, and K8sGPT using SREGym. It does not establish that the organizations maintaining those products themselves use SREGym, so those organizations are not included. Funding, a model appearing in a benchmark, a paper citation, and a company appearing in a simulated outage also do not establish use by that company.
 

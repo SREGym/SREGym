@@ -108,6 +108,7 @@ def build(theme):
         ),
         "chiron": (80, named_mark("chiron.png", 40, 42, "Chiron", 90, ink)),
         "skyhook": (80, named_mark("skyhook.svg", 35, 58, "Skyhook", 116, ink, note="Radar")),
+        "ciroos": (80, logo("ciroos.svg" if dark else "ciroos-color.png", 20, 16, 200, 48)),
         "washington": (100, logo(f"washington-stacked-{'white' if dark else 'purple'}.png", 27, 4, 186, 92)),
         "illinois": (
             100,
