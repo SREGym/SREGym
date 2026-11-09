@@ -369,6 +369,27 @@ If our work is useful for you, please cite it:
 }
 ```
 
+## Who uses SREGym?
+
+SREGym is used by researchers and engineers at organizations including:
+
+<p align="center">
+  <a href="https://www.microsoft.com/research/"><img src="assets/who-uses/light/microsoft.png#gh-light-mode-only" alt="Microsoft Research" width="180" height="60"><img src="assets/who-uses/dark/microsoft.png#gh-dark-mode-only" alt="Microsoft Research" width="180" height="60"></a>
+  <a href="https://www.datadoghq.com/"><img src="assets/who-uses/light/datadog.png#gh-light-mode-only" alt="Datadog" width="180" height="60"><img src="assets/who-uses/dark/datadog.png#gh-dark-mode-only" alt="Datadog" width="180" height="60"></a>
+  <a href="https://cognition.com/"><img src="assets/who-uses/light/cognition.png#gh-light-mode-only" alt="Cognition" width="180" height="60"><img src="assets/who-uses/dark/cognition.png#gh-dark-mode-only" alt="Cognition" width="180" height="60"></a>
+  <a href="https://cloudthinker.io/"><img src="assets/who-uses/light/cloudthinker.png#gh-light-mode-only" alt="CloudThinker" width="180" height="60"><img src="assets/who-uses/dark/cloudthinker.png#gh-dark-mode-only" alt="CloudThinker" width="180" height="60"></a>
+</p>
+<p align="center">
+  <a href="https://www.nofire.ai/"><img src="assets/who-uses/light/nofire.png#gh-light-mode-only" alt="NOFire" width="180" height="60"><img src="assets/who-uses/dark/nofire.png#gh-dark-mode-only" alt="NOFire" width="180" height="60"></a>
+  <a href="https://chironvision.ai/"><img src="assets/who-uses/light/chiron.png#gh-light-mode-only" alt="Chiron" width="180" height="60"><img src="assets/who-uses/dark/chiron.png#gh-dark-mode-only" alt="Chiron" width="180" height="60"></a>
+  <a href="https://radarhq.io/"><img src="assets/who-uses/light/skyhook.png#gh-light-mode-only" alt="Skyhook, makers of Radar" width="180" height="60"><img src="assets/who-uses/dark/skyhook.png#gh-dark-mode-only" alt="Skyhook, makers of Radar" width="180" height="60"></a>
+</p>
+<p align="center">
+  <a href="https://www.washington.edu/"><img src="assets/who-uses/light/washington.png#gh-light-mode-only" alt="University of Washington" width="216" height="90"><img src="assets/who-uses/dark/washington.png#gh-dark-mode-only" alt="University of Washington" width="216" height="90"></a>
+  <a href="https://illinois.edu/"><img src="assets/who-uses/light/illinois.png#gh-light-mode-only" alt="University of Illinois Urbana-Champaign" width="216" height="90"><img src="assets/who-uses/dark/illinois.png#gh-dark-mode-only" alt="University of Illinois Urbana-Champaign" width="216" height="90"></a>
+  <a href="https://www.utoronto.ca/"><img src="assets/who-uses/light/toronto.png#gh-light-mode-only" alt="University of Toronto" width="216" height="90"><img src="assets/who-uses/dark/toronto.png#gh-dark-mode-only" alt="University of Toronto" width="216" height="90"></a>
+</p>
+
 ## Acknowledgements
 
 We are grateful to the generous support from
