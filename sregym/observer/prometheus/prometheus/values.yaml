@@ -1275,7 +1275,7 @@ extraScrapeConfigs: |
         labels:
           namespace: train-ticket
 
-  # ---- OTel Collector spanmetrics (Jaeger traces — blueprint-hotel-reservation, social-network) ----
+  # ---- OTel Collector spanmetrics (Jaeger traces) ----
   - job_name: 'otel-spanmetrics'
     scrape_interval: 15s
     static_configs:
@@ -1292,28 +1292,23 @@ extraScrapeConfigs: |
       - source_labels: [service_name]
         regex: 'unknown_service:wlgen_proc'
         action: drop
-      # Default namespace for blueprint-hotel-reservation services
-      - target_label: namespace
-        replacement: blueprint-hotel-reservation
-      # Override for social-network services
-      - source_labels: [service_name]
-        regex: 'nginx-thrift|compose-post-service|social-graph-service|post-storage-service|user-timeline-service|url-shorten-service|text-service|unique-id-service|user-mention-service|home-timeline-service|media-service|media-frontend|user-service'
+      # Use the namespace attached to the trace, not a service-name guess.
+      - source_labels: [k8s_namespace_name]
+        regex: '(.+)'
         target_label: namespace
-        replacement: social-network
+        replacement: '$1'
 
-  # ---- OTel Collector spanmetrics (OTLP traces — astronomy-shop, train-ticket) ----
+  # ---- OTel Collector spanmetrics (OTLP traces) ----
   - job_name: 'otel-spanmetrics-otlp'
     scrape_interval: 15s
     static_configs:
       - targets:
           - otel-collector.observe:8890
-        labels:
-          namespace: astronomy-shop
     metric_relabel_configs:
-      - source_labels: [service_name]
-        regex: 'ts-.+'
+      - source_labels: [k8s_namespace_name]
+        regex: '(.+)'
         target_label: namespace
-        replacement: train-ticket
+        replacement: '$1'
   # ---- Scraping from TiDB Cluster ----
   - job_name: tidb-cluster
     scrape_interval: 15s
