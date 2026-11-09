@@ -1,3 +1,8 @@
+global:
+  jaeger:
+    # Clients cache this address; the app-local Jaeger Service is replaced after startup.
+    localAgentHostPort: otel-collector.observe.svc.cluster.local:6831
+
 nginx-thrift:
   container:
     dockerRegistry: ghcr.io

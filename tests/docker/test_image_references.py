@@ -155,7 +155,14 @@ def test_social_network_chart_uses_published_images():
         timeout=30,
     ).stdout
     services = 0
+    tracing_configs = 0
     for manifest in yaml.safe_load_all(rendered):
+        if manifest and manifest.get("kind") == "ConfigMap":
+            for filename, content in manifest.get("data", {}).items():
+                if filename in {"jaeger-config.json", "jaeger-config.yml"}:
+                    config = yaml.safe_load(content)
+                    assert config["reporter"]["localAgentHostPort"] == "otel-collector.observe.svc.cluster.local:6831"
+                    tracing_configs += 1
         if not manifest or manifest.get("kind") != "Deployment":
             continue
         name = manifest["metadata"]["name"]
@@ -167,6 +174,7 @@ def test_social_network_chart_uses_published_images():
             assert container["image"] == IMAGES[target], name
             services += 1
     assert services == 13
+    assert tracing_configs == 18
 
 
 def test_social_deploy_does_not_switch_images_or_accumulate_overrides():
