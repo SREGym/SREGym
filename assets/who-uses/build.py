@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 LOGOS = ROOT / "logos"
 WIDTH = 240
+HEIGHT = 90
 SCALE = 3
 
 
@@ -42,15 +43,34 @@ def text(content, x, y, size, color, *, weight=400, anchor="start"):
 
 
 def named_mark(filename, y, mark_width, name, name_width, color, *, note=None):
-    gap, size = 13, 39
+    gap, size = 11, 34
     start = (WIDTH - mark_width - gap - name_width) / 2
     items = [
         logo(filename, start, y - size / 2, mark_width, size, replacements=(("currentColor", color),)),
-        text(name, start + mark_width + gap, y + 10, 28, color, weight=600),
+        text(name, start + mark_width + gap, y + 9, 27, color, weight=600),
     ]
     if note:
-        items.append(text(note, WIDTH / 2, y + 34, 12, color, anchor="middle"))
+        items.append(text(note, WIDTH / 2, y + 31, 11, color, anchor="middle"))
     return "\n".join(items)
+
+
+def centered_logo(filename, width, height, *, replacements=()):
+    return logo(filename, (WIDTH - width) / 2, (HEIGHT - height) / 2, width, height, replacements=replacements)
+
+
+def washington_logo(dark, ink, muted):
+    return (
+        logo(
+            "washington-w.svg",
+            30,
+            31,
+            42,
+            29,
+            replacements=(("#4b2e83", "#FFFFFF"), ("#4B2E83", "#FFFFFF")) if dark else (),
+        )
+        + text("University of", 84, 37, 14, muted)
+        + text("Washington", 84, 60, 22, ink, weight=500)
+    )
 
 
 def microsoft_logo(dark):
@@ -76,17 +96,22 @@ def build(theme):
     ink = "#f0f6fc" if dark else "#1f2328"
     muted = "#aeb7c2" if dark else "#59636e"
     organizations = {
-        "microsoft": (80, microsoft_logo(dark)),
-        "datadog": (80, logo(f"datadog-{'white' if dark else 'purple'}.svg", 22, 15, 196, 48)),
-        "cognition": (80, named_mark("cognition-0.svg", 40, 39, "Cognition", 131, ink)),
+        "microsoft": (
+            HEIGHT,
+            '<g transform="translate(120 45) scale(0.70) translate(-120 -38.5)">' + microsoft_logo(dark) + "</g>",
+        ),
+        "datadog": (HEIGHT, centered_logo(f"datadog-{'white' if dark else 'purple'}.svg", 185, 46)),
+        "cognition": (HEIGHT, named_mark("cognition-0.svg", 45, 34, "Cognition", 126, ink)),
+        "komodor": (
+            HEIGHT,
+            centered_logo("komodor.svg", 174, 30, replacements=() if dark else (("#FF8F6B", ink),)),
+        ),
         "cloudthinker": (
-            80,
-            logo(
+            HEIGHT,
+            centered_logo(
                 "cloudthinker.svg",
-                16,
-                19,
-                208,
-                42,
+                232,
+                47,
                 replacements=()
                 if dark
                 else (
@@ -96,26 +121,61 @@ def build(theme):
             ),
         ),
         "nofire": (
-            80,
-            logo(
+            HEIGHT,
+            centered_logo(
                 "nofire.svg",
-                25,
-                22,
-                190,
-                37,
+                180,
+                35,
                 replacements=(("white", "#0B0C0E"), ("#0B0C0D", "#FFFFFF")) if dark else (),
             ),
         ),
-        "chiron": (80, named_mark("chiron.png", 40, 42, "Chiron", 90, ink)),
-        "skyhook": (80, named_mark("skyhook.svg", 35, 58, "Skyhook", 116, ink, note="Radar")),
-        "ciroos": (80, logo("ciroos.svg" if dark else "ciroos-color.png", 20, 16, 200, 48)),
-        "washington": (100, logo(f"washington-stacked-{'white' if dark else 'purple'}.png", 27, 4, 186, 92)),
-        "illinois": (
-            100,
-            logo(f"illinois-{'dark' if dark else 'light'}.svg", 2, 25, 236, 41)
-            + text("Urbana-Champaign", 120, 89, 13, muted, anchor="middle"),
+        "chiron": (HEIGHT, named_mark("chiron.png", 45, 34, "Chiron", 86, ink)),
+        "skyhook": (HEIGHT, named_mark("skyhook.svg", 42, 45, "Skyhook", 112, ink, note="Radar")),
+        "ciroos": (HEIGHT, centered_logo("ciroos.svg" if dark else "ciroos-color.png", 180, 44)),
+        "one2n": (
+            HEIGHT,
+            centered_logo(
+                "one2n.svg",
+                126,
+                45,
+                replacements=(('viewBox="0 0 118 50"', 'viewBox="14 6 98 35"'),)
+                + ((("rgb(6, 16, 89)", ink),) if dark else ()),
+            ),
         ),
-        "toronto": (100, logo("toronto.svg", 15, 10, 210, 79, replacements=() if dark else (("#FFFFFF", "#002A5C"),))),
+        "exo": (HEIGHT, named_mark(f"exo-{'dark' if dark else 'light'}.svg", 45, 38, "Exo", 51, ink)),
+        "p95": (
+            HEIGHT,
+            centered_logo(
+                "p95.svg",
+                165,
+                29,
+                replacements=() if dark else (("#d1e394", ink), ("#d1d7d9", ink)),
+            ),
+        ),
+        "bespoke": (
+            HEIGHT,
+            centered_logo(
+                "bespoke.svg",
+                214,
+                30,
+                replacements=() if dark else (("rgb(255, 255, 255)", ink),),
+            ),
+        ),
+        "washington": (HEIGHT, washington_logo(dark, ink, muted)),
+        "illinois": (
+            HEIGHT,
+            logo(f"illinois-{'dark' if dark else 'light'}.svg", 38, 28, 164, 28)
+            + text("Urbana-Champaign", 120, 72, 11, muted, anchor="middle"),
+        ),
+        "toronto": (
+            HEIGHT,
+            centered_logo("toronto.svg", 160, 59, replacements=() if dark else (("#FFFFFF", "#002A5C"),)),
+        ),
+        "berkeley": (HEIGHT, centered_logo(f"berkeley-{'dark' if dark else 'light'}.png", 144, 46)),
+        "asu": (
+            HEIGHT,
+            centered_logo("asu-white.png" if dark else "asu-color.png", 210 if dark else 185, 60 if dark else 40),
+        ),
     }
     output = ROOT / theme
     output.mkdir(exist_ok=True)
