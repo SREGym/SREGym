@@ -12,6 +12,11 @@ from sregym.generators.workload.base import WorkloadEntry
 from sregym.generators.workload.stream import StreamWorkloadManager
 from sregym.paths import TARGET_MICROSERVICES
 
+# The CPU stress trigger runs in the hidden khaos namespace so the agent sees
+# neither the DaemonSet nor its pod events. Being a DaemonSet, it still lands on
+# every node the application runs on.
+CPU_STRESS_NAMESPACE = "khaos"
+
 # Mimicked the Wrk2 class
 
 logger = logging.getLogger("all.infra.workload")
@@ -351,12 +356,19 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
 
     def _deploy_cpu_stress_daemonset(self):
         apps_v1 = client.AppsV1Api()
+        core_v1 = client.CoreV1Api()
         daemonset_name = "cpu-stress-daemon"
+
+        try:
+            core_v1.create_namespace(body=client.V1Namespace(metadata=client.V1ObjectMeta(name=CPU_STRESS_NAMESPACE)))
+        except client.exceptions.ApiException as e:
+            if e.status != 409:
+                raise
 
         try:
             apps_v1.delete_namespaced_daemon_set(
                 name=daemonset_name,
-                namespace=self.namespace,
+                namespace=CPU_STRESS_NAMESPACE,
                 body=client.V1DeleteOptions(propagation_policy="Foreground"),
             )
             logger.info(f"Deleted existing DaemonSet '{daemonset_name}'")
@@ -369,7 +381,7 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
             "kind": "DaemonSet",
             "metadata": {
                 "name": daemonset_name,
-                "namespace": self.namespace,
+                "namespace": CPU_STRESS_NAMESPACE,
             },
             "spec": {
                 "selector": {"matchLabels": {"app": daemonset_name}},
@@ -389,7 +401,7 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
                 },
             },
         }
-        apps_v1.create_namespaced_daemon_set(namespace=self.namespace, body=daemonset_body)
+        apps_v1.create_namespaced_daemon_set(namespace=CPU_STRESS_NAMESPACE, body=daemonset_body)
         self.cpu_stress_daemonset_name = daemonset_name
         logger.info(f"CPU stress DaemonSet '{daemonset_name}' deployed — one stress pod per node")
 
@@ -400,7 +412,7 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
         try:
             apps_v1.delete_namespaced_daemon_set(
                 name=self.cpu_stress_daemonset_name,
-                namespace=self.namespace,
+                namespace=CPU_STRESS_NAMESPACE,
                 body=client.V1DeleteOptions(propagation_policy="Foreground"),
             )
             logger.info(f"CPU stress DaemonSet '{self.cpu_stress_daemonset_name}' deleted")
