@@ -37,6 +37,7 @@ def test_hotel_renders_real_replica_sets_without_mutating_source(tier):
         assert headless["spec"]["publishNotReadyAddresses"]
         assert stateful["spec"]["podManagementPolicy"] == "Parallel"
     config = json.loads(next(d for d in docs if d["kind"] == "ConfigMap")["data"]["config.json"])
+    assert config["jaegerAddress"] == "otel-collector.observe.svc.cluster.local:6831"
     assert config["GeoMongoAddress"].endswith("/?replicaSet=mongodb-geo")
     assert config["GeoMongoAddress"].count(":27017") == app.scale.members
     # Source files are unchanged, despite rendering a different deployment topology.

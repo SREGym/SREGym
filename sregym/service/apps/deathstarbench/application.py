@@ -396,7 +396,6 @@ class ScaledApplication:
 class ScaledHotelReservationApplication(ScaledApplication, HotelReservation):
     expected_databases = 6
     authenticated_databases = frozenset({"mongodb-geo", "mongodb-rate"})
-    services = frozenset({"frontend", "geo", "profile", "rate", "recommendation", "reservation", "search", "user"})
 
     def __init__(self, tier: str = "replicated", storage_class: str = "openebs-hostpath"):
         tier_config(tier)
@@ -416,6 +415,7 @@ class ScaledHotelReservationApplication(ScaledApplication, HotelReservation):
 
     def patch_clients(self, documents):
         config = json.loads((TARGET_MICROSERVICES / "hotelReservation/config.json").read_text())
+        config["jaegerAddress"] = self.jaeger_agent_address
         for key, value in config.items():
             if key.endswith("MongoAddress"):
                 name = value.split(":")[0]
