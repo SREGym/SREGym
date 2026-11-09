@@ -181,6 +181,24 @@ def test_trace_identity_and_replica_counters(endpoints, pods, tmp_path):
             break
         time.sleep(5)
     assert actual == expected
+    # Both receivers sent two 1 ms spans for each selected operation.
+    # A nanosecond bucket typo leaves counts/sums correct but clips quantiles.
+    for suffix in ("http", "k8s.pod.uid"):
+        selector = f'{{span_name="{prefix}-{suffix}"}}'
+        results = {}
+        for key, query in {
+            "count": f"sum(traces_span_metrics_duration_milliseconds_count{selector})",
+            "sum": f"sum(traces_span_metrics_duration_milliseconds_sum{selector})",
+            "median": f"histogram_quantile(0.5, sum by(le)(traces_span_metrics_duration_milliseconds_bucket{selector}))",
+        }.items():
+            response = requests.get(f"{prometheus}/api/v1/query", params={"query": query}, timeout=20)
+            response.raise_for_status()
+            data = response.json()
+            (tmp_path / f"histogram-{suffix}-{key}.json").write_text(json.dumps(data, indent=2))
+            assert data["status"] == "success" and len(data["data"]["result"]) == 1, data
+            results[key] = float(data["data"]["result"][0]["value"][1])
+        assert results["count"] == 2 and results["sum"] == 2, results
+        assert 0.5 <= results["median"] <= 5, results
     for identity in trace_ids:
         response = requests.get(f"{jaeger}/api/traces/{identity}", timeout=20)
         response.raise_for_status()

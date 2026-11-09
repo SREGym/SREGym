@@ -102,3 +102,24 @@ def test_replica_counters_use_service_and_namespace_identity():
     config = yaml.safe_load(next(r for r in resources if r["kind"] == "ConfigMap")["data"]["config.yaml"])
     for connector in config["connectors"].values():
         assert connector["resource_metrics_key_attributes"] == ["service.name", "k8s.namespace.name"]
+
+
+@pytest.mark.parametrize(
+    ("name", "buckets"),
+    [
+        (
+            "spanmetrics",
+            ["1ms", "2.5ms", "5ms", "10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s", "10s"],
+        ),
+        (
+            "spanmetrics/otlp",
+            ["5ms", "10ms", "25ms", "50ms", "75ms", "100ms", "250ms", "500ms", "750ms", "1s", "1.5s", "2s", "5s"],
+        ),
+    ],
+)
+def test_span_histograms_use_explicit_durations(name, buckets):
+    configmap = next(resource for resource in collector_resources() if resource["kind"] == "ConfigMap")
+    config = yaml.safe_load(configmap["data"]["config.yaml"])
+    histogram = config["connectors"][name]["histogram"]
+    assert histogram["unit"] == "ms"
+    assert histogram["explicit"]["buckets"] == buckets
