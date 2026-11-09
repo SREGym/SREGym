@@ -95,3 +95,10 @@ def test_collector_metadata_permissions_are_read_only():
     binding = next(r for r in resources if r["kind"] == "ClusterRoleBinding")
     assert binding["roleRef"]["name"] == role["metadata"]["name"]
     assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "otel-collector", "namespace": "observe"}]
+
+
+def test_replica_counters_use_service_and_namespace_identity():
+    resources = collector_resources()
+    config = yaml.safe_load(next(r for r in resources if r["kind"] == "ConfigMap")["data"]["config.yaml"])
+    for connector in config["connectors"].values():
+        assert connector["resource_metrics_key_attributes"] == ["service.name", "k8s.namespace.name"]
