@@ -51,7 +51,7 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
       7. The frontend still serves the probe product and its original reviews.
     """
 
-    # A lookup may touch at most 1/20 of the heap's pages at injection (279 of 5,594 here);
+    # A lookup may touch at most 1/20 of the heap's pages at injection (about 295 of 5,905 here);
     # a real index lookup touches about 4, the fault the whole table. The floor is for tiny tables.
     LOOKUP_BUFFER_FRACTION = 20
     MIN_LOOKUP_BUFFERS = 64

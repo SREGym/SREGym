@@ -7,6 +7,7 @@ import json
 import logging
 import shlex
 import time
+from datetime import date, datetime, timedelta
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.product_reviews_missing_index_mitigation import (
@@ -44,6 +45,12 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
     Running and every response is still correct. The cause is only visible inside the
     database. The fix is an index the planner uses for product_id again, without
     deleting the history.
+
+    The database says the history is real rather than leaving it to be guessed: each
+    review has a created_at going back years, catalog.discontinued_products lists every
+    retired product with its name and the day it left the catalog, and both tables carry
+    a comment saying so. Without these the rows look like junk for product ids that don't
+    exist, and deleting them looks like part of the fix.
     """
 
     POSTGRES_DEPLOY = "postgresql"
@@ -55,7 +62,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
     # Not restored on recovery: astronomy-shop is redeployed fresh every run.
     FAULT_MEMORY_LIMIT = "512Mi"
 
-    # 2,700 discontinued products with 20 to 200 reviews each: 293,823 rows, a 44 MB heap. Measured at
+    # 2,700 discontinued products with 20 to 200 reviews each: 293,823 rows, a 46 MB heap. Measured at
     # steady state (local kind cluster, 512Mi): a lookup goes from ~0.05 ms to ~20 ms in Postgres and the
     # frontend median of the review endpoints from ~8 ms to ~17 ms.
     HISTORY_PRODUCTS = 2_700
@@ -204,6 +211,42 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         "bad": (" Returned it after a week.", " Not for serious use.", " Would not buy again.", " Look elsewhere."),
     }
     PRODUCT_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    # Where the retired products are listed, so their reviews don't look orphaned.
+    DISCONTINUED_TABLE = "catalog.discontinued_products"
+    # Products left the catalog between 2020 and 2024; their reviews were written in the three years before.
+    FIRST_DISCONTINUED = date(2020, 1, 1)
+    DISCONTINUED_SPAN_DAYS = 5 * 365
+    REVIEW_SPAN_DAYS = 3 * 365
+    PRODUCT_BRANDS = (
+        "Solaris",
+        "Starfield",
+        "Nightwatch",
+        "Polaris",
+        "Meridian",
+        "Lumina",
+        "Zenith",
+        "Aurora",
+        "Perseid",
+        "Halley",
+        "Kepler",
+        "Cassini",
+    )
+    PRODUCT_SERIES = ("Explorer", "Voyager", "Pathfinder", "Observer", "Navigator", "Scout", "Pro", "Classic")
+    PRODUCT_KINDS = (
+        "Refractor Telescope",
+        "Reflector Telescope",
+        "Dobsonian Telescope",
+        "Astro Binoculars",
+        "Equatorial Mount",
+        "Eyepiece Kit",
+        "Solar Filter",
+        "Star Tracker",
+        "Red Flashlight",
+        "Finder Scope",
+        "Planetary Camera",
+        "Travel Tripod",
+    )
 
     _READY_TIMEOUT_SECONDS = 300
     _READY_POLL_SECONDS = 5
@@ -374,19 +417,47 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         return "".join(cls.PRODUCT_ID_ALPHABET[digest[k] % len(cls.PRODUCT_ID_ALPHABET)] for k in range(10))
 
     @classmethod
-    def history_csv(cls, catalog_ids: list[str]) -> tuple[str, int]:
-        """
-        Review history for discontinued products as CSV, and its row count
-        """
+    def discontinued_products(cls, catalog_ids: list[str]) -> list[tuple[int, str, str, date]]:
+        """(n, id, name, day it left the catalog) of every discontinued product"""
         catalog = set(catalog_ids)
-        span = cls.MAX_REVIEWS_PER_PRODUCT - cls.MIN_REVIEWS_PER_PRODUCT + 1
-        scores = [score for score, weight in cls.SCORE_WEIGHTS for _ in range(weight)]
-        buf, rows = io.StringIO(), 0
-        writer = csv.writer(buf, lineterminator="\n")
+        products = []
         for n in range(1, cls.HISTORY_PRODUCTS + 1):
             product_id = cls.history_product_id(n)
             if product_id in catalog:
                 continue
+            name = (
+                f"{cls.PRODUCT_BRANDS[cls._hash(f'{product_id}brand') % len(cls.PRODUCT_BRANDS)]} "
+                f"{cls.PRODUCT_SERIES[cls._hash(f'{product_id}series') % len(cls.PRODUCT_SERIES)]} "
+                f"{60 + 10 * (cls._hash(f'{product_id}size') % 15)} "
+                f"{cls.PRODUCT_KINDS[cls._hash(f'{product_id}kind') % len(cls.PRODUCT_KINDS)]}"
+            )
+            left = cls.FIRST_DISCONTINUED + timedelta(days=cls._hash(f"{product_id}left") % cls.DISCONTINUED_SPAN_DAYS)
+            products.append((n, product_id, name, left))
+        return products
+
+    @classmethod
+    def discontinued_csv(cls, catalog_ids: list[str]) -> tuple[str, int]:
+        """The discontinued products (id, name, discontinued_on) as CSV, and their count"""
+        buf = io.StringIO()
+        products = cls.discontinued_products(catalog_ids)
+        csv.writer(buf, lineterminator="\n").writerows(
+            [product_id, name, left.isoformat()] for _, product_id, name, left in products
+        )
+        return buf.getvalue(), len(products)
+
+    @classmethod
+    def history_csv(cls, catalog_ids: list[str]) -> tuple[str, int]:
+        """
+        Review history for discontinued products as CSV, and its row count.
+
+        Each review is dated within the three years before its product left the catalog.
+        """
+        span = cls.MAX_REVIEWS_PER_PRODUCT - cls.MIN_REVIEWS_PER_PRODUCT + 1
+        scores = [score for score, weight in cls.SCORE_WEIGHTS for _ in range(weight)]
+        buf, rows = io.StringIO(), 0
+        writer = csv.writer(buf, lineterminator="\n")
+        for n, product_id, _, left in cls.discontinued_products(catalog_ids):
+            last_day = datetime(left.year, left.month, left.day)
             for r in range(1, cls.MIN_REVIEWS_PER_PRODUCT + 1 + cls._hash(f"n{n}") % span):
                 key = f"{product_id}{r}"
                 score = scores[cls._hash(key + "s") % len(scores)]
@@ -402,9 +473,42 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
                 username += cls.USERNAME_ENDS[cls._hash(key + "v") % len(cls.USERNAME_ENDS)]
                 if cls._hash(key + "w") % 3 == 0:
                     username += str(10 + cls._hash(key + "x") % 90)
-                writer.writerow([product_id, username, text, score])
+                written = last_day - timedelta(
+                    days=1 + cls._hash(key + "t") % cls.REVIEW_SPAN_DAYS, seconds=cls._hash(key + "h") % 86_400
+                )
+                writer.writerow([product_id, username, text, score, written.isoformat(sep=" ")])
                 rows += 1
         return buf.getvalue(), rows
+
+    def _prepare_history_schema(self) -> None:
+        """
+        Make the history read as history: date every review and list the discontinued products.
+
+        The original reviews get dates over the last year. Left at the column default they
+        would all carry the injection time.
+        """
+        self._run_ddl(
+            f"ALTER TABLE {self._qualified} ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT now(); "
+            f"UPDATE {self._qualified} SET created_at = date_trunc('second', now() - id * interval '7 days 3 hours'); "
+            f"COMMENT ON TABLE {self._qualified} IS 'Customer reviews of every product the shop has sold, including "
+            f"products since retired from the catalog (see {self.DISCONTINUED_TABLE})'; "
+            f"DROP TABLE IF EXISTS {self.DISCONTINUED_TABLE}; "
+            f"CREATE TABLE {self.DISCONTINUED_TABLE} (id varchar(16) PRIMARY KEY, name text NOT NULL, "
+            "discontinued_on date NOT NULL); "
+            f"COMMENT ON TABLE {self.DISCONTINUED_TABLE} IS 'Products no longer for sale. Their reviews stay in "
+            f"{self._qualified}'; "
+            f"GRANT SELECT ON {self.DISCONTINUED_TABLE} TO otelu;",
+            "preparing the review history tables",
+        )
+
+    def _seed_discontinued_products(self) -> None:
+        data, rows = self.discontinued_csv(self.catalog_ids)
+        out = self._psql(
+            f"COPY {self.DISCONTINUED_TABLE} (id, name, discontinued_on) FROM STDIN WITH (FORMAT csv);\n{data}\\.\n",
+            timeout=self._SEED_TIMEOUT_SECONDS,
+        )
+        if _sql_failed(out) or f"COPY {rows}" not in out:
+            raise RuntimeError(f"Listing {rows} discontinued products failed: {out.strip()[:500]}")
 
     def _seed_history(self) -> None:
         """
@@ -413,7 +517,8 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         data, rows = self.history_csv(self.catalog_ids)
         before = self._max_review_id()
         out = self._psql(
-            f"COPY {self._qualified} (product_id, username, description, score) FROM STDIN WITH (FORMAT csv);\n"
+            f"COPY {self._qualified} (product_id, username, description, score, created_at) "
+            "FROM STDIN WITH (FORMAT csv);\n"
             f"{data}\\.\n",
             timeout=self._SEED_TIMEOUT_SECONDS,
         )
@@ -726,6 +831,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
             raise RuntimeError("catalog.products is empty. It cannot pick products for the plan checks")
 
         self._delete_history()
+        self._prepare_history_schema()
         self._recreate_index()
 
         self.baseline_review_ids, self.baseline_review_sig = self._capture_review_baseline()
@@ -737,6 +843,7 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         if not self.probe_reviews or not self.probe_product_name or _sql_failed(self.probe_product_name):
             raise RuntimeError(f"product {self.PROBE_PRODUCT_ID} has no name or reviews to probe through the frontend")
 
+        self._seed_discontinued_products()
         self._seed_history()
         self._analyze()
         # The oracle's buffer limit is a fraction of this, so bloating the table later can't raise it.

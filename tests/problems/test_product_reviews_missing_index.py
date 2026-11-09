@@ -4,6 +4,7 @@ import json
 import shlex
 import sys
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -83,7 +84,7 @@ def test_history_is_deterministic_and_matches_the_measured_size():
     parsed = list(csv.reader(io.StringIO(data)))
     assert len(parsed) == rows
     alphabet = set(Problem.PRODUCT_ID_ALPHABET)
-    for product_id, username, description, score in parsed[::997]:
+    for product_id, username, description, score, _ in parsed[::997]:
         assert len(product_id) == 10 and set(product_id) <= alphabet
         assert username and description
         assert 1.0 <= float(score) <= 5.0
@@ -99,7 +100,7 @@ def test_history_does_not_look_cloned():
     assert sum(score >= 4.0 for score in scores) / len(scores) > 0.7  # skewed high like the shop's own reviews
     bad_closers = set(Problem.CLOSERS["bad"])
     good_closers = {c for c in Problem.CLOSERS["good"] if c}
-    for _, _, text, score in parsed[::101]:
+    for _, _, text, score, _ in parsed[::101]:
         if float(score) >= 4.0:
             assert not any(text.endswith(c) for c in bad_closers)
         if float(score) <= 2.0:
@@ -111,6 +112,45 @@ def test_history_skips_products_still_in_the_catalog():
     data, rows = Problem.history_csv([taken])
     assert taken not in {row[0] for row in csv.reader(io.StringIO(data))}
     assert rows < Problem.history_csv([])[1]
+
+
+def test_history_reads_as_history_not_as_a_bulk_load():
+    """Every review is dated in the three years before its product left the catalog"""
+    data, count = Problem.discontinued_csv([])
+    left = {row[0]: datetime.fromisoformat(row[2]) for row in csv.reader(io.StringIO(data))}
+    assert count == len(left) == Problem.HISTORY_PRODUCTS
+    assert min(left.values()).year == 2020 and max(left.values()).year == 2024
+    reviews = list(csv.reader(io.StringIO(Problem.history_csv([])[0])))
+    assert {row[0] for row in reviews} == set(left)
+    for product_id, *_, written in reviews[::101]:
+        age = left[product_id] - datetime.fromisoformat(written)
+        assert timedelta(0) < age < timedelta(days=Problem.REVIEW_SPAN_DAYS + 1)
+    assert len({row[4][:4] for row in reviews}) >= 7  # spread over years
+
+
+def test_discontinued_products_skip_the_catalog_and_have_names():
+    taken = Problem.history_product_id(1)
+    rows = list(csv.reader(io.StringIO(Problem.discontinued_csv([taken])[0])))
+    assert len(rows) == Problem.HISTORY_PRODUCTS - 1
+    assert taken not in {row[0] for row in rows}
+    assert all(name.split()[0] in Problem.PRODUCT_BRANDS for _, name, _ in rows)
+
+
+def test_history_schema_dates_reviews_and_lists_discontinued_products(problem):
+    problem._run_ddl = Mock()
+    problem._prepare_history_schema()
+    sql = problem._run_ddl.call_args.args[0]
+    assert "ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT now()" in sql
+    assert "DROP TABLE IF EXISTS catalog.discontinued_products" in sql  # a re-inject starts clean
+    assert "CREATE TABLE catalog.discontinued_products" in sql
+    assert sql.count("COMMENT ON TABLE") == 2
+
+
+def test_discontinued_seed_fails_loudly_when_copy_is_short(problem):
+    problem._psql = Mock(return_value="COPY 12\n")
+    with pytest.raises(RuntimeError, match="discontinued products"):
+        problem._seed_discontinued_products()
+    assert problem._psql.call_args.args[0].startswith("COPY catalog.discontinued_products (id, name, discontinued_on)")
 
 
 def test_psql_uses_tcp_and_feeds_sql_on_stdin(problem):
@@ -131,7 +171,9 @@ def test_seed_fails_loudly_when_copy_is_short(problem):
     with pytest.raises(RuntimeError, match="Seeding"):
         problem._seed_history()
     script = problem._psql.call_args.args[0]
-    assert script.startswith("COPY reviews.productreviews (product_id, username, description, score) FROM STDIN")
+    assert script.startswith(
+        "COPY reviews.productreviews (product_id, username, description, score, created_at) FROM STDIN"
+    )
     assert script.endswith("\\.\n")
 
 
