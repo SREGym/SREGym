@@ -334,7 +334,7 @@ def test_pre_run_skips_uv_and_image_and_judge_request(repo, monkeypatch):
 
     console = Console(record=True, width=120)
     assert doctor.run_pre_run_doctor(options, console=console) is True
-    assert "setup checks passed" in console.export_text()
+    assert console.export_text() == ""  # a run that can start prints nothing extra
     assert not [c for c in runner.calls if c.startswith(("uv ", "docker image"))]
 
 
@@ -475,3 +475,15 @@ def test_firewalled_host_ports_block_a_run(repo, monkeypatch):
     check.options.pre_run = True
     reach = next(r for r in check.run_all() if r.name == "Container to host")
     assert reach.status == Status.FAIL
+
+
+def test_pre_run_is_silent_on_warnings(repo, monkeypatch):
+    runner = FakeRunner(_all_good(repo, monkeypatch))
+    monkeypatch.setattr(doctor, "_port_in_use", lambda port: True)  # a warning, not a blocker
+    monkeypatch.setattr(doctor, "Doctor", lambda opts: Doctor(opts, runner=runner, repo_root=repo))
+    from rich.console import Console
+
+    console = Console(record=True, width=120)
+    options = DoctorOptions(environment={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
+    assert doctor.run_pre_run_doctor(options, console=console) is True
+    assert console.export_text() == ""

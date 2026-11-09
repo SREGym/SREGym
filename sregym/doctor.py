@@ -693,7 +693,15 @@ def _port_in_use(port: int) -> bool:
 
 # ----------------------------------------------------------------------- output
 
-_ICONS = {Status.OK: "✅", Status.WARN: "⚠️ ", Status.FAIL: "❌", Status.SKIP: "➖"}
+# Filled word badges rather than emoji or symbols: terminal fonts draw ✅ as a
+# small dim outline, and a one-cell symbol is hard to read even on a colored
+# block, while a colored word is visible at a glance.
+_BADGES = {
+    Status.OK: "[bold black on green] PASS [/]",
+    Status.WARN: "[bold black on yellow] WARN [/]",
+    Status.FAIL: "[bold white on red] FAIL [/]",
+    Status.SKIP: "[dim] SKIP [/]",
+}
 _STYLES = {Status.OK: "green", Status.WARN: "yellow", Status.FAIL: "red", Status.SKIP: "dim"}
 
 
@@ -711,30 +719,34 @@ def render(results: Iterable[CheckResult], options: DoctorOptions, console=None)
         show_lines=False,
         expand=False,
     )
-    table.add_column("", width=2)
+    table.add_column("", width=6, no_wrap=True)
     table.add_column("Check", style="bold")
     table.add_column("Result")
     for r in results:
         detail = f"[{_STYLES[r.status]}]{r.detail}[/]"
         if r.fix and r.status in (Status.FAIL, Status.WARN):
             detail += f"\n[cyan]→ {r.fix}[/]"
-        table.add_row(_ICONS[r.status], r.name, detail)
+        table.add_row(_BADGES[r.status], r.name, detail)
     console.print(table)
 
     fails = sum(r.status == Status.FAIL for r in results)
     warns = sum(r.status == Status.WARN for r in results)
     if fails:
-        console.print(f"[red bold]{fails} blocker(s)[/], {warns} warning(s). Fix the blockers before starting a run.")
+        console.print(
+            f"{_BADGES[Status.FAIL]} [red bold]{fails} blocker(s)[/], {warns} warning(s). "
+            "Fix the blockers before starting a run."
+        )
     elif warns:
-        console.print(f"[green bold]Ready to run[/] with {warns} warning(s).")
+        console.print(f"{_BADGES[Status.OK]} [green bold]Ready to run[/] with {warns} warning(s).")
     else:
-        console.print("[green bold]Ready to run.[/]")
+        console.print(f"{_BADGES[Status.OK]} [green bold]Ready to run.[/]")
 
 
 def run_pre_run_doctor(options: DoctorOptions, console=None) -> bool:
     """Check the machine at the start of a run; return False if the run must stop.
 
-    Prints one line when everything passes, otherwise only the problems.
+    Silent unless a check shows the run would fail: warnings are left to
+    `--doctor`, so a normal run looks the same as without the check.
     """
     from rich.console import Console
 
@@ -742,16 +754,14 @@ def run_pre_run_doctor(options: DoctorOptions, console=None) -> bool:
     options.pre_run = True
     options.live_judge = False  # the run's own judge preflight sends the test request
     results = Doctor(options).run_all()
-    problems = [r for r in results if r.status in (Status.FAIL, Status.WARN)]
-    passed = sum(r.status == Status.OK for r in results)
-    if not problems:
-        console.print(f"[green]✅ Doctor: {passed} setup checks passed[/]")
+    blockers = [r for r in results if r.status == Status.FAIL]
+    if not blockers:
         return True
-    render(problems, options, console)
-    blocked = any(r.status == Status.FAIL for r in problems)
-    if blocked:
-        console.print("Stopping before deployment. Re-run with --skip-doctor to start anyway.")
-    return not blocked
+    render(blockers, options, console)
+    console.print(
+        "Stopping before deployment. Run with --doctor for the full report, or --skip-doctor to start anyway."
+    )
+    return False
 
 
 def run_doctor(options: DoctorOptions, console=None) -> int:
