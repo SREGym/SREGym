@@ -1,0 +1,187 @@
+{
+ "name": "Render remittance advices",
+ "nodes": [
+  {
+   "id": "7c12ac16-a53f-5012-bd78-f48360c14562",
+   "name": "When called by a workflow",
+   "type": "n8n-nodes-base.executeWorkflowTrigger",
+   "typeVersion": 1.2,
+   "position": [
+    0,
+    300
+   ],
+   "parameters": {
+    "inputSource": "passthrough"
+   }
+  },
+  {
+   "id": "68822d35-df29-5c51-bdcb-65cee90d5eeb",
+   "name": "SEPA payment?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2.2,
+   "position": [
+    220,
+    300
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "strict",
+      "version": 2
+     },
+     "conditions": [
+      {
+       "id": "d0d6be71-b235-508f-8f79-9ea1579b72b1",
+       "leftValue": "={{ $json.currency }}",
+       "rightValue": "EUR",
+       "operator": {
+        "type": "string",
+        "operation": "equals"
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "5756d15a-b1f5-564f-9ae8-f09dba2dd8be",
+   "name": "SEPA advice",
+   "type": "n8n-nodes-base.set",
+   "typeVersion": 3.4,
+   "position": [
+    440,
+    200
+   ],
+   "parameters": {
+    "mode": "manual",
+    "assignments": {
+     "assignments": [
+      {
+       "id": "c108ca44-1a9f-5428-96a5-f70fe160f8b8",
+       "name": "document",
+       "value": "={{ JSON.stringify({ document: 'remittance-advice', batch_id: $json.batch_id, line_id: $json.line_id, vendor: $json.vendor, iban: $json.iban, amount: $json.amount, currency: $json.currency, scheme: 'SEPA', invoices: $json.invoices, text: 'Northwind Trading AP: we are paying ' + $json.currency + ' ' + $json.amount + ' to ' + $json.vendor + ' for invoices ' + $json.invoices + ' (' + $json.line_id + ').' }) }}",
+       "type": "string"
+      },
+      {
+       "id": "51507e76-7547-5f47-8bf6-45da6b002c4d",
+       "name": "line_id",
+       "value": "={{ $json.line_id }}",
+       "type": "string"
+      }
+     ]
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "68b485f2-8a23-5420-8bd8-3d54d071d187",
+   "name": "Cross-border advice",
+   "type": "n8n-nodes-base.set",
+   "typeVersion": 3.4,
+   "position": [
+    440,
+    400
+   ],
+   "parameters": {
+    "mode": "manual",
+    "assignments": {
+     "assignments": [
+      {
+       "id": "cc1bede9-263d-5a9a-b01d-be0afdc8140e",
+       "name": "document",
+       "value": "={{ JSON.stringify({ document: 'remittance-advice', batch_id: $json.batch_id, line_id: $json.line_id, vendor: $json.vendor, iban: $json.iban, amount: $json.amount, currency: $json.currency, scheme: 'SWIFT', charges: 'SHA', fx_note: 'Converted at the bank rate on the value date.', invoices: $json.invoices, text: 'Northwind Trading AP: we are paying ' + $json.currency + ' ' + $json.amount + ' to ' + $json.vendor + ' for invoices ' + $json.invoices + ' (' + $json.line_id + ').' }) }}",
+       "type": "string"
+      },
+      {
+       "id": "051f3000-9978-5757-b4ff-28d8731f13fb",
+       "name": "line_id",
+       "value": "={{ $json.line_id }}",
+       "type": "string"
+      }
+     ]
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "00bee6ef-1d57-5f90-ba74-a6f6eacae93f",
+   "name": "Advice document",
+   "type": "n8n-nodes-base.convertToFile",
+   "typeVersion": 1.1,
+   "position": [
+    680,
+    300
+   ],
+   "parameters": {
+    "operation": "toText",
+    "sourceProperty": "document",
+    "binaryPropertyName": "data",
+    "options": {
+     "fileName": "={{ $json.line_id }}.json"
+    }
+   }
+  }
+ ],
+ "connections": {
+  "When called by a workflow": {
+   "main": [
+    [
+     {
+      "node": "SEPA payment?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "SEPA payment?": {
+   "main": [
+    [
+     {
+      "node": "SEPA advice",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Cross-border advice",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "SEPA advice": {
+   "main": [
+    [
+     {
+      "node": "Advice document",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Cross-border advice": {
+   "main": [
+    [
+     {
+      "node": "Advice document",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1",
+  "saveDataSuccessExecution": "none",
+  "callerPolicy": "workflowsFromSameOwner"
+ }
+}

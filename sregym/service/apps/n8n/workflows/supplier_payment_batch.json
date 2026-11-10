@@ -1,0 +1,339 @@
+{
+ "name": "Supplier payment batch",
+ "nodes": [
+  {
+   "id": "9327a600-bd33-50b1-a86f-8d6b8c29f0e4",
+   "name": "Payment batch",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    0,
+    300
+   ],
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "payment-batches",
+    "responseMode": "onReceived",
+    "options": {}
+   },
+   "webhookId": "1e7dbad2-051c-54da-9c81-0fc767195865"
+  },
+  {
+   "id": "bcd2317c-3382-5b4b-9ad2-be91785050ef",
+   "name": "Register batch",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    220,
+    300
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://payables-portal:8080/api/payment-batches",
+    "sendBody": true,
+    "bodyParameters": {
+     "parameters": [
+      {
+       "name": "batch_id",
+       "value": "={{ $json.body.batch_id }}"
+      },
+      {
+       "name": "lines",
+       "value": "={{ $json.body.lines.length }}"
+      },
+      {
+       "name": "total",
+       "value": "={{ $json.body.lines.reduce((s, l) => s + Number(l.amount), 0).toFixed(2) }}"
+      },
+      {
+       "name": "cutoff_at",
+       "value": "={{ $now.plus(10, 'minutes').toUTC().toISO() }}"
+      }
+     ]
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "a42f0661-beab-576b-964c-97e654bedac9",
+   "name": "Payment lines",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    440,
+    300
+   ],
+   "parameters": {
+    "jsCode": "const batch = $('Payment batch').first().json.body;\nreturn batch.lines.map((line) => ({ json: { ...line, batch_id: batch.batch_id } }));"
+   }
+  },
+  {
+   "id": "2b007381-560a-56d9-af4b-d9af4f0656c9",
+   "name": "Remittance advices",
+   "type": "n8n-nodes-base.executeWorkflow",
+   "typeVersion": 1.3,
+   "position": [
+    660,
+    300
+   ],
+   "parameters": {
+    "source": "database",
+    "workflowId": {
+     "__rl": true,
+     "value": "@workflow:Render remittance advices",
+     "mode": "id"
+    },
+    "options": {
+     "waitForSubWorkflow": true
+    }
+   }
+  },
+  {
+   "id": "3b6f9b1d-34cc-5dbe-a056-469a9c9a7955",
+   "name": "Release hold",
+   "type": "n8n-nodes-base.wait",
+   "typeVersion": 1.1,
+   "position": [
+    880,
+    300
+   ],
+   "parameters": {
+    "resume": "timeInterval",
+    "amount": 10,
+    "unit": "minutes"
+   },
+   "webhookId": "70d951a8-e131-5d78-a483-8b388cd49faa"
+  },
+  {
+   "id": "4488cf33-02e6-5174-9297-dfda290ce534",
+   "name": "Read advice",
+   "type": "n8n-nodes-base.extractFromFile",
+   "typeVersion": 1.1,
+   "position": [
+    1100,
+    300
+   ],
+   "parameters": {
+    "operation": "fromJson",
+    "binaryPropertyName": "data",
+    "destinationKey": "advice",
+    "options": {}
+   }
+  },
+  {
+   "id": "2b5a6ea7-e61d-5d0b-82b1-3596251e4297",
+   "name": "Schedule payout",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1320,
+    300
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://payments-gateway:8080/v1/payouts",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Idempotency-Key",
+       "value": "={{ $json.advice.line_id }}"
+      }
+     ]
+    },
+    "sendBody": true,
+    "bodyParameters": {
+     "parameters": [
+      {
+       "name": "reference",
+       "value": "={{ $json.advice.line_id }}"
+      },
+      {
+       "name": "beneficiary",
+       "value": "={{ $json.advice.vendor }}"
+      },
+      {
+       "name": "iban",
+       "value": "={{ $json.advice.iban }}"
+      },
+      {
+       "name": "amount",
+       "value": "={{ $json.advice.amount }}"
+      },
+      {
+       "name": "currency",
+       "value": "={{ $json.advice.currency }}"
+      }
+     ]
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "18637025-4f56-587f-b981-529aeea2200f",
+   "name": "Send remittance advice",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1540,
+    300
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://payables-portal:8080/api/remittances",
+    "sendBody": true,
+    "bodyParameters": {
+     "parameters": [
+      {
+       "name": "batch_id",
+       "value": "={{ $('Read advice').item.json.advice.batch_id }}"
+      },
+      {
+       "name": "line_id",
+       "value": "={{ $json.reference }}"
+      },
+      {
+       "name": "vendor",
+       "value": "={{ $json.beneficiary }}"
+      },
+      {
+       "name": "amount",
+       "value": "={{ $json.amount }}"
+      },
+      {
+       "name": "currency",
+       "value": "={{ $json.currency }}"
+      },
+      {
+       "name": "payout_id",
+       "value": "={{ $json.id }}"
+      },
+      {
+       "name": "advice",
+       "value": "={{ $('Read advice').item.json.advice.text }}"
+      }
+     ]
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "0351300f-afd9-5664-9120-602deebd1414",
+   "name": "Close batch",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1760,
+    300
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "=http://payables-portal:8080/api/payment-batches/{{ $('Read advice').first().json.advice.batch_id }}/settled",
+    "sendBody": true,
+    "bodyParameters": {
+     "parameters": [
+      {
+       "name": "lines",
+       "value": "={{ $input.all().length }}"
+      }
+     ]
+    },
+    "options": {}
+   },
+   "executeOnce": true
+  }
+ ],
+ "connections": {
+  "Payment batch": {
+   "main": [
+    [
+     {
+      "node": "Register batch",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Register batch": {
+   "main": [
+    [
+     {
+      "node": "Payment lines",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Payment lines": {
+   "main": [
+    [
+     {
+      "node": "Remittance advices",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Remittance advices": {
+   "main": [
+    [
+     {
+      "node": "Release hold",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Release hold": {
+   "main": [
+    [
+     {
+      "node": "Read advice",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read advice": {
+   "main": [
+    [
+     {
+      "node": "Schedule payout",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Schedule payout": {
+   "main": [
+    [
+     {
+      "node": "Send remittance advice",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Send remittance advice": {
+   "main": [
+    [
+     {
+      "node": "Close batch",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}

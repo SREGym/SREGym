@@ -1,0 +1,71 @@
+image:
+  repository: n8nio/n8n
+  digest: sha256:764f4a134995f131214042dfa69fb4479b8d31f0f89c7f5a4c3fa0e782a80965
+  pullPolicy: IfNotPresent
+fullnameOverride: n8n
+queueMode:
+  enabled: true
+  workerReplicaCount: 2
+  workerConcurrency: 10
+service:
+  type: NodePort
+  port: 5678
+database:
+  type: postgresdb
+  useExternal: true
+  host: postgres
+  port: 5432
+  database: n8n
+  schema: public
+  user: n8n
+  passwordSecret:
+    name: n8n-db-secret
+    key: password
+redis:
+  enabled: true
+  useExternal: true
+  host: redis
+  port: 6379
+secretRefs:
+  existingSecret: n8n-core-secrets
+taskRunners:
+  enabled: true
+  image:
+    repository: n8nio/runners
+    digest: sha256:1bc66accf92dcc7f30e9c728b3be0cf376efc5e1b692184604a976a5742bc55b
+  authToken:
+    existingSecret: n8n-core-secrets
+    existingSecretKey: N8N_RUNNERS_AUTH_TOKEN
+probes:
+  worker:
+    readiness:
+      command: ["/bin/sh", "-c", "grep -aq 'n8n worker' /proc/1/cmdline"]
+    liveness:
+      command: ["/bin/sh", "-c", "grep -aq 'n8n worker' /proc/1/cmdline"]
+serviceAccount:
+  automountServiceAccountToken: false
+persistence:
+  enabled: true
+  accessModes: ["ReadWriteOnce"]
+  size: 10Gi
+  storageClassName: standard
+strategy:
+  type: Recreate
+editor:
+  url: http://n8n-main.n8n.svc.cluster.local:5678
+webhook:
+  url: http://n8n-main.n8n.svc.cluster.local:5678/
+config:
+  extraEnv:
+    - name: N8N_PROXY_HOPS
+      value: "1"
+    - name: N8N_DIAGNOSTICS_ENABLED
+      value: "false"
+    - name: N8N_VERSION_NOTIFICATIONS_ENABLED
+      value: "false"
+    - name: N8N_TEMPLATES_ENABLED
+      value: "false"
+    - name: N8N_SECURE_COOKIE
+      value: "false"
+    - name: DB_PING_MAX_FAILURES_BEFORE_RECOVERY
+      value: "30"

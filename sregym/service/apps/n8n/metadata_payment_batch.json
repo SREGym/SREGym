@@ -1,0 +1,11 @@
+{
+    "Name": "n8n",
+    "Namespace": "n8n",
+    "Desc": "n8n 2.43.5 workflow automation in queue mode, deployed with the official n8n-hosting Helm chart (release `n8n`): the n8n-main Deployment (editor, REST API and webhooks) and the n8n-worker Deployment (two pods, concurrency 10, each with an n8nio/runners task-runner sidecar), with PostgreSQL (`postgres`, database `n8n`) and Redis (`redis`, the job queue). n8n runs the treasury team's published workflow \"Supplier payment batch\": the ERP posts each payment batch (a batch id and its payment lines: supplier, IBAN, amount, currency, invoices) to the production webhook /webhook/payment-batches; the workflow registers the batch in payables-portal, has the sub-workflow \"Render remittance advices\" produce one remittance advice document per payment, holds the batch for treasury's 10-minute release window (the batch's cut-off), then schedules each payment at payments-gateway, sends each supplier its remittance advice through payables-portal and closes the batch. payables-portal (port 8080, /api/payment-batches, /api/remittances) keeps the batches with their cut-off and status and the remittance advices sent. payments-gateway (port 8080, /v1/payouts) is the bank API: a payout settles 24 hours after it is scheduled and can be cancelled until then (POST /v1/payouts/<id>/cancel); it honours an Idempotency-Key header. The ERP calls the webhook from outside the cluster. The n8n owner login (email, password) is in the n8n-owner Secret.",
+    "Supported Operations": [
+        "Submit payment batches to the production webhook",
+        "Inspect payment batches and remittance advices in payables-portal and payouts in payments-gateway",
+        "Cancel scheduled payouts at payments-gateway",
+        "Inspect and edit workflows and executions in n8n (editor, REST API, CLI in the n8n pods, PostgreSQL)"
+    ]
+}
