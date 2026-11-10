@@ -30,6 +30,7 @@ from sregym.service.apps.gitea.application import GiteaApplication
 from sregym.service.apps.gitlab.application import GitLabApplication
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.mattermost.application import MattermostApplication
+from sregym.service.apps.pretix.application import PretixApplication
 from sregym.service.apps.saleor.application import Saleor
 from sregym.service.apps.slack_spine.application import SlackSpine
 from sregym.service.apps.social_network import SocialNetwork
@@ -134,6 +135,7 @@ APPLICATIONS = (
     ),
     AppDefinition("frappe", Frappe, Frappe.metadata_file, service_port=8000),
     AppDefinition("saleor", Saleor, Saleor.metadata_file, service_port=8000),
+    AppDefinition("pretix", PretixApplication, PretixApplication.metadata_file, service_port=80),
     AppDefinition("slack-spine", SlackSpine, SlackSpine.metadata_file, ("slack_spine",), service_port=8000),
 )
 
