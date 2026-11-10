@@ -8,9 +8,9 @@ config:
       - cri: {}
       # Controllers and the CNI log noise-controller objects as namespace/name.
       - drop:
-          expression: "(^|[^a-z0-9-])(chaos-mesh|khaos)/"
+          expression: "(^|[^a-z0-9-])(chaos-mesh|khaos|provider-network)/"
     extraRelabelConfigs:
       # Keep noise-controller logs out of Loki, including direct API queries.
       - action: drop
         source_labels: [__meta_kubernetes_namespace]
-        regex: chaos-mesh|khaos
+        regex: chaos-mesh|khaos|provider-network
