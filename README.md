@@ -88,7 +88,15 @@ For existing clusters, see the [upgrade and baseline instructions](./docs/networ
 
 #### Check your setup first
 
-Add `--check-setup` to the command you plan to run. It checks the tools, Docker, the cluster, the network policy, whether agent containers can reach the host, and the agent and judge credentials for that exact configuration. It prints a fix for each problem and exits without changing anything; the two container checks start short-lived containers from the agent image and remove them afterwards:
+Add `--check-setup` to the command you plan to run. Instead of starting the benchmark, it checks that this machine is ready for that exact configuration and prints a fix for each problem:
+
+- tools: uv version and the applications submodule
+- Docker: running, with enough CPUs, memory and disk, and the agent image pulled
+- cluster: all nodes Ready, `/run/udev` for `--profile full`, the Calico tier for filtered internet access
+- agent and judge: registered, allowed by the filtered network policy, credentials set
+- networking: ports free, agent containers can reach the host and mount temp folders, and the hosts the run downloads from (GitHub, chart repos, image registries, the model API) resolve and answer
+
+It does not change the machine or the cluster; the container checks start short-lived containers from the agent image and remove them afterwards. For example:
 
 ```bash
 uv run main.py --agent codex --model gpt-5 --profile svelte --check-setup

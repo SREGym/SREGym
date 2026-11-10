@@ -52,7 +52,7 @@ The cluster is now ready to run SREGym.
 
 ## Troubleshooting
 
-Start with `uv run main.py --check-setup`, adding the flags you plan to run with. It checks Docker, the cluster nodes, `/run/udev`, the Calico tier, whether agent containers can reach the host, and your credentials, and prints a fix for each problem. On Docker Engine with `ufw` enabled, the firewall drops traffic from containers to the host, so the agent never reaches the run API and waits until `--agent-timeout`. The check detects this and prints the `ufw allow` rule.
+Start with `uv run main.py --check-setup`, adding the flags you plan to run with. It checks Docker, the cluster nodes, `/run/udev`, the Calico tier, whether agent containers can reach the host, and your credentials, and prints a fix for each problem. On Docker Engine with `ufw` enabled, the firewall drops traffic from containers to the host, so the agent never reaches the run API and waits until `--agent-timeout`. The check detects this and prints the `ufw allow` rule. It also catches two other problems that otherwise fail minutes into a run: Docker Desktop on Linux not sharing `/tmp`, which the agent's credential mounts need, and DNS or network trouble that makes Helm chart downloads time out during deploy.
 
 ### Docker issues
 
