@@ -681,17 +681,15 @@ def _codex_logged_in(env: dict[str, str]) -> bool:
 
 def _litellm_credentials(name: str, model: str, env: dict[str, str]) -> CheckResult:
     try:
+        from unittest import mock
+
         import litellm
 
-        saved = dict(os.environ)
-        os.environ.clear()
-        os.environ.update(env)
-        try:
+        # validate_environment only reads os.environ, so evaluate it against the
+        # environment being checked; patch.dict restores the real one afterwards.
+        with mock.patch.dict(os.environ, env, clear=True):
             report = litellm.validate_environment(model)
-        finally:
-            os.environ.clear()
-            os.environ.update(saved)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - an unknown provider should warn, not crash the report
         return CheckResult(name, Status.WARN, f"could not work out the credentials for {model}: {exc}")
     missing = report.get("missing_keys") or []
     if missing:
