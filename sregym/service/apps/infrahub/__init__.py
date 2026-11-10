@@ -1,0 +1,1 @@
+"""Infrahub application integration."""
