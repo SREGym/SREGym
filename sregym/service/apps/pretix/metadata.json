@@ -1,0 +1,14 @@
+{
+  "Name": "pretix",
+  "Namespace": "pretix",
+  "Desc": "pretix 2026.9.0, an open-source ticket shop, selling registrations for the Lakeside Tech Day 2026 workshops (organizer lakeside, event techday26; each workshop is a free product with a limited number of seats). It is deployed like pretix's production docker setup: pretix-web (nginx in front of gunicorn, 12 workers x 16 threads) behind the pretix-web Service, pretix-worker (Celery task worker, concurrency 4), the pretix-periodic CronJob that runs pretix cron every minute, PostgreSQL (postgres), Redis (redis, with append-only persistence) and the Mailpit SMTP sink (mailpit) that receives all outgoing email. Attendees register through the public shop; the door-scanner deployment runs the door scanning stations, which check attendees in through the check-in API and watch the workshop rooms' check-in lists. The organizer's API token is in the pretix-api Secret (key token); send it as 'Authorization: Token <token>'.",
+  "frontend_service": "pretix-web",
+  "frontend_port": 80,
+  "Supported Operations": [
+    "Browse the shop, register for workshops and join waiting lists",
+    "Inspect and change orders, vouchers, quotas and the waiting list through the REST API (/api/v1/organizers/lakeside/events/techday26/...)",
+    "Check attendees in (check-in API, check-in lists)",
+    "Run pretix management commands (python -m pretix ...) inside the pretix-web or pretix-worker pods",
+    "Inspect PostgreSQL, Redis, Mailpit and pod logs"
+  ]
+}
