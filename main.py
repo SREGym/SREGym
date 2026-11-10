@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import csv
 import importlib
+import itertools
 import logging
 import os
 import sys
@@ -26,9 +27,9 @@ from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_
 from clients.jev.config import configure as configure_jev
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
-from sregym.agent_registry import get_agent, list_agents
+from sregym.agent_registry import get_agent, list_agents, registry_path
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
-from sregym.conductor.conductor_api import request_shutdown, run_api
+from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
@@ -195,6 +196,22 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
+def claim_results_dir(root: Path = Path("results")) -> Path:
+    """Create this run's results directory, named for the current minute.
+
+    If another run already has that name, use <name>_2, <name>_3 and so on. mkdir without
+    exist_ok is the claim, so two runs started in the same minute cannot share a directory.
+    """
+    name = get_current_datetime_formatted()
+    root.mkdir(parents=True, exist_ok=True)
+    for candidate in itertools.chain([name], (f"{name}_{n}" for n in itertools.count(2))):
+        try:
+            (root / candidate).mkdir()
+            return root / candidate
+        except FileExistsError:
+            continue
+
+
 def _restore_env_var(name: str, previous_value: str | None) -> None:
     if previous_value is None:
         os.environ.pop(name, None)
@@ -304,8 +321,7 @@ def driver_loop(
                     "Benchmark interrupted by user.", [{agent_to_run: all_results_for_agent}]
                 )
 
-        base_dir = Path("results") / get_current_datetime_formatted()
-        base_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = claim_results_dir()
         global _driver_base_dir
         _driver_base_dir = base_dir
         # give the API a moment to bind
@@ -319,7 +335,7 @@ def driver_loop(
             # so do not let stale local-run state affect them.
             conductor.clear_cluster_egress_boundary()
         else:
-            available_agents = list_agents(path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml").keys()
+            available_agents = list_agents(path=registry_path(Path(os.path.dirname(os.path.abspath(__file__))))).keys()
             if agent_to_run not in available_agents:
                 console.log(f"⚠️ Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}")
                 sys.exit(1)
@@ -590,7 +606,7 @@ def driver_loop(
                     with _artifact_environment(run):
                         reg = get_agent(
                             agent_to_run,
-                            path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
+                            path=registry_path(Path(os.path.dirname(os.path.abspath(__file__)))),
                         )
                         if reg:
                             check_interrupted()
@@ -963,6 +979,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     # Assigning unconditionally here would clobber the caller's value, which
     # then surfaces far away as a connection to the wrong service.
     os.environ.setdefault("API_PORT", "8000")
+    check_api_port_available()
     os.environ.setdefault("MCP_SERVER_PORT", "9954")
     # Derived, never duplicated: a literal here silently disagrees with
     # MCP_SERVER_PORT, and consumers prefer the URL over the parts.
@@ -981,7 +998,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
-        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+        get_agent(args.agent, path=registry_path(Path(os.path.dirname(os.path.abspath(__file__)))))
         if args.agent
         else None
     )

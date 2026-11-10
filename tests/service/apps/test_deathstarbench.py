@@ -3,10 +3,10 @@ import json
 from unittest.mock import Mock
 
 import pytest
+import yaml
 
 from sregym.service.apps.deathstarbench.application import (
     LABEL,
-    OPENRESTY_IMAGE,
     SCALE_TIERS,
     ScaledHotelReservationApplication,
     ScaledSocialNetworkApplication,
@@ -36,6 +36,7 @@ def test_hotel_renders_real_replica_sets_without_mutating_source(tier):
         assert headless["spec"]["publishNotReadyAddresses"]
         assert stateful["spec"]["podManagementPolicy"] == "Parallel"
     config = json.loads(next(d for d in docs if d["kind"] == "ConfigMap")["data"]["config.json"])
+    assert config["jaegerAddress"] == "otel-collector.observe.svc.cluster.local:6831"
     assert config["GeoMongoAddress"].endswith("/?replicaSet=mongodb-geo")
     assert config["GeoMongoAddress"].count(":27017") == app.scale.members
     # Source files are unchanged, despite rendering a different deployment topology.
@@ -92,14 +93,49 @@ def test_social_client_seed_list_preserves_upstream_port_append_contract():
 
 
 @pytest.mark.parametrize("tier", SCALE_TIERS)
-def test_social_uses_pinned_multiarch_frontend_without_changing_the_source(tier):
+def test_social_uses_configured_pinned_frontend_without_changing_the_source(tier):
     app = ScaledSocialNetworkApplication(tier)
     original = app.source_documents()
     documents = app.render()
     deployment = next(d for d in documents if d["kind"] == "Deployment" and d["metadata"]["name"] == "nginx-thrift")
     container = next(c for c in deployment["spec"]["template"]["spec"]["containers"] if c["name"] == "nginx-thrift")
-    assert container["image"] == OPENRESTY_IMAGE
+    source_frontend = next(
+        d for d in original if d.get("kind") == "Deployment" and d["metadata"]["name"] == "nginx-thrift"
+    )
+    configured_image = source_frontend["spec"]["template"]["spec"]["containers"][0]["image"]
+    assert container["image"] == configured_image
+    assert configured_image.startswith("ghcr.io/sregym/openresty-thrift:") and "@sha256:" in configured_image
     assert original == app.source_documents()
+
+
+def test_scaled_social_preserves_the_configured_frontend_image():
+    app = ScaledSocialNetworkApplication("replicated")
+    source = app.source_documents()
+    configured_image = "ghcr.io/sregym/openresty-thrift:configured@sha256:" + "a" * 64
+    frontend = next(d for d in source if d.get("kind") == "Deployment" and d["metadata"]["name"] == "nginx-thrift")
+    frontend["spec"]["template"]["spec"]["containers"][0]["image"] = configured_image
+    app.source_documents = lambda: copy.deepcopy(source)
+
+    rendered = app.render()
+
+    frontend = next(d for d in rendered if d.get("kind") == "Deployment" and d["metadata"]["name"] == "nginx-thrift")
+    assert frontend["spec"]["template"]["spec"]["containers"][0]["image"] == configured_image
+
+
+def test_scaled_social_uses_the_same_central_tracing_configuration():
+    app = ScaledSocialNetworkApplication()
+    configurations = [
+        yaml.safe_load(content)
+        for document in app.source_documents()
+        if document.get("kind") == "ConfigMap"
+        for filename, content in document.get("data", {}).items()
+        if filename in {"jaeger-config.json", "jaeger-config.yml"}
+    ]
+    assert len(configurations) == 18
+    assert all(
+        config["reporter"]["localAgentHostPort"] == "otel-collector.observe.svc.cluster.local:6831"
+        for config in configurations
+    )
 
 
 def test_authenticated_members_have_private_key_and_bounded_cache():

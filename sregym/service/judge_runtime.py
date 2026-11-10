@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.request import ProxyHandler, build_opener
 
-from sregym.agent_registry import get_agent
+from sregym.agent_registry import get_agent, registry_path
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
 from sregym.service.internet_policy import InternetPolicy
 
@@ -81,7 +81,7 @@ def managed_judge_backend(backend: str = "api", *, force_build: bool = False) ->
 
     env = _subscription_environment(backend)
     repo_root = Path(__file__).resolve().parents[2]
-    registration = get_agent(backend, repo_root / "agents.yaml")
+    registration = get_agent(backend, registry_path(repo_root))
     if registration is None or not registration.install_script:
         raise ValueError(f"No CLI installer registered for judge backend {backend}")
 

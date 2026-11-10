@@ -74,6 +74,7 @@ def test_chart_renders_without_harness(offline_cluster, tmp_path, problem_cls):
         assert loadgen["spec"]["template"]["spec"]["containers"][0]["command"] == [
             "python3",
             "/opt/loadgen-session/entrypoint.py",
+            "sregym_loadgen.py",
         ]
         session = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "loadgen-session")
         assert session["metadata"]["labels"]["app"] == "load-generator"
