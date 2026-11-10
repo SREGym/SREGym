@@ -219,6 +219,10 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
     # Where the retired products are listed, so their reviews don't look orphaned.
     DISCONTINUED_TABLE = "catalog.discontinued_products"
 
+    # A review's date, for the checksums over rows aliased r. Read through to_jsonb, a dropped column
+    # counts as changed dates rather than a query error, and the text is ISO 8601 whatever the DateStyle.
+    _CREATED_AT_SQL = "COALESCE(to_jsonb(r) ->> 'created_at', '')"
+
     INIT_CONFIGMAP = "postgresql-init"
     INIT_KEY = "init.sql"
     # What init.sql gains, in the file's own style. _prepare_history_schema creates the same objects.
@@ -300,6 +304,8 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         self.history_range: tuple[int, int] | None = None
         self.history_rows: int = 0
         self.history_checksum: int = 0
+        self.discontinued_rows: int = 0
+        self.discontinued_checksum: int = 0
         self.postgres_identity: dict | None = None
         self.heap_pages_at_inject: int = 0
 
@@ -570,6 +576,30 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         )
         if _sql_failed(out) or f"COPY {rows}" not in out:
             raise RuntimeError(f"Listing {rows} discontinued products failed: {out.strip()[:500]}")
+        self.discontinued_rows, self.discontinued_checksum = self.discontinued_fingerprint()
+        if self.discontinued_rows != rows:
+            raise RuntimeError(f"Listed {rows} discontinued products but found {self.discontinued_rows}")
+
+    def discontinued_fingerprint(self) -> tuple[int, int]:
+        """Row count and content checksum of the discontinued products, (0, 0) once the table is gone"""
+        present = self._psql(f"SELECT to_regclass('{self.DISCONTINUED_TABLE}') IS NOT NULL;", tuples_only=True).strip()
+        answer = present.splitlines()[-1].strip() if present else ""
+        if answer not in ("t", "f"):
+            raise RuntimeError(f"Could not look up {self.DISCONTINUED_TABLE}: {present[:300]}")
+        if answer == "f":
+            return 0, 0
+        # Read through to_jsonb, like created_at, so a dropped column counts as changed rows
+        out = self._psql(
+            "SELECT count(*) || '|' || COALESCE(sum(hashtext(concat_ws('|', j ->> 'id', j ->> 'name', "
+            "j ->> 'discontinued_on'))::bigint), 0) "
+            f"FROM (SELECT to_jsonb(d) AS j FROM {self.DISCONTINUED_TABLE} d) s;",
+            tuples_only=True,
+        )
+        try:
+            count, checksum = out.strip().splitlines()[-1].split("|")
+            return int(count), int(checksum)
+        except (ValueError, IndexError) as exc:
+            raise RuntimeError(f"Could not fingerprint {self.DISCONTINUED_TABLE}: {out.strip()[:300]}") from exc
 
     def _seed_history(self) -> None:
         """
@@ -599,8 +629,8 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         low, high = self.history_range
         out = self._psql(
             "SELECT count(*) || '|' || COALESCE(sum(hashtext(product_id || '|' || username || '|' || "
-            f"COALESCE(description, '') || '|' || score::text)::bigint), 0) FROM {self._qualified} "
-            f"WHERE id BETWEEN {low} AND {high};",
+            f"COALESCE(description, '') || '|' || score::text || '|' || {self._CREATED_AT_SQL})::bigint), 0) "
+            f"FROM {self._qualified} r WHERE id BETWEEN {low} AND {high};",
             tuples_only=True,
         )
         try:
@@ -765,15 +795,15 @@ class ProductReviewsMissingIndexAstronomyShop(Problem):
         return [tuple(line.split("|", 1)) for line in out.splitlines() if "|" in line]
 
     def _review_data_signature(self, ids: list[int]) -> str:
-        """md5 over (id, product_id, username, description, score) of the given rows"""
+        """md5 over (id, product_id, username, description, score, created_at) of the given rows"""
         if not ids:
             return ""
         id_list = ",".join(str(i) for i in ids)
         out = self._psql(
             "SELECT md5(COALESCE(string_agg("
-            "id || '|' || product_id || '|' || username || '|' || COALESCE(description, '') || '|' || score, "
-            "',' ORDER BY id), '')) "
-            f"FROM {self._qualified} WHERE id IN ({id_list});",
+            "id || '|' || product_id || '|' || username || '|' || COALESCE(description, '') || '|' || score "
+            f"|| '|' || {self._CREATED_AT_SQL}, ',' ORDER BY id), '')) "
+            f"FROM {self._qualified} r WHERE id IN ({id_list});",
             tuples_only=True,
         ).strip()
         if _sql_failed(out):

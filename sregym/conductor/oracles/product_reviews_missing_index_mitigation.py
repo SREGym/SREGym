@@ -21,11 +21,13 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
          is a separate database that only holds what init.sql loaded.
 
       3. The review history seeded at injection is still there, row for row and
-         unchanged (count + content checksum over its id range). Deleting,
-         truncating or archiving the history makes the scans cheap without fixing
-         anything, and a postgres restart wipes it (the pod has no volume).
+         unchanged, dates included (count + content checksum over its id range).
+         Deleting, truncating or archiving the history makes the scans cheap without
+         fixing anything, and a postgres restart wipes it (the pod has no volume).
 
       4. The original reviews are still there and unchanged, and so is every catalog product.
+         So is catalog.discontinued_products, which says the history is real. Dropping or
+         emptying it doesn't make a lookup cheaper, but it's data loss like the rest.
 
       5. The table still enforces what it did at injection: id stays unique, every
          column keeps its NOT NULL and its default or identity, and the table gains no
@@ -71,6 +73,7 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
         "review_app_database_changed": FailureClass.AGENT_ERROR,
         "original_reviews_not_preserved": FailureClass.AGENT_ERROR,
         "catalog_products_not_preserved": FailureClass.AGENT_ERROR,
+        "discontinued_products_not_preserved": FailureClass.AGENT_ERROR,
         "postgres_scaled_out": FailureClass.AGENT_ERROR,
         # An OOM kill wipes the data too. The raised limit makes it unlikely, but an
         # agent's heavy queries could also cause it, so it can't be pinned on either.
@@ -142,6 +145,18 @@ class ProductReviewsMissingIndexMitigationOracle(MitigationOracle):
             reason = f"{len(missing)} of {len(p.catalog_ids)} catalog products are gone"
             logger.info(reason)
             return self.fail("catalog_products_not_preserved", message=reason)
+
+        listed, checksum = p.discontinued_fingerprint()
+        if (listed, checksum) != (p.discontinued_rows, p.discontinued_checksum):
+            reason = (
+                f"{p.DISCONTINUED_TABLE} has {listed} rows ({p.discontinued_rows} at injection)"
+                if listed != p.discontinued_rows
+                else f"{p.DISCONTINUED_TABLE} has all its rows but their contents were changed"
+            )
+            logger.info(reason)
+            return self.fail(
+                "discontinued_products_not_preserved", message=reason, expected=p.discontinued_rows, found=listed
+            )
 
         # The table must still enforce what it did at injection. These can go while every row survives.
         rules = p.table_rules()

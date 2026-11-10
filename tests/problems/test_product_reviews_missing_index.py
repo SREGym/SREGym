@@ -393,6 +393,8 @@ def healthy(problem, monkeypatch):
     problem.original_reviews_intact = Mock(return_value=(True, "intact"))
     problem.postgres_pod_count = Mock(return_value=1)
     problem.missing_catalog_products = Mock(return_value=[])
+    problem.discontinued_rows, problem.discontinued_checksum = 2_700, 11
+    problem.discontinued_fingerprint = Mock(return_value=(2_700, 11))
     problem.table_rules_at_inject = dict(TABLE_RULES)
     problem.table_rules = Mock(return_value=dict(TABLE_RULES))
     problem.costs = {
@@ -541,6 +543,52 @@ def test_oracle_rejects_lost_catalog_products(healthy):
     assert (result["reason"], result["failure_class"]) == ("catalog_products_not_preserved", FailureClass.AGENT_ERROR)
 
 
+@pytest.mark.parametrize("found", [(0, 0), (2_699, 11), (2_700, 12)])  # dropped or emptied, one gone, rewritten
+def test_oracle_rejects_lost_or_changed_discontinued_products(healthy, found):
+    healthy.discontinued_fingerprint.return_value = found
+    result = verdict(healthy)
+    assert (result["reason"], result["failure_class"]) == (
+        "discontinued_products_not_preserved",
+        FailureClass.AGENT_ERROR,
+    )
+
+
+def test_discontinued_fingerprint_reads_a_dropped_table_as_empty(problem):
+    problem._psql = Mock(return_value="f\n")
+    assert problem.discontinued_fingerprint() == (0, 0)
+    assert problem._psql.call_count == 1
+
+
+def test_discontinued_fingerprint_counts_and_checksums_the_rows(problem):
+    problem._psql = Mock(side_effect=["t\n", "2700|-123\n"])
+    assert problem.discontinued_fingerprint() == (2_700, -123)
+    assert "to_jsonb(d)" in problem._psql.call_args.args[0]  # a dropped column changes the checksum, no error
+
+
+@pytest.mark.parametrize("output", ["ERROR: connection to server at 127.0.0.1 failed", ""])
+def test_discontinued_fingerprint_raises_when_postgres_does_not_answer(problem, output):
+    problem._psql = Mock(return_value=output)
+    with pytest.raises(RuntimeError, match="discontinued_products"):
+        problem.discontinued_fingerprint()
+
+
+def test_discontinued_seed_records_the_fingerprint(problem):
+    rows = Problem.discontinued_csv(problem.catalog_ids)[1]
+    problem._psql = Mock(side_effect=[f"COPY {rows}\n", "t\n", f"{rows}|99\n"])
+    problem._seed_discontinued_products()
+    assert (problem.discontinued_rows, problem.discontinued_checksum) == (rows, 99)
+
+
+def test_review_checksums_cover_the_review_dates(problem):
+    problem.history_range = (51, 100)
+    problem._psql = Mock(return_value="50|7\n")
+    problem.history_fingerprint()
+    assert "to_jsonb(r) ->> 'created_at'" in problem._psql.call_args.args[0]
+    problem._psql = Mock(return_value="d41d8cd98f00b204e9800998ecf8427e\n")
+    problem._review_data_signature([1, 2])
+    assert "to_jsonb(r) ->> 'created_at'" in problem._psql.call_args.args[0]
+
+
 def test_missing_catalog_products_ignores_new_ones(problem):
     problem._catalog_ids = Mock(return_value=["OLJCESPC7Z", "NEWPRODUCT"])
     assert problem.missing_catalog_products() == ["66VCHSJNUP"]
@@ -558,6 +606,7 @@ def test_oracle_ignores_a_column_added_after_injection(healthy):
         "history_fingerprint",
         "original_reviews_intact",
         "missing_catalog_products",
+        "discontinued_fingerprint",
         "table_rules",
         "lookup_costs",
     ],
