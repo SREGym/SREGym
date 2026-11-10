@@ -23,6 +23,7 @@ from sregym.service.apps.deathstarbench.application import (
     ScaledHotelReservationApplication,
     ScaledSocialNetworkApplication,
 )
+from sregym.service.apps.dependency_track.application import DependencyTrack
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.apps.flight_ticket import FlightTicket
 from sregym.service.apps.frappe.application import Frappe
@@ -134,6 +135,9 @@ APPLICATIONS = (
     ),
     AppDefinition("frappe", Frappe, Frappe.metadata_file, service_port=8000),
     AppDefinition("saleor", Saleor, Saleor.metadata_file, service_port=8000),
+    AppDefinition(
+        "dependency-track", DependencyTrack, DependencyTrack.METADATA, ("dependency_track",), service_port=8080
+    ),
     AppDefinition("slack-spine", SlackSpine, SlackSpine.metadata_file, ("slack_spine",), service_port=8000),
 )
 
