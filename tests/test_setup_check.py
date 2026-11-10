@@ -569,3 +569,29 @@ def test_every_host_the_deploy_downloads_from_is_checked():
     assert len(used) >= 3, f"the patterns no longer find the deploy's download URLs: {used}"
     missing = used - set(setup_check.DOWNLOAD_HOSTS)
     assert not missing, f"add these hosts to DOWNLOAD_HOSTS in sregym/setup_check.py: {sorted(missing)}"
+
+
+def _probed_hosts(check, monkeypatch):
+    probed = []
+    monkeypatch.setattr(setup_check, "_probe_host", lambda host: probed.append(host) or ("", 0.01))
+    check.check_internet()
+    return probed
+
+
+def test_internet_check_includes_the_agents_model_api(repo, monkeypatch):
+    check, _ = make(repo, agent="stratus", model="anthropic/claude-sonnet-4-6", env={"ANTHROPIC_API_KEY": "x"})
+    check.check_agent()
+    probed = _probed_hosts(check, monkeypatch)
+    assert "api.anthropic.com" in probed
+    assert set(setup_check.DOWNLOAD_HOSTS) <= set(probed)
+
+
+def test_internet_check_includes_chaos_mesh_with_noise(repo, monkeypatch):
+    check, _ = make(repo, noise=True)
+    assert "charts.chaos-mesh.org" in _probed_hosts(check, monkeypatch)
+
+
+def test_internet_check_adds_no_model_host_for_model_free_agents(repo, monkeypatch):
+    check, _ = make(repo, agent="autosubmit")
+    check.check_agent()
+    assert sorted(_probed_hosts(check, monkeypatch)) == sorted(setup_check.DOWNLOAD_HOSTS)

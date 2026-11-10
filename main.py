@@ -1369,6 +1369,7 @@ if __name__ == "__main__":
                     profile=args.profile,
                     internet_access=args.internet_access,
                     use_external_harness=args.use_external_harness,
+                    noise=args.noise,
                     live_judge=not args.check_setup_offline,
                 ),
                 console=console,

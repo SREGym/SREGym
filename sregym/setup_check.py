@@ -90,6 +90,8 @@ DOWNLOAD_HOSTS = (
     "ghcr.io",
     "registry-1.docker.io",
 )
+# --noise installs Chaos Mesh from its own chart repo.
+NOISE_HOSTS = ("charts.chaos-mesh.org",)
 NETWORK_TIMEOUT_S = 5
 # A lookup slower than this rarely fails alone, but Helm and image pulls make
 # many of them during a deploy, and some will time out.
@@ -125,6 +127,7 @@ class SetupCheckOptions:
     profile: str = "full"
     internet_access: str = "filtered"
     use_external_harness: bool = False
+    noise: bool = False
     live_judge: bool = True
     environment: dict[str, str] = field(default_factory=lambda: dict(os.environ))
 
@@ -622,8 +625,9 @@ class SetupChecker:
         proxy = next((self.env[v] for v in ("HTTPS_PROXY", "https_proxy") if self.env.get(v)), None)
         if proxy:
             return CheckResult(name, Status.SKIP, f"traffic goes through the proxy {proxy}, so this was not tested")
-        with ThreadPoolExecutor(max_workers=len(DOWNLOAD_HOSTS)) as pool:
-            results = dict(zip(DOWNLOAD_HOSTS, pool.map(_probe_host, DOWNLOAD_HOSTS), strict=True))
+        hosts = list(dict.fromkeys([*DOWNLOAD_HOSTS, *self._run_specific_hosts()]))
+        with ThreadPoolExecutor(max_workers=len(hosts)) as pool:
+            results = dict(zip(hosts, pool.map(_probe_host, hosts), strict=True))
         failed = {host: error for host, (error, _) in results.items() if error}
         if failed:
             listed = "; ".join(f"{host}: {error}" for host, error in failed.items())
@@ -631,7 +635,7 @@ class SetupChecker:
             fix = (
                 "DNS is not answering. Check your network or DNS server (resolvectl status), then retry"
                 if dns
-                else "Check your network, VPN or firewall; a deploy downloads Helm charts and images from these hosts"
+                else "Check your network, VPN or firewall; a run downloads charts and images and calls the model API"
             )
             return CheckResult(name, Status.FAIL, f"cannot reach {listed}", fix)
         slowest_host, (_, slowest) = max(results.items(), key=lambda item: item[1][1])
@@ -643,7 +647,25 @@ class SetupChecker:
                 "Helm chart and image downloads may time out during deploy. Check your DNS server "
                 "(resolvectl status) or switch to a faster one",
             )
-        return CheckResult(name, Status.OK, f"reached {len(results)} hosts a deploy downloads from")
+        return CheckResult(name, Status.OK, f"reached {len(results)} hosts this run needs: " + ", ".join(results))
+
+    def _run_specific_hosts(self) -> list[str]:
+        """Hosts this run needs beyond every deploy's: the agent's model API and --noise."""
+        hosts = list(NOISE_HOSTS) if self.options.noise else []
+        reg = self._agent_reg
+        if reg is None or self.options.agent in MODEL_FREE_AGENTS or self.options.use_external_harness:
+            return hosts
+        from sregym.service.internet_policy import InternetPolicy
+        from sregym.service.provider_endpoints import provider_endpoint_rules
+
+        # The filtered-mode allowlist names exactly the model hosts the agent calls; it
+        # applies in open mode too, where the agent calls the same API without a filter.
+        policy = InternetPolicy.from_mode("filtered", agent_name=reg.name, model_id=self.options.model)
+        try:
+            rules = provider_endpoint_rules(policy, self.env, codex_subscription_auth=_codex_logged_in(self.env))
+        except ValueError:
+            return hosts  # unknown provider: reported by the allowlist check
+        return hosts + sorted({r.host for r in rules if r.host != "host.docker.internal"})
 
     # --------------------------------------------------------------------- run
 
