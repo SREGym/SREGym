@@ -37,6 +37,7 @@ from sregym.conductor.problems.apps.gitlab.notification_intermittent import GitL
 from sregym.conductor.problems.apps.gitlab.notification_unannounced import (
     GitLabNotificationUnannouncedAmbiguityProblem,
 )
+from sregym.conductor.problems.apps.infrahub.redis_restart_merge_lock import InfrahubRedisRestartWedgedMergeLock
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
 from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
@@ -227,6 +228,8 @@ class ProblemRegistry:
             # ==================== TRAIN TICKET FAULT INJECTOR ====================
             "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,
             "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
+            # ==================== INFRAHUB (UPSTREAM CONCURRENCY BUGS) ====================
+            "infrahub_redis_restart_wedged_merge_lock": InfrahubRedisRestartWedgedMergeLock,
             # ==================== HARDWARE FAULT INJECTOR ====================
             "silent_data_corruption": SilentDataCorruption,
             "latent_sector_error": LatentSectorError,

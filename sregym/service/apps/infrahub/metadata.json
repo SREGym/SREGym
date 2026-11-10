@@ -1,0 +1,13 @@
+{
+  "Name": "Infrahub",
+  "Namespace": "infrahub",
+  "Desc": "OpsMill Infrahub 1.11.9, a graph-based infrastructure source of truth with branches and versioned schemas, deployed like its production docker-compose: infrahub-server (gunicorn, 4 API workers) behind the infrahub-server Service, two Prefect task-worker pods that run Infrahub's background flows, the Prefect task-manager with its PostgreSQL database (task-manager-db), Neo4j (database), RabbitMQ (message-queue) and Redis (cache). The inventory-sync service records the network team's devices (NetworkDevice) and their modules (NetworkModule) in Infrahub through the GraphQL API. {changes} The admin API token is in the infrahub-credentials Secret (key admin-token); send it as the X-INFRAHUB-KEY header.",
+  "frontend_service": "infrahub-server",
+  "frontend_port": 8000,
+  "Supported Operations": [
+    "Create and read NetworkDevice and NetworkModule objects through GraphQL (POST /graphql/main)",
+    "Inspect and load schemas (GET /api/schema/<kind>, POST /api/schema/load)",
+    "Create, change and merge branches (BranchCreate, BranchMerge)",
+    "Run Infrahub's maintenance CLI (infrahub ...) inside the server or worker pods"
+  ]
+}
