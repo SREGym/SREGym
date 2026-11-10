@@ -250,7 +250,7 @@ def test_judge_ping_failure_is_reported(repo, monkeypatch):
 
 
 def test_busy_port_is_a_warning(repo, monkeypatch):
-    monkeypatch.setattr(setup_check, "_port_in_use", lambda port: port == 8000)
+    monkeypatch.setattr(setup_check, "_port_in_use", lambda port, host="0.0.0.0": port == 8000)
     result = make(repo)[0].check_ports()
     assert result.status == Status.WARN
     assert "8000 (API_PORT)" in result.detail
@@ -268,7 +268,7 @@ def test_exit_code_reflects_blockers(monkeypatch):
 
 
 def test_setup_check_never_runs_mutating_commands(repo, monkeypatch):
-    monkeypatch.setattr(setup_check, "_port_in_use", lambda port: False)
+    monkeypatch.setattr(setup_check, "_port_in_use", lambda port, host="0.0.0.0": False)
     responses = {
         "uv --version": (0, "uv 0.13.7"),
         "docker info": (0, json.dumps({"NCPU": 16, "MemTotal": 32 * 1024**3})),
@@ -441,7 +441,7 @@ def test_report_shows_brackets_in_details_literally():
 
 
 def test_free_ports_message_names_the_ports_in_use_by_this_run(repo, monkeypatch):
-    monkeypatch.setattr(setup_check, "_port_in_use", lambda port: False)
+    monkeypatch.setattr(setup_check, "_port_in_use", lambda port, host="0.0.0.0": False)
     check, _ = make(repo, env={"API_PORT": "8100"})
     result = check.check_ports()
     assert result.status == Status.OK
@@ -464,3 +464,19 @@ def test_missing_agent_registry_override_is_a_blocker(repo, monkeypatch):
     [result] = make(repo)[0].check_agent()
     assert result.status == Status.FAIL
     assert "SREGYM_AGENT_REGISTRY" in result.detail
+
+
+def test_port_check_uses_the_api_bind_host(repo, monkeypatch):
+    seen = []
+    monkeypatch.setattr(setup_check, "_port_in_use", lambda port, host="0.0.0.0": seen.append((port, host)) or False)
+    make(repo, env={"API_BIND_HOST": "127.0.0.1"})[0].check_ports()
+    assert seen == [(8000, "127.0.0.1"), (9954, "0.0.0.0"), (16443, "0.0.0.0")]
+
+
+def test_listener_on_loopback_counts_as_in_use():
+    import socket
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        assert setup_check._port_in_use(listener.getsockname()[1])

@@ -468,7 +468,14 @@ class SetupChecker:
 
     def check_ports(self) -> CheckResult:
         ports = [(variable, int(self.env.get(variable) or default)) for variable, default in HOST_PORTS]
-        busy = [f"{port} ({variable})" for variable, port in ports if _port_in_use(port)]
+        # The API binds API_BIND_HOST like check_api_port_available(); the other two can listen on
+        # every interface, and a wildcard bind conflicts with a listener on any address.
+        api_host = self.env.get("API_BIND_HOST", "0.0.0.0")
+        busy = [
+            f"{port} ({variable})"
+            for variable, port in ports
+            if _port_in_use(port, api_host if variable == "API_PORT" else "0.0.0.0")
+        ]
         if busy:
             return CheckResult(
                 "Host ports",
@@ -703,11 +710,13 @@ def _litellm_credentials(name: str, model: str, env: dict[str, str]) -> CheckRes
     return CheckResult(name, Status.OK, f"credentials found for {model}")
 
 
-def _port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+def _port_in_use(port: int, host: str = "0.0.0.0") -> bool:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        # Like uvicorn, ignore a socket an earlier run left in TIME_WAIT.
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            sock.bind(("127.0.0.1", port))
+            sock.bind((host, port))
         except OSError:
             return True
     return False
