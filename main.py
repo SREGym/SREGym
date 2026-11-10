@@ -30,6 +30,7 @@ from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents, registry_path
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
+from sregym.conductor.hooks import AttemptHookError, load_hooks
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
@@ -495,6 +496,7 @@ def driver_loop(
                 # start_problem waits out pod readiness before it raises, and
                 # the retry then tears down and redeploys the whole problem.
                 deploy_attempts = 0
+                hook_failed = ""
                 for deploy_attempt in range(1, max_deploy_retries + 1):
                     check_interrupted()
                     deploy_attempts = deploy_attempt
@@ -510,6 +512,10 @@ def driver_loop(
                             console.log(
                                 "⛔ Image platform failures require a compatible image; skipping deploy retries"
                             )
+                            break
+                        if isinstance(e, AttemptHookError):
+                            hook_failed = str(e)
+                            console.log("⛔ A hook refused the attempt; redeploying would not change that")
                             break
                         if deploy_attempt < max_deploy_retries:
                             console.log("🧹 Cleaning up before retry...")
@@ -545,6 +551,8 @@ def driver_loop(
                         "deploy_failed": True,
                         "deploy_attempts": deploy_attempts,
                     }
+                    if hook_failed:
+                        snapshot["hook_failed"] = hook_failed
                     for stage, outcome in conductor.results.items():
                         if isinstance(outcome, dict):
                             for key, value in outcome.items():
@@ -1058,6 +1066,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     conductor = Conductor(
         config=conductor_config,
         judge_preflight=None if args.use_external_harness else run_judge_preflight_check,
+        hooks=load_hooks(agent_reg.hooks) if agent_reg else None,
     )
 
     suite = getattr(args, "suite", None)

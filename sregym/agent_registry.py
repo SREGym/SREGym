@@ -40,6 +40,9 @@ class AgentRegistration:
     # MCP server (its /kubectl tools), so its only route to the cluster is whatever MCP server it
     # is given (e.g. Radar). Default unchanged.
     cluster_access: bool = True
+    # "module:attribute" of an object with before_fault_injection and/or
+    # after_fault_injection; see sregym.conductor.hooks. Imported by main.py.
+    hooks: str | None = None
 
 
 def _ensure_file(path: Path):
@@ -61,6 +64,7 @@ def list_agents(path: Path = DEFAULT_REG_PATH) -> dict[str, AgentRegistration]:
             agent_version=a.get("agent_version"),
             container_isolation=a.get("container_isolation", True),
             cluster_access=a.get("cluster_access", True),
+            hooks=a.get("hooks"),
         )
     return out
 
