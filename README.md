@@ -88,7 +88,7 @@ For existing clusters, see the [upgrade and baseline instructions](./docs/networ
 
 #### Check your setup first
 
-Add `--check-setup` to the command you plan to run. It checks the tools, Docker, the cluster, the network policy, whether agent containers can reach the host, and the agent and judge credentials for that exact configuration. It prints a fix for each problem and exits without changing anything (the host check starts one throwaway container from the agent image):
+Add `--check-setup` to the command you plan to run. It checks the tools, Docker, the cluster, the network policy, whether agent containers can reach the host, and the agent and judge credentials for that exact configuration. It prints a fix for each problem and exits without changing anything; the two container checks start short-lived containers from the agent image and remove them afterwards:
 
 ```bash
 uv run main.py --agent codex --model gpt-5 --profile svelte --check-setup

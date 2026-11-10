@@ -5,7 +5,9 @@ A benchmark run discovers most setup problems late: a kind node without
 adminnetworkpolicy tier fails when the egress boundary is installed, and a
 missing judge credential fails after the agent image is built. ``--check-setup``
 runs those same checks up front, in a few seconds, and says how to fix each
-one. It does not create, change, or delete anything.
+one. It does not change the machine or the cluster: the only things it
+creates are two short-lived containers (started with --rm and
+--pull=never) and one temp folder, which it removes afterwards.
 
 Run it with the flags you would pass to a benchmark run::
 
