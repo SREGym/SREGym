@@ -140,6 +140,10 @@ class Conductor:
         self.waiting_for_agent: bool = False
         self._evaluating: bool = False  # True while a submission is being evaluated
         self.fault_injected: bool = False
+        # Ground truth for the injected fault, kept in memory until the attempt
+        # publishes: the problem object is gone by then, and the spec names the
+        # faulty component, so it must not be on disk while the agent runs.
+        self.fault_spec: dict | None = None
 
     @property
     def current_problem(self):
@@ -260,6 +264,7 @@ class Conductor:
         self._evaluating = False
         self._accepting_submissions = False
         self.fault_injected = False
+        self.fault_spec = None
 
         if not self.tasklist:
             self.logger.warning("Empty tasklist; no stages configured for this problem.")
@@ -332,6 +337,13 @@ class Conductor:
             mitigation_oracle.capture_baseline()
 
         problem.inject_fault()
+        # getattr throughout: tests call this on bare conductors and stand-in problems.
+        self.fault_spec = {
+            "problem_id": getattr(self, "problem_id", None),
+            "namespace": getattr(problem, "namespace", None),
+            "root_cause": getattr(problem, "root_cause", None),
+            "fault_injected_at": time.time(),
+        }
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
 
