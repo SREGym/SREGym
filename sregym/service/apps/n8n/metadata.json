@@ -1,0 +1,11 @@
+{
+    "Name": "n8n",
+    "Namespace": "n8n",
+    "Desc": "n8n 2.43.5 workflow automation in queue mode, deployed with the official n8n-hosting Helm chart (release `n8n`): the n8n-main Deployment (editor, REST API and webhooks) and the n8n-worker Deployment (two pods, concurrency 10, each with an n8nio/runners task-runner sidecar), with PostgreSQL (`postgres`, database `n8n`) and Redis (`redis`, the job queue). n8n runs the accounts-payable team's published workflow \"Supplier invoice payment\": AP clerks approve supplier invoices in payables-portal, and the ERP posts each approved invoice to the production webhook /webhook/invoice-payments (re-sending a post that fails); n8n schedules the payout at payments-gateway, checks the payout with the bank a few seconds later and marks the invoice paid in payables-portal. payables-portal (port 8080, /api/invoices) keeps the approved invoices, their payment status and history. payments-gateway (port 8080, /v1/payouts) is the bank API: a payout settles 24 hours after it is scheduled and can be cancelled until then (POST /v1/payouts/<id>/cancel). The n8n owner login (email, password) is in the n8n-owner Secret.",
+    "Supported Operations": [
+        "Approve invoices in payables-portal and post them to the production webhook",
+        "Inspect invoices in payables-portal and payouts in payments-gateway",
+        "Cancel scheduled payouts at payments-gateway",
+        "Inspect and edit workflows and executions in n8n (editor, REST API, CLI in the n8n pods, PostgreSQL)"
+    ]
+}

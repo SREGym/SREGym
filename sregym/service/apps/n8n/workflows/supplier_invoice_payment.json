@@ -1,0 +1,170 @@
+{
+ "name": "Supplier invoice payment",
+ "nodes": [
+  {
+   "id": "8861adfd-5030-5083-9cd0-9439625c7c14",
+   "name": "Approved invoice",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    0,
+    300
+   ],
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "invoice-payments",
+    "responseMode": "onReceived",
+    "options": {}
+   },
+   "webhookId": "f9cd645d-6a52-51fa-ac14-daed0ef5bbdf"
+  },
+  {
+   "id": "2cfaa130-0888-5529-8cdf-4e0ab1f66f4c",
+   "name": "Schedule payout",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    220,
+    300
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "http://payments-gateway:8080/v1/payouts",
+    "options": {},
+    "sendBody": true,
+    "bodyParameters": {
+     "parameters": [
+      {
+       "name": "reference",
+       "value": "={{ $('Approved invoice').first().json.body.id }}"
+      },
+      {
+       "name": "beneficiary",
+       "value": "={{ $('Approved invoice').first().json.body.vendor }}"
+      },
+      {
+       "name": "iban",
+       "value": "={{ $('Approved invoice').first().json.body.iban }}"
+      },
+      {
+       "name": "amount",
+       "value": "={{ $('Approved invoice').first().json.body.amount }}"
+      },
+      {
+       "name": "currency",
+       "value": "={{ $('Approved invoice').first().json.body.currency }}"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "8f455e47-d85e-52fc-82d0-3c71e548ca11",
+   "name": "Bank confirmation",
+   "type": "n8n-nodes-base.wait",
+   "typeVersion": 1.1,
+   "position": [
+    440,
+    300
+   ],
+   "parameters": {
+    "resume": "timeInterval",
+    "amount": 3,
+    "unit": "seconds"
+   },
+   "webhookId": "54943cb8-ea44-5681-a1b8-ee8d7218161e"
+  },
+  {
+   "id": "1dd9b40e-6ef5-586c-981d-be01997b183d",
+   "name": "Payout status",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    660,
+    300
+   ],
+   "parameters": {
+    "method": "GET",
+    "url": "=http://payments-gateway:8080/v1/payouts/{{ $('Schedule payout').first().json.id }}",
+    "options": {}
+   }
+  },
+  {
+   "id": "8181947c-282c-5ba4-906b-fe35ca637106",
+   "name": "Mark invoice paid",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    880,
+    300
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "=http://payables-portal:8080/api/invoices/{{ $('Approved invoice').first().json.body.id }}/paid",
+    "options": {},
+    "sendBody": true,
+    "bodyParameters": {
+     "parameters": [
+      {
+       "name": "payout_id",
+       "value": "={{ $json.id }}"
+      },
+      {
+       "name": "payout_status",
+       "value": "={{ $json.status }}"
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "connections": {
+  "Approved invoice": {
+   "main": [
+    [
+     {
+      "node": "Schedule payout",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Schedule payout": {
+   "main": [
+    [
+     {
+      "node": "Bank confirmation",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Bank confirmation": {
+   "main": [
+    [
+     {
+      "node": "Payout status",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Payout status": {
+   "main": [
+    [
+     {
+      "node": "Mark invoice paid",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ }
+}
