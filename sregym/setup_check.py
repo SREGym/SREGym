@@ -461,11 +461,8 @@ class SetupChecker:
     # ------------------------------------------------------------------- ports
 
     def check_ports(self) -> CheckResult:
-        busy = []
-        for variable, default in HOST_PORTS:
-            port = int(self.env.get(variable) or default)
-            if _port_in_use(port):
-                busy.append(f"{port} ({variable})")
+        ports = [(variable, int(self.env.get(variable) or default)) for variable, default in HOST_PORTS]
+        busy = [f"{port} ({variable})" for variable, port in ports if _port_in_use(port)]
         if busy:
             return CheckResult(
                 "Host ports",
@@ -473,7 +470,7 @@ class SetupChecker:
                 "already in use: " + ", ".join(busy),
                 "Stop the other process or set the listed variable to a free port",
             )
-        return CheckResult("Host ports", Status.OK, "8000, 9954 and 16443 are free (or moved via env)")
+        return CheckResult("Host ports", Status.OK, ", ".join(str(port) for _, port in ports) + " are free")
 
     def check_host_reachable(self) -> CheckResult:
         """Can an agent container open a connection back to the host's run ports?

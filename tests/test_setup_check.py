@@ -438,3 +438,11 @@ def test_report_shows_brackets_in_details_literally():
     text = console.export_text()
     assert "POST [/v1/chat] failed: [bold]" in text
     assert "set [JUDGE_API_KEY]" in text
+
+
+def test_free_ports_message_names_the_ports_in_use_by_this_run(repo, monkeypatch):
+    monkeypatch.setattr(setup_check, "_port_in_use", lambda port: False)
+    check, _ = make(repo, env={"API_PORT": "8100"})
+    result = check.check_ports()
+    assert result.status == Status.OK
+    assert result.detail == "8100, 9954, 16443 are free"
