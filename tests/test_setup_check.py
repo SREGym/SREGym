@@ -539,3 +539,33 @@ def test_hung_dns_lookup_times_out(monkeypatch):
     error, _ = setup_check._probe_host("github.com")
     assert "does not resolve" in error
     assert time.monotonic() - start < 0.5
+
+
+# Deploy code that every run executes, whatever the problem.
+EVERY_RUN_DEPLOY_SOURCES = (
+    "sregym/conductor/conductor.py",
+    "sregym/service/telemetry/loki.py",
+    "sregym/observer/prometheus/prometheus/Chart.yaml",
+)
+DOWNLOAD_URL_PATTERNS = (
+    r"repository:\s*(https://\S+)",  # Helm chart dependencies
+    r"helm repo add \S+ (https://\S+?)[\s\"']",  # shell form
+    r'"repo", "add", "[^"]+", "(https://[^"]+)"',  # argv form
+    r"kubectl apply -f (https://\S+?)[\s\"']",  # remote manifests
+)
+
+
+def test_every_host_the_deploy_downloads_from_is_checked():
+    import re
+    from urllib.parse import urlparse
+
+    root = Path(setup_check.REPO_ROOT)
+    used = {
+        urlparse(url).hostname
+        for source in EVERY_RUN_DEPLOY_SOURCES
+        for pattern in DOWNLOAD_URL_PATTERNS
+        for url in re.findall(pattern, (root / source).read_text())
+    }
+    assert len(used) >= 3, f"the patterns no longer find the deploy's download URLs: {used}"
+    missing = used - set(setup_check.DOWNLOAD_HOSTS)
+    assert not missing, f"add these hosts to DOWNLOAD_HOSTS in sregym/setup_check.py: {sorted(missing)}"

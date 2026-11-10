@@ -76,12 +76,17 @@ for port in sys.argv[1:]:
     print(port, state)
 """
 
-# Hosts a deploy downloads from: Helm chart indexes, the chart archives they
-# point to on GitHub, and the registries that serve container images.
+# Hosts every deploy downloads from: the chart repos and manifests of the
+# stack each run installs (Prometheus, Loki, OpenEBS), the GitHub hosts that
+# serve their chart archives, and the registries that serve container images.
+# tests/test_setup_check.py fails if that deploy code starts using a host that
+# is missing here. Apps and options can add more (e.g. --noise uses Chaos Mesh).
 DOWNLOAD_HOSTS = (
     "github.com",
+    "release-assets.githubusercontent.com",
     "prometheus-community.github.io",
     "grafana.github.io",
+    "openebs.github.io",
     "ghcr.io",
     "registry-1.docker.io",
 )
@@ -638,7 +643,7 @@ class SetupChecker:
                 "Helm chart and image downloads may time out during deploy. Check your DNS server "
                 "(resolvectl status) or switch to a faster one",
             )
-        return CheckResult(name, Status.OK, f"reached {len(results)} download hosts (github.com, ghcr.io, chart repos)")
+        return CheckResult(name, Status.OK, f"reached {len(results)} hosts a deploy downloads from")
 
     # --------------------------------------------------------------------- run
 
