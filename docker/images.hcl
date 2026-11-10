@@ -293,8 +293,8 @@ target "social-network" {
 
 target "openresty-thrift" {
   inherits = ["_common"]
-  context = "SREGym-applications/socialNetwork/docker/openresty-thrift"
-  dockerfile = "xenial/Dockerfile"
+  context = "SREGym-applications/socialNetwork"
+  dockerfile = "docker/openresty-thrift/xenial/Dockerfile"
   tags = ["${REGISTRY}/openresty-thrift:${IMAGE_TAG}"]
 }
 
