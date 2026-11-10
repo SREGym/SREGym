@@ -411,6 +411,8 @@ class SetupChecker:
         if opts.use_external_harness:
             return CheckResult(name, Status.SKIP, "not used with --use-external-harness")
         if opts.judge_backend != "api":
+            # Reuse the run's own credential rule so this check cannot drift from it. It reads
+            # os.environ, which is what a run started from this shell would see.
             from sregym.service.judge_runtime import _subscription_environment
 
             try:
