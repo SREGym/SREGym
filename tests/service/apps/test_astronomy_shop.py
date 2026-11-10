@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 import yaml
@@ -5,6 +6,8 @@ import yaml
 from sregym.service.apps import astronomy_shop
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.helm import Helm
+
+CHART = Path(__file__).resolve().parents[3] / "SREGym-applications/astronomy-shop/charts/opentelemetry-demo"
 
 
 def _app(architectures: set[str]) -> AstronomyShop:
@@ -76,6 +79,17 @@ def test_full_profile_caps_ui_descriptors_without_increasing_memory():
     ui = values["components"]["flagd"]["sidecarContainers"][0]
     assert ui["name"] == "flagd-ui"
     assert ui["resources"]["limits"]["memory"] == "250Mi"
+
+
+def test_flagd_service_exposes_ofrep_beside_grpc():
+    # The 2.2.0 load-generator evaluates flags over OFREP (port 8016 unless
+    # FLAGD_OFREP_PORT says otherwise). The chart keeps the gRPC port under
+    # service.port, so the fix adds OFREP through ports and both are rendered.
+    fixes = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    assert fixes["components"]["flagd"]["ports"] == [{"name": "ofrep", "value": 8016}]
+    upstream = yaml.safe_load((CHART / "values.yaml").read_text())
+    assert upstream["components"]["flagd"]["service"]["port"] == 8013
+    assert "ports" not in upstream["components"]["flagd"]
 
 
 def test_arm_go_services_have_memory_headroom():

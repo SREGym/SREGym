@@ -1,5 +1,14 @@
+import json
+import os
+import shutil
+import subprocess
+import threading
+import time
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
+import pytest
 from kubernetes import client
 
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import (
@@ -52,7 +61,7 @@ class _KubeCtl:
     def get_deployment(self, name, namespace):
         return self.deployment
 
-    def exec_command(self, command):
+    def exec_command_checked(self, command, timeout=None):
         self.commands.append(command)
         return ""
 
@@ -143,3 +152,93 @@ def test_restore_requires_a_captured_baseline():
         assert "captured baseline" in str(exc)
     else:
         raise AssertionError("Expected recovery without a baseline to fail")
+
+
+def test_python_program_is_not_expanded_by_the_host_shell(tmp_path):
+    import sys
+
+    stub = tmp_path / "kubectl"
+    stub.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+    stub.chmod(0o755)
+    kubectl = _KubeCtl(None)
+    kubectl.exec_command_checked = lambda command, **kwargs: subprocess.check_output(
+        command, shell=True, text=True, env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "PY": "host"}
+    )
+    problem = _problem(kubectl)
+    argv = json.loads(problem._traffic_python("print('literal $PY $(false) $!')"))
+    assert argv[:2] == ["exec", "deployment/load-generator"]
+    output = subprocess.check_output(argv[argv.index("--") + 1 :], text=True)
+    assert output.strip() == "literal $PY $(false) $!"
+
+
+def test_traffic_launch_program_uses_a_detached_checked_child():
+    from unittest.mock import Mock
+
+    problem = _problem(None)
+    problem.crafted_payload = "abc!"
+    problem.driver_interval_seconds = 0.05
+    problem._traffic_python = Mock()
+    problem._start_crafted_traffic()
+    source = problem._traffic_python.call_args.args[0]
+    compile(source, "traffic-launcher", "exec")
+    assert "subprocess.Popen" in source
+    assert "start_new_session=True" in source
+    assert "process.poll()" in source
+    assert "http://frontend-proxy:8080/?waf=abc!" in source
+
+
+@pytest.mark.skipif(shutil.which("perl") is None, reason="Perl is not installed")
+def test_safe_edge_proxy_preserves_post_headers_and_body(free_tcp_port):
+    received = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            received.append((self.path, self.headers.get("Host"), body))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    problem = _problem(None)
+    problem.regex_env, problem.bad_regex = "WAF_RULE_REGEX", "^([a-zA-Z]+)*$"
+    upstream_port = server.server_address[1]
+    process = subprocess.Popen(
+        ["perl", "-e", problem._edge_filter_script()],
+        env={
+            **os.environ,
+            "ENVOY_PORT": str(free_tcp_port),
+            "FRONTEND_HOST": "127.0.0.1",
+            "FRONTEND_PORT": str(upstream_port),
+            "WAF_RULE_REGEX": "^[A-Za-z]+$",
+        },
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        body = b'{"message":"a real write"}'
+        request = urllib.request.Request(f"http://127.0.0.1:{free_tcp_port}/api/write", data=body)
+        for _attempt in range(40):
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    assert response.read() == body
+                break
+            except ConnectionError:
+                time.sleep(0.05)
+            except urllib.error.URLError as exc:
+                if not isinstance(exc.reason, ConnectionRefusedError):
+                    raise
+                time.sleep(0.05)
+        else:
+            raise AssertionError("Edge proxy never became available")
+        assert received == [("/api/write", f"127.0.0.1:{upstream_port}", body)]
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+        server.shutdown()
+        server.server_close()
