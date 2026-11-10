@@ -52,7 +52,7 @@ The cluster is now ready to run SREGym.
 
 ## Troubleshooting
 
-Start with `uv run main.py --doctor`, adding the flags you plan to run with. It checks Docker, the cluster nodes, `/run/udev`, the Calico tier, whether agent containers can reach the host, and your credentials, and prints a fix for each problem. On Docker Engine with `ufw` enabled, the firewall drops traffic from containers to the host, so the agent never reaches the run API and waits until `--agent-timeout`. The doctor detects this and prints the `ufw allow` rule.
+Start with `uv run main.py --check-setup`, adding the flags you plan to run with. It checks Docker, the cluster nodes, `/run/udev`, the Calico tier, whether agent containers can reach the host, and your credentials, and prints a fix for each problem. On Docker Engine with `ufw` enabled, the firewall drops traffic from containers to the host, so the agent never reaches the run API and waits until `--agent-timeout`. The check detects this and prints the `ufw allow` rule.
 
 ### Docker issues
 
@@ -87,7 +87,7 @@ All KIND nodes share the host's `fs.inotify.max_user_instances` limit. When this
 
 On macOS, allocate at least 16 GB to Docker Desktop or OrbStack's Linux VM for
 the full Lite profile. Leave additional RAM for macOS and the agent. Docker
-Desktop on Linux also runs a VM with its own memory limit. `--doctor` warns when
+Desktop on Linux also runs a VM with its own memory limit. `--check-setup` warns when
 Docker has less memory than SREGym-Lite needs.
 
 WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.

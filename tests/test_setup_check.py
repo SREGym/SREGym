@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from sregym import doctor
-from sregym.doctor import CheckResult, Doctor, DoctorOptions, Status
+from sregym import setup_check
+from sregym.setup_check import CheckResult, SetupChecker, SetupCheckOptions, Status
 
 READY_NODE = {"metadata": {"name": "kind-worker"}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}
 NOT_READY_NODE = {
@@ -49,8 +49,8 @@ def repo(tmp_path: Path) -> Path:
 
 def make(repo, responses=None, env=None, **options):
     runner = FakeRunner(responses or {})
-    opts = DoctorOptions(environment=env or {}, live_judge=False, **options)
-    return Doctor(opts, runner=runner, repo_root=repo), runner
+    opts = SetupCheckOptions(environment=env or {}, live_judge=False, **options)
+    return SetupChecker(opts, runner=runner, repo_root=repo), runner
 
 
 def cluster(nodes):
@@ -84,7 +84,7 @@ def test_docker_down_skips_image_check(repo):
 
 
 def test_small_docker_vm_explains_the_cap(repo, monkeypatch):
-    monkeypatch.setattr(doctor, "_host_memory_gb", lambda: 15.0)
+    monkeypatch.setattr(setup_check, "_host_memory_gb", lambda: 15.0)
     info = {"ServerVersion": "28.5.1", "NCPU": 12, "MemTotal": 4 * 1024**3, "OperatingSystem": "Docker Desktop"}
     check, _ = make(repo, {"docker info": (0, json.dumps(info))})
     size = next(r for r in check.check_docker() if r.name == "Machine size")
@@ -141,7 +141,7 @@ def test_kubectl_noise_is_summarized():
         'E1106 14:21:38 memcache.go:265] "Unhandled Error" err="couldn\'t get current server API group list: '
         'Get \\"https://127.0.0.1:39829/api?timeout=32s\\": dial tcp 127.0.0.1:39829: connect: connection refused"'
     )
-    assert doctor._summarize_kubectl_error(noise) == "https://127.0.0.1:39829 refused the connection"
+    assert setup_check._summarize_kubectl_error(noise) == "https://127.0.0.1:39829 refused the connection"
 
 
 def test_missing_udev_is_a_blocker_on_full_profile(repo):
@@ -250,7 +250,7 @@ def test_judge_ping_failure_is_reported(repo, monkeypatch):
 
 
 def test_busy_port_is_a_warning(repo, monkeypatch):
-    monkeypatch.setattr(doctor, "_port_in_use", lambda port: port == 8000)
+    monkeypatch.setattr(setup_check, "_port_in_use", lambda port: port == 8000)
     result = make(repo)[0].check_ports()
     assert result.status == Status.WARN
     assert "8000 (API_PORT)" in result.detail
@@ -260,20 +260,21 @@ def test_exit_code_reflects_blockers(monkeypatch):
     from rich.console import Console
 
     console = Console(record=True, width=120)
-    monkeypatch.setattr(Doctor, "run_all", lambda self: [CheckResult("x", Status.WARN, "meh", "do y")])
-    assert doctor.run_doctor(DoctorOptions(environment={}), console=console) == 0
-    monkeypatch.setattr(Doctor, "run_all", lambda self: [CheckResult("x", Status.FAIL, "broken", "fix it")])
-    assert doctor.run_doctor(DoctorOptions(environment={}), console=console) == 1
+    monkeypatch.setattr(SetupChecker, "run_all", lambda self: [CheckResult("x", Status.WARN, "meh", "do y")])
+    assert setup_check.run_setup_check(SetupCheckOptions(environment={}), console=console) == 0
+    monkeypatch.setattr(SetupChecker, "run_all", lambda self: [CheckResult("x", Status.FAIL, "broken", "fix it")])
+    assert setup_check.run_setup_check(SetupCheckOptions(environment={}), console=console) == 1
     assert "1 blocker(s)" in console.export_text()
 
 
-def test_doctor_never_runs_mutating_commands(repo, monkeypatch):
-    monkeypatch.setattr(doctor, "_port_in_use", lambda port: False)
+def test_setup_check_never_runs_mutating_commands(repo, monkeypatch):
+    monkeypatch.setattr(setup_check, "_port_in_use", lambda port: False)
     responses = {
         "uv --version": (0, "uv 0.13.7"),
         "docker info": (0, json.dumps({"NCPU": 16, "MemTotal": 32 * 1024**3})),
         "docker image inspect": (0, "[]"),
         "docker exec": (0, ""),
+        "docker run --rm --pull=never --network=none": (0, "ok"),
         "docker run": (0, "8000 open\n9954 open\n16443 open\n"),
         "kubectl get tiers": (0, "tier/adminnetworkpolicy"),
         **cluster([READY_NODE]),
@@ -288,77 +289,6 @@ def test_doctor_never_runs_mutating_commands(repo, monkeypatch):
         assert not any(word in call.split() for word in ("apply", "delete", "create", "pull", "start", "patch"))
         if call.startswith("docker run"):  # the reachability probe: throwaway, never pulls
             assert "--rm" in call.split() and "--pull=never" in call.split()
-
-
-def _all_good(repo, monkeypatch, **overrides):
-    monkeypatch.setattr(doctor, "_port_in_use", lambda port: False)
-    responses = {
-        "docker info": (0, json.dumps({"NCPU": 16, "MemTotal": 32 * 1024**3})),
-        "docker exec": (0, ""),
-        "docker run": (0, "8000 open\n9954 open\n16443 open\n"),
-        "kubectl get tiers": (0, "tier/adminnetworkpolicy"),
-        **cluster([READY_NODE]),
-        **overrides,
-    }
-    return responses
-
-
-def test_pre_run_blocks_on_a_certain_failure(repo, monkeypatch):
-    responses = _all_good(repo, monkeypatch, **{"kubectl get tiers": (1, "NotFound")})
-    check, _ = make(repo, responses, env={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
-    check.options.pre_run = True
-    tier = next(r for r in check.run_all() if r.name == "Calico adminnetworkpolicy tier")
-    assert tier.status == Status.FAIL
-
-
-def test_pre_run_only_warns_on_inferred_credentials(repo, monkeypatch):
-    responses = _all_good(repo, monkeypatch)
-    check, _ = make(repo, responses, env={}, model="anthropic/claude-sonnet-4-6")
-    check.options.pre_run = True
-    results = check.run_all()
-    assert not [r for r in results if r.status == Status.FAIL], results
-    creds = next(r for r in results if r.name == "Agent credentials")
-    assert creds.status == Status.WARN
-
-
-def test_pre_run_skips_uv_and_image_and_judge_request(repo, monkeypatch):
-    def no_judge_requests():
-        raise AssertionError("the run's own judge preflight sends the test request")
-
-    monkeypatch.setattr("llm_backend.init_backend.get_llm_backend_for_judge", no_judge_requests)
-    responses = _all_good(repo, monkeypatch)
-    runner = FakeRunner(responses)
-    options = DoctorOptions(environment={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
-    monkeypatch.setattr(doctor, "Doctor", lambda opts: Doctor(opts, runner=runner, repo_root=repo))
-    from rich.console import Console
-
-    console = Console(record=True, width=120)
-    assert doctor.run_pre_run_doctor(options, console=console) is True
-    assert console.export_text() == ""  # a run that can start prints nothing extra
-    assert not [c for c in runner.calls if c.startswith(("uv ", "docker image"))]
-
-
-def test_pre_run_stops_and_explains_how_to_skip(repo, monkeypatch):
-    responses = _all_good(repo, monkeypatch, **{"kubectl get nodes": (1, "connection refused")})
-    runner = FakeRunner(responses)
-    monkeypatch.setattr(doctor, "Doctor", lambda opts: Doctor(opts, runner=runner, repo_root=repo))
-    from rich.console import Console
-
-    console = Console(record=True, width=120)
-    assert doctor.run_pre_run_doctor(DoctorOptions(environment={}), console=console) is False
-    text = console.export_text()
-    assert "--skip-doctor" in text
-    assert "Kubernetes cluster" in text
-    assert "Applications submodule" not in text  # passing checks are not listed
-
-
-def test_docker_is_not_required_without_agent_containers(repo, monkeypatch):
-    responses = _all_good(repo, monkeypatch, **{"docker info": (1, "Cannot connect to the Docker daemon")})
-    check, _ = make(repo, responses, env={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
-    check.options.pre_run = True
-    check.options.use_external_harness = True
-    docker_result = next(r for r in check.run_all() if r.name == "Docker")
-    assert docker_result.status == Status.WARN
 
 
 def test_custom_endpoint_is_ignored_for_agents_that_do_not_use_it(repo):
@@ -386,7 +316,7 @@ def test_judge_names_the_endpoint_it_will_use(repo):
     ],
 )
 def test_memory_advice_fits_the_host(repo, monkeypatch, host_gb, docker_gb, expected):
-    monkeypatch.setattr(doctor, "_host_memory_gb", lambda: host_gb)
+    monkeypatch.setattr(setup_check, "_host_memory_gb", lambda: host_gb)
     info = {"NCPU": 12, "MemTotal": int(docker_gb * 1024**3), "OperatingSystem": "Docker Desktop"}
     check, _ = make(repo, {"docker info": (0, json.dumps(info))}, profile="svelte")
     size = next(r for r in check.check_docker() if r.name == "Machine size")
@@ -395,9 +325,9 @@ def test_memory_advice_fits_the_host(repo, monkeypatch, host_gb, docker_gb, expe
 
 def test_kubectl_json_before_the_error_is_skipped():
     output = '{\n    "apiVersion": "v1",\n    "items": [],\n}\nThe connection to the server 127.0.0.1:37659 was refused - did you specify the right host or port?'
-    assert doctor._summarize_kubectl_error(output) == "127.0.0.1:37659 refused the connection"
+    assert setup_check._summarize_kubectl_error(output) == "127.0.0.1:37659 refused the connection"
     assert (
-        doctor._summarize_kubectl_error('{\n"items": []\n}\nerror: You must be logged in')
+        setup_check._summarize_kubectl_error('{\n"items": []\n}\nerror: You must be logged in')
         == "error: You must be logged in"
     )
 
@@ -469,21 +399,31 @@ def test_reachability_is_skipped_without_agent_containers(repo):
     assert not [c for c in runner.calls if c.startswith("docker run")]
 
 
-def test_firewalled_host_ports_block_a_run(repo, monkeypatch):
-    responses = _all_good(repo, monkeypatch, **{"docker run": (0, "8000 blocked\n9954 open\n16443 open\n")})
-    check, _ = make(repo, responses, env={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
-    check.options.pre_run = True
-    reach = next(r for r in check.run_all() if r.name == "Container to host")
-    assert reach.status == Status.FAIL
+def test_unshared_temp_folder_blocks_with_a_tmpdir_fix(repo):
+    denied = (
+        "docker: Error response from daemon: mounts denied:\n"
+        "The path /tmp/sregym-setup-check-x is not shared from the host and is not known to Docker."
+    )
+    responses = {**_docker_up(), "docker run": (125, denied)}
+    check, _ = make(repo, responses)
+    check.check_docker()
+    result = check.check_temp_mounts()
+    assert result.status == Status.FAIL
+    assert "File sharing" in result.fix and "export TMPDIR=" in result.fix
 
 
-def test_pre_run_is_silent_on_warnings(repo, monkeypatch):
-    runner = FakeRunner(_all_good(repo, monkeypatch))
-    monkeypatch.setattr(doctor, "_port_in_use", lambda port: True)  # a warning, not a blocker
-    monkeypatch.setattr(doctor, "Doctor", lambda opts: Doctor(opts, runner=runner, repo_root=repo))
-    from rich.console import Console
+def test_shared_temp_folder_passes_and_cleans_up(repo):
+    responses = {**_docker_up(), "docker run": (0, "ok")}
+    check, runner = make(repo, responses)
+    check.check_docker()
+    assert check.check_temp_mounts().status == Status.OK
+    [probe] = [c for c in runner.calls if c.startswith("docker run")]
+    mounted = probe.split("-v ")[1].split(":")[0]
+    assert not Path(mounted).exists()  # the probe folder is removed afterwards
 
-    console = Console(record=True, width=120)
-    options = DoctorOptions(environment={"ANTHROPIC_API_KEY": "x"}, model="anthropic/claude-sonnet-4-6")
-    assert doctor.run_pre_run_doctor(options, console=console) is True
-    assert console.export_text() == ""
+
+def test_temp_mount_check_is_skipped_without_agent_containers(repo):
+    check, runner = make(repo, _docker_up(), use_external_harness=True)
+    check.check_docker()
+    assert check.check_temp_mounts().status == Status.SKIP
+    assert not runner.calls[1:]

@@ -1233,7 +1233,7 @@ if __name__ == "__main__":
         help="Enable experimental Jev decision support for Codex (e.g. jev-latest). Requires TYPESAFE_API_KEY and --force-build.",
     )
     parser.add_argument(
-        "--doctor",
+        "--check-setup",
         action="store_true",
         help=(
             "Check that this machine is ready for a run with the other flags given (tools, Docker, cluster, "
@@ -1241,18 +1241,9 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--skip-doctor",
+        "--check-setup-offline",
         action="store_true",
-        default=os.environ.get("SREGYM_SKIP_DOCTOR") == "1",
-        help=(
-            "Do not run the setup checks at the start of a run (also SREGYM_SKIP_DOCTOR=1). By default a run "
-            "stops before deployment when a check shows it would fail"
-        ),
-    )
-    parser.add_argument(
-        "--doctor-offline",
-        action="store_true",
-        help="With --doctor, check judge credentials without sending the judge a test request",
+        help="With --check-setup, check judge credentials without sending the judge a test request",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -1348,12 +1339,12 @@ if __name__ == "__main__":
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
 
-    if args.doctor:
-        from sregym.doctor import DoctorOptions, run_doctor
+    if args.check_setup:
+        from sregym.setup_check import SetupCheckOptions, run_setup_check
 
         sys.exit(
-            run_doctor(
-                DoctorOptions(
+            run_setup_check(
+                SetupCheckOptions(
                     agent=args.agent,
                     model=args.model,
                     judge_model=args.judge_model,
@@ -1361,25 +1352,10 @@ if __name__ == "__main__":
                     profile=args.profile,
                     internet_access=args.internet_access,
                     use_external_harness=args.use_external_harness,
-                    live_judge=not args.doctor_offline,
+                    live_judge=not args.check_setup_offline,
                 ),
                 console=console,
             )
         )
-
-    if not args.skip_doctor:
-        from sregym.doctor import DoctorOptions, run_pre_run_doctor
-
-        doctor_options = DoctorOptions(
-            agent=args.agent,
-            model=args.model,
-            judge_model=args.judge_model,
-            judge_backend=args.judge_backend,
-            profile=args.profile,
-            internet_access=args.internet_access,
-            use_external_harness=args.use_external_harness,
-        )
-        if not run_pre_run_doctor(doctor_options, console=console):
-            sys.exit(1)
 
     main(args)

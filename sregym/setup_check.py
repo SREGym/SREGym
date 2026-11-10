@@ -3,13 +3,13 @@
 A benchmark run discovers most setup problems late: a kind node without
 /run/udev fails during OpenEBS setup, a cluster without the Calico
 adminnetworkpolicy tier fails when the egress boundary is installed, and a
-missing judge credential fails after the agent image is built. ``doctor``
+missing judge credential fails after the agent image is built. ``--check-setup``
 runs those same checks up front, in a few seconds, and says how to fix each
 one. It does not create, change, or delete anything.
 
 Run it with the flags you would pass to a benchmark run::
 
-    uv run main.py --doctor --agent codex --model gpt-5 --profile svelte
+    uv run main.py --agent codex --model gpt-5 --profile svelte --check-setup
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import tomllib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -50,19 +51,6 @@ SUBSCRIPTION_CREDENTIALS = {
     "copilot": ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
     "cursor": ("CURSOR_API_KEY",),
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"),
-}
-# Checks that, when they fail, mean a benchmark run would certainly fail too.
-# Each mirrors an error the run raises later (deploy, egress boundary, agent
-# lookup, allowlist). Every other failure only warns before a run.
-PRE_RUN_BLOCKERS = {
-    "Applications submodule",
-    "Docker",
-    "Kubernetes cluster",
-    "/run/udev on kind nodes",
-    "Calico adminnetworkpolicy tier",
-    "Agent",
-    "Filtered network allowlist",
-    "Container to host",
 }
 # Runs inside a throwaway agent container. A refused connection proves the
 # packets reached the host (nothing listens before a run starts); a timeout
@@ -106,7 +94,7 @@ class CheckResult:
 
 
 @dataclass
-class DoctorOptions:
+class SetupCheckOptions:
     agent: str = "stratus"
     model: str = "gpt-5"
     judge_model: str | None = None
@@ -115,8 +103,6 @@ class DoctorOptions:
     internet_access: str = "filtered"
     use_external_harness: bool = False
     live_judge: bool = True
-    # Set when the doctor runs automatically at the start of a benchmark run.
-    pre_run: bool = False
     environment: dict[str, str] = field(default_factory=lambda: dict(os.environ))
 
 
@@ -134,8 +120,8 @@ def run_command(argv: list[str], timeout: float = 20) -> tuple[int, str]:
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
-class Doctor:
-    def __init__(self, options: DoctorOptions, runner: Runner = run_command, repo_root: Path = REPO_ROOT):
+class SetupChecker:
+    def __init__(self, options: SetupCheckOptions, runner: Runner = run_command, repo_root: Path = REPO_ROOT):
         self.options = options
         self.run = runner
         self.repo_root = repo_root
@@ -539,16 +525,66 @@ class Doctor:
             return CheckResult(name, Status.WARN, "could not reach host.docker.internal: " + "; ".join(errors))
         return CheckResult(name, Status.OK, f"agent containers can reach host ports {', '.join(states)}")
 
+    def check_temp_mounts(self) -> CheckResult:
+        """Can Docker mount folders from the temp directory into a container?
+
+        A run copies credentials, the kubeconfig, and proxy certificates into
+        fresh temp folders and mounts them into the agent container. Docker
+        Desktop shares only the paths listed in its File Sharing settings,
+        which on Linux do not include /tmp by default.
+        """
+        name = "Temp folder mounts"
+        reg = self._agent_reg
+        if self.options.use_external_harness or (reg is not None and not reg.container_isolation):
+            return CheckResult(name, Status.SKIP, "the agent does not run in a container")
+        if not self._docker_ok:
+            return CheckResult(name, Status.SKIP, "Docker is not reachable")
+        from sregym.service.container_runner import DEFAULT_AGENT_IMAGE
+
+        image = self.env.get("SREGYM_AGENT_IMAGE") or DEFAULT_AGENT_IMAGE
+        probe = Path(tempfile.mkdtemp(prefix="sregym-setup-check-"))
+        try:
+            (probe / "probe").write_text("ok")
+            code, out = self.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--pull=never",
+                    "--network=none",
+                    "-v",
+                    f"{probe}:/sregym-setup-check:ro",
+                    image,
+                    "cat /sregym-setup-check/probe",
+                ],
+                60,
+            )
+        finally:
+            shutil.rmtree(probe, ignore_errors=True)
+        root = probe.parent
+        if code == 0 and "ok" in out:
+            return CheckResult(name, Status.OK, f"Docker can mount folders from {root}")
+        if re.search(r"No such image|Unable to find image", out, re.IGNORECASE):
+            return CheckResult(name, Status.SKIP, "agent image is not pulled yet, so this was not tested")
+        if re.search(r"mounts denied|not shared from the host", out, re.IGNORECASE):
+            return CheckResult(
+                name,
+                Status.FAIL,
+                f"Docker refuses to mount folders from {root}, where a run puts the agent's credentials "
+                "and kubeconfig; the agent preflight would fail with 'mounts denied'",
+                f"Add {root} under Docker Desktop -> Settings -> Resources -> File sharing, or use a temp "
+                "folder Docker already shares: mkdir -p ~/.cache/sregym-tmp && export TMPDIR=~/.cache/sregym-tmp",
+            )
+        return CheckResult(name, Status.WARN, "could not test: " + (_first_line(out) or f"exit {code}"))
+
     # --------------------------------------------------------------------- run
 
     def run_all(self) -> list[CheckResult]:
         results: list[CheckResult] = []
-        if not self.options.pre_run:  # `uv run` already enforces the version
-            results.append(self.check_uv())
+        results.append(self.check_uv())
         results.append(self.check_submodule())
         results.extend(self.check_docker())
-        if not self.options.pre_run:
-            results.append(self.check_agent_image())
+        results.append(self.check_agent_image())
         results.append(self.check_cluster())
         results.append(self.check_udev())
         results.append(self.check_calico_tier())
@@ -556,25 +592,8 @@ class Doctor:
         results.append(self.check_judge())
         results.append(self.check_ports())
         results.append(self.check_host_reachable())
-        if self.options.pre_run:
-            results = [self._pre_run_severity(r) for r in results]
+        results.append(self.check_temp_mounts())
         return results
-
-    def _pre_run_severity(self, result: CheckResult) -> CheckResult:
-        """Before a run, block only on what the run itself would certainly fail on.
-
-        Credential checks infer what an agent or judge needs, so before a run
-        they only warn: the run's own agent and judge preflights test the real
-        credentials. Docker is required only when the agent runs in a container.
-        """
-        if result.status != Status.FAIL:
-            return result
-        if result.name == "Docker":
-            reg = self._agent_reg
-            blocks = not self.options.use_external_harness and (reg is None or reg.container_isolation)
-        else:
-            blocks = result.name in PRE_RUN_BLOCKERS
-        return result if blocks else CheckResult(result.name, Status.WARN, result.detail, result.fix)
 
 
 # ----------------------------------------------------------------------- helpers
@@ -705,7 +724,7 @@ _BADGES = {
 _STYLES = {Status.OK: "green", Status.WARN: "yellow", Status.FAIL: "red", Status.SKIP: "dim"}
 
 
-def render(results: Iterable[CheckResult], options: DoctorOptions, console=None) -> None:
+def render(results: Iterable[CheckResult], options: SetupCheckOptions, console=None) -> None:
     from rich.console import Console
     from rich.table import Table
 
@@ -713,7 +732,7 @@ def render(results: Iterable[CheckResult], options: DoctorOptions, console=None)
     results = list(results)
     table = Table(
         title=(
-            f"SREGym doctor — agent {options.agent}, model {options.model}, "
+            f"SREGym setup check — agent {options.agent}, model {options.model}, "
             f"profile {options.profile}, internet {options.internet_access}"
         ),
         show_lines=False,
@@ -742,34 +761,12 @@ def render(results: Iterable[CheckResult], options: DoctorOptions, console=None)
         console.print(f"{_BADGES[Status.OK]} [green bold]Ready to run.[/]")
 
 
-def run_pre_run_doctor(options: DoctorOptions, console=None) -> bool:
-    """Check the machine at the start of a run; return False if the run must stop.
-
-    Silent unless a check shows the run would fail: warnings are left to
-    `--doctor`, so a normal run looks the same as without the check.
-    """
-    from rich.console import Console
-
-    console = console or Console()
-    options.pre_run = True
-    options.live_judge = False  # the run's own judge preflight sends the test request
-    results = Doctor(options).run_all()
-    blockers = [r for r in results if r.status == Status.FAIL]
-    if not blockers:
-        return True
-    render(blockers, options, console)
-    console.print(
-        "Stopping before deployment. Run with --doctor for the full report, or --skip-doctor to start anyway."
-    )
-    return False
-
-
-def run_doctor(options: DoctorOptions, console=None) -> int:
+def run_setup_check(options: SetupCheckOptions, console=None) -> int:
     """Run every check, print the report, and return a process exit code."""
-    results = Doctor(options).run_all()
+    results = SetupChecker(options).run_all()
     render(results, options, console)
     return 1 if any(r.status == Status.FAIL for r in results) else 0
 
 
 if __name__ == "__main__":
-    sys.exit(run_doctor(DoctorOptions()))
+    sys.exit(run_setup_check(SetupCheckOptions()))

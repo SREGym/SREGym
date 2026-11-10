@@ -32,7 +32,6 @@ SREGym has been used to simulate real-world cloud failures, such as:
 
 [SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 17 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
-
 <h2 id="📦installation">📦 Installation</h2>
 
 ### Requirements
@@ -89,15 +88,13 @@ For existing clusters, see the [upgrade and baseline instructions](./docs/networ
 
 #### Check your setup first
 
-Add `--doctor` to the command you plan to run. It checks the tools, Docker, the cluster, the network policy, whether agent containers can reach the host, and the agent and judge credentials for that exact configuration. It prints a fix for each problem and exits without changing anything (the host check starts one throwaway container from the agent image):
+Add `--check-setup` to the command you plan to run. It checks the tools, Docker, the cluster, the network policy, whether agent containers can reach the host, and the agent and judge credentials for that exact configuration. It prints a fix for each problem and exits without changing anything (the host check starts one throwaway container from the agent image):
 
 ```bash
-uv run main.py --doctor --agent codex --model gpt-5 --profile svelte
+uv run main.py --agent codex --model gpt-5 --profile svelte --check-setup
 ```
 
-It exits non-zero when a run would fail. Add `--doctor-offline` to skip the one-line test request it sends to the judge.
-
-Every run also does these checks before it deploys anything. If a check shows the run would fail, for example the cluster is unreachable or filtered internet access has no Calico tier, the run stops right away and prints the fix. Otherwise the run prints nothing extra; warnings, and credential problems that the run's own preflight tests anyway, only show up in `--doctor`. Pass `--skip-doctor` (or set `SREGYM_SKIP_DOCTOR=1`) to turn the checks off.
+It exits non-zero when a run would fail. Add `--check-setup-offline` to skip the one-line test request it sends to the judge.
 
 #### Quick Start
 
