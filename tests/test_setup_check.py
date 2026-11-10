@@ -446,3 +446,21 @@ def test_free_ports_message_names_the_ports_in_use_by_this_run(repo, monkeypatch
     result = check.check_ports()
     assert result.status == Status.OK
     assert result.detail == "8100, 9954, 16443 are free"
+
+
+def test_agent_registry_override_is_used(repo, monkeypatch, tmp_path):
+    custom = tmp_path / "my-agents.yaml"
+    custom.write_text("agents:\n  - name: mine\n    kickoff_command: python mine.py\n")
+    monkeypatch.setenv("SREGYM_AGENT_REGISTRY", str(custom))
+    check, _ = make(repo, agent="mine", internet_access="open")
+    assert check.check_agent()[0].status == Status.OK
+    check, _ = make(repo, agent="stratus", internet_access="open")
+    [result] = check.check_agent()
+    assert result.status == Status.FAIL and "my-agents.yaml" in result.detail
+
+
+def test_missing_agent_registry_override_is_a_blocker(repo, monkeypatch):
+    monkeypatch.setenv("SREGYM_AGENT_REGISTRY", "/nonexistent/agents.yaml")
+    [result] = make(repo)[0].check_agent()
+    assert result.status == Status.FAIL
+    assert "SREGYM_AGENT_REGISTRY" in result.detail

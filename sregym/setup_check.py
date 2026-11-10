@@ -341,9 +341,15 @@ class SetupChecker:
     # ------------------------------------------------------------- agent/model
 
     def check_agent(self) -> list[CheckResult]:
-        from sregym.agent_registry import list_agents
+        from sregym.agent_registry import REGISTRY_ENV, list_agents, registry_path
 
-        agents = list_agents(self.repo_root / "agents.yaml")
+        try:
+            path = registry_path(self.repo_root)
+        except FileNotFoundError as exc:
+            return [
+                CheckResult("Agent", Status.FAIL, str(exc), f"Point {REGISTRY_ENV} at an existing file or unset it")
+            ]
+        agents = list_agents(path)
         reg = agents.get(self.options.agent)
         self._agent_reg = reg
         if reg is None:
@@ -351,7 +357,7 @@ class SetupChecker:
                 CheckResult(
                     "Agent",
                     Status.FAIL,
-                    f"'{self.options.agent}' is not in agents.yaml",
+                    f"'{self.options.agent}' is not in {path.name}",
                     "Choose one of: " + ", ".join(sorted(agents)),
                 )
             ]
