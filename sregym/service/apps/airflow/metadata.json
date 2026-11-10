@@ -1,0 +1,14 @@
+{
+  "Name": "Airflow",
+  "Namespace": "airflow",
+  "Desc": "Apache Airflow 3.3.2 workflow orchestrator, deployed from the official Airflow Helm chart (release `airflow`) with the CeleryExecutor: one `airflow-scheduler`, one `airflow-dag-processor`, one `airflow-triggerer`, one `airflow-api-server` (also the Execution API), and one Celery `airflow-worker` (StatefulSet). Celery uses a Redis broker (`airflow-redis`). All Airflow components reach the metadata database through PgBouncer (`airflow-pgbouncer`, transaction pooling) in front of a PostgreSQL StatefulSet (`postgres`). Component metrics are exported to a statsd exporter (`airflow-statsd`, Prometheus job `airflow`) and scraped by Prometheus. DAGs are mounted from the `operator-dags` ConfigMap into every Airflow pod at /opt/airflow/dags. An `airflow-monitor` deployment watches recent runs of the operator DAGs and reports their health at http://airflow-monitor:8080/status.",
+  "frontend_service": "airflow-api-server",
+  "frontend_port": 8080,
+  "Supported Operations": [
+    "Run and inspect DAGs and task instances through the Airflow REST API (airflow-api-server) or the airflow CLI inside any Airflow pod",
+    "Trigger DAG runs and read dag_run / task_instance state",
+    "Inspect scheduler, dag-processor, triggerer, worker and api-server logs",
+    "Inspect the metadata database (psql in the postgres pod) and PgBouncer (SHOW ... on airflow-pgbouncer:6543)",
+    "Read Airflow component metrics from the statsd exporter and Prometheus (job airflow)"
+  ]
+}

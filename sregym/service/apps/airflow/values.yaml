@@ -1,0 +1,86 @@
+# SREGym overlay for the official Apache Airflow Helm chart (1.22.0), pinned to
+# the Airflow 3.3.2 image. CeleryExecutor production topology: one scheduler,
+# dag-processor, triggerer, api-server and Celery worker, a Redis broker,
+# PgBouncer (transaction pooling, chart defaults -- no idle_transaction_timeout)
+# and an external PostgreSQL StatefulSet.
+
+# Pin the application image to the released 3.3.2 tag (the chart ships 3.2.2).
+defaultAirflowRepository: apache/airflow
+defaultAirflowTag: "3.3.2"
+airflowVersion: "3.3.2"
+
+executor: "CeleryExecutor"
+
+# Use the external `postgres` StatefulSet applied alongside the chart, reached
+# through PgBouncer like every real deployment.
+postgresql:
+  enabled: false
+
+data:
+  metadataConnection:
+    user: airflow
+    pass: airflow
+    protocol: postgresql
+    host: postgres
+    port: 5432
+    db: airflow
+    sslmode: disable
+
+pgbouncer:
+  enabled: true
+
+redis:
+  enabled: true
+  persistence:
+    enabled: true
+    storageClassName: standard
+
+statsd:
+  enabled: true
+
+scheduler:
+  replicas: 1
+dagProcessor:
+  enabled: true
+triggerer:
+  enabled: true
+  persistence:
+    enabled: true
+    storageClassName: standard
+apiServer:
+  replicas: 1
+workers:
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClassName: standard
+
+# DAGs are mounted from the operator-dags ConfigMap into every Airflow pod.
+dags:
+  persistence:
+    enabled: false
+  gitSync:
+    enabled: false
+
+volumes:
+  - name: operator-dags
+    configMap:
+      name: operator-dags
+volumeMounts:
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/fleet_heartbeat.py
+    subPath: fleet_heartbeat.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/fleet_backlog.py
+    subPath: fleet_backlog.py
+    readOnly: true
+
+config:
+  core:
+    load_examples: 'False'
+  scheduler:
+    min_file_process_interval: '5'
+    dag_dir_list_interval: '15'
+  dag_processor:
+    min_file_process_interval: '5'

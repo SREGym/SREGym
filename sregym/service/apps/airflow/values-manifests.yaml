@@ -1,0 +1,32 @@
+# Overlay for the shop deployments that also hand parcels to the carrier
+# (carrier_manifest DAG). Applied on top of values.yaml and values-commerce.yaml.
+
+volumeMounts:
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/fleet_heartbeat.py
+    subPath: fleet_heartbeat.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/fleet_backlog.py
+    subPath: fleet_backlog.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/order_intake.py
+    subPath: order_intake.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/partner_settlement.py
+    subPath: partner_settlement.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/ops_alerts.py
+    subPath: ops_alerts.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/carrier_manifest.py
+    subPath: carrier_manifest.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/carrier_desk.py
+    subPath: carrier_desk.py
+    readOnly: true

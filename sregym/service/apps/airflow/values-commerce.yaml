@@ -1,0 +1,36 @@
+# Overlay for the deployments that also run the shop pipelines (order intake
+# from SQS, partner settlement). Applied on top of values.yaml.
+
+env:
+  - name: AIRFLOW_CONN_AWS_DEFAULT
+    value: '{"conn_type": "aws", "login": "shop-pipelines", "password": "shop-pipelines-secret", "extra": {"region_name": "us-east-1", "endpoint_url": "http://orders-sqs:9324"}}'
+  - name: AIRFLOW_CONN_SHOP_DB
+    value: 'postgresql://shop:shop@postgres:5432/shop'
+
+scheduler:
+  replicas: 1
+  # One scheduler at a time: the replacement starts after the old one exits.
+  strategy:
+    type: Recreate
+
+volumeMounts:
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/fleet_heartbeat.py
+    subPath: fleet_heartbeat.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/fleet_backlog.py
+    subPath: fleet_backlog.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/order_intake.py
+    subPath: order_intake.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/partner_settlement.py
+    subPath: partner_settlement.py
+    readOnly: true
+  - name: operator-dags
+    mountPath: /opt/airflow/dags/ops_alerts.py
+    subPath: ops_alerts.py
+    readOnly: true

@@ -16,6 +16,7 @@ from sregym.paths import (
     SOCIAL_NETWORK_METADATA,
     TRAIN_TICKET_METADATA,
 )
+from sregym.service.apps.airflow.application import AirflowApplication
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.base import Application
 from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
@@ -134,6 +135,7 @@ APPLICATIONS = (
     ),
     AppDefinition("frappe", Frappe, Frappe.metadata_file, service_port=8000),
     AppDefinition("saleor", Saleor, Saleor.metadata_file, service_port=8000),
+    AppDefinition("airflow", AirflowApplication, AirflowApplication.metadata_file, service_port=8080),
     AppDefinition("slack-spine", SlackSpine, SlackSpine.metadata_file, ("slack_spine",), service_port=8000),
 )
 
