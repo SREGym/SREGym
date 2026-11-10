@@ -427,3 +427,14 @@ def test_temp_mount_check_is_skipped_without_agent_containers(repo):
     check.check_docker()
     assert check.check_temp_mounts().status == Status.SKIP
     assert not runner.calls[1:]
+
+
+def test_report_shows_brackets_in_details_literally():
+    from rich.console import Console
+
+    console = Console(record=True, width=200)
+    result = CheckResult("Judge", Status.FAIL, "POST [/v1/chat] failed: [bold]", "set [JUDGE_API_KEY]")
+    setup_check.render([result], SetupCheckOptions(environment={}), console)
+    text = console.export_text()
+    assert "POST [/v1/chat] failed: [bold]" in text
+    assert "set [JUDGE_API_KEY]" in text

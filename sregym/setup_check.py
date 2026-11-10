@@ -726,6 +726,7 @@ _STYLES = {Status.OK: "green", Status.WARN: "yellow", Status.FAIL: "red", Status
 
 def render(results: Iterable[CheckResult], options: SetupCheckOptions, console=None) -> None:
     from rich.console import Console
+    from rich.markup import escape
     from rich.table import Table
 
     console = console or Console()
@@ -742,10 +743,12 @@ def render(results: Iterable[CheckResult], options: SetupCheckOptions, console=N
     table.add_column("Check", style="bold")
     table.add_column("Result")
     for r in results:
-        detail = f"[{_STYLES[r.status]}]{r.detail}[/]"
+        # Details quote command output and error messages, which can contain
+        # square brackets that Rich would otherwise read as markup.
+        detail = f"[{_STYLES[r.status]}]{escape(r.detail)}[/]"
         if r.fix and r.status in (Status.FAIL, Status.WARN):
-            detail += f"\n[cyan]→ {r.fix}[/]"
-        table.add_row(_BADGES[r.status], r.name, detail)
+            detail += f"\n[cyan]→ {escape(r.fix)}[/]"
+        table.add_row(_BADGES[r.status], escape(r.name), detail)
     console.print(table)
 
     fails = sum(r.status == Status.FAIL for r in results)
