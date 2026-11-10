@@ -41,6 +41,9 @@ from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
 from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
 from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import FrappeWritesAndQueueOOM
+from sregym.conductor.problems.apps.dependency_track.dependency_reviews_missing import (
+    DependencyTrackDependencyReviewsMissing,
+)
 from sregym.conductor.problems.apps.saleor.statement_timeout import SaleorCheckoutStatementTimeoutCanary
 from sregym.conductor.problems.apps.slack_spine.lock_leaks import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
 from sregym.conductor.problems.apps.slack_spine.store_consistency import SlackLoginsUnreadSendsAllSlow
@@ -302,6 +305,8 @@ class ProblemRegistry:
             "slack_sends_fail_compliance_window": SlackSendsFailComplianceWindow,
             "slack_seq_lock_leak": SlackSeqLockLeak,
             "slack_distractor_volume_seq_lock": SlackDistractorVolumeSeqLock,
+            # ==================== DEPENDENCY-TRACK (UPSTREAM CONCURRENCY BUG) ====================
+            "dependency_track_dependency_reviews_missing": DependencyTrackDependencyReviewsMissing,
             # Existing faults ported to Frappe, Saleor and Slack Spine.
             **PORTED_PROBLEMS,
         }

@@ -1395,6 +1395,24 @@ extraScrapeConfigs: |
           - rabbitmq.saleor.svc.cluster.local:15692
         labels:
           namespace: saleor
+  # Dependency-Track api-server management port and the workload services' metrics.
+  - job_name: 'dependency-track'
+    scrape_interval: 30s
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [dependency-track]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        regex: management|http-metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component, __meta_kubernetes_pod_label_app]
+        separator: ""
+        target_label: component
 
 # Adds option to add alert_relabel_configs to avoid duplicate alerts in alertmanager
 # useful in H/A prometheus with different external labels but the same alerts

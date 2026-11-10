@@ -1,0 +1,46 @@
+fullnameOverride: dt
+image:
+  registry: ghcr.io
+database:
+  jdbcUrl: jdbc:postgresql://postgres:5432/dtrack?reWriteBatchedInserts=true
+  existingSecret:
+    name: dt-db-creds
+    usernameKey: username
+    passwordKey: password
+secretManagement:
+  database:
+    kek:
+      existingSecret:
+        name: dt-kek
+fileStorage:
+  provider: s3
+  s3:
+    endpoint: http://seaweedfs:8333
+    region: us-east-1
+    bucket: dtrack
+    credentials:
+      existingSecret:
+        name: dt-s3-creds
+        accessKeyIdKey: accessKeyId
+        secretAccessKeyKey: secretAccessKey
+apiServer:
+  image:
+    repository: dependencytrack/apiserver
+    tag: sha256:2e89e291c2a38d91542b112a67f00fb2608cff744dc53a370caf62fccd161122
+  extraEnv:
+    - name: DT_TELEMETRY_SUBMISSION_DEFAULT_ENABLED
+      value: "false"
+    - name: EXTRA_JAVA_OPTIONS
+      value: -XX:ActiveProcessorCount=4
+  web:
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        memory: 2Gi
+frontend:
+  image:
+    repository: dependencytrack/frontend
+    tag: sha256:3bbe3c714134d7c2a32df4c9fffaefaa6eb535aa27c42ea0f502eb4de7c936fb
+  apiBaseUrl: http://dt-api-server:8080

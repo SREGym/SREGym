@@ -1,0 +1,10 @@
+{
+  "Name": "Dependency-Track",
+  "Namespace": "dependency-track",
+  "Desc": "OWASP Dependency-Track 5 (software composition analysis platform), deployed from its Helm chart (release `dt`) in the monolith topology: the `dt-api-server` Deployment serves the REST API and runs all background processing (BOM import, vulnerability and policy analysis, package metadata resolution, notification publishing, metrics), `dt-frontend` serves the web UI, PostgreSQL (`postgres`) is the database and SeaweedFS (`seaweedfs`) is the S3 file storage. The `ci-pipelines` deployment runs the organisation's build pipelines, which upload CycloneDX SBOMs for eight services and report the policy gate result. The `violation-tracker` deployment is the security team's ticket bridge: it receives Dependency-Track's webhook notifications (notification rule `security-alerts`) and keeps one ticket per policy violation (HTTP API on port 8080: /tickets, /audit, /metrics). Dependency-Track admin credentials are in the `dt-admin-credentials` Secret.",
+  "Supported Operations": [
+    "Upload SBOMs and inspect projects, components and policy violations through the Dependency-Track REST API",
+    "Manage policies and notification rules",
+    "Inspect tickets opened by the violation tracker"
+  ]
+}
