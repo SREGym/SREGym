@@ -29,6 +29,12 @@ class FakeRunner:
         return 127, f"{argv[0]}: command not found"
 
 
+@pytest.fixture(autouse=True)
+def no_real_network(monkeypatch):
+    """Tests must not depend on this machine's internet; the internet check is tested on its own."""
+    monkeypatch.setattr(setup_check, "_probe_host", lambda host: ("", 0.01))
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     (tmp_path / "pyproject.toml").write_text('[tool.uv]\nrequired-version = ">=0.11.8"\n')
@@ -480,3 +486,56 @@ def test_listener_on_loopback_counts_as_in_use():
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         assert setup_check._port_in_use(listener.getsockname()[1])
+
+
+def test_reachable_download_hosts_pass(repo):
+    result = make(repo)[0].check_internet()
+    assert result.status == Status.OK
+
+
+def test_dns_failure_is_a_blocker_with_a_dns_fix(repo, monkeypatch):
+    monkeypatch.setattr(setup_check, "_probe_host", lambda host: ("does not resolve (DNS gave no answer in 5s)", 5.0))
+    result = make(repo)[0].check_internet()
+    assert result.status == Status.FAIL
+    assert "github.com: does not resolve" in result.detail
+    assert "DNS is not answering" in result.fix
+
+
+def test_blocked_host_is_a_blocker_with_a_network_fix(repo, monkeypatch):
+    monkeypatch.setattr(
+        setup_check,
+        "_probe_host",
+        lambda host: ("port 443 unreachable (Connection timed out)", 0.02) if host == "ghcr.io" else ("", 0.02),
+    )
+    result = make(repo)[0].check_internet()
+    assert result.status == Status.FAIL
+    assert result.detail == "cannot reach ghcr.io: port 443 unreachable (Connection timed out)"
+    assert "VPN or firewall" in result.fix
+
+
+def test_slow_dns_is_a_warning(repo, monkeypatch):
+    monkeypatch.setattr(setup_check, "_probe_host", lambda host: ("", 2.4 if host == "github.com" else 0.02))
+    result = make(repo)[0].check_internet()
+    assert result.status == Status.WARN
+    assert "github.com took 2.4s" in result.detail
+
+
+def test_internet_check_is_skipped_behind_a_proxy(repo, monkeypatch):
+    def no_probe(host):
+        raise AssertionError("must not probe directly behind a proxy")
+
+    monkeypatch.setattr(setup_check, "_probe_host", no_probe)
+    result = make(repo, env={"HTTPS_PROXY": "http://proxy:3128"})[0].check_internet()
+    assert result.status == Status.SKIP
+
+
+def test_hung_dns_lookup_times_out(monkeypatch):
+    import time
+
+    monkeypatch.undo()  # use the real _probe_host, with a fake slow resolver
+    monkeypatch.setattr(setup_check, "NETWORK_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(setup_check.socket, "getaddrinfo", lambda *a, **k: time.sleep(0.6))
+    start = time.monotonic()
+    error, _ = setup_check._probe_host("github.com")
+    assert "does not resolve" in error
+    assert time.monotonic() - start < 0.5

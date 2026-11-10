@@ -25,8 +25,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -73,6 +75,20 @@ for port in sys.argv[1:]:
         s.close()
     print(port, state)
 """
+
+# Hosts a deploy downloads from: Helm chart indexes, the chart archives they
+# point to on GitHub, and the registries that serve container images.
+DOWNLOAD_HOSTS = (
+    "github.com",
+    "prometheus-community.github.io",
+    "grafana.github.io",
+    "ghcr.io",
+    "registry-1.docker.io",
+)
+NETWORK_TIMEOUT_S = 5
+# A lookup slower than this rarely fails alone, but Helm and image pulls make
+# many of them during a deploy, and some will time out.
+SLOW_DNS_S = 1.0
 
 # Agents that send model traffic to AGENT_API_BASE when it is set.
 CUSTOM_ENDPOINT_AGENTS = {"codex", "stratus", "mini-sre"}
@@ -591,6 +607,39 @@ class SetupChecker:
             )
         return CheckResult(name, Status.WARN, "could not test: " + (_first_line(out) or f"exit {code}"))
 
+    def check_internet(self) -> CheckResult:
+        """Can this machine reach the hosts a deploy downloads charts and images from?
+
+        Helm and the kind nodes fetch from these hosts while the app deploys, so
+        missing or unreliable DNS only shows up minutes into a run.
+        """
+        name = "Internet access"
+        proxy = next((self.env[v] for v in ("HTTPS_PROXY", "https_proxy") if self.env.get(v)), None)
+        if proxy:
+            return CheckResult(name, Status.SKIP, f"traffic goes through the proxy {proxy}, so this was not tested")
+        with ThreadPoolExecutor(max_workers=len(DOWNLOAD_HOSTS)) as pool:
+            results = dict(zip(DOWNLOAD_HOSTS, pool.map(_probe_host, DOWNLOAD_HOSTS), strict=True))
+        failed = {host: error for host, (error, _) in results.items() if error}
+        if failed:
+            listed = "; ".join(f"{host}: {error}" for host, error in failed.items())
+            dns = all("resolve" in error for error in failed.values())
+            fix = (
+                "DNS is not answering. Check your network or DNS server (resolvectl status), then retry"
+                if dns
+                else "Check your network, VPN or firewall; a deploy downloads Helm charts and images from these hosts"
+            )
+            return CheckResult(name, Status.FAIL, f"cannot reach {listed}", fix)
+        slowest_host, (_, slowest) = max(results.items(), key=lambda item: item[1][1])
+        if slowest > SLOW_DNS_S:
+            return CheckResult(
+                name,
+                Status.WARN,
+                f"DNS is slow: looking up {slowest_host} took {slowest:.1f}s",
+                "Helm chart and image downloads may time out during deploy. Check your DNS server "
+                "(resolvectl status) or switch to a faster one",
+            )
+        return CheckResult(name, Status.OK, f"reached {len(results)} download hosts (github.com, ghcr.io, chart repos)")
+
     # --------------------------------------------------------------------- run
 
     def run_all(self) -> list[CheckResult]:
@@ -607,6 +656,7 @@ class SetupChecker:
         results.append(self.check_ports())
         results.append(self.check_host_reachable())
         results.append(self.check_temp_mounts())
+        results.append(self.check_internet())
         return results
 
 
@@ -710,6 +760,33 @@ def _litellm_credentials(name: str, model: str, env: dict[str, str]) -> CheckRes
     if missing:
         return CheckResult(name, Status.FAIL, f"{model} needs {', '.join(missing)}", f"export {missing[0]}=...")
     return CheckResult(name, Status.OK, f"credentials found for {model}")
+
+
+def _probe_host(host: str) -> tuple[str, float]:
+    """Resolve a host and open a TLS port to it; return (error or "", DNS seconds)."""
+    start = time.monotonic()
+    # getaddrinfo has no timeout of its own, so bound it from a worker thread, and do
+    # not wait for that thread on the way out: a hung lookup must not hang the check.
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        addresses = pool.submit(socket.getaddrinfo, host, 443, type=socket.SOCK_STREAM).result(
+            timeout=NETWORK_TIMEOUT_S
+        )
+    except TimeoutError:
+        return f"does not resolve (DNS gave no answer in {NETWORK_TIMEOUT_S}s)", NETWORK_TIMEOUT_S
+    except OSError as exc:
+        return f"does not resolve ({exc.strerror or exc})", time.monotonic() - start
+    finally:
+        pool.shutdown(wait=False)
+    dns_seconds = time.monotonic() - start
+    family, kind, proto, _, address = addresses[0]
+    try:
+        with socket.socket(family, kind, proto) as sock:
+            sock.settimeout(NETWORK_TIMEOUT_S)
+            sock.connect(address)
+    except OSError as exc:
+        return f"port 443 unreachable ({exc.strerror or exc})", dns_seconds
+    return "", dns_seconds
 
 
 def _port_in_use(port: int, host: str = "0.0.0.0") -> bool:
