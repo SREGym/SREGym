@@ -4,7 +4,6 @@ import contextlib
 import csv
 import importlib
 import itertools
-import json
 import logging
 import os
 import sys
@@ -36,7 +35,7 @@ from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
-from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers
+from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers, write_json_artifact
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
@@ -236,7 +235,7 @@ def _write_fault_spec(published_dir: Path, conductor, problem_id: str) -> Path |
     }
     path = published_dir / "fault-spec.json"
     try:
-        path.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+        write_json_artifact(path, spec)
     except OSError as exc:
         logger.warning("Could not write %s: %s", path, exc)
         return None

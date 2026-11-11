@@ -34,7 +34,7 @@ class RunArtifacts:
 
     def save_network_audit(self, audit: dict[str, Any]) -> None:
         """Retain the audit even if agent artifact validation later fails."""
-        _write_json(self.network_audit_path, audit)
+        write_json_artifact(self.network_audit_path, audit)
 
     @property
     def judge_responses_path(self) -> Path:
@@ -66,7 +66,7 @@ class RunArtifacts:
 
         row = extract(snapshot, "")
         if responses:
-            _write_json(self.judge_responses_path, responses)
+            write_json_artifact(self.judge_responses_path, responses)
         return row
 
     @classmethod
@@ -133,7 +133,7 @@ class RunArtifacts:
                 ("judge_responses.json", self.judge_responses_path),
             ):
                 if source.exists():
-                    _write_json(self.active_dir / name, json.loads(source.read_text(encoding="utf-8")))
+                    write_json_artifact(self.active_dir / name, json.loads(source.read_text(encoding="utf-8")))
         except ArtifactFinalizationError:
             raise
         except (OSError, csv.Error, ValueError) as exc:
@@ -259,7 +259,7 @@ def _rewrite_json(path: Path, artifact_id: str, problem_id: str) -> None:
         return
     if data["problem_id"] == artifact_id:
         data["problem_id"] = problem_id
-        _write_json(path, data)
+        write_json_artifact(path, data)
     elif data["problem_id"] != problem_id:
         raise ArtifactFinalizationError(f"non-semantic problem_id in JSON artifact: {path}")
 
@@ -421,7 +421,8 @@ def _write_csv(path: Path, fields: list[str], rows: list[dict[str, Any]]) -> Non
         tmp.unlink(missing_ok=True)
 
 
-def _write_json(path: Path, data: dict[str, Any]) -> None:
+def write_json_artifact(path: Path, data: dict[str, Any]) -> None:
+    """Atomically replace a JSON artifact without following an existing symlink."""
     tmp = _temp_path(path)
     try:
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
