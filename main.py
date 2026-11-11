@@ -1052,6 +1052,9 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
             "Run it with --internet-access open or enable container isolation."
         )
 
+    # An invalid hook registration must fail before agent resources are prepared.
+    agent_hooks = load_hooks(agent_reg.hooks) if agent_reg else None
+
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
         if internet_policy.is_filtered and not args.use_external_harness
@@ -1097,7 +1100,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     conductor = Conductor(
         config=conductor_config,
         judge_preflight=None if args.use_external_harness else run_judge_preflight_check,
-        hooks=load_hooks(agent_reg.hooks) if agent_reg else None,
+        hooks=agent_hooks,
     )
 
     suite = getattr(args, "suite", None)

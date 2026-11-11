@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
+from sregym.agent_registry import AgentRegistration
+
 
 def _load_main_module():
     main_path = Path(__file__).resolve().parents[1] / "main.py"
@@ -247,6 +249,49 @@ def test_judge_preflight_is_deferred_until_effective_stages_are_known(monkeypatc
     with pytest.raises(ReachedConductor):
         benchmark_main._run_benchmark(args)
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("hook_spec", "error"),
+    [
+        ("missing_colon", ValueError),
+        ("missing_sregym_test_hook_module:hooks", ModuleNotFoundError),
+        ("json:missing_sregym_test_hooks", AttributeError),
+    ],
+)
+def test_invalid_hooks_fail_before_agent_preparation(monkeypatch, hook_spec, error):
+    benchmark_main = _load_main_module()
+    monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
+    monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
+    monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
+    monkeypatch.setattr(benchmark_main, "get_container_host_bind_address", lambda: "127.0.0.1")
+    registration = AgentRegistration(name="codex", install_script="install-codex.sh", hooks=hook_spec)
+    monkeypatch.setattr(benchmark_main, "get_agent", lambda *args, **kwargs: registration)
+    launcher = Mock()
+    monkeypatch.setattr(benchmark_main, "LAUNCHER", launcher)
+    preflight = Mock()
+    constructor = Mock()
+    monkeypatch.setattr(benchmark_main, "run_preflight_check", preflight)
+    monkeypatch.setattr(benchmark_main, "Conductor", constructor)
+    args = SimpleNamespace(
+        agent="codex",
+        internet_access="filtered",
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        use_external_harness=False,
+        force_build=False,
+        stages=["mitigation"],
+    )
+
+    with pytest.raises(error):
+        benchmark_main._run_benchmark(args)
+
+    launcher.enable_container_isolation.assert_not_called()
+    launcher._container_runner.prepare_agent_tools.assert_not_called()
+    preflight.assert_not_called()
+    constructor.assert_not_called()
 
 
 def test_cleanup_deadline_covers_namespace_deletion_and_honors_override(monkeypatch):
