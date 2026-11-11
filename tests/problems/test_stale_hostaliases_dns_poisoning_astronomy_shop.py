@@ -24,8 +24,6 @@ DEPLOYMENT = "frontend-proxy"
 TARGET_BACKEND = "frontend"
 
 _CHART = TARGET_MICROSERVICES / "astronomy-shop" / "charts" / "opentelemetry-demo"
-_KUBECONFIG = Path(os.environ.get("KUBECONFIG") or Path.home() / ".kube" / "config")
-_HAS_CLUSTER = _CHART.exists() and _KUBECONFIG.exists()
 
 
 class _AppsV1:
@@ -159,9 +157,13 @@ def test_problem_wires_hosts_mitigation_oracle_and_probe_method(monkeypatch):
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not _HAS_CLUSTER, reason="no kubeconfig or astronomy-shop chart submodule on disk")
+@pytest.mark.skipif(not _CHART.exists(), reason="no astronomy-shop chart submodule on disk")
 def test_lifecycle_against_a_live_cluster():
     """inject -> probe fails -> oracle fails -> recover -> probe passes -> oracle passes."""
+    # The test guard hides KUBECONFIG during collection, so check it only once access is granted.
+    kubeconfig = Path(os.environ.get("KUBECONFIG") or Path.home() / ".kube" / "config")
+    if not kubeconfig.exists():
+        pytest.skip("no kubeconfig on disk")
     problem = StaleHostAliasesDNSPoisoningAstronomyShop()
     problem.app.deploy()
     problem.kubectl.wait_for_ready(problem.namespace)

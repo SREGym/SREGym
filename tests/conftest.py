@@ -4,6 +4,7 @@ import functools
 import inspect
 import os
 import re
+import shlex
 import socket
 import subprocess
 import tempfile
@@ -30,6 +31,35 @@ _KUBERNETES_ENVIRONMENT = (
     "KUBERNETES_SERVICE_PORT_HTTPS",
     "KUBERNETES_MASTER",
 )
+# Options whose value is a separate word, so it is not mistaken for the wrapped command.
+_WRAPPER_VALUE_OPTIONS = {
+    "env": {"-C", "-S", "-u", "--chdir", "--split-string", "--unset"},
+    "exec": {"-a"},
+    "sudo": {
+        "-C",
+        "-D",
+        "-g",
+        "-h",
+        "-p",
+        "-R",
+        "-r",
+        "-T",
+        "-t",
+        "-U",
+        "-u",
+        "--chdir",
+        "--chroot",
+        "--close-from",
+        "--command-timeout",
+        "--group",
+        "--host",
+        "--other-user",
+        "--prompt",
+        "--role",
+        "--type",
+        "--user",
+    },
+}
 
 
 def _cluster_command(command, *, executable=None, shell=False):
@@ -132,13 +162,32 @@ def _cluster_command(command, *, executable=None, shell=False):
         return any(arg.split("=", 1)[0] in _KUBERNETES_ENVIRONMENT for arg in tokens[1:])
     if program in {"env", "command", "exec", "sudo", "nohup"}:
         rest = tokens[1:]
-        # Clearing the environment would undo child-process isolation.
-        if program == "env" and any(
-            arg == "-i" or arg == "--ignore-environment" or arg == "-u" or arg.startswith("--unset") for arg in rest
-        ):
-            return True
+        value_options = _WRAPPER_VALUE_OPTIONS.get(program, set())
         while rest and rest[0].startswith("-"):
-            rest = rest[1:]
+            option = rest.pop(0)
+            if option == "--":
+                break
+            if option.startswith("--"):
+                name, equals, value = option.partition("=")
+                names = [name]
+                if name in value_options and not equals:
+                    value = rest.pop(0) if rest else ""
+            else:
+                # Short options may be grouped; the first one taking a value ends the group.
+                names, value = [], ""
+                for index, letter in enumerate(option[1:], 1):
+                    names.append("-" + letter)
+                    if "-" + letter in value_options:
+                        value = option[index + 1 :] or (rest.pop(0) if rest else "")
+                        break
+            # Clearing the environment would undo child-process isolation.
+            if program == "env" and (option == "-" or {"-i", "-u", "--ignore-environment", "--unset"} & set(names)):
+                return True
+            if program == "env" and names[-1] in {"-S", "--split-string"}:
+                try:
+                    rest = shlex.split(value) + rest
+                except ValueError:
+                    return True
         return _cluster_command(rest) if rest else False
     return False
 
@@ -448,6 +497,32 @@ def pytest_runtest_protocol(item):
         yield
     finally:
         guard.set_live_access(False)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_fixture_setup(fixturedef, request):
+    guard = request.config.stash[_GUARD]
+    # A broader-scoped fixture created by an opted-in test may be torn down
+    # after a later unit test. Keep its cleanup on the access it was created with.
+    live = fixturedef.scope != "function" and guard.allowed
+    granted = []
+
+    def grant():
+        if not guard.allowed:
+            guard.set_live_access(True)
+            granted.append(True)
+
+    def revoke():
+        if granted:
+            granted.clear()
+            guard.set_live_access(False)
+
+    if live:
+        # Fixture finalizers run last-in, first-out, so these bracket its teardown.
+        fixturedef.addfinalizer(revoke)
+    yield
+    if live:
+        fixturedef.addfinalizer(grant)
 
 
 @pytest.hookimpl(hookwrapper=True)

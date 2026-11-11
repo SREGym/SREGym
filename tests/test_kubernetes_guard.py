@@ -135,11 +135,14 @@ import pytest
     ("printf '%s' '$(kubectl get pods)'", True),
     (["xargs", "-n", "1", "grep", "kubectl"], False),
     (["bash", "--norc", "-c", "printf '%s' helm"], False),
+    (["sudo", "-u", "kubectl", "ls"], False),
+    (["env", "-C", "kubectl", "ls"], False),
+    (["env", "grep", "-i", "kubectl", "some-file"], False),
 ])
 def test_data(command, shell):
     assert subprocess.check_output(command, shell=shell, text=True).strip() == "inert command"
 """)
-    guarded_suite.runpytest_subprocess("-q").assert_outcomes(passed=10)
+    guarded_suite.runpytest_subprocess("-q").assert_outcomes(passed=13)
 
 
 def test_indirect_cluster_commands_fail_even_if_caught(guarded_suite):
@@ -160,6 +163,11 @@ import pytest
     ("while false; do kubectl get pods; done", True),
     ("case x in x) kubectl get pods;; esac", True),
     ("export KUBECONFIG=~/.kube/config; k=kube; ${k}ctl get pods", True),
+    (["sudo", "-u", "test-user", "kubectl", "get", "pods"], False),
+    (["sudo", "-Eu", "test-user", "--", "kubectl", "get", "pods"], False),
+    (["env", "-C", "/tmp", "kubectl", "get", "pods"], False),
+    (["env", "-S", "kubectl get pods"], False),
+    (["env", "-uKUBECONFIG", "true"], False),
 ])
 def test_blocked(command, shell):
     try:
@@ -168,7 +176,7 @@ def test_blocked(command, shell):
         pass
 """)
     result = guarded_suite.runpytest_subprocess("-q")
-    result.assert_outcomes(passed=12, errors=12)
+    result.assert_outcomes(passed=17, errors=17)
     result.stdout.fnmatch_lines(["*Blocked real Kubernetes access*"])
 
 
@@ -490,6 +498,35 @@ def test_fixture(cluster_cleanup):
     result = guarded_suite.runpytest_subprocess("-q")
     result.assert_outcomes(passed=1, errors=1)
     result.stdout.fnmatch_lines(["*ApiClient.call_api, ApiClient.call_api*"])
+
+
+@pytest.mark.parametrize("scope", ["module", "session"])
+def test_broader_integration_fixture_cleanup_keeps_its_access(guarded_suite, scope):
+    guarded_suite.makepyfile(f"""
+import pytest
+from kubernetes import client
+
+@pytest.fixture(scope="{scope}")
+def cluster_resource():
+    yield
+    assert client.ApiClient().call_api("/cleanup", "DELETE") == "allowed"
+
+@pytest.mark.integration
+def test_integration(cluster_resource):
+    pass
+
+def test_unit_runs_last():
+    try:
+        client.ApiClient().call_api("/api", "GET")
+    except RuntimeError:
+        pass
+""")
+    result = guarded_suite.runpytest_subprocess("-q", "--allow-kubernetes")
+    # The unit test's own call is still blocked; the fixture cleanup after it is not.
+    result.assert_outcomes(passed=2, errors=1)
+    result.stdout.fnmatch_lines(["*Blocked real Kubernetes access: ApiClient.call_api"])
+    result.stdout.no_fnmatch_line("*AssertionError*")
+    result.stdout.no_fnmatch_line("*ApiClient.call_api, ApiClient.call_api*")
 
 
 @pytest.mark.parametrize("opt_in", [False, True])
