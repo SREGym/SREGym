@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.progress import (
@@ -35,7 +35,7 @@ from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
-from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers
+from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers, write_json_artifact
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
@@ -210,6 +210,36 @@ def claim_results_dir(root: Path = Path("results")) -> Path:
             return root / candidate
         except FileExistsError:
             continue
+
+
+def _write_fault_spec(published_dir: Path, conductor, problem_id: str) -> Path | None:
+    """Record what was injected beside the attempt's published artifacts.
+
+    Written after publication, not into the staging directory: the agent reads
+    that directory as AGENT_LOGS_DIR, and finalization rejects any staged file
+    carrying the real problem id, which this one does. Null fields mean the
+    attempt published without injecting.
+    """
+    # Tests drive driver_loop with stand-in conductors, so accept only a real spec.
+    captured = getattr(conductor, "fault_spec", None)
+    if not isinstance(captured, dict):
+        captured = {}
+    injected_at = captured.get("fault_injected_at")
+    if injected_at is not None:
+        injected_at = datetime.fromtimestamp(injected_at, UTC).isoformat().replace("+00:00", "Z")
+    spec = {
+        "problem_id": problem_id,
+        "namespace": captured.get("namespace"),
+        "root_cause": captured.get("root_cause"),
+        "fault_injected_at": injected_at,
+    }
+    path = published_dir / "fault-spec.json"
+    try:
+        write_json_artifact(path, spec)
+    except OSError as exc:
+        logger.warning("Could not write %s: %s", path, exc)
+        return None
+    return path
 
 
 def _restore_env_var(name: str, previous_value: str | None) -> None:
@@ -834,6 +864,7 @@ def driver_loop(
                     writer.writerows(all_results_for_agent)
 
                 if published_run_dir is not None:
+                    _write_fault_spec(published_run_dir, conductor, pid)
                     logger.info(
                         f"⏳ Attempt {attempt} of {n_attempts} for problem {pid} complete - "
                         f"Intermediate results written to {tmp_path}; artifacts published to {published_run_dir}"
