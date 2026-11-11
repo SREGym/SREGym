@@ -483,7 +483,7 @@ class Conductor:
             await self._run_hook("before_fault_injection")
             with self._phase("inject_fault"):
                 self._inject_fault()
-            injected_at = time.time()
+            injected_at = self.fault_spec["fault_injected_at"]
 
             # Let the fault surface in telemetry before the agent sees it.
             propagation = (

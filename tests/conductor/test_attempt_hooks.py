@@ -11,6 +11,7 @@ import pytest
 from sregym.agent_registry import list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.hooks import AttemptHookError, FaultContext, load_hooks
+from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.phases import read_ledger, summarize
 
 
@@ -88,6 +89,33 @@ def test_the_after_hook_runs_after_the_propagation_wait(monkeypatch):
     asyncio.run(c._advance_to_next_stage(0))
 
     assert log == ["before", "inject", "sleep 5", "after"]
+
+
+@pytest.mark.parametrize("checkpoint_duration", [0.0, 30.0])
+def test_after_hook_uses_captured_injection_time_before_checkpoint(monkeypatch, checkpoint_duration):
+    clock = [1000.0]
+    monkeypatch.setattr("sregym.conductor.conductor.time.time", lambda: clock[0])
+    log: list[str] = []
+    hooks = _Hooks(log)
+    c = _bare_conductor(log, hooks)
+    observations = []
+
+    def checkpoint():
+        clock[0] += checkpoint_duration / 2
+        observations.append(clock[0])
+        clock[0] += checkpoint_duration / 2
+
+    diagnosis = DiagnosisOracle.__new__(DiagnosisOracle)
+    diagnosis.load_diagnosis_checkpoint = checkpoint
+    c.problem.diagnosis_oracle = diagnosis
+
+    asyncio.run(c._advance_to_next_stage())
+
+    before, after = hooks.contexts
+    assert before.fault_injected_at is None
+    assert after.fault_injected_at == c.fault_spec["fault_injected_at"] == 1000.0
+    assert observations[0] >= after.fault_injected_at
+    assert c.waiting_for_agent and c.submission_stage == "diagnosis"
 
 
 def test_hooks_run_off_the_event_loop_thread():
