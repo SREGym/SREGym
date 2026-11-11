@@ -3,28 +3,28 @@ name: Problem Difficulty Evaluation
 # Opt-in only: a core team member starts this workflow from the Actions UI or
 # comments "/evaluate-problem <id> [3|5] [model]" on a pull request.
 #
-# By default Codex runs on NCSA Lumen (LUMEN_API_KEY) for five attempts.
-# Codex requires the Responses API, so a local LiteLLM proxy translates its
-# requests to Lumen's OpenAI-compatible Chat Completions endpoint. The Lumen
-# preflight requires a real tool call, because a model that can only answer in
-# text would fail every attempt and make the problem look hard.
+# By default Claude Code runs on Claude Opus 5.5 for three attempts. When the
+# optional CLAUDE_CODE_OAUTH_TOKEN secret exists (created with
+# `claude setup-token` on a Claude plan), Claude runs use that subscription
+# first: the agent and the judge both run through Claude Code on the token,
+# and the usage counts against the token owner's plan limits. Otherwise, or
+# when the subscription is unusable, Claude runs use the Anthropic API
+# (ANTHROPIC_API_KEY, a monthly credit grant).
 #
-# Claude Code on the Anthropic API (ANTHROPIC_API_KEY, a monthly credit grant)
-# runs only when a Claude model is named, for three attempts; use it for the
-# final check of a problem. glm-5.3-flash runs Codex on the Z.ai GLM Coding
-# Plan through the same LiteLLM proxy.
+# Naming the Lumen model runs Codex on NCSA Lumen (LUMEN_API_KEY), and
+# glm-5.3-flash runs Codex on the Z.ai GLM Coding Plan, each for five
+# attempts. Codex requires the Responses API, so a local LiteLLM proxy
+# translates its requests to their OpenAI-compatible Chat Completions
+# endpoints. The Lumen preflight requires a real tool call, because a model
+# that can only answer in text would fail every attempt and make the problem
+# look hard.
 #
-# When the optional CLAUDE_CODE_OAUTH_TOKEN secret exists (created with
-# `claude setup-token` on a Claude plan), Claude runs try that subscription
-# before API credits. The agent and the judge then both run through Claude
-# Code on the token. That usage counts against the token owner's plan limits.
-#
-# When the requested provider's preflight fails (credits exhausted, outage,
-# no tool calls, or the secret isn't set), the run falls back in the order
-# Lumen, Z.ai, then a personal Cursor CLI subscription instead of failing
-# outright. The fallbacks don't try to match models between runs -- they exist
-# purely to flag whether a problem still gets solved by *some* capable agent,
-# not to compare agents.
+# When the requested provider's preflight fails (plan limit or credits
+# exhausted, outage, no tool calls, or the secret isn't set), the run falls
+# back in the order Lumen, Z.ai, then a personal Cursor CLI subscription
+# instead of failing outright. The fallbacks don't try to match models between
+# runs -- they exist purely to flag whether a problem still gets solved by
+# *some* capable agent, not to compare agents.
 #
 # Comment runs evaluate the PR merged into the default branch so that problems
 # introduced by the PR itself can be scored before merge. Because this job
@@ -52,15 +52,15 @@ on:
           - "3"
           - "5"
       model:
-        description: "Model; Lumen by default, Claude for a final check. Unusable providers fall back to Lumen, Z.ai, then Cursor"
+        description: "Model; Claude runs use the subscription token, then API credits. Unusable providers fall back to Lumen, Z.ai, then Cursor"
         required: true
-        # Keep the Lumen option in sync with LUMEN_MODEL below.
-        default: deepseek-v4.1-flash-1017
+        default: claude-opus-5-5
         type: choice
         options:
-          - deepseek-v4.1-flash-1017
           - claude-opus-5-5
           - claude-sonnet-5-5
+          # Keep the Lumen option in sync with LUMEN_MODEL below.
+          - deepseek-v4.1-flash-1017
           - glm-5.3-flash
 
 concurrency:
@@ -68,7 +68,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The default model, served by NCSA Lumen's OpenAI-compatible API.
+  # The Lumen model, served by NCSA Lumen's OpenAI-compatible API. It runs
+  # when named and as the first fallback.
   LUMEN_MODEL: deepseek-v4.1-flash-1017
   LUMEN_API_BASE: https://lumen.ncsa.illinois.edu/v1
 
@@ -148,15 +149,15 @@ jobs:
                 read -r -a words <<< "$raw" || true
                 problem_id=${words[0]:-}
                 # Both optional values may be omitted, so tell them apart by
-                # shape: "/evaluate-problem <id> claude-opus-5-5" keeps
-                # Claude's default attempt count.
+                # shape: "/evaluate-problem <id> glm-5.3-flash" keeps GLM's
+                # default attempt count.
                 for word in "${words[@]:1:2}"; do
                   case "$word" in
                     *[!0-9]*) model="$word" ;;
                     *) attempts="$word" ;;
                   esac
                 done
-                model=${model:-$LUMEN_MODEL}
+                model=${model:-claude-opus-5-5}
               fi
               ;;
           esac
@@ -410,8 +411,8 @@ jobs:
           }
 
           # The requested provider goes first, then the rest in fallback
-          # order. Claude only runs when a Claude model is named, and tries the
-          # subscription before API credits when its secret is configured.
+          # order. Claude runs try the subscription before API credits when
+          # its secret is configured.
           case "$REQUESTED_MODEL" in
             claude-*)
               chain="anthropic lumen zai cursor"
