@@ -327,7 +327,10 @@ To add a new problem:
    Plan. When the requested provider is unusable (for example, when its
    credits are spent, or the Lumen model cannot make tool calls), the run falls
    back to Lumen, then Z.ai, then the Cursor CLI, and the report says why. Both
-   optional values can be omitted independently. The workflow publishes diagnosis, mitigation, and overall
+   optional values can be omitted independently. If the repository has a
+   `CLAUDE_CODE_OAUTH_TOKEN` secret (created with `claude setup-token`), Claude
+   runs use that Claude subscription before API credits, and the usage counts
+   against the token owner's plan limits. The workflow publishes diagnosis, mitigation, and overall
    pass rates in the run summary and PR conversation. A problem is marked
    saturated only when every requested attempt completes and passes.
 

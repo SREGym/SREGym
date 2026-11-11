@@ -14,6 +14,11 @@ name: Problem Difficulty Evaluation
 # final check of a problem. glm-5.3-flash runs Codex on the Z.ai GLM Coding
 # Plan through the same LiteLLM proxy.
 #
+# When the optional CLAUDE_CODE_OAUTH_TOKEN secret exists (created with
+# `claude setup-token` on a Claude plan), Claude runs try that subscription
+# before API credits. The agent and the judge then both run through Claude
+# Code on the token. That usage counts against the token owner's plan limits.
+#
 # When the requested provider's preflight fails (credits exhausted, outage,
 # no tool calls, or the secret isn't set), the run falls back in the order
 # Lumen, Z.ai, then a personal Cursor CLI subscription instead of failing
@@ -23,7 +28,8 @@ name: Problem Difficulty Evaluation
 #
 # Comment runs evaluate the PR merged into the default branch so that problems
 # introduced by the PR itself can be scored before merge. Because this job
-# holds LUMEN_API_KEY/ANTHROPIC_API_KEY/ZCODE_API_KEY/CURSOR_API_KEY, only
+# holds provider keys (LUMEN_API_KEY, CLAUDE_CODE_OAUTH_TOKEN,
+# ANTHROPIC_API_KEY, ZCODE_API_KEY, CURSOR_API_KEY), only
 # OWNER/MEMBER/COLLABORATOR comments are honoured; review the PR diff before
 # issuing the command, as it executes PR code.
 
@@ -206,10 +212,23 @@ jobs:
       CURSOR_JUDGE_BRIDGE_PORT: "4100"
       CURSOR_MODEL: "auto"
     steps:
+      # The Claude subscription preflight runs the Claude Code CLI. Install it
+      # here, before any provider key is in the environment.
+      - name: Install Claude Code CLI
+        if: startsWith(needs.resolve.outputs.model, 'claude-')
+        run: |
+          set -euo pipefail
+          # Same guard as the agent image: only releases at least a week old.
+          npm_config_before="$(node -p 'new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()')"
+          export npm_config_before
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
       - name: Choose evaluation provider
         id: provider
         env:
           LUMEN_API_KEY: ${{ secrets.LUMEN_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
@@ -279,6 +298,28 @@ jobs:
               return 1
             fi
             echo "Lumen preflight passed for $LUMEN_MODEL, including a tool call."
+          }
+
+          # A Claude plan's OAuth token (from `claude setup-token`) signs Claude
+          # Code in without API credits. The token only works through Claude
+          # Code, not the Messages API, so the preflight runs the CLI itself.
+          check_claude_oauth() {
+            local output_file="$RUNNER_TEMP/claude-oauth-preflight.json"
+            local error_file="$RUNNER_TEMP/claude-oauth-preflight.err"
+            local status=0 message
+            # ANTHROPIC_API_KEY outranks the OAuth token in print mode, so drop
+            # it to test the same sign-in the agent will use.
+            env -u ANTHROPIC_API_KEY timeout 150 \
+              claude -p "Reply with OK." --model "$REQUESTED_MODEL" --output-format json \
+              < /dev/null > "$output_file" 2> "$error_file" || status=$?
+            if [ "$status" -eq 0 ] && jq -e '.is_error == false' "$output_file" > /dev/null 2>&1; then
+              echo "Claude subscription preflight passed for $REQUESTED_MODEL."
+              return 0
+            fi
+            message=$(jq -r '.result // empty' "$output_file" 2>/dev/null || true)
+            [ -n "$message" ] || message=$(tail -c 300 "$error_file" 2>/dev/null || true)
+            reason="Claude Code exited with status $status: ${message:-no output}"
+            return 1
           }
 
           check_anthropic() {
@@ -369,13 +410,19 @@ jobs:
           }
 
           # The requested provider goes first, then the rest in fallback
-          # order. Claude only runs when a Claude model is named.
+          # order. Claude only runs when a Claude model is named, and tries the
+          # subscription before API credits when its secret is configured.
           case "$REQUESTED_MODEL" in
-            claude-*) chain="anthropic lumen zai cursor" ;;
+            claude-*)
+              chain="anthropic lumen zai cursor"
+              if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+                chain="claude_oauth $chain"
+              fi
+              ;;
             glm-*) chain="zai lumen cursor" ;;
             *) chain="lumen zai cursor" ;;
           esac
-          declare -A label=([lumen]="Lumen" [anthropic]="Claude" [zai]="Z.ai" [cursor]="Cursor")
+          declare -A label=([lumen]="Lumen" [claude_oauth]="Claude subscription" [anthropic]="Claude" [zai]="Z.ai" [cursor]="Cursor")
 
           provider=""
           fallback_note=""
@@ -405,7 +452,7 @@ jobs:
 
           case "$provider" in
             lumen) run_model="$LUMEN_MODEL"; harness="Codex"; default_attempts=5 ;;
-            anthropic) run_model="$REQUESTED_MODEL"; harness="Claude Code"; default_attempts=3 ;;
+            claude_oauth|anthropic) run_model="$REQUESTED_MODEL"; harness="Claude Code"; default_attempts=3 ;;
             zai) run_model="$ZAI_MODEL"; harness="Codex"; default_attempts=5 ;;
             cursor) run_model="$CURSOR_MODEL"; harness="Cursor CLI"; default_attempts=5 ;;
           esac
@@ -463,6 +510,7 @@ jobs:
               `${process.env.PR_NUMBER}#issuecomment-${process.env.COMMENT_ID}`;
             const providerLabel = {
               lumen: 'Codex on NCSA Lumen',
+              claude_oauth: 'Claude Code on a Claude subscription',
               anthropic: 'Claude Code on the Anthropic API',
               zai: 'Codex on the Z.ai Coding Plan',
               cursor: 'Cursor CLI fallback',
@@ -722,13 +770,25 @@ jobs:
           # Only Claude runs get the Anthropic key; SREGym forwards provider
           # keys into the agent container, and other agents don't need it.
           ANTHROPIC_API_KEY: ${{ env.PROVIDER == 'anthropic' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_PLAN_TOKEN: ${{ env.PROVIDER == 'claude_oauth' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -euo pipefail
           echo "EVALUATION_STARTED=true" >> "$GITHUB_ENV"
 
           build_args=()
+          judge_args=()
           case "$PROVIDER" in
+            claude_oauth)
+              # The same harness as an API-key run, signed in with the plan's
+              # OAuth token. The token can't call the Messages API directly, so
+              # the judge also runs through Claude Code on the same token.
+              build_args+=(--force-build)
+              agent_name="claudecode"
+              judge_model="$RUN_MODEL"
+              judge_args+=(--judge-backend claudecode)
+              export CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_PLAN_TOKEN"
+              ;;
             anthropic)
               # The released agent image carries its own copy of clients/;
               # build so the checked-out Claude Code driver is what runs.
@@ -761,6 +821,7 @@ jobs:
             --agent "$agent_name" \
             --model "$RUN_MODEL" \
             --judge-model "$judge_model" \
+            "${judge_args[@]}" \
             --n-attempts "$ATTEMPTS" \
             --agent-timeout 1800 \
             --internet-access filtered \
