@@ -861,6 +861,16 @@ def _probe_host(host: str, port: int = 443) -> tuple[str, float]:
 
 
 def _port_in_use(port: int, host: str = "0.0.0.0") -> bool:
+    """Whether a run binding host:port would find it taken.
+
+    On Linux a bind to the wildcard address conflicts with a listener on any address. macOS
+    lets that SO_REUSEADDR bind succeed next to a 127.0.0.1 listener, so also try connecting
+    to the loopback address, which finds such a listener on both systems.
+    """
+    return _bind_conflicts(port, host) or _accepts_connection(port)
+
+
+def _bind_conflicts(port: int, host: str) -> bool:
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     with socket.socket(family, socket.SOCK_STREAM) as sock:
         # Like uvicorn, ignore a socket an earlier run left in TIME_WAIT.
@@ -870,6 +880,12 @@ def _port_in_use(port: int, host: str = "0.0.0.0") -> bool:
         except OSError:
             return True
     return False
+
+
+def _accepts_connection(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
 # ----------------------------------------------------------------------- output

@@ -694,3 +694,16 @@ def test_long_fix_commands_are_not_cut_off():
     text = console.export_text()
     assert "…" not in text
     assert digest in "".join(line.strip("│ ") for line in text.splitlines())
+
+
+def test_loopback_listener_is_found_where_the_bind_test_misses_it(monkeypatch):
+    """macOS lets the wildcard bind succeed next to a 127.0.0.1 listener; the connect test catches it."""
+    import socket
+
+    monkeypatch.setattr(setup_check, "_bind_conflicts", lambda port, host: False)  # behave like macOS
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        assert setup_check._port_in_use(port)
+    assert not setup_check._port_in_use(port)
