@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -562,16 +563,7 @@ class SetupChecker:
         ports = {variable: int(self.env.get(variable) or default) for variable, default in HOST_PORTS}
         command = shlex.join(["python3", "-c", _REACH_SCRIPT, *map(str, ports.values())])
         code, out = self.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--pull=never",
-                "--network=bridge",
-                "--add-host=host.docker.internal:host-gateway",
-                image,
-                command,
-            ],
+            ["docker", "run", "--rm", "--pull=never", *self._agent_network_args(), image, command],
             60,
         )
         if code != 0 and re.search(r"No such image|Unable to find image", out, re.IGNORECASE):
@@ -593,6 +585,17 @@ class SetupChecker:
         if errors:
             return CheckResult(name, Status.WARN, "could not reach host.docker.internal: " + "; ".join(errors))
         return CheckResult(name, Status.OK, f"agent containers can reach host ports {', '.join(states)}")
+
+    def _agent_network_args(self) -> list[str]:
+        """The network a run gives the agent container, as in ContainerRunner.
+
+        Filtered agents sit on a bridge network behind the egress proxy. In open mode on Linux
+        the agent uses the host network, where traffic to the host stays local and a firewall
+        such as ufw does not drop it, so testing from a bridge there would report a false block.
+        """
+        if self.options.internet_access != "filtered" and platform.system() != "Darwin":
+            return ["--network=host", "--add-host=host.docker.internal:host-gateway"]
+        return ["--network=bridge", "--add-host=host.docker.internal:host-gateway"]
 
     def check_temp_mounts(self) -> CheckResult:
         """Can Docker mount folders from the temp directory into a container?

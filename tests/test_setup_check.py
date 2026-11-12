@@ -736,3 +736,21 @@ def test_wrong_judge_key_shows_the_providers_error_and_key_hint(repo, monkeypatc
     assert result.status == Status.FAIL
     assert "Invalid API Key" in result.detail
     assert result.fix.startswith("Check the API key first")
+
+
+@pytest.mark.parametrize(
+    ("internet", "system", "network"),
+    [
+        ("filtered", "Linux", "--network=bridge"),
+        ("open", "Linux", "--network=host"),
+        ("open", "Darwin", "--network=bridge"),
+    ],
+)
+def test_host_probe_uses_the_network_a_run_gives_the_agent(repo, monkeypatch, internet, system, network):
+    monkeypatch.setattr(setup_check.platform, "system", lambda: system)
+    responses = {**_docker_up(), "docker run": (0, "8000 open\n9954 open\n16443 open\n")}
+    check, runner = make(repo, responses, internet_access=internet)
+    check.check_docker()
+    assert check.check_host_reachable().status == Status.OK
+    [probe] = [c for c in runner.calls if c.startswith("docker run")]
+    assert network in probe.split()
