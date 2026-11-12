@@ -420,7 +420,9 @@ def test_application_request_failure_is_bounded(monkeypatch):
         (500, {"error": "no connection available"}, False),
     ],
 )
-def test_real_api_client_checks_search_and_recommendations(monkeypatch, status, payload, valid):
+def test_real_api_client_checks_search_and_recommendations(
+    monkeypatch, status, payload, valid, allow_kubernetes_test_server
+):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -437,6 +439,7 @@ def test_real_api_client_checks_search_and_recommendations(monkeypatch, status, 
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    allow_kubernetes_test_server(server)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     configuration = Configuration(host=f"http://127.0.0.1:{server.server_port}")

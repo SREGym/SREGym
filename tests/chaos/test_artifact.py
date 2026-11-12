@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from unittest.mock import Mock
 
 import pytest
 
@@ -232,15 +233,21 @@ def test_run_preserves_explicit_kubeconfig(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("KUBECONFIG", "/selected/config:/selected/overlay")
     artifact = FaultArtifact.load(make(tmp_path, inject='printf "%s" "$KUBECONFIG"'))
-
-    assert artifact.workspace().run("inject.sh", "hotel").stdout == "/selected/config:/selected/overlay"
+    # Verify the application's forwarding before the test guard sanitizes a
+    # real child environment. This test does not need to launch a process.
+    run = Mock()
+    monkeypatch.setattr("sregym.chaos.artifact.subprocess.run", run)
+    artifact.workspace().run("inject.sh", "hotel")
+    assert run.call_args.kwargs["env"]["KUBECONFIG"] == "/selected/config:/selected/overlay"
 
 
 def test_run_keeps_kubectl_default_selection(tmp_path, monkeypatch):
     monkeypatch.delenv("KUBECONFIG", raising=False)
     artifact = FaultArtifact.load(make(tmp_path, inject='printf "%s" "${KUBECONFIG-unset}"'))
-
-    assert artifact.workspace().run("inject.sh", "hotel").stdout == "unset"
+    run = Mock()
+    monkeypatch.setattr("sregym.chaos.artifact.subprocess.run", run)
+    artifact.workspace().run("inject.sh", "hotel")
+    assert "KUBECONFIG" not in run.call_args.kwargs["env"]
 
 
 def test_attempts_copy_current_source_without_sharing_state(tmp_path):

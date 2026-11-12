@@ -1,5 +1,9 @@
 from unittest.mock import Mock
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("offline_kubectl")
+
 
 def test_cascade_gateway_runs_several_replicas_and_is_not_oracle_topology_checked():
     """The shared SaaS oracle demands exactly one replica of its deployments.
