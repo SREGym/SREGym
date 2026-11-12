@@ -5,7 +5,7 @@ import yaml
 from sregym.service.apps.hotel_reservation import HotelReservation
 
 
-def test_tracing_uses_the_central_collector_without_changing_source():
+def test_tracing_uses_the_central_collector_without_changing_source(offline_kubectl):
     app = HotelReservation()
     source = {
         path.relative_to(app.k8s_deploy_path): path.read_text() for path in Path(app.k8s_deploy_path).rglob("*.yaml")
@@ -27,7 +27,7 @@ def test_tracing_uses_the_central_collector_without_changing_source():
     assert all((Path(app.k8s_deploy_path) / path).read_text() == content for path, content in source.items())
 
 
-def test_standard_rate_policy_has_headroom_above_the_default_workload():
+def test_standard_rate_policy_has_headroom_above_the_default_workload(offline_kubectl):
     app = HotelReservation()
     deployment_path = Path(app.k8s_deploy_path) / "rate" / "rate-deployment.yaml"
     deployment = yaml.safe_load(deployment_path.read_text())

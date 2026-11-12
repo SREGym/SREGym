@@ -488,7 +488,7 @@ def test_a_slow_agent_is_not_charged_for_elapsed_time(store):
     assert state["dropped_requests"] == 0
 
 
-def test_no_family_ships_an_authored_briefing():
+def test_no_family_ships_an_authored_briefing(offline_kubectl):
     """Rendered configuration does not add a repair guide to the application."""
     import json
 
