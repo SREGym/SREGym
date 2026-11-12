@@ -682,3 +682,15 @@ def test_stopped_docker_shows_the_error_not_the_json(repo):
     assert result.status == Status.FAIL
     assert result.detail.startswith("failed to connect to the docker API")
     assert "{" not in result.detail
+
+
+def test_long_fix_commands_are_not_cut_off():
+    from rich.console import Console
+
+    digest = "sha256:" + "9df755b042158a94896701c44028bd145aabefb9355784901b1bab7e7b445ef2"
+    fix = f"docker pull ghcr.io/sregym/agent-base:sha-a4c6bf32ea763712d100bfe3d107ff097c5dc014@{digest}"
+    console = Console(record=True, width=100)
+    setup_check.render([CheckResult("Agent image", Status.WARN, "not pulled", fix)], SetupCheckOptions(), console)
+    text = console.export_text()
+    assert "…" not in text
+    assert digest in "".join(line.strip("│ ") for line in text.splitlines())

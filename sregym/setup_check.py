@@ -903,7 +903,8 @@ def render(results: Iterable[CheckResult], options: SetupCheckOptions, console=N
     )
     table.add_column("", width=6, no_wrap=True)
     table.add_column("Check", style="bold")
-    table.add_column("Result")
+    # Fold rather than cut long words: fix lines hold commands such as a full image digest to copy.
+    table.add_column("Result", overflow="fold")
     for r in results:
         # Details quote command output and error messages, which can contain
         # square brackets that Rich would otherwise read as markup.
