@@ -754,3 +754,32 @@ def test_host_probe_uses_the_network_a_run_gives_the_agent(repo, monkeypatch, in
     assert check.check_host_reachable().status == Status.OK
     [probe] = [c for c in runner.calls if c.startswith("docker run")]
     assert network in probe.split()
+
+
+NO_CONTEXT = {
+    "kubectl get nodes": (1, "The connection to the server localhost:8080 was refused"),
+    "kubectl config current-context": (1, "error: current-context is not set"),
+}
+
+
+def test_no_context_with_a_kind_context_suggests_switching_to_it(repo):
+    responses = {**NO_CONTEXT, "kubectl config get-contexts": (0, "kind-kind\n"), "kind get clusters": (0, "kind\n")}
+    result = make(repo, responses)[0].check_cluster()
+    assert result.status == Status.FAIL
+    assert result.fix == "kubectl config use-context kind-kind"
+
+
+def test_no_context_with_a_running_kind_cluster_suggests_exporting_it(repo):
+    responses = {**NO_CONTEXT, "kubectl config get-contexts": (0, ""), "kind get clusters": (0, "kind\n")}
+    result = make(repo, responses)[0].check_cluster()
+    assert result.fix == "kind export kubeconfig --name kind"
+
+
+def test_no_context_and_no_cluster_suggests_creating_one(repo):
+    responses = {
+        **NO_CONTEXT,
+        "kubectl config get-contexts": (0, ""),
+        "kind get clusters": (0, "No kind clusters found.\n"),
+    }
+    result = make(repo, responses)[0].check_cluster()
+    assert "kind/setup_kind_cluster.sh" in result.fix

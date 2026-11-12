@@ -288,7 +288,7 @@ class SetupChecker:
         create = "Create the supported cluster: kind/setup_kind_cluster.sh (see kind/README.md)"
         context = _first_line(self.run(["kubectl", "config", "current-context"], 10)[1])
         if not context or "not set" in context:
-            return CheckResult(name, Status.FAIL, "kubectl has no current context", create)
+            return self._no_current_context(name, create)
         detail = f"context {context}: {_summarize_kubectl_error(error)}"
         if context.startswith("kind-"):
             cluster = context.removeprefix("kind-")
@@ -318,6 +318,30 @@ class SetupChecker:
                     "docker start " + " ".join(stopped),
                 )
         return CheckResult(name, Status.FAIL, detail, "kubectl cluster-info; or " + create[0].lower() + create[1:])
+
+    def _no_current_context(self, name: str, create: str) -> CheckResult:
+        """No context selected: reconnect to a cluster that still exists before suggesting a new one."""
+        detail = "kubectl has no current context"
+        code, out = self.run(["kubectl", "config", "get-contexts", "-o", "name"], 10)
+        contexts = [line.strip() for line in out.splitlines() if line.strip()] if code == 0 else []
+        code, out = self.run(["kind", "get", "clusters"], 15)
+        clusters = [line.strip() for line in out.splitlines() if line.strip() and " " not in line] if code == 0 else []
+        for cluster in clusters:
+            if f"kind-{cluster}" in contexts:
+                return CheckResult(name, Status.FAIL, detail, f"kubectl config use-context kind-{cluster}")
+        if clusters:
+            # The cluster runs, but kubeconfig lost its entry (for example, it was reset).
+            return CheckResult(
+                name,
+                Status.FAIL,
+                f"{detail}; kind cluster '{clusters[0]}' is running but missing from kubeconfig",
+                f"kind export kubeconfig --name {clusters[0]}",
+            )
+        if contexts:
+            return CheckResult(
+                name, Status.FAIL, detail, "kubectl config use-context <name>; available: " + ", ".join(contexts)
+            )
+        return CheckResult(name, Status.FAIL, detail, create)
 
     def check_udev(self) -> CheckResult:
         name = "/run/udev on kind nodes"
