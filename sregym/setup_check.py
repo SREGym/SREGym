@@ -626,9 +626,10 @@ class SetupChecker:
         proxy = next((self.env[v] for v in ("HTTPS_PROXY", "https_proxy") if self.env.get(v)), None)
         if proxy:
             return CheckResult(name, Status.SKIP, f"traffic goes through the proxy {proxy}, so this was not tested")
-        hosts = list(dict.fromkeys([*DOWNLOAD_HOSTS, *self._run_specific_hosts()]))
-        with ThreadPoolExecutor(max_workers=len(hosts)) as pool:
-            results = dict(zip(hosts, pool.map(_probe_host, hosts), strict=True))
+        endpoints = list(dict.fromkeys([*((host, 443) for host in DOWNLOAD_HOSTS), *self._run_specific_hosts()]))
+        with ThreadPoolExecutor(max_workers=len(endpoints)) as pool:
+            probes = pool.map(lambda endpoint: _probe_host(*endpoint), endpoints)
+            results = {_endpoint_label(*endpoint): probe for endpoint, probe in zip(endpoints, probes, strict=True)}
         failed = {host: error for host, (error, _) in results.items() if error}
         if failed:
             listed = "; ".join(f"{host}: {error}" for host, error in failed.items())
@@ -650,9 +651,9 @@ class SetupChecker:
             )
         return CheckResult(name, Status.OK, f"reached {len(results)} hosts this run needs: " + ", ".join(results))
 
-    def _run_specific_hosts(self) -> list[str]:
-        """Hosts this run needs beyond every deploy's: the agent's model API and --noise."""
-        hosts = list(NOISE_HOSTS) if self.options.noise else []
+    def _run_specific_hosts(self) -> list[tuple[str, int]]:
+        """Endpoints this run needs beyond every deploy's: the agent's model API and --noise."""
+        hosts = [(host, 443) for host in NOISE_HOSTS] if self.options.noise else []
         reg = self._agent_reg
         if reg is None or self.options.agent in MODEL_FREE_AGENTS or self.options.use_external_harness:
             return hosts
@@ -666,7 +667,8 @@ class SetupChecker:
             rules = provider_endpoint_rules(policy, self.env, codex_subscription_auth=_codex_logged_in(self.env))
         except ValueError:
             return hosts  # unknown provider: reported by the allowlist check
-        return hosts + sorted({r.host for r in rules if r.host != "host.docker.internal"})
+        # Keep each rule's port: a custom AGENT_API_BASE such as http://localhost:8080/v1 is not on 443.
+        return hosts + sorted({(r.host, r.port) for r in rules if r.host != "host.docker.internal"})
 
     # --------------------------------------------------------------------- run
 
@@ -790,14 +792,18 @@ def _litellm_credentials(name: str, model: str, env: dict[str, str]) -> CheckRes
     return CheckResult(name, Status.OK, f"credentials found for {model}")
 
 
-def _probe_host(host: str) -> tuple[str, float]:
-    """Resolve a host and open a TLS port to it; return (error or "", DNS seconds)."""
+def _endpoint_label(host: str, port: int) -> str:
+    return host if port == 443 else f"{host}:{port}"
+
+
+def _probe_host(host: str, port: int = 443) -> tuple[str, float]:
+    """Resolve a host and open a connection to its port; return (error or "", DNS seconds)."""
     start = time.monotonic()
     # getaddrinfo has no timeout of its own, so bound it from a worker thread, and do
     # not wait for that thread on the way out: a hung lookup must not hang the check.
     pool = ThreadPoolExecutor(max_workers=1)
     try:
-        addresses = pool.submit(socket.getaddrinfo, host, 443, type=socket.SOCK_STREAM).result(
+        addresses = pool.submit(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM).result(
             timeout=NETWORK_TIMEOUT_S
         )
     except TimeoutError:
@@ -813,7 +819,7 @@ def _probe_host(host: str) -> tuple[str, float]:
             sock.settimeout(NETWORK_TIMEOUT_S)
             sock.connect(address)
     except OSError as exc:
-        return f"port 443 unreachable ({exc.strerror or exc})", dns_seconds
+        return f"port {port} unreachable ({exc.strerror or exc})", dns_seconds
     return "", dns_seconds
 
 

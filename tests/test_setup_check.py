@@ -32,7 +32,7 @@ class FakeRunner:
 @pytest.fixture(autouse=True)
 def no_real_network(monkeypatch):
     """Tests must not depend on this machine's internet; the internet check is tested on its own."""
-    monkeypatch.setattr(setup_check, "_probe_host", lambda host: ("", 0.01))
+    monkeypatch.setattr(setup_check, "_probe_host", lambda host, port=443: ("", 0.01))
 
 
 @pytest.fixture
@@ -501,7 +501,9 @@ def test_reachable_download_hosts_pass(repo):
 
 
 def test_dns_failure_is_a_blocker_with_a_dns_fix(repo, monkeypatch):
-    monkeypatch.setattr(setup_check, "_probe_host", lambda host: ("does not resolve (DNS gave no answer in 5s)", 5.0))
+    monkeypatch.setattr(
+        setup_check, "_probe_host", lambda host, port=443: ("does not resolve (DNS gave no answer in 5s)", 5.0)
+    )
     result = make(repo)[0].check_internet()
     assert result.status == Status.FAIL
     assert "github.com: does not resolve" in result.detail
@@ -512,7 +514,9 @@ def test_blocked_host_is_a_blocker_with_a_network_fix(repo, monkeypatch):
     monkeypatch.setattr(
         setup_check,
         "_probe_host",
-        lambda host: ("port 443 unreachable (Connection timed out)", 0.02) if host == "ghcr.io" else ("", 0.02),
+        lambda host, port=443: (
+            ("port 443 unreachable (Connection timed out)", 0.02) if host == "ghcr.io" else ("", 0.02)
+        ),
     )
     result = make(repo)[0].check_internet()
     assert result.status == Status.FAIL
@@ -521,14 +525,14 @@ def test_blocked_host_is_a_blocker_with_a_network_fix(repo, monkeypatch):
 
 
 def test_slow_dns_is_a_warning(repo, monkeypatch):
-    monkeypatch.setattr(setup_check, "_probe_host", lambda host: ("", 2.4 if host == "github.com" else 0.02))
+    monkeypatch.setattr(setup_check, "_probe_host", lambda host, port=443: ("", 2.4 if host == "github.com" else 0.02))
     result = make(repo)[0].check_internet()
     assert result.status == Status.WARN
     assert "github.com took 2.4s" in result.detail
 
 
 def test_internet_check_is_skipped_behind_a_proxy(repo, monkeypatch):
-    def no_probe(host):
+    def no_probe(host, port=443):
         raise AssertionError("must not probe directly behind a proxy")
 
     monkeypatch.setattr(setup_check, "_probe_host", no_probe)
@@ -580,7 +584,12 @@ def test_every_host_the_deploy_downloads_from_is_checked():
 
 def _probed_hosts(check, monkeypatch):
     probed = []
-    monkeypatch.setattr(setup_check, "_probe_host", lambda host: probed.append(host) or ("", 0.01))
+
+    def record(host, port=443):
+        probed.append(setup_check._endpoint_label(host, port))
+        return "", 0.01
+
+    monkeypatch.setattr(setup_check, "_probe_host", record)
     check.check_internet()
     return probed
 
@@ -602,3 +611,22 @@ def test_internet_check_adds_no_model_host_for_model_free_agents(repo, monkeypat
     check, _ = make(repo, agent="autosubmit")
     check.check_agent()
     assert sorted(_probed_hosts(check, monkeypatch)) == sorted(setup_check.DOWNLOAD_HOSTS)
+
+
+def test_custom_endpoint_is_probed_on_its_own_port(repo, monkeypatch):
+    env = {"AGENT_API_BASE": "http://localhost:8080/v1", "AGENT_API_KEY": "k"}
+    check, _ = make(repo, agent="stratus", model="openai/my-model", env=env)
+    check.check_agent()
+    probed = _probed_hosts(check, monkeypatch)
+    assert "localhost:8080" in probed
+    assert "localhost" not in probed
+
+
+def test_probe_uses_the_given_port():
+    import socket
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        error, _ = setup_check._probe_host("127.0.0.1", listener.getsockname()[1])
+    assert error == ""
