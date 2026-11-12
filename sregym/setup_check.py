@@ -506,13 +506,17 @@ class SetupChecker:
             from llm_backend.init_backend import get_llm_backend_for_judge
 
             with mock.patch.dict(os.environ, judge_env):
-                get_llm_backend_for_judge().inference("Say ok.", system_prompt="Reply with exactly 'ok'.")
+                backend = get_llm_backend_for_judge()
+                # One attempt: the backend's retries turn every error, a wrong key included, into
+                # "Max retries exceeded" after about 30 seconds and drop the provider's message.
+                backend.retry = False
+                backend.inference("Say ok.", system_prompt="Reply with exactly 'ok'.")
         except Exception as exc:  # noqa: BLE001 - every failure here is a reportable finding
             return CheckResult(
                 name,
                 Status.FAIL,
                 f"{source} did not answer: {_first_line(str(exc))[:200]}",
-                "Check credit/quota and --judge-model, or use --judge-backend codex",
+                "Check the API key first, then credit/quota and --judge-model, or use --judge-backend codex",
             )
         return CheckResult(name, Status.OK, f"{source} answered a test request")
 

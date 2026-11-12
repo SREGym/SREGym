@@ -653,7 +653,10 @@ def test_judge_ping_uses_the_endpoint_and_key_a_run_would(repo, monkeypatch):
     seen = {}
 
     class Backend:
+        retry = True
+
         def inference(self, *args, **kwargs):
+            seen["retry"] = self.retry
             seen.update({k: os.environ.get(k) for k in ("JUDGE_MODEL_ID", "JUDGE_API_BASE", "JUDGE_API_KEY")})
 
     monkeypatch.setattr("llm_backend.init_backend.get_llm_backend_for_judge", lambda: Backend())
@@ -663,6 +666,7 @@ def test_judge_ping_uses_the_endpoint_and_key_a_run_would(repo, monkeypatch):
     check, _ = make(repo, agent="opencode", model="local/qwen3", env=env)
     check.options.live_judge = True
     assert check.check_judge().status == Status.OK
+    assert seen.pop("retry") is False  # one attempt, so a wrong key shows its real error at once
     assert seen == {
         "JUDGE_MODEL_ID": "openai/qwen3",
         "JUDGE_API_BASE": "http://localhost:11434/v1",
@@ -714,3 +718,21 @@ def test_proxy_credentials_are_not_printed(repo):
     assert result.status == Status.SKIP
     assert "proxy.corp:3128" in result.detail
     assert "s3cret" not in result.detail and "alice" not in result.detail
+
+
+def test_wrong_judge_key_shows_the_providers_error_and_key_hint(repo, monkeypatch):
+    class Rejecting:
+        retry = True
+
+        def inference(self, *args, **kwargs):
+            if self.retry:
+                raise RuntimeError("Max retries exceeded. Unable to complete the request.")
+            raise RuntimeError("litellm.BadRequestError: OpenAIException - Invalid API Key")
+
+    monkeypatch.setattr("llm_backend.init_backend.get_llm_backend_for_judge", lambda: Rejecting())
+    check, _ = make(repo, env={"JUDGE_API_BASE": "https://x", "JUDGE_API_KEY": "wrong"})
+    check.options.live_judge = True
+    result = check.check_judge()
+    assert result.status == Status.FAIL
+    assert "Invalid API Key" in result.detail
+    assert result.fix.startswith("Check the API key first")
