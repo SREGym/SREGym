@@ -413,6 +413,16 @@ class SetupChecker:
         agent, model = self.options.agent, self.options.model
         if agent in MODEL_FREE_AGENTS:
             return CheckResult(name, Status.SKIP, f"'{agent}' does not call a model")
+        if _is_opencode_local_model(agent, model):
+            # opencode_agent.py needs only the base URL; servers such as Ollama take no key.
+            if self.env.get("AGENT_API_BASE"):
+                return CheckResult(name, Status.OK, f"AGENT_API_BASE set for {model} (no key needed)")
+            return CheckResult(
+                name,
+                Status.FAIL,
+                f"{model} needs AGENT_API_BASE",
+                "export AGENT_API_BASE=http://localhost:11434/v1 (your local model server)",
+            )
         if self.env.get("AGENT_API_BASE") and _uses_custom_endpoint(agent, model):
             if self.env.get("AGENT_API_KEY"):
                 return CheckResult(name, Status.OK, f"AGENT_API_KEY set for {self.env['AGENT_API_BASE']}")
@@ -449,8 +459,22 @@ class SetupChecker:
 
         judge_model = opts.judge_model or opts.model
         env = self.env
-        base = env.get("JUDGE_API_BASE") or (None if opts.judge_model else env.get("AGENT_API_BASE"))
-        key = env.get("JUDGE_API_KEY") or (None if opts.judge_model else env.get("AGENT_API_KEY"))
+        # Mirror main._configure_model_environment(): the judge inherits the agent endpoint when
+        # --judge-model is not set or is an OpenCode local model, which also gets a placeholder key.
+        local_judge = _is_opencode_local_model(opts.agent, judge_model)
+        inherits = not opts.judge_model or local_judge
+        base = env.get("JUDGE_API_BASE") or (env.get("AGENT_API_BASE") if inherits else None)
+        key = env.get("JUDGE_API_KEY") or (env.get("AGENT_API_KEY") if inherits else None)
+        if local_judge:
+            if not base:
+                return CheckResult(
+                    name,
+                    Status.FAIL,
+                    f"{judge_model} as the judge needs AGENT_API_BASE or JUDGE_API_BASE",
+                    "export AGENT_API_BASE=http://localhost:11434/v1 (your local model server)",
+                )
+            key = key or "dummy"
+            judge_model = f"openai/{judge_model.split('/', 1)[1]}"
         if base:
             if not key:
                 return CheckResult(
@@ -464,23 +488,22 @@ class SetupChecker:
             source = judge_model
         if not opts.live_judge:
             return CheckResult(name, Status.OK, f"credentials found for {source} (not contacted)")
-        return self._ping_judge(judge_model, source)
+        return self._ping_judge(judge_model, source, base, key)
 
-    def _ping_judge(self, judge_model: str, source: str) -> CheckResult:
-        """Send the same one-line request the run's judge preflight sends."""
+    def _ping_judge(
+        self, judge_model: str, source: str, base: str | None = None, key: str | None = None
+    ) -> CheckResult:
+        """Send the same one-line request the run's judge preflight sends, to the same endpoint."""
         name = "Judge"
+        judge_env = {"JUDGE_MODEL_ID": judge_model}
+        judge_env.update({k: v for k, v in (("JUDGE_API_BASE", base), ("JUDGE_API_KEY", key)) if v})
         try:
+            from unittest import mock
+
             from llm_backend.init_backend import get_llm_backend_for_judge
 
-            previous = os.environ.get("JUDGE_MODEL_ID")
-            os.environ["JUDGE_MODEL_ID"] = judge_model
-            try:
+            with mock.patch.dict(os.environ, judge_env):
                 get_llm_backend_for_judge().inference("Say ok.", system_prompt="Reply with exactly 'ok'.")
-            finally:
-                if previous is None:
-                    os.environ.pop("JUDGE_MODEL_ID", None)
-                else:
-                    os.environ["JUDGE_MODEL_ID"] = previous
         except Exception as exc:  # noqa: BLE001 - every failure here is a reportable finding
             return CheckResult(
                 name,
@@ -699,6 +722,11 @@ def _firewall_fix(ports: list[str], run: Runner) -> str:
     if ufw_active:
         return f"ufw is active and drops this traffic. Allow Docker's networks to reach these ports: {allow}"
     return f"A host firewall drops traffic from Docker networks. Allow 172.16.0.0/12 to TCP {', '.join(ports)}"
+
+
+def _is_opencode_local_model(agent: str, model: str) -> bool:
+    """Same rule as main._is_opencode_local_model()."""
+    return agent == "opencode" and model.startswith("local/")
 
 
 def _uses_custom_endpoint(agent: str, model: str) -> bool:

@@ -630,3 +630,42 @@ def test_probe_uses_the_given_port():
         listener.listen()
         error, _ = setup_check._probe_host("127.0.0.1", listener.getsockname()[1])
     assert error == ""
+
+
+def test_local_opencode_model_needs_only_a_base_url(repo):
+    env = {"AGENT_API_BASE": "http://localhost:11434/v1"}
+    check, _ = make(repo, agent="opencode", model="local/qwen3", env=env)
+    assert check._check_agent_credentials().status == Status.OK
+    judge = check.check_judge()
+    assert judge.status == Status.OK
+    assert "openai/qwen3 via http://localhost:11434/v1" in judge.detail
+
+
+def test_local_opencode_model_without_a_base_url_is_a_blocker(repo):
+    check, _ = make(repo, agent="opencode", model="local/qwen3")
+    assert check._check_agent_credentials().status == Status.FAIL
+    assert check.check_judge().status == Status.FAIL
+
+
+def test_judge_ping_uses_the_endpoint_and_key_a_run_would(repo, monkeypatch):
+    import os
+
+    seen = {}
+
+    class Backend:
+        def inference(self, *args, **kwargs):
+            seen.update({k: os.environ.get(k) for k in ("JUDGE_MODEL_ID", "JUDGE_API_BASE", "JUDGE_API_KEY")})
+
+    monkeypatch.setattr("llm_backend.init_backend.get_llm_backend_for_judge", lambda: Backend())
+    monkeypatch.delenv("JUDGE_API_BASE", raising=False)
+    monkeypatch.delenv("JUDGE_API_KEY", raising=False)
+    env = {"AGENT_API_BASE": "http://localhost:11434/v1"}
+    check, _ = make(repo, agent="opencode", model="local/qwen3", env=env)
+    check.options.live_judge = True
+    assert check.check_judge().status == Status.OK
+    assert seen == {
+        "JUDGE_MODEL_ID": "openai/qwen3",
+        "JUDGE_API_BASE": "http://localhost:11434/v1",
+        "JUDGE_API_KEY": "dummy",
+    }
+    assert "JUDGE_API_BASE" not in os.environ  # restored afterwards
