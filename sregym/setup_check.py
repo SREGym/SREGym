@@ -498,17 +498,18 @@ class SetupChecker:
         # every interface, and a wildcard bind conflicts with a listener on any address.
         api_host = self.env.get("API_BIND_HOST", "0.0.0.0")
         busy = [
-            f"{port} ({variable})"
+            (variable, port)
             for variable, port in ports
             if _port_in_use(port, api_host if variable == "API_PORT" else "0.0.0.0")
         ]
         if busy:
-            return CheckResult(
-                "Host ports",
-                Status.WARN,
-                "already in use: " + ", ".join(busy),
-                "Stop the other process or set the listed variable to a free port",
-            )
+            listed = ", ".join(f"{port} ({variable})" for variable, port in busy)
+            fix = "Stop the other process or set the listed variable to a free port"
+            # Since check_api_port_available() a run refuses to start when the API port is taken.
+            # A run replaces a leftover SREGym port-forward on the MCP port itself, so the others warn.
+            if any(variable == "API_PORT" for variable, _ in busy):
+                return CheckResult("Host ports", Status.FAIL, f"already in use: {listed}; the run would not start", fix)
+            return CheckResult("Host ports", Status.WARN, f"already in use: {listed}", fix)
         return CheckResult("Host ports", Status.OK, ", ".join(str(port) for _, port in ports) + " are free")
 
     def check_host_reachable(self) -> CheckResult:

@@ -255,11 +255,18 @@ def test_judge_ping_failure_is_reported(repo, monkeypatch):
     assert "402" in result.detail
 
 
-def test_busy_port_is_a_warning(repo, monkeypatch):
+def test_busy_api_port_is_a_blocker(repo, monkeypatch):
     monkeypatch.setattr(setup_check, "_port_in_use", lambda port, host="0.0.0.0": port == 8000)
     result = make(repo)[0].check_ports()
-    assert result.status == Status.WARN
+    assert result.status == Status.FAIL
     assert "8000 (API_PORT)" in result.detail
+
+
+def test_busy_mcp_port_is_a_warning(repo, monkeypatch):
+    monkeypatch.setattr(setup_check, "_port_in_use", lambda port, host="0.0.0.0": port == 9954)
+    result = make(repo)[0].check_ports()
+    assert result.status == Status.WARN
+    assert "9954 (MCP_SERVER_PORT)" in result.detail
 
 
 def test_exit_code_reflects_blockers(monkeypatch):
