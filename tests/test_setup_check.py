@@ -29,6 +29,17 @@ class FakeRunner:
         return 127, f"{argv[0]}: command not found"
 
 
+# The real lookup, kept before the autouse fixture below swaps it for a small fake.
+REAL_KNOWN_PROBLEM_IDS = setup_check._known_problem_ids
+
+
+@pytest.fixture(autouse=True)
+def small_problem_registry(monkeypatch):
+    monkeypatch.setattr(
+        setup_check, "_known_problem_ids", lambda: ["missing_service_hotel_reservation", "network_policy_block"]
+    )
+
+
 @pytest.fixture(autouse=True)
 def no_real_network(monkeypatch):
     """Tests must not depend on this machine's internet; the internet check is tested on its own."""
@@ -783,3 +794,21 @@ def test_no_context_and_no_cluster_suggests_creating_one(repo):
     }
     result = make(repo, responses)[0].check_cluster()
     assert "kind/setup_kind_cluster.sh" in result.fix
+
+
+def test_registered_problem_passes(repo):
+    assert make(repo, problem="network_policy_block")[0].check_problem().status == Status.OK
+
+
+def test_mistyped_problem_is_a_blocker_with_suggestions(repo):
+    result = make(repo, problem="missing_servce_hotel_reservation")[0].check_problem()
+    assert result.status == Status.FAIL
+    assert result.fix == "Did you mean: missing_service_hotel_reservation"
+
+
+def test_problem_check_is_skipped_without_problem(repo):
+    assert make(repo)[0].check_problem().status == Status.SKIP
+
+
+def test_real_registry_lookup_finds_a_shipped_problem():
+    assert "missing_service_hotel_reservation" in REAL_KNOWN_PROBLEM_IDS()

@@ -16,6 +16,7 @@ Run it with the flags you would pass to a benchmark run::
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import platform
@@ -129,6 +130,7 @@ class SetupCheckOptions:
     internet_access: str = "filtered"
     use_external_harness: bool = False
     noise: bool = False
+    problem: str | None = None
     live_judge: bool = True
     environment: dict[str, str] = field(default_factory=lambda: dict(os.environ))
 
@@ -418,6 +420,26 @@ class SetupChecker:
             results.append(self._check_filtered_provider(reg))
         results.append(self._check_agent_credentials())
         return results
+
+    def check_problem(self) -> CheckResult:
+        """Is --problem a registered problem id? A run stops on an unknown one only after starting up."""
+        name = "Problem"
+        problem = self.options.problem
+        if not problem:
+            return CheckResult(name, Status.SKIP, "no --problem given")
+        try:
+            known = _known_problem_ids()
+        except Exception as exc:  # noqa: BLE001 - a registry import error should not hide the other checks
+            return CheckResult(name, Status.WARN, f"could not load the problem registry: {_first_line(str(exc))[:160]}")
+        if problem in known:
+            return CheckResult(name, Status.OK, f"'{problem}' is a registered problem")
+        close = difflib.get_close_matches(problem, known, n=3, cutoff=0.6)
+        fix = (
+            "Did you mean: " + ", ".join(close)
+            if close
+            else "List the problem ids in sregym/conductor/problems/registry.py"
+        )
+        return CheckResult(name, Status.FAIL, f"'{problem}' is not a registered problem", fix)
 
     def _check_filtered_provider(self, reg) -> CheckResult:
         from sregym.service.internet_policy import InternetPolicy
@@ -742,6 +764,7 @@ class SetupChecker:
         results.append(self.check_cluster())
         results.append(self.check_udev())
         results.append(self.check_calico_tier())
+        results.append(self.check_problem())
         results.extend(self.check_agent())
         results.append(self.check_judge())
         results.append(self.check_ports())
@@ -760,6 +783,21 @@ def _firewall_fix(ports: list[str], run: Runner) -> str:
     if ufw_active:
         return f"ufw is active and drops this traffic. Allow Docker's networks to reach these ports: {allow}"
     return f"A host firewall drops traffic from Docker networks. Allow 172.16.0.0/12 to TCP {', '.join(ports)}"
+
+
+def _known_problem_ids() -> list[str]:
+    """Every problem id a run accepts for --problem.
+
+    ProblemRegistry() ends by creating a KubeCtl, which exits the process when there is no
+    kubeconfig. The ids do not need the cluster, so stand in for it: this check must still
+    work, and report, when the cluster is the thing that is broken.
+    """
+    from unittest import mock
+
+    from sregym.conductor.problems import registry
+
+    with mock.patch.object(registry, "KubeCtl"):
+        return registry.ProblemRegistry().get_problem_ids(all=True)
 
 
 def _is_opencode_local_model(agent: str, model: str) -> bool:

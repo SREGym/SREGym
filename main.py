@@ -1413,6 +1413,7 @@ if __name__ == "__main__":
                     internet_access=args.internet_access,
                     use_external_harness=args.use_external_harness,
                     noise=args.noise,
+                    problem=args.problem,
                     live_judge=not args.check_setup_offline,
                 ),
                 console=console,
