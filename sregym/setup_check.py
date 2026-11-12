@@ -187,7 +187,10 @@ class SetupChecker:
         if code != 0:
             self._docker_ok = False
             fix = "Install Docker" if code == 127 else "Start the Docker daemon (or Docker Desktop/OrbStack)"
-            return [CheckResult("Docker", Status.FAIL, _first_line(out) or "Docker is not reachable", fix)]
+            # `docker info --format '{{json .}}'` prints an empty JSON document even when it fails.
+            return [
+                CheckResult("Docker", Status.FAIL, _first_message_line(out)[:200] or "Docker is not reachable", fix)
+            ]
         self._docker_ok = True
         try:
             info = json.loads(out.strip().splitlines()[-1])
@@ -753,8 +756,14 @@ def _summarize_kubectl_error(text: str) -> str:
         if needle in text:
             return message
     # `kubectl -o json` prints an empty list before its error; skip the JSON.
-    lines = [line.strip() for line in text.splitlines() if line.strip() and line.strip()[0] not in '{}[]"']
-    return lines[0][:160] if lines else "not reachable"
+    return _first_message_line(text)[:160] or "not reachable"
+
+
+def _first_message_line(text: str) -> str:
+    """First line of command output that is not JSON, which tools print alongside their errors."""
+    return next(
+        (line.strip() for line in (text or "").splitlines() if line.strip() and line.strip()[0] not in '{}[]"'), ""
+    )
 
 
 def _host_memory_gb() -> float | None:

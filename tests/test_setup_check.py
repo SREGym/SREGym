@@ -669,3 +669,16 @@ def test_judge_ping_uses_the_endpoint_and_key_a_run_would(repo, monkeypatch):
         "JUDGE_API_KEY": "dummy",
     }
     assert "JUDGE_API_BASE" not in os.environ  # restored afterwards
+
+
+def test_stopped_docker_shows_the_error_not_the_json(repo):
+    output = (
+        '{"ID":"","Containers":0,"Images":0,"Driver":"","Plugins":[]}\n'
+        "failed to connect to the docker API at unix:///var/run/docker.sock; "
+        "check if the path is correct and if the daemon is running\n"
+    )
+    check, _ = make(repo, {"docker info": (1, output)})
+    [result] = check.check_docker()
+    assert result.status == Status.FAIL
+    assert result.detail.startswith("failed to connect to the docker API")
+    assert "{" not in result.detail
