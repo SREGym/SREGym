@@ -16,6 +16,7 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.hooks import AttemptHookError, FaultContext
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
@@ -78,10 +79,19 @@ class ConductorConfig:
 
 
 class Conductor:
-    def __init__(self, config: ConductorConfig | None = None, *, judge_preflight: Callable[[], None] | None = None):
+    def __init__(
+        self,
+        config: ConductorConfig | None = None,
+        *,
+        judge_preflight: Callable[[], None] | None = None,
+        hooks: object | None = None,
+    ):
         self.config = config or ConductorConfig()
         self._judge_preflight = judge_preflight
         self._judge_preflight_done = False
+        # See sregym.conductor.hooks. None, or an object with before_fault_injection
+        # and/or after_fault_injection.
+        self._hooks = hooks
 
         # core services
         self.problems = ProblemRegistry()
@@ -140,6 +150,10 @@ class Conductor:
         self.waiting_for_agent: bool = False
         self._evaluating: bool = False  # True while a submission is being evaluated
         self.fault_injected: bool = False
+        # Ground truth for the injected fault, kept in memory until the attempt
+        # publishes: the problem object is gone by then, and the spec names the
+        # faulty component, so it must not be on disk while the agent runs.
+        self.fault_spec: dict | None = None
 
     @property
     def current_problem(self):
@@ -260,6 +274,7 @@ class Conductor:
         self._evaluating = False
         self._accepting_submissions = False
         self.fault_injected = False
+        self.fault_spec = None
 
         if not self.tasklist:
             self.logger.warning("Empty tasklist; no stages configured for this problem.")
@@ -332,6 +347,13 @@ class Conductor:
             mitigation_oracle.capture_baseline()
 
         problem.inject_fault()
+        # getattr throughout: tests call this on bare conductors and stand-in problems.
+        self.fault_spec = {
+            "problem_id": getattr(self, "problem_id", None),
+            "namespace": getattr(problem, "namespace", None),
+            "root_cause": getattr(problem, "root_cause", None),
+            "fault_injected_at": time.time(),
+        }
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
 
@@ -417,6 +439,31 @@ class Conductor:
         ledger = getattr(self, "phases", None)
         return ledger is not None and ledger.is_open(name)
 
+    async def _run_hook(self, name: str, *, fault_injected_at: float | None = None) -> None:
+        """Call the registered hook `name`, if any, as its own phase.
+
+        `getattr` on `_hooks` as `_phase` does: a Conductor built without
+        __init__ has no hooks. The hook is usually a wait, so it runs in a
+        thread. Any exception becomes AttemptHookError, which main.py does not
+        answer with a redeploy.
+        """
+        hook = getattr(getattr(self, "_hooks", None), name, None)
+        if hook is None:
+            return
+        ctx = FaultContext(
+            problem_id=self.problem_id,
+            namespace=self.problem.namespace,
+            fault_injected_at=fault_injected_at,
+        )
+        with self._phase(f"hook:{name}"):
+            try:
+                await asyncio.to_thread(hook, ctx)
+            except AttemptHookError:
+                raise
+            except Exception as exc:
+                self.logger.exception(f"[HOOK] {name} failed")
+                raise AttemptHookError(f"{name} failed: {exc}") from exc
+
     async def _advance_to_next_stage(self, start_index: int = 0):
         """
         Advance to the next stage starting from start_index.
@@ -433,8 +480,10 @@ class Conductor:
 
         # Inject the fault once before the first stage.
         if start_index == 0 and not self.fault_injected:
+            await self._run_hook("before_fault_injection")
             with self._phase("inject_fault"):
                 self._inject_fault()
+            injected_at = self.fault_spec["fault_injected_at"]
 
             # Let the fault surface in telemetry before the agent sees it.
             propagation = (
@@ -447,6 +496,10 @@ class Conductor:
                 with self._phase("propagation", seconds=propagation):
                     await asyncio.sleep(propagation)
                 self.logger.info("[PROPAGATION] Propagation window complete.")
+
+            # After propagation, so a hook that waits for the fault to show up
+            # on the agent's side overlaps the sleep instead of adding to it.
+            await self._run_hook("after_fault_injection", fault_injected_at=injected_at)
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
