@@ -707,3 +707,10 @@ def test_loopback_listener_is_found_where_the_bind_test_misses_it(monkeypatch):
         port = listener.getsockname()[1]
         assert setup_check._port_in_use(port)
     assert not setup_check._port_in_use(port)
+
+
+def test_proxy_credentials_are_not_printed(repo):
+    result = make(repo, env={"HTTPS_PROXY": "http://alice:s3cret@proxy.corp:3128"})[0].check_internet()
+    assert result.status == Status.SKIP
+    assert "proxy.corp:3128" in result.detail
+    assert "s3cret" not in result.detail and "alice" not in result.detail

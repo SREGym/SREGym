@@ -651,7 +651,11 @@ class SetupChecker:
         name = "Internet access"
         proxy = next((self.env[v] for v in ("HTTPS_PROXY", "https_proxy") if self.env.get(v)), None)
         if proxy:
-            return CheckResult(name, Status.SKIP, f"traffic goes through the proxy {proxy}, so this was not tested")
+            return CheckResult(
+                name,
+                Status.SKIP,
+                f"traffic goes through the proxy {_without_credentials(proxy)}, so this was not tested",
+            )
         endpoints = list(dict.fromkeys([*((host, 443) for host in DOWNLOAD_HOSTS), *self._run_specific_hosts()]))
         with ThreadPoolExecutor(max_workers=len(endpoints)) as pool:
             probes = pool.map(lambda endpoint: _probe_host(*endpoint), endpoints)
@@ -827,6 +831,11 @@ def _litellm_credentials(name: str, model: str, env: dict[str, str]) -> CheckRes
     if missing:
         return CheckResult(name, Status.FAIL, f"{model} needs {', '.join(missing)}", f"export {missing[0]}=...")
     return CheckResult(name, Status.OK, f"credentials found for {model}")
+
+
+def _without_credentials(url: str) -> str:
+    """Drop user:password@ from a URL; people paste this output into issues."""
+    return re.sub(r"(?<=://)[^/@\s]*@", "", url)
 
 
 def _endpoint_label(host: str, port: int) -> str:
