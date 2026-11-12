@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import threading
@@ -157,12 +158,16 @@ def test_restore_requires_a_captured_baseline():
 def test_python_program_is_not_expanded_by_the_host_shell(tmp_path):
     import sys
 
-    stub = tmp_path / "kubectl"
+    stub = tmp_path / "kubectl-stub"
     stub.write_text(f"#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n")
     stub.chmod(0o755)
     kubectl = _KubeCtl(None)
+    # The test guard blocks commands named kubectl, so run the stub by path.
     kubectl.exec_command_checked = lambda command, **kwargs: subprocess.check_output(
-        command, shell=True, text=True, env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "PY": "host"}
+        shlex.quote(str(stub)) + command.removeprefix("kubectl"),
+        shell=True,
+        text=True,
+        env={**os.environ, "PY": "host"},
     )
     problem = _problem(kubectl)
     argv = json.loads(problem._traffic_python("print('literal $PY $(false) $!')"))

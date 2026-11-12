@@ -14,6 +14,8 @@ from sregym.service.apps.deathstarbench.application import (
     mongo_resources,
 )
 
+pytestmark = pytest.mark.usefixtures("offline_kubectl")
+
 
 @pytest.mark.parametrize("tier", SCALE_TIERS)
 def test_hotel_renders_real_replica_sets_without_mutating_source(tier):

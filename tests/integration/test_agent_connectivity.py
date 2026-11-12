@@ -1,6 +1,6 @@
 """Read-only container-to-Kubernetes checks; requires KIND and the agent image.
 
-Run explicitly with: uv run pytest tests/integration/test_agent_connectivity.py -m integration -v
+Run explicitly with: uv run pytest tests/integration/test_agent_connectivity.py -m integration --allow-kubernetes -v
 No agent installation or model API request is made.
 """
 
