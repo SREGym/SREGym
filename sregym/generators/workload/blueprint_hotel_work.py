@@ -16,6 +16,7 @@ from sregym.paths import TARGET_MICROSERVICES
 # neither the DaemonSet nor its pod events. Being a DaemonSet, it still lands on
 # every node the application runs on.
 CPU_STRESS_NAMESPACE = "khaos"
+CPU_STRESS_DAEMONSET_NAME = "cpu-stress-daemon"
 
 # Mimicked the Wrk2 class
 
@@ -337,6 +338,8 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
                     "direction": "to",
                 },
             }
+            # Retain the cleanup target even if a later API request fails.
+            self.current_experiment_names = [network_experiment_name]
             self.cpu_containment_injector.create_chaos_experiment(network_chaos, network_experiment_name)
 
             print(
@@ -346,7 +349,6 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
             self._deploy_cpu_stress_daemonset()
 
             start_time = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-            self.current_experiment_names = [network_experiment_name]
             logger.info(f"[{start_time}] Network latency + CPU stress DaemonSet injection completed")
             print(
                 f"[Step 3a] Done — network latency + CPU stress active on all nodes at {start_time}. Watch Prometheus p99 latency for spike above 50ms."
@@ -357,7 +359,7 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
     def _deploy_cpu_stress_daemonset(self):
         apps_v1 = client.AppsV1Api()
         core_v1 = client.CoreV1Api()
-        daemonset_name = "cpu-stress-daemon"
+        daemonset_name = CPU_STRESS_DAEMONSET_NAME
 
         try:
             core_v1.create_namespace(body=client.V1Namespace(metadata=client.V1ObjectMeta(name=CPU_STRESS_NAMESPACE)))
@@ -402,23 +404,65 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
             },
         }
         apps_v1.create_namespaced_daemon_set(namespace=CPU_STRESS_NAMESPACE, body=daemonset_body)
-        self.cpu_stress_daemonset_name = daemonset_name
         logger.info(f"CPU stress DaemonSet '{daemonset_name}' deployed — one stress pod per node")
 
-    def _delete_cpu_stress_daemonset(self):
-        if not hasattr(self, "cpu_stress_daemonset_name"):
-            return
+    def _delete_cpu_stress_daemonset(self, *, wait=False):
         apps_v1 = client.AppsV1Api()
         try:
             apps_v1.delete_namespaced_daemon_set(
-                name=self.cpu_stress_daemonset_name,
+                name=CPU_STRESS_DAEMONSET_NAME,
                 namespace=CPU_STRESS_NAMESPACE,
                 body=client.V1DeleteOptions(propagation_policy="Foreground"),
+                _request_timeout=30,
             )
-            logger.info(f"CPU stress DaemonSet '{self.cpu_stress_daemonset_name}' deleted")
+            logger.info("CPU stress DaemonSet '%s' deletion requested", CPU_STRESS_DAEMONSET_NAME)
         except client.exceptions.ApiException as e:
             if e.status != 404:
-                logger.error(f"Error deleting CPU stress DaemonSet: {e}")
+                raise
+
+        if not wait:
+            return
+
+        core_v1 = client.CoreV1Api()
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            # This Kubernetes client accepts integer (not float) total timeouts.
+            request_timeout = max(1, min(30, int(deadline - time.monotonic())))
+            try:
+                apps_v1.read_namespaced_daemon_set(
+                    name=CPU_STRESS_DAEMONSET_NAME,
+                    namespace=CPU_STRESS_NAMESPACE,
+                    _request_timeout=request_timeout,
+                )
+            except client.exceptions.ApiException as e:
+                if e.status != 404:
+                    raise
+                request_timeout = max(1, min(30, int(deadline - time.monotonic())))
+                try:
+                    pods = core_v1.list_namespaced_pod(
+                        namespace=CPU_STRESS_NAMESPACE,
+                        label_selector=f"app={CPU_STRESS_DAEMONSET_NAME}",
+                        _request_timeout=request_timeout,
+                    )
+                except client.exceptions.ApiException as e:
+                    if e.status == 404:
+                        return  # The namespace itself is already gone.
+                    raise
+                if not pods.items:
+                    return
+            time.sleep(min(2, max(0, deadline - time.monotonic())))
+        raise TimeoutError("CPU stress DaemonSet or its pods remain after 60 seconds")
+
+    def cleanup_cpu_stress(self, *, wait=False):
+        """Remove both trigger resources, even when network cleanup fails."""
+        try:
+            for experiment_name in list(getattr(self, "current_experiment_names", [])):
+                self.cpu_containment_injector.delete_chaos_experiment(experiment_name)
+                self.current_experiment_names.remove(experiment_name)
+                logger.info("Deleted chaos experiment: %s", experiment_name)
+        finally:
+            # Use the fixed name: a timed-out create may have succeeded server-side.
+            self._delete_cpu_stress_daemonset(wait=wait)
 
     def _recover_cpu_stress(self):
         """
@@ -427,16 +471,10 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
         load (31x) continues to exceed service capacity — sustaining the metastable storm
         until a hard reboot (recover_fault) removes the restraint.
         """
+        print("[Step 3b] Removing network latency + CPU stress DaemonSet (trigger)...")
+        self.cleanup_cpu_stress()
+
         try:
-            print("[Step 3b] Removing network latency + CPU stress DaemonSet (trigger)...")
-            logger.info("Recovering chaos experiments...")
-
-            if hasattr(self, "current_experiment_names"):
-                for experiment_name in self.current_experiment_names:
-                    self.cpu_containment_injector.delete_chaos_experiment(experiment_name)
-                    logger.info(f"Deleted chaos experiment: {experiment_name}")
-            self._delete_cpu_stress_daemonset()
-
             if self.apply_capacity_restraint:
                 print(
                     "[Step 3b] Trigger removed — applying permanent capacity restraint to sustain metastable storm..."
@@ -519,7 +557,11 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
 
     def stop(self):
         logger.info("Stop Workload with Blueprint Hotel Workload Manager")
-        if self.continuous:
-            self.wrk.delete_bhotelwrk_deployment(deployment_name=self.deployment_name, namespace=self.namespace)
-        else:
-            self.wrk.stop_workload(job_name=self.job_name, namespace=self.namespace)
+        try:
+            if self.continuous:
+                self.wrk.delete_bhotelwrk_deployment(deployment_name=self.deployment_name, namespace=self.namespace)
+            else:
+                self.wrk.stop_workload(job_name=self.job_name, namespace=self.namespace)
+        finally:
+            if self.CPU_containment:
+                self.cleanup_cpu_stress(wait=True)
