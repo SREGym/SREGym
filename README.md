@@ -32,7 +32,6 @@ SREGym has been used to simulate real-world cloud failures, such as:
 
 [SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 17 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
-
 <h2 id="📦installation">📦 Installation</h2>
 
 ### Requirements
@@ -86,6 +85,16 @@ For existing clusters, see the [upgrade and baseline instructions](./docs/networ
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
 ### Running an Agent
+
+#### Check your setup first
+
+Add `--check-setup` to the command you plan to run. Instead of starting the benchmark, it checks that the machine is ready for that configuration (Docker, the cluster, network, credentials, and the hosts the run downloads from) and prints a fix for each problem. It exits non-zero when a run would fail.
+
+```bash
+uv run main.py --agent codex --model gpt-5 --profile svelte --check-setup
+```
+
+Add `--check-setup-offline` to skip the test request it sends to the judge.
 
 #### Quick Start
 

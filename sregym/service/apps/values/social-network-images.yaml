@@ -7,4 +7,4 @@ nginx-thrift:
   container:
     dockerRegistry: ghcr.io
     image: sregym/openresty-thrift
-    imageVersion: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:fa344a1bf5320c40e57476eea23706b91819c6d6faa03b34ec846c4d2e3c0d18
+    imageVersion: 20261109-trace-identity@sha256:c030ef7e7b23dd4576c3d956410d5878353e7b5be3258056deed3a3071dd84e4

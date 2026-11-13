@@ -9,6 +9,8 @@ from sregym.service.apps.gitea import workflow as workload
 from sregym.service.apps.gitea.application import GiteaApplication
 from sregym.service.apps.persistent import cleanup_persistent_namespace
 
+pytestmark = pytest.mark.usefixtures("offline_kubectl")
+
 
 def test_agent_application_endpoint_exposes_gitea_and_its_tier(monkeypatch):
     from sregym.conductor import conductor_api

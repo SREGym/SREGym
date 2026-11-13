@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.progress import (
@@ -30,12 +30,13 @@ from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents, registry_path
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
+from sregym.conductor.hooks import AttemptHookError, load_hooks
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
-from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers
+from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers, write_json_artifact
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
@@ -210,6 +211,36 @@ def claim_results_dir(root: Path = Path("results")) -> Path:
             return root / candidate
         except FileExistsError:
             continue
+
+
+def _write_fault_spec(published_dir: Path, conductor, problem_id: str) -> Path | None:
+    """Record what was injected beside the attempt's published artifacts.
+
+    Written after publication, not into the staging directory: the agent reads
+    that directory as AGENT_LOGS_DIR, and finalization rejects any staged file
+    carrying the real problem id, which this one does. Null fields mean the
+    attempt published without injecting.
+    """
+    # Tests drive driver_loop with stand-in conductors, so accept only a real spec.
+    captured = getattr(conductor, "fault_spec", None)
+    if not isinstance(captured, dict):
+        captured = {}
+    injected_at = captured.get("fault_injected_at")
+    if injected_at is not None:
+        injected_at = datetime.fromtimestamp(injected_at, UTC).isoformat().replace("+00:00", "Z")
+    spec = {
+        "problem_id": problem_id,
+        "namespace": captured.get("namespace"),
+        "root_cause": captured.get("root_cause"),
+        "fault_injected_at": injected_at,
+    }
+    path = published_dir / "fault-spec.json"
+    try:
+        write_json_artifact(path, spec)
+    except OSError as exc:
+        logger.warning("Could not write %s: %s", path, exc)
+        return None
+    return path
 
 
 def _restore_env_var(name: str, previous_value: str | None) -> None:
@@ -495,6 +526,7 @@ def driver_loop(
                 # start_problem waits out pod readiness before it raises, and
                 # the retry then tears down and redeploys the whole problem.
                 deploy_attempts = 0
+                hook_failed = ""
                 for deploy_attempt in range(1, max_deploy_retries + 1):
                     check_interrupted()
                     deploy_attempts = deploy_attempt
@@ -510,6 +542,10 @@ def driver_loop(
                             console.log(
                                 "⛔ Image platform failures require a compatible image; skipping deploy retries"
                             )
+                            break
+                        if isinstance(e, AttemptHookError):
+                            hook_failed = str(e)
+                            console.log("⛔ A hook refused the attempt; redeploying would not change that")
                             break
                         if deploy_attempt < max_deploy_retries:
                             console.log("🧹 Cleaning up before retry...")
@@ -545,6 +581,8 @@ def driver_loop(
                         "deploy_failed": True,
                         "deploy_attempts": deploy_attempts,
                     }
+                    if hook_failed:
+                        snapshot["hook_failed"] = hook_failed
                     for stage, outcome in conductor.results.items():
                         if isinstance(outcome, dict):
                             for key, value in outcome.items():
@@ -834,6 +872,7 @@ def driver_loop(
                     writer.writerows(all_results_for_agent)
 
                 if published_run_dir is not None:
+                    _write_fault_spec(published_run_dir, conductor, pid)
                     logger.info(
                         f"⏳ Attempt {attempt} of {n_attempts} for problem {pid} complete - "
                         f"Intermediate results written to {tmp_path}; artifacts published to {published_run_dir}"
@@ -1013,6 +1052,9 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
             "Run it with --internet-access open or enable container isolation."
         )
 
+    # An invalid hook registration must fail before agent resources are prepared.
+    agent_hooks = load_hooks(agent_reg.hooks) if agent_reg else None
+
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
         if internet_policy.is_filtered and not args.use_external_harness
@@ -1058,6 +1100,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     conductor = Conductor(
         config=conductor_config,
         judge_preflight=None if args.use_external_harness else run_judge_preflight_check,
+        hooks=agent_hooks,
     )
 
     suite = getattr(args, "suite", None)
@@ -1250,6 +1293,19 @@ if __name__ == "__main__":
         help="Enable experimental Jev decision support for Codex (e.g. jev-latest). Requires TYPESAFE_API_KEY and --force-build.",
     )
     parser.add_argument(
+        "--check-setup",
+        action="store_true",
+        help=(
+            "Check that this machine is ready for a run with the other flags given (tools, Docker, cluster, "
+            "network policy, agent and judge credentials), print how to fix each problem, and exit"
+        ),
+    )
+    parser.add_argument(
+        "--check-setup-offline",
+        action="store_true",
+        help="With --check-setup, check judge credentials without sending the judge a test request",
+    )
+    parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
     )
     parser.add_argument(
@@ -1342,5 +1398,26 @@ if __name__ == "__main__":
         parser.error("--propagation must be a non-negative integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
+
+    if args.check_setup:
+        from sregym.setup_check import SetupCheckOptions, run_setup_check
+
+        sys.exit(
+            run_setup_check(
+                SetupCheckOptions(
+                    agent=args.agent,
+                    model=args.model,
+                    judge_model=args.judge_model,
+                    judge_backend=args.judge_backend,
+                    profile=args.profile,
+                    internet_access=args.internet_access,
+                    use_external_harness=args.use_external_harness,
+                    noise=args.noise,
+                    problem=args.problem,
+                    live_judge=not args.check_setup_offline,
+                ),
+                console=console,
+            )
+        )
 
     main(args)
