@@ -39,7 +39,7 @@ kubectl rollout status deployment/calico-kube-controllers -n kube-system --timeo
 kubectl get tiers.crd.projectcalico.org
 ```
 
-4. Verify that the output includes the `adminnetworkpolicy` tier.
+4. Verify that the output includes the `adminnetworkpolicy` tier. `uv run main.py --check-setup` also checks for it.
 5. Remove the old baseline as described in the next section.
 
 ### Remove the old baseline after an upgrade

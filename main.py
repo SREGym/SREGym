@@ -1293,6 +1293,19 @@ if __name__ == "__main__":
         help="Enable experimental Jev decision support for Codex (e.g. jev-latest). Requires TYPESAFE_API_KEY and --force-build.",
     )
     parser.add_argument(
+        "--check-setup",
+        action="store_true",
+        help=(
+            "Check that this machine is ready for a run with the other flags given (tools, Docker, cluster, "
+            "network policy, agent and judge credentials), print how to fix each problem, and exit"
+        ),
+    )
+    parser.add_argument(
+        "--check-setup-offline",
+        action="store_true",
+        help="With --check-setup, check judge credentials without sending the judge a test request",
+    )
+    parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
     )
     parser.add_argument(
@@ -1385,5 +1398,26 @@ if __name__ == "__main__":
         parser.error("--propagation must be a non-negative integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
+
+    if args.check_setup:
+        from sregym.setup_check import SetupCheckOptions, run_setup_check
+
+        sys.exit(
+            run_setup_check(
+                SetupCheckOptions(
+                    agent=args.agent,
+                    model=args.model,
+                    judge_model=args.judge_model,
+                    judge_backend=args.judge_backend,
+                    profile=args.profile,
+                    internet_access=args.internet_access,
+                    use_external_harness=args.use_external_harness,
+                    noise=args.noise,
+                    problem=args.problem,
+                    live_judge=not args.check_setup_offline,
+                ),
+                console=console,
+            )
+        )
 
     main(args)
