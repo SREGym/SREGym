@@ -156,35 +156,38 @@ class RemoteOSFaultInjector(FaultInjector):
         return self._ssh_exec(host, user, f"sudo sh -c {shlex.quote(command)}")
 
     def _wait_for_worker_nodes(self, target_status="NotReady", timeout=NODE_NOT_READY_TIMEOUT):
-        """Poll until all worker nodes reach the target status ('Ready' or 'NotReady')."""
-        output = self.kubectl.exec_command("kubectl get nodes --no-headers")
-        worker_node_names = set()
-        for line in output.strip().splitlines():
-            parts = line.split()
-            if len(parts) >= 3 and "control-plane" not in parts[2]:
-                worker_node_names.add(parts[0])
-
+        """Wait for the workers present at the start of the readiness check."""
+        nodes = self._get_node_items()
+        if nodes is None:
+            raise RuntimeError("Cannot determine worker nodes for the readiness check")
+        worker_node_names = {node["metadata"]["name"] for node in nodes if not self._is_control_plane_node(node)}
         if not worker_node_names:
             print("No worker nodes found in cluster.")
             return
+        return self._wait_for_nodes(worker_node_names, target_status, timeout)
 
-        print(f"Waiting for worker nodes {worker_node_names} to become {target_status}...")
-        start = time.time()
-        while time.time() - start < timeout:
-            output = self.kubectl.exec_command("kubectl get nodes --no-headers")
-            all_matched = True
-            for line in output.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[0] in worker_node_names:
-                    if parts[1] != target_status:
-                        all_matched = False
-                        break
-            if all_matched:
-                print(f"All worker nodes are {target_status}.")
-                return
+    def _wait_for_nodes(self, node_names, target_status, timeout):
+        """Check the Ready condition independently of scheduling restrictions."""
+        expected = {"Ready": {"True"}, "NotReady": {"False", "Unknown"}}[target_status]
+        print(f"Waiting for nodes {sorted(node_names)} to become {target_status}...")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            nodes = self._get_node_items()
+            if nodes is not None:
+                # A cordoned node can be healthy; kubectl's display combines
+                # these independent states as Ready,SchedulingDisabled.
+                readiness = {
+                    node["metadata"]["name"]: condition.get("status")
+                    for node in nodes
+                    for condition in node.get("status", {}).get("conditions", [])
+                    if condition.get("type") == "Ready"
+                }
+                if all(readiness.get(name) in expected for name in node_names):
+                    print(f"All requested nodes are {target_status}.")
+                    return True
             time.sleep(NODE_NOT_READY_POLL_INTERVAL)
-
-        print(f"Timed out after {timeout}s waiting for nodes to become {target_status}.")
+        print(f"Timed out after {timeout}s waiting for nodes {sorted(node_names)} to become {target_status}.")
+        return False
 
     def inject_kubelet_crash(self):
         """Force-kill kubelet and stop the service on all worker nodes."""
@@ -235,18 +238,8 @@ class RemoteOSFaultInjector(FaultInjector):
     def _wait_for_single_node(
         self, node_name: str, target_status: str = "Ready", timeout: int = NODE_NOT_READY_TIMEOUT
     ):
-        """Poll until a single named node reaches target status."""
-        print(f"Waiting for node {node_name} to become {target_status}...")
-        start = time.time()
-        while time.time() - start < timeout:
-            output = self.kubectl.exec_command("kubectl get nodes --no-headers")
-            for line in output.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[0] == node_name and parts[1] == target_status:
-                    print(f"Node {node_name} is {target_status}.")
-                    return
-            time.sleep(NODE_NOT_READY_POLL_INTERVAL)
-        print(f"Timed out after {timeout}s waiting for {node_name} to become {target_status}.")
+        """Use the same readiness check for single-node recovery."""
+        return self._wait_for_nodes({node_name}, target_status, timeout)
 
     def inject_disk_pressure(
         self, node_name: str, threshold: float | None = None, margin_pct: int = 10

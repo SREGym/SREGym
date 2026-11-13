@@ -25,6 +25,8 @@ class ExpiredTlsHotelReservation(Problem):
     inside the referenced secret to discover the root cause.
     """
 
+    HOST = "hotel-reservation.local"
+
     def __init__(self, *, app: Application | None = None):
         super().__init__(app=app if app is not None else HotelReservation())
 
@@ -144,7 +146,7 @@ class ExpiredTlsHotelReservation(Problem):
 
         subject = issuer = x509.Name(
             [
-                x509.NameAttribute(NameOID.COMMON_NAME, "hotel-reservation.local"),
+                x509.NameAttribute(NameOID.COMMON_NAME, self.HOST),
             ]
         )
         now = datetime.datetime.now(datetime.UTC)
@@ -161,7 +163,7 @@ class ExpiredTlsHotelReservation(Problem):
             .add_extension(
                 x509.SubjectAlternativeName(
                     [
-                        x509.DNSName("hotel-reservation.local"),
+                        x509.DNSName(self.HOST),
                     ]
                 ),
                 critical=False,

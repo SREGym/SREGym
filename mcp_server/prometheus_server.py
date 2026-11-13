@@ -1,3 +1,4 @@
+import anyio.to_thread
 from fastmcp import FastMCP
 
 from clients.stratus.stratus_utils.get_logger import get_logger
@@ -13,17 +14,7 @@ mcp = FastMCP("Prometheus MCP Server")
 PROMETHEUS_URL = "http://prometheus-server.observe.svc.cluster.local:80"
 
 
-@mcp.tool(name="get_metrics")
-def get_metrics(query: str) -> str:
-    """Query real-time metrics data from the Prometheus instance.
-
-    Args:
-        query (str): A Prometheus Query Language (PromQL) expression used to fetch metric values.
-
-    Returns:
-        str: String of metric results, including timestamps, values, and labels or error information.
-    """
-
+def _get_metrics_sync(query: str) -> str:
     logger.info("[prom_mcp] get_metrics called, getting prometheus metrics")
 
     observability_client = ObservabilityClient(PROMETHEUS_URL)
@@ -46,18 +37,26 @@ def get_metrics(query: str) -> str:
         return err_str
 
 
-@mcp.tool(name="get_alerts")
-def get_alerts() -> str:
-    """Get all currently firing alerts from the Prometheus instance.
+@mcp.tool(name="get_metrics")
+async def get_metrics(query: str) -> str:
+    """Query real-time metrics data from the Prometheus instance.
 
-    Returns a list of firing alerts with their labels (alertname, severity,
-    namespace, service_name, etc.) and annotations (summary, description).
+    Args:
+        query (str): A Prometheus Query Language (PromQL) expression used to fetch metric values.
 
     Returns:
-        str: String of firing alert data including alert names, labels,
-             and annotations, or "No firing alerts" if none are active.
+        str: String of metric results, including timestamps, values, and labels or error information.
     """
+    # ObservabilityClient.make_request is a blocking `requests` call (up to
+    # REQUEST_TIMEOUT=120s, plus retries). FastMCP calls a sync tool function
+    # inline on the single uvicorn worker, so running it directly here would
+    # block every other request on this process, including the conductor's
+    # port-forward health probe and every other session's calls. See the
+    # matching comment on exec_kubectl_cmd_safely in mcp_server/kubectl_mcp_tools.py.
+    return await anyio.to_thread.run_sync(_get_metrics_sync, query)
 
+
+def _get_alerts_sync() -> str:
     logger.info("[prom_mcp] get_alerts called")
 
     observability_client = ObservabilityClient(PROMETHEUS_URL)
@@ -77,3 +76,17 @@ def get_alerts() -> str:
         err_str = f"[prom_mcp] Error querying get_alerts: {str(e)}"
         logger.error(err_str)
         return err_str
+
+
+@mcp.tool(name="get_alerts")
+async def get_alerts() -> str:
+    """Get all currently firing alerts from the Prometheus instance.
+
+    Returns a list of firing alerts with their labels (alertname, severity,
+    namespace, service_name, etc.) and annotations (summary, description).
+
+    Returns:
+        str: String of firing alert data including alert names, labels,
+             and annotations, or "No firing alerts" if none are active.
+    """
+    return await anyio.to_thread.run_sync(_get_alerts_sync)

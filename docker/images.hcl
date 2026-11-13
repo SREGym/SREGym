@@ -212,7 +212,6 @@ target "slack-spine-images" {
       { name = "builder", component = "builder", variant = "normal", repository = "slack-app-builder", digest = "5201d7a4c6e4313c2b9d01209ff6aed413af6f4cc2e11d667631f0ce4920fa07" },
       { name = "python", component = "python", variant = "normal", repository = "slack-py", digest = "c3a51b1ab5082f337ae5e8c1f2d60467273b1e73440580fc7e1132564b943c12" },
       { name = "toolbox", component = "toolbox", variant = "normal", repository = "slack-main", digest = "e3dec9737ddfb496b7c380ff529248bf4216514f0d0127f91e41973c05d940f9" },
-      { name = "loadgen", component = "loadgen", variant = "normal", repository = "slack-loadgen", digest = "5a8bfa7e291a3e9ddc32eca99d291531964f08e3b1e269bd59fc9236a1eebbd2" },
       { name = "pgbouncer", component = "pgbouncer", variant = "normal", repository = "slack-pgbouncer", digest = "70dc0e4aefb23ba0646a3410358732ba8358f3b8aa95b8595f2decbba56ceff0" },
     ]
   }
@@ -222,6 +221,12 @@ target "slack-spine-images" {
     VARIANT = image.variant
   }
   tags = ["${REGISTRY}/slack-spine:${IMAGE_TAG}-${image.name}"]
+}
+
+target "slack-spine-loadgen" {
+  inherits = ["_common"]
+  context = "docker/apps/slack_spine/loadgen"
+  tags = ["${REGISTRY}/slack-spine:${IMAGE_TAG}-loadgen"]
 }
 
 target "slack-spine-go" {
@@ -288,8 +293,8 @@ target "social-network" {
 
 target "openresty-thrift" {
   inherits = ["_common"]
-  context = "SREGym-applications/socialNetwork/docker/openresty-thrift"
-  dockerfile = "xenial/Dockerfile"
+  context = "SREGym-applications/socialNetwork"
+  dockerfile = "docker/openresty-thrift/xenial/Dockerfile"
   tags = ["${REGISTRY}/openresty-thrift:${IMAGE_TAG}"]
 }
 
@@ -310,7 +315,7 @@ target "agent-base" {
   inherits = ["_common"]
   context = "."
   dockerfile = "docker/agents/Dockerfile"
-  // Match the Kubernetes version used by the bundled KIND node image.
+  // Keep kubectl on the same Kubernetes minor version as the KIND node image.
   args = { KUBECTL_VERSION = "v1.32.1" }
   tags = ["${REGISTRY}/agent-base:${IMAGE_TAG}"]
 }

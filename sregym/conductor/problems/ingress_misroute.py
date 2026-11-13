@@ -30,16 +30,39 @@ class IngressMisroute(Problem):
             namespace=self.namespace,
             description=(
                 f"Ingress `{self.ingress_name}` has a misconfigured backend rule for path `{self.path}`, routing "
-                f"requests to `{self.wrong_service}` instead of `{self.correct_service}`. Traffic reaches a valid "
-                "service, but the response semantics are incorrect for the requested endpoint, causing functional "
-                "errors rather than hard connectivity failures. Users observe wrong API behavior, inconsistent results, "
-                "or failures on routes that previously worked."
+                f"requests to `{self.wrong_service}` instead of `{self.correct_service}`. The recommendation "
+                "backend speaks gRPC rather than the frontend's HTTP API, so requests through the Ingress fail "
+                "with protocol errors instead of returning hotel data. Direct requests to the frontend still work."
             ),
         )
         self.networking_v1 = client.NetworkingV1Api()
         self.faulty_service = [correct_service, wrong_service]
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = IngressMisrouteMitigationOracle(problem=self)
+
+    @property
+    def ingress_probe_path(self) -> str:
+        return f"{self.path}/recommendations?require=dis&lat=38.0235&lon=-122.095"
+
+    @staticmethod
+    def ingress_response_valid(payload) -> bool:
+        """Require hotel results, not just an HTTP 200 or a generic page."""
+        if not isinstance(payload, dict) or payload.get("type") != "FeatureCollection":
+            return False
+        features = payload.get("features")
+        return (
+            isinstance(features, list)
+            and bool(features)
+            and all(
+                isinstance(feature, dict)
+                and isinstance(feature.get("id"), str)
+                and bool(feature["id"])
+                and isinstance(feature.get("properties"), dict)
+                and isinstance(feature["properties"].get("name"), str)
+                and bool(feature["properties"]["name"])
+                for feature in features
+            )
+        )
 
     def _ensure_proxy_services(self):
         """Create proxy services that map the ingress backend names to the real app services."""

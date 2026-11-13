@@ -205,3 +205,10 @@ def test_provider_definition_keeps_default_and_overrides_together(provider, defi
         assert provider_endpoint_rules(policy, {variable: "https://custom.test/v1"}) == (
             EndpointRule("custom.test", 443),
         )
+
+
+@pytest.mark.parametrize("agent", ["claudecode", "claudecode_radar"])
+def test_claude_code_clients_reach_the_anthropic_api(agent):
+    policy = InternetPolicy.from_mode("filtered", agent_name=agent, model_id="anthropic/claude-opus-5-5")
+
+    assert provider_endpoint_rules(policy, {"ANTHROPIC_API_KEY": "secret"}) == (EndpointRule("api.anthropic.com", 443),)

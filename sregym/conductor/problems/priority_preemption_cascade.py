@@ -19,6 +19,8 @@ import time
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 from kubernetes.utils.quantity import parse_quantity
+from urllib3.exceptions import HTTPError
+from urllib3.util import Retry
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.priority_preemption_mitigation import PriorityPreemptionMitigationOracle
@@ -53,6 +55,8 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     MIN_PADDING_REQUEST_KIB = 8 * 1024 * 1024
     PADDING_DEPLOYMENT_PREFIX = "report-cache-shard"
     PADDING_LABEL = "report-cache"
+    APPLICATION_SETTLE_SECONDS = 60
+    APPLICATION_POLL_SECONDS = 2
 
     def __init__(self, faulty_service: str = "reservation", *, app: Application | None = None):
         super().__init__(app=app if app is not None else HotelReservation())
@@ -88,7 +92,68 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.app.create_workload()
-        self.mitigation_oracle = PriorityPreemptionMitigationOracle(problem=self)
+        # Ports supply their own application checks through configure_port.
+        self._application_check = self._wait_for_application if app is None else None
+        self.mitigation_oracle = PriorityPreemptionMitigationOracle(
+            problem=self, application_check=self._application_check
+        )
+
+    def _probe_application(self):
+        configuration = client.Configuration.get_default_copy()
+        configuration.retries = Retry(total=0, redirect=0, raise_on_redirect=False)
+        position = [("lat", "38.0235"), ("lon", "-122.095")]
+        # The load generator books April 2015. Probe other dates so its valid
+        # reservations cannot exhaust availability in this read-only check.
+        probes = (
+            ("hotels", [*position, ("inDate", "2030-01-10"), ("outDate", "2030-01-11")]),
+            ("recommendations", [*position, ("require", "dis")]),
+        )
+        with client.ApiClient(configuration) as api:
+            for path, query in probes:
+                payload, status, _ = api.call_api(
+                    f"/api/v1/namespaces/{self.namespace}/services/"
+                    f"http:{self.app.frontend_service}:{self.app.frontend_port}/proxy/{path}",
+                    "GET",
+                    query_params=query,
+                    response_type="object",
+                    auth_settings=["BearerToken"],
+                    _return_http_data_only=False,
+                    _request_timeout=(5, 10),
+                )
+                features = payload.get("features") if isinstance(payload, dict) else None
+                if (
+                    status != 200
+                    or not isinstance(payload, dict)
+                    or payload.get("type") != "FeatureCollection"
+                    or not isinstance(features, list)
+                    or not features
+                    or not all(
+                        isinstance(feature, dict)
+                        and isinstance(feature.get("id"), str)
+                        and bool(feature["id"])
+                        and isinstance(feature.get("properties"), dict)
+                        and isinstance(feature["properties"].get("name"), str)
+                        and bool(feature["properties"]["name"])
+                        for feature in features
+                    )
+                ):
+                    raise ValueError(f"Hotel {path} did not return hotel results (HTTP {status})")
+
+    def _wait_for_application(self):
+        deadline = time.monotonic() + self.APPLICATION_SETTLE_SECONDS
+        while True:
+            try:
+                self._probe_application()
+                return
+            except ApiException as exc:
+                if exc.status not in (404, 500, 502, 503, 504):
+                    raise
+                error = f"Hotel request failed with HTTP {exc.status}"
+            except (HTTPError, OSError, ValueError) as exc:
+                error = str(exc)
+            if time.monotonic() >= deadline:
+                raise ValueError(f"Hotel requests did not recover: {error}")
+            time.sleep(self.APPLICATION_POLL_SECONDS)
 
     def _target_deployment(self):
         return self.apps_v1.read_namespaced_deployment(name=self.faulty_service, namespace=self.namespace)
@@ -428,10 +493,21 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             for deployment in self._app_deployments()
             if deployment.metadata.name != self.faulty_service
         ]
+
+        def startup_order(name):
+            if name == "consul":
+                return 0, name
+            if name.startswith(("mongodb-", "memcached-")):
+                return 1, name
+            if name in ("search", "frontend"):
+                return (3 if name == "search" else 4), name
+            return 2, name
+
         body = {"spec": {"template": {"spec": {"priorityClassName": self.PLATFORM_PRIORITY_CLASS}}}}
-        for name in peer_names:
+        # Replacing Consul after clients register can discard their discovery
+        # state. Finish each dependency rollout before replacing its clients.
+        for name in sorted(peer_names, key=startup_order):
             self.apps_v1.patch_namespaced_deployment(name=name, namespace=self.namespace, body=body)
-        for name in peer_names:
             self._wait_for_deployment_ready(name, self.namespace)
 
     def _ensure_target_preemptable(self, target_pod):
@@ -737,21 +813,11 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         self._capture_app_template_state()
         print(f"Target node: {self.target_node} | target request: {self.target_request_memory}")
 
-        print(f"Preparing existing production pod '{self.faulty_service}' with realistic memory requests")
-        self._patch_target_requests()
-        target_pod = self._target_pod()
-        self.target_node = target_pod.spec.node_name
-        print(f"Pinning '{self.faulty_service}' to pressure node '{self.target_node}'")
-        self._pin_target_to_node()
-        target_pod = self._target_pod()
-        self.target_node = target_pod.spec.node_name
-        self._ensure_target_preemptable(target_pod)
-
-        print("Creating unsafe PriorityClasses")
+        print("Preparing PriorityClasses without changing the default yet")
         self._create_or_replace_priority_class(
             self.PLATFORM_PRIORITY_CLASS,
             value=100000,
-            global_default=True,
+            global_default=False,
             description="Default priority for shared platform and tenant workloads.",
         )
         self._create_or_replace_priority_class(
@@ -763,9 +829,26 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
 
         print("Protecting peer app deployments so the scheduler has a deterministic victim")
         self._protect_peer_deployments()
+        # The victim must also reconnect after discovery/datastore rollouts,
+        # while new pods still receive their original priority of zero.
+        print(f"Preparing existing production pod '{self.faulty_service}' with realistic memory requests")
+        self._patch_target_requests()
+        target_pod = self._target_pod()
+        self.target_node = target_pod.spec.node_name
+        print(f"Pinning '{self.faulty_service}' to pressure node '{self.target_node}'")
+        self._pin_target_to_node()
         target_pod = self._target_pod()
         self._ensure_target_preemptable(target_pod)
         self.target_node = target_pod.spec.node_name
+        if self._application_check is not None:
+            self._application_check()
+        print("Enabling the unsafe global default for new tenant and replacement pods")
+        self._create_or_replace_priority_class(
+            self.PLATFORM_PRIORITY_CLASS,
+            value=100000,
+            global_default=True,
+            description="Default priority for shared platform and tenant workloads.",
+        )
         padding_names = self._create_capacity_padding()
         try:
             if padding_names:
@@ -798,6 +881,8 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         self._make_platform_priority_safe()
         self._protect_target_deployment()
         self._wait_for_deployment_ready(self.faulty_service, self.namespace)
+        if self._application_check is not None:
+            self._application_check()
         print(
             f"Recovered priority preemption cascade by protecting "
             f"{self.namespace}/{self.faulty_service} with {self.PRODUCTION_PRIORITY_CLASS}\n"

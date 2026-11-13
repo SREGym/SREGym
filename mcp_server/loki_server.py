@@ -1,3 +1,4 @@
+import anyio.to_thread
 from fastmcp import FastMCP
 
 from clients.stratus.stratus_utils.get_logger import get_logger
@@ -10,17 +11,7 @@ logger.info("Starting Loki MCP Server")
 mcp = FastMCP("Loki MCP Server")
 
 
-@mcp.tool(name="get_logs")
-def get_logs(query: str, last_n_minutes: int = 15) -> str:
-    """Query logs from Loki using LogQL.
-
-    Args:
-        query (str): A LogQL query expression (e.g., '{namespace="default"}' or '{app="nginx"} |= "error"').
-        last_n_minutes (int): Number of minutes to look back for logs. Defaults to 15.
-
-    Returns:
-        str: Log entries matching the query, or error information.
-    """
+def _get_logs_sync(query: str, last_n_minutes: int) -> str:
     logger.info(f"[loki_mcp] get_logs called with query: {query}")
 
     loki_url = "http://loki.observe.svc.cluster.local:3100"
@@ -76,13 +67,27 @@ def get_logs(query: str, last_n_minutes: int = 15) -> str:
         return err_str
 
 
-@mcp.tool(name="get_labels")
-def get_labels() -> str:
-    """Get all available label names from Loki.
+@mcp.tool(name="get_logs")
+async def get_logs(query: str, last_n_minutes: int = 15) -> str:
+    """Query logs from Loki using LogQL.
+
+    Args:
+        query (str): A LogQL query expression (e.g., '{namespace="default"}' or '{app="nginx"} |= "error"').
+        last_n_minutes (int): Number of minutes to look back for logs. Defaults to 15.
 
     Returns:
-        str: List of available label names for filtering logs.
+        str: Log entries matching the query, or error information.
     """
+    # ObservabilityClient.make_request is a blocking `requests` call (up to
+    # REQUEST_TIMEOUT=120s, plus retries). FastMCP calls a sync tool function
+    # inline on the single uvicorn worker, so running it directly here would
+    # block every other request on this process, including the conductor's
+    # port-forward health probe and every other session's calls. See the
+    # matching comment on exec_kubectl_cmd_safely in mcp_server/kubectl_mcp_tools.py.
+    return await anyio.to_thread.run_sync(_get_logs_sync, query, last_n_minutes)
+
+
+def _get_labels_sync() -> str:
     logger.info("[loki_mcp] get_labels called")
 
     loki_url = "http://loki.observe.svc.cluster.local:3100"
@@ -107,16 +112,17 @@ def get_labels() -> str:
         return err_str
 
 
-@mcp.tool(name="get_label_values")
-def get_label_values(label: str) -> str:
-    """Get all values for a specific label from Loki.
-
-    Args:
-        label (str): The label name to get values for (e.g., 'namespace', 'app', 'pod').
+@mcp.tool(name="get_labels")
+async def get_labels() -> str:
+    """Get all available label names from Loki.
 
     Returns:
-        str: List of values for the specified label.
+        str: List of available label names for filtering logs.
     """
+    return await anyio.to_thread.run_sync(_get_labels_sync)
+
+
+def _get_label_values_sync(label: str) -> str:
     logger.info(f"[loki_mcp] get_label_values called for label: {label}")
 
     loki_url = "http://loki.observe.svc.cluster.local:3100"
@@ -142,3 +148,16 @@ def get_label_values(label: str) -> str:
         err_str = f"[loki_mcp] Error querying get_label_values: {str(e)}"
         logger.error(err_str)
         return err_str
+
+
+@mcp.tool(name="get_label_values")
+async def get_label_values(label: str) -> str:
+    """Get all values for a specific label from Loki.
+
+    Args:
+        label (str): The label name to get values for (e.g., 'namespace', 'app', 'pod').
+
+    Returns:
+        str: List of values for the specified label.
+    """
+    return await anyio.to_thread.run_sync(_get_label_values_sync, label)

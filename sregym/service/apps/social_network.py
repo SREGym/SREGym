@@ -3,7 +3,7 @@
 import logging
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
-from sregym.paths import SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
+from sregym.paths import SOCIAL_NETWORK_IMAGE_VALUES, SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.helm import Helm
@@ -25,6 +25,7 @@ class SocialNetwork(Application):
 
     def load_app_json(self):
         super().load_app_json()
+        self.helm_configs["values_file"] = str(SOCIAL_NETWORK_IMAGE_VALUES)
         metadata = self.get_app_json()
         self.app_name = metadata["Name"]
         self.description = metadata["Desc"]

@@ -1,6 +1,7 @@
 """Mitigation oracle for the InternalTrafficPolicyLocal problem.
 
-Passes when **either**:
+Required application workloads and resources must remain healthy. The network
+check then passes when either:
 * ``spec.internalTrafficPolicy`` on the ``recommendation`` Service is no longer
   ``Local`` (i.e. changed to ``Cluster`` or the field was removed), **or**
 * Every worker node has at least one Ready ``recommendation`` Service endpoint
@@ -18,11 +19,11 @@ import time
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.mitigation import MitigationOracle
 
 
-class InternalTrafficPolicyMitigationOracle(Oracle):
+class InternalTrafficPolicyMitigationOracle(MitigationOracle):
     importance = 1.0
 
     def __init__(self, problem):
@@ -36,6 +37,10 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
 
     def evaluate(self) -> dict:
         print("== InternalTrafficPolicy Mitigation Evaluation ==")
+
+        result = super().evaluate()
+        if not result.get("success"):
+            return result
 
         try:
             svc = self.core_v1.read_namespaced_service(self.problem.FAULTY_SERVICE, self.problem.namespace)

@@ -3,21 +3,27 @@ name: Problem Difficulty Evaluation
 # Opt-in only: a core team member starts this workflow from the Actions UI or
 # comments "/evaluate-problem <id> [3|5] [model]" on a pull request.
 #
-# By default Claude Code runs on Claude Opus through the Anthropic API
-# (ANTHROPIC_API_KEY, a monthly credit grant) for three attempts. When the
-# Anthropic preflight fails (credits exhausted, outage, or the secret isn't
-# set), or when glm-5.3-flash is requested, the Z.ai pipeline runs instead
-# with five attempts: Codex requires the Responses API, so a local LiteLLM
-# proxy translates its requests to Z.ai's OpenAI-compatible GLM Coding Plan
-# endpoint. Z.ai is a low-volume annual plan, so when its preflight fails too,
-# this workflow falls back to a personal Cursor CLI subscription instead of
-# failing outright. The fallbacks don't try to match models between runs --
-# they exist purely to flag whether a problem still gets solved by *some*
-# capable agent, not to compare agents.
+# By default Codex runs on NCSA Lumen (LUMEN_API_KEY) for five attempts.
+# Codex requires the Responses API, so a local LiteLLM proxy translates its
+# requests to Lumen's OpenAI-compatible Chat Completions endpoint. The Lumen
+# preflight requires a real tool call, because a model that can only answer in
+# text would fail every attempt and make the problem look hard.
+#
+# Claude Code on the Anthropic API (ANTHROPIC_API_KEY, a monthly credit grant)
+# runs only when a Claude model is named, for three attempts; use it for the
+# final check of a problem. glm-5.3-flash runs Codex on the Z.ai GLM Coding
+# Plan through the same LiteLLM proxy.
+#
+# When the requested provider's preflight fails (credits exhausted, outage,
+# no tool calls, or the secret isn't set), the run falls back in the order
+# Lumen, Z.ai, then a personal Cursor CLI subscription instead of failing
+# outright. The fallbacks don't try to match models between runs -- they exist
+# purely to flag whether a problem still gets solved by *some* capable agent,
+# not to compare agents.
 #
 # Comment runs evaluate the PR merged into the default branch so that problems
 # introduced by the PR itself can be scored before merge. Because this job
-# holds ANTHROPIC_API_KEY/ZCODE_API_KEY/CURSOR_API_KEY, only
+# holds LUMEN_API_KEY/ANTHROPIC_API_KEY/ZCODE_API_KEY/CURSOR_API_KEY, only
 # OWNER/MEMBER/COLLABORATOR comments are honoured; review the PR diff before
 # issuing the command, as it executes PR code.
 
@@ -31,7 +37,7 @@ on:
         required: true
         type: string
       attempts:
-        description: "Number of independent evaluations (default: 3 on Claude, 5 on GLM/Cursor)"
+        description: "Number of independent evaluations (default: 3 on Claude, 5 on Lumen/GLM/Cursor)"
         required: true
         default: default
         type: choice
@@ -40,11 +46,13 @@ on:
           - "3"
           - "5"
       model:
-        description: "Model; Claude models fall back to the GLM pipeline when the Anthropic API is unusable"
+        description: "Model; Lumen by default, Claude for a final check. Unusable providers fall back to Lumen, Z.ai, then Cursor"
         required: true
-        default: claude-opus-5-5
+        # Keep the Lumen option in sync with LUMEN_MODEL below.
+        default: deepseek-v4.1-flash-1017
         type: choice
         options:
+          - deepseek-v4.1-flash-1017
           - claude-opus-5-5
           - claude-sonnet-5-5
           - glm-5.3-flash
@@ -52,6 +60,11 @@ on:
 concurrency:
   group: problem-difficulty-${{ github.event_name }}-${{ github.event.inputs.problem_id || github.event.issue.number || github.ref }}
   cancel-in-progress: false
+
+env:
+  # The default model, served by NCSA Lumen's OpenAI-compatible API.
+  LUMEN_MODEL: deepseek-v4.1-flash-1017
+  LUMEN_API_BASE: https://lumen.ncsa.illinois.edu/v1
 
 jobs:
   resolve:
@@ -111,7 +124,7 @@ jobs:
               # so main-only harness files are present even when the PR branch
               # predates them. A PR with merge conflicts has no /merge ref and
               # checkout fails with a clear error. This runs PR code next to
-              # ZCODE_API_KEY, which is why the trigger is limited to
+              # the provider API keys, which is why the trigger is limited to
               # write-access commenters below.
               checkout_ref="refs/pull/${pr_number}/merge"
               case "$COMMENT_ASSOC" in
@@ -129,15 +142,15 @@ jobs:
                 read -r -a words <<< "$raw" || true
                 problem_id=${words[0]:-}
                 # Both optional values may be omitted, so tell them apart by
-                # shape: "/evaluate-problem <id> glm-5.3-flash" keeps GLM's
-                # default attempt count.
+                # shape: "/evaluate-problem <id> claude-opus-5-5" keeps
+                # Claude's default attempt count.
                 for word in "${words[@]:1:2}"; do
                   case "$word" in
                     *[!0-9]*) model="$word" ;;
                     *) attempts="$word" ;;
                   esac
                 done
-                model=${model:-claude-opus-5-5}
+                model=${model:-$LUMEN_MODEL}
               fi
               ;;
           esac
@@ -153,8 +166,8 @@ jobs:
               skip_reason="attempts must be 3 or 5"
             else
               case "$model" in
-                claude-opus-5-5|claude-sonnet-5-5|glm-5.3-flash) should_run=true ;;
-                *) skip_reason="model must be claude-opus-5-5, claude-sonnet-5-5, or glm-5.3-flash" ;;
+                "$LUMEN_MODEL"|claude-opus-5-5|claude-sonnet-5-5|glm-5.3-flash) should_run=true ;;
+                *) skip_reason="model must be $LUMEN_MODEL, claude-opus-5-5, claude-sonnet-5-5, or glm-5.3-flash" ;;
               esac
             fi
           fi
@@ -185,8 +198,8 @@ jobs:
       issues: write
     env:
       PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
-      # ATTEMPTS, ZAI_MODEL and RUN_MODEL are set once a provider is chosen:
-      # the default attempt count and the Z.ai model depend on which one ran.
+      # ATTEMPTS, RUN_MODEL and HARNESS are set once a provider is chosen:
+      # the default attempt count and the model depend on which one ran.
       REQUESTED_ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
       REQUESTED_MODEL: ${{ needs.resolve.outputs.model }}
       LITELLM_PORT: "4000"
@@ -196,66 +209,126 @@ jobs:
       - name: Choose evaluation provider
         id: provider
         env:
+          LUMEN_API_KEY: ${{ secrets.LUMEN_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -euo pipefail
-          provider=""
-          claude_reason=""
-          zai_reason=""
           ZAI_MODEL="glm-5.3-flash"
-
           case "$REQUESTED_MODEL" in
-            claude-*)
-              if [ -n "$ANTHROPIC_API_KEY" ]; then
-                response_file="$RUNNER_TEMP/anthropic-preflight.json"
-                request_body=$(jq -cn --arg model "$REQUESTED_MODEL" '{
-                  model: $model,
-                  max_tokens: 1024,
-                  messages: [{role: "user", content: "Reply with OK."}]
-                }')
-                # Exhausted credits come back as an HTTP error here, which
-                # sends this run to the GLM pipeline. Retries keep a passing
-                # overload or connection blip from doing the same.
-                http_status=$(curl --silent --show-error \
-                  --connect-timeout 10 \
-                  --max-time 120 \
-                  --retry 2 \
-                  --retry-delay 5 \
-                  --output "$response_file" \
-                  --write-out '%{http_code}' \
-                  --request POST \
-                  --url https://api.anthropic.com/v1/messages \
-                  --header "x-api-key: $ANTHROPIC_API_KEY" \
-                  --header 'anthropic-version: 2023-06-01' \
-                  --header 'Content-Type: application/json' \
-                  --data "$request_body" || true)
-
-                case "$http_status" in
-                  2??)
-                    provider="anthropic"
-                    echo "Anthropic API preflight passed for $REQUESTED_MODEL."
-                    ;;
-                  *)
-                    error_type=$(jq -r '.error.type // "unknown"' "$response_file" 2>/dev/null || true)
-                    error_message=$(jq -r '.error.message // "unknown error"' "$response_file" 2>/dev/null || true)
-                    claude_reason="HTTP ${http_status:-000}, ${error_type:-unknown}: ${error_message:-unknown error}"
-                    echo "Anthropic API preflight failed: $claude_reason"
-                    ;;
-                esac
-              else
-                claude_reason="repository secret ANTHROPIC_API_KEY is not configured"
-                echo "$claude_reason"
-              fi
-              ;;
-            *)
-              ZAI_MODEL="$REQUESTED_MODEL"
-              ;;
+            glm-*) ZAI_MODEL="$REQUESTED_MODEL" ;;
           esac
 
-          if [ -z "$provider" ] && [ -n "$ZCODE_API_KEY" ]; then
-            response_file="$RUNNER_TEMP/zai-preflight.json"
+          # Each check_* function returns 0 when its provider can run this
+          # evaluation, or sets $reason and returns 1.
+          reason=""
+
+          check_lumen() {
+            if [ -z "$LUMEN_API_KEY" ]; then
+              reason="repository secret LUMEN_API_KEY is not configured"
+              return 1
+            fi
+            local response_file="$RUNNER_TEMP/lumen-preflight.json"
+            local request_body http_status error_message
+            # Codex can only act through tool calls, so a model that answers
+            # in plain text would fail every attempt and make the problem
+            # look hard. Require a tool call, not just a reply. The token
+            # budget leaves room for the model's reasoning before the call.
+            request_body=$(jq -cn --arg model "$LUMEN_MODEL" '{
+              model: $model,
+              messages: [{role: "user", content: "Call the report_status tool with status set to ok."}],
+              tools: [{
+                type: "function",
+                function: {
+                  name: "report_status",
+                  description: "Report a status string.",
+                  parameters: {
+                    type: "object",
+                    properties: {status: {type: "string"}},
+                    required: ["status"]
+                  }
+                }
+              }],
+              tool_choice: "auto",
+              max_tokens: 4096,
+              stream: false
+            }')
+            http_status=$(curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 180 \
+              --retry 2 \
+              --retry-delay 5 \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --url "$LUMEN_API_BASE/chat/completions" \
+              --header "Authorization: Bearer $LUMEN_API_KEY" \
+              --header 'Content-Type: application/json' \
+              --data "$request_body" || true)
+            case "$http_status" in
+              2??) ;;
+              *)
+                error_message=$(jq -r '.error.message // .message // "unknown error"' "$response_file" 2>/dev/null || true)
+                reason="HTTP ${http_status:-000}: ${error_message:-unknown error}"
+                return 1
+                ;;
+            esac
+            if ! jq -e '(.choices[0].message.tool_calls // []) | length > 0' "$response_file" > /dev/null 2>&1; then
+              reason="$LUMEN_MODEL replied without calling a tool, and Codex needs tool calls"
+              return 1
+            fi
+            echo "Lumen preflight passed for $LUMEN_MODEL, including a tool call."
+          }
+
+          check_anthropic() {
+            if [ -z "$ANTHROPIC_API_KEY" ]; then
+              reason="repository secret ANTHROPIC_API_KEY is not configured"
+              return 1
+            fi
+            local response_file="$RUNNER_TEMP/anthropic-preflight.json"
+            local request_body http_status error_type error_message
+            request_body=$(jq -cn --arg model "$REQUESTED_MODEL" '{
+              model: $model,
+              max_tokens: 1024,
+              messages: [{role: "user", content: "Reply with OK."}]
+            }')
+            # Exhausted credits come back as an HTTP error here, which sends
+            # this run down the fallback chain. Retries keep a passing
+            # overload or connection blip from doing the same.
+            http_status=$(curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 120 \
+              --retry 2 \
+              --retry-delay 5 \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --url https://api.anthropic.com/v1/messages \
+              --header "x-api-key: $ANTHROPIC_API_KEY" \
+              --header 'anthropic-version: 2023-06-01' \
+              --header 'Content-Type: application/json' \
+              --data "$request_body" || true)
+            case "$http_status" in
+              2??)
+                echo "Anthropic API preflight passed for $REQUESTED_MODEL."
+                ;;
+              *)
+                error_type=$(jq -r '.error.type // "unknown"' "$response_file" 2>/dev/null || true)
+                error_message=$(jq -r '.error.message // "unknown error"' "$response_file" 2>/dev/null || true)
+                reason="HTTP ${http_status:-000}, ${error_type:-unknown}: ${error_message:-unknown error}"
+                return 1
+                ;;
+            esac
+          }
+
+          check_zai() {
+            if [ -z "$ZCODE_API_KEY" ]; then
+              reason="repository secret ZCODE_API_KEY is not configured"
+              return 1
+            fi
+            local response_file="$RUNNER_TEMP/zai-preflight.json"
+            local request_body http_status error_code error_message
             request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
               model: $model,
               messages: [{role: "user", content: "Reply with OK."}],
@@ -272,62 +345,72 @@ jobs:
               --url https://api.z.ai/api/coding/paas/v4/chat/completions \
               --header "Authorization: Bearer $ZCODE_API_KEY" \
               --header 'Content-Type: application/json' \
-              --data "$request_body")
-
+              --data "$request_body" || true)
             case "$http_status" in
               2??)
-                provider="zai"
                 echo "Z.ai Coding Plan preflight passed for $ZAI_MODEL."
                 ;;
               *)
                 error_code=$(jq -r '.error.code // .code // "unknown"' "$response_file" 2>/dev/null || true)
                 error_message=$(jq -r '.error.message // .message // "unknown error"' "$response_file" 2>/dev/null || true)
-                zai_reason="HTTP $http_status, code ${error_code:-unknown}: ${error_message:-unknown error}"
-                echo "Z.ai Coding Plan preflight failed: $zai_reason"
+                reason="HTTP ${http_status:-000}, code ${error_code:-unknown}: ${error_message:-unknown error}"
+                return 1
                 ;;
             esac
-          elif [ -z "$provider" ]; then
-            zai_reason="repository secret ZCODE_API_KEY is not configured"
-            echo "$zai_reason"
-          fi
+          }
 
-          # Z.ai is a low-volume annual plan; when it's out of quota (or
-          # simply not configured), fall back to a personal Cursor CLI
-          # subscription instead of failing the whole run. This fallback
-          # doesn't try to hold the model constant across runs -- it exists
-          # to flag whether a problem is still solvable at all, not to
-          # compare agents/models.
-          if [ -z "$provider" ]; then
-            if [ -n "$CURSOR_API_KEY" ]; then
-              provider="cursor"
-              echo "Falling back to the Cursor CLI ($zai_reason)."
-            else
-              echo "::error::No evaluation provider is usable for this run."
-              {
-                echo "# Problem Difficulty Evaluation"
-                echo
-                echo "❌ No usable evaluation backend."
-                echo
-                if [ -n "$claude_reason" ]; then
-                  echo "- **Anthropic**: $claude_reason"
-                fi
-                echo "- **Z.ai**: $zai_reason"
-                echo "- **Cursor**: repository secret \`CURSOR_API_KEY\` is not configured."
-              } | tee evaluation-report.md >> "$GITHUB_STEP_SUMMARY"
-              exit 1
+          # Cursor is a personal subscription with no cheap preflight; the
+          # CLI's own check runs after it is installed.
+          check_cursor() {
+            if [ -z "$CURSOR_API_KEY" ]; then
+              reason="repository secret CURSOR_API_KEY is not configured"
+              return 1
             fi
+          }
+
+          # The requested provider goes first, then the rest in fallback
+          # order. Claude only runs when a Claude model is named.
+          case "$REQUESTED_MODEL" in
+            claude-*) chain="anthropic lumen zai cursor" ;;
+            glm-*) chain="zai lumen cursor" ;;
+            *) chain="lumen zai cursor" ;;
+          esac
+          declare -A label=([lumen]="Lumen" [anthropic]="Claude" [zai]="Z.ai" [cursor]="Cursor")
+
+          provider=""
+          fallback_note=""
+          failures=()
+          for candidate in $chain; do
+            reason=""
+            if "check_$candidate"; then
+              provider="$candidate"
+              break
+            fi
+            echo "${label[$candidate]} unavailable: $reason"
+            fallback_note="${fallback_note:+$fallback_note }${label[$candidate]} unavailable ($reason)."
+            failures+=("- **${label[$candidate]}**: $reason")
+          done
+
+          if [ -z "$provider" ]; then
+            echo "::error::No evaluation provider is usable for this run."
+            {
+              echo "# Problem Difficulty Evaluation"
+              echo
+              echo "❌ No usable evaluation backend."
+              echo
+              printf '%s\n' "${failures[@]}"
+            } | tee evaluation-report.md >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
           case "$provider" in
+            lumen) run_model="$LUMEN_MODEL"; harness="Codex"; default_attempts=5 ;;
             anthropic) run_model="$REQUESTED_MODEL"; harness="Claude Code"; default_attempts=3 ;;
             zai) run_model="$ZAI_MODEL"; harness="Codex"; default_attempts=5 ;;
             cursor) run_model="$CURSOR_MODEL"; harness="Cursor CLI"; default_attempts=5 ;;
           esac
           attempts="${REQUESTED_ATTEMPTS:-$default_attempts}"
 
-          fallback_note=""
-          [ -n "$claude_reason" ] && fallback_note="Claude unavailable ($claude_reason)."
-          [ -n "$zai_reason" ] && fallback_note="${fallback_note:+$fallback_note }Z.ai unavailable ($zai_reason)."
           # Provider error text is written to GITHUB_ENV, so keep it on one line.
           fallback_note=$(printf '%s' "$fallback_note" | tr '\r\n' '  ')
 
@@ -336,7 +419,6 @@ jobs:
             echo "PROVIDER=$provider"
             echo "PROVIDER_READY=true"
             echo "RUN_MODEL=$run_model"
-            echo "ZAI_MODEL=$ZAI_MODEL"
             echo "HARNESS=$harness"
             echo "ATTEMPTS=$attempts"
             echo "FALLBACK_NOTE=$fallback_note"
@@ -380,6 +462,7 @@ jobs:
               `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/pull/` +
               `${process.env.PR_NUMBER}#issuecomment-${process.env.COMMENT_ID}`;
             const providerLabel = {
+              lumen: 'Codex on NCSA Lumen',
               anthropic: 'Claude Code on the Anthropic API',
               zai: 'Codex on the Z.ai Coding Plan',
               cursor: 'Cursor CLI fallback',
@@ -436,34 +519,41 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --locked
 
-      - name: Start Codex-to-Z.ai bridge
-        if: env.PROVIDER == 'zai'
+      - name: Start Codex bridge
+        if: env.PROVIDER == 'lumen' || env.PROVIDER == 'zai'
         env:
-          ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
+          # Only the selected upstream's key reaches the LiteLLM process.
+          LUMEN_API_KEY: ${{ env.PROVIDER == 'lumen' && secrets.LUMEN_API_KEY || '' }}
+          ZCODE_API_KEY: ${{ env.PROVIDER == 'zai' && secrets.ZCODE_API_KEY || '' }}
         run: |
           set -euo pipefail
+          case "$PROVIDER" in
+            lumen) upstream_base="$LUMEN_API_BASE"; upstream_key_var="LUMEN_API_KEY" ;;
+            zai) upstream_base="https://api.z.ai/api/coding/paas/v4"; upstream_key_var="ZCODE_API_KEY" ;;
+          esac
+
           proxy_key="sk-local-$(openssl rand -hex 24)"
           echo "::add-mask::$proxy_key"
           echo "LITELLM_MASTER_KEY=$proxy_key" >> "$GITHUB_ENV"
           export LITELLM_MASTER_KEY="$proxy_key"
 
-          cat > "$RUNNER_TEMP/zai-litellm.yaml" <<EOF
+          cat > "$RUNNER_TEMP/codex-litellm.yaml" <<EOF
           model_list:
-            - model_name: $ZAI_MODEL
+            - model_name: $RUN_MODEL
               litellm_params:
-                # Z.ai implements Chat Completions. This prefix makes LiteLLM
-                # translate Codex Responses requests instead of forwarding
-                # them to Z.ai's nonexistent /responses endpoint.
-                model: openai/chat_completions/$ZAI_MODEL
-                api_base: https://api.z.ai/api/coding/paas/v4
-                api_key: os.environ/ZCODE_API_KEY
-            - model_name: $ZAI_MODEL-judge
+                # Lumen and Z.ai implement Chat Completions. This prefix makes
+                # LiteLLM translate Codex Responses requests instead of
+                # forwarding them to the upstream's /responses endpoint.
+                model: openai/chat_completions/$RUN_MODEL
+                api_base: $upstream_base
+                api_key: os.environ/$upstream_key_var
+            - model_name: $RUN_MODEL-judge
               litellm_params:
                 # The judge already speaks Chat Completions, so it must use the
                 # unmodified upstream model ID rather than the Responses bridge.
-                model: openai/$ZAI_MODEL
-                api_base: https://api.z.ai/api/coding/paas/v4
-                api_key: os.environ/ZCODE_API_KEY
+                model: openai/$RUN_MODEL
+                api_base: $upstream_base
+                api_key: os.environ/$upstream_key_var
           litellm_settings:
             drop_params: true
             modify_params: true
@@ -474,7 +564,7 @@ jobs:
           # The proxy extra conflicts with SREGym's intentionally pinned web
           # stack, so run the matching LiteLLM proxy in an isolated uv tool env.
           nohup uvx --exclude-newer '7 days' --from 'litellm[proxy]==1.91.0' litellm \
-            --config "$RUNNER_TEMP/zai-litellm.yaml" \
+            --config "$RUNNER_TEMP/codex-litellm.yaml" \
             --host 0.0.0.0 \
             --port "$LITELLM_PORT" \
             > "$RUNNER_TEMP/litellm.log" 2>&1 &
@@ -494,11 +584,11 @@ jobs:
           exit 1
 
       - name: Preflight Codex and judge bridges
-        if: env.PROVIDER == 'zai'
+        if: env.PROVIDER == 'lumen' || env.PROVIDER == 'zai'
         run: |
           set -euo pipefail
-          codex_response_file="$RUNNER_TEMP/zai-codex-bridge-preflight.json"
-          codex_request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
+          codex_response_file="$RUNNER_TEMP/codex-bridge-preflight.json"
+          codex_request_body=$(jq -cn --arg model "$RUN_MODEL" '{
             model: $model,
             input: "Reply with OK.",
             max_output_tokens: 16,
@@ -518,16 +608,16 @@ jobs:
           if [[ "$codex_http_status" != 2* ]]; then
             error_message=$(jq -r '.error.message // .message // "unknown error"' \
               "$codex_response_file" 2>/dev/null || true)
-            printf 'Codex-to-Z.ai bridge preflight failed: HTTP %s: %s\n' \
-              "$codex_http_status" "${error_message:-unknown error}"
+            printf 'Codex-to-%s bridge preflight failed: HTTP %s: %s\n' \
+              "$PROVIDER" "$codex_http_status" "${error_message:-unknown error}"
             tail -200 "$RUNNER_TEMP/litellm.log" || true
             exit 1
           fi
 
-          echo "Codex-to-Z.ai Responses bridge preflight passed for $ZAI_MODEL."
+          echo "Codex-to-$PROVIDER Responses bridge preflight passed for $RUN_MODEL."
 
-          judge_model="$ZAI_MODEL-judge"
-          judge_response_file="$RUNNER_TEMP/zai-judge-bridge-preflight.json"
+          judge_model="$RUN_MODEL-judge"
+          judge_response_file="$RUNNER_TEMP/judge-bridge-preflight.json"
           judge_request_body=$(jq -cn --arg model "$judge_model" '{
             model: $model,
             messages: [{role: "user", content: "Reply with OK."}],
@@ -548,13 +638,13 @@ jobs:
           if [[ "$judge_http_status" != 2* ]]; then
             error_message=$(jq -r '.error.message // .message // "unknown error"' \
               "$judge_response_file" 2>/dev/null || true)
-            printf 'Judge-to-Z.ai bridge preflight failed: HTTP %s: %s\n' \
-              "$judge_http_status" "${error_message:-unknown error}"
+            printf 'Judge-to-%s bridge preflight failed: HTTP %s: %s\n' \
+              "$PROVIDER" "$judge_http_status" "${error_message:-unknown error}"
             tail -200 "$RUNNER_TEMP/litellm.log" || true
             exit 1
           fi
 
-          echo "Judge-to-Z.ai Chat Completions bridge preflight passed for $judge_model."
+          echo "Judge-to-$PROVIDER Chat Completions bridge preflight passed for $judge_model."
 
       - name: Install Cursor CLI
         if: env.PROVIDER == 'cursor'
@@ -604,7 +694,7 @@ jobs:
 
       - name: Install Kind
         run: |
-          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.28.0/kind-linux-amd64
           chmod +x /tmp/kind
           sudo mv /tmp/kind /usr/local/bin/kind
           kind version
@@ -612,11 +702,17 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v4
 
-      - name: Pre-pull kind node image
-        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
-
       - name: Prepare /run/udev for OpenEBS NDM
         run: sudo mkdir -p /run/udev
+
+      # All kind nodes share the runner's inotify limits. The hosted image's
+      # defaults run out once four nodes start, and pods that need an inotify
+      # instance (kube-proxy, Calico install-cni, promtail) then crash-loop
+      # with "too many open files". Values match kind/README.md.
+      - name: Raise inotify limits for kind
+        run: |
+          sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches
+          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=1048576
 
       - name: Create kind cluster with Calico
         run: bash kind/setup_kind_cluster.sh x86
@@ -642,10 +738,10 @@ jobs:
               # ANTHROPIC_API_KEY from the environment.
               judge_model="anthropic/$RUN_MODEL"
               ;;
-            zai)
+            lumen|zai)
               build_args+=(--force-build)
               agent_name="codex"
-              judge_model="openai/${ZAI_MODEL}-judge"
+              judge_model="openai/${RUN_MODEL}-judge"
               export AGENT_API_BASE="http://127.0.0.1:$LITELLM_PORT/v1"
               export AGENT_API_KEY="$LITELLM_MASTER_KEY"
               export JUDGE_API_BASE="http://127.0.0.1:$LITELLM_PORT/v1"
@@ -729,8 +825,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Stop Codex-to-Z.ai bridge
-        if: always() && env.PROVIDER == 'zai'
+      - name: Stop Codex bridge
+        if: always() && (env.PROVIDER == 'lumen' || env.PROVIDER == 'zai')
         run: |
           if [ -f "$RUNNER_TEMP/litellm.pid" ]; then
             kill "$(cat "$RUNNER_TEMP/litellm.pid")" 2>/dev/null || true

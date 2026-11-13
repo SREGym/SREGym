@@ -699,7 +699,7 @@ spec:
         self.core_api.delete_namespaced_pod(
             name=target,
             namespace=self.namespace,
-            body=client.V1DeleteOptions(grace_period_seconds=0),
+            body=client.V1DeleteOptions(),
         )
         print(
             f"Deleted pod {target}; replacement pod will be mutated to "

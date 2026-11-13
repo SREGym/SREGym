@@ -65,6 +65,7 @@ _SUBMISSION_OBJ_RE = re.compile(r"\{[^{}]*\bSubmission received\b[^{}]*\}")
 # the same session format.
 _TOOL_ALIASES: dict[str, str] = {
     "cloudthinker_rca": "cloudthinker",
+    "claudecode_radar": "claudecode",
 }
 
 

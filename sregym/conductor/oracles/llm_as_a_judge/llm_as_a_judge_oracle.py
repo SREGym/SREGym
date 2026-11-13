@@ -100,14 +100,22 @@ class LLMAsAJudgeOracle(Oracle):
                 expectation=expectation,
             )
 
-            # Check if judge is not initialized
+            # No verdict: the judge never scored this attempt, because its
+            # backend would not initialize or because its reply could not be
+            # parsed. Left ungraded rather than recorded as a failure, and
+            # named in unscored_reason so a reader can tell it apart from a
+            # diagnosis the judge scored 0.
             if report.verdict is None:
-                print("⚠️  LLM judge is not initialized - returning null result")
+                print(f"⚠️  LLM judge returned no verdict ({report.unscored_reason}) - attempt is unscored")
                 results["judgment"] = None
                 results["reasoning"] = report.reasoning
                 results["success"] = None
                 results["accuracy"] = None
                 results["checklist"] = []
+                results["unscored_reason"] = report.unscored_reason
+                # The judge's own last reply, kept so an unscored attempt can
+                # be explained, and re-judged, after the run has ended.
+                results["judge_raw_response"] = report.raw_response
                 return results
 
             # Use composite score (0.0-1.0) scaled to 0-100

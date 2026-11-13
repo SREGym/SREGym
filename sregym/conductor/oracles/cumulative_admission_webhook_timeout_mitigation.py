@@ -1,11 +1,9 @@
 """Mitigation oracle for the ``cumulative_admission_webhook_timeout`` problem.
 
-This oracle is purpose-built because the default ``MitigationOracle``
-(which walks every pod and requires phase == "Running") cannot detect
-this fault's symptom: the ``recommendation`` pod is *absent* (the
-ReplicaSet's recreate attempt is blocked by admission), not crashed. A
-pod walk that filters out terminated/absent pods can pass the namespace
-trivially even when the deployment is missing its replica entirely.
+Shared mitigation checks require the pre-injection application workloads and
+resources to remain healthy. The checks below also verify the policy plane
+and admission of a fresh pod; healthy existing pods alone cannot prove that
+new pods can be admitted.
 
 The fault is a *missing* ingress allow for the kube-apiserver, so the
 intended fix is additive: add the allow on the webhook port. Several
@@ -18,7 +16,7 @@ working fix at runtime (the probe) and rejects the destructive shortcuts
 (removing the namespace's network isolation, deleting all webhooks,
 deleting or scaling the workload to zero).
 
-The oracle checks four properties in order:
+After the shared application-health checks, the oracle checks four properties:
 
 1. **Workload intact.** The policy namespace exists, at least one of
    the SREGym webhook configurations remains (the policy plane must
@@ -48,15 +46,12 @@ import time
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
-from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger(__name__)
 
-
-_ROLLOUT_SETTLE_SECONDS = 60
-_ROLLOUT_POLL_INTERVAL = 3
 
 # Probe pod
 _PROBE_TIMEOUT_S = 90
@@ -64,7 +59,7 @@ _PROBE_POLL_INTERVAL = 3
 _PROBE_IMAGE = "busybox:1.36"
 
 
-class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
+class CumulativeAdmissionWebhookTimeoutMitigationOracle(MitigationOracle):
     """Oracle for the cumulative admission-webhook timeout fault.
 
     Attributes referenced from the Problem (set in its ``__init__``):
@@ -103,11 +98,11 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
     def evaluate(self) -> dict:
         print("== Cumulative Webhook Timeout Mitigation Evaluation ==")
 
-        namespace = self.problem.namespace
         target_deployment = self.problem.TARGET_DEPLOYMENT
 
-        # Give any agent-triggered rollout a moment to settle.
-        self._wait_for_rollout_settle(namespace)
+        result = super().evaluate()
+        if not result.get("success"):
+            return result
 
         # 1. Workload intact: deployment present with its replica count, at
         #    least one webhook remains, policy namespace still exists.
@@ -269,7 +264,7 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
                     "restore the deployment and re-apply the fix."
                 )
             raise
-        if (d.spec.replicas or 1) < 1:
+        if d.spec.replicas == 0:
             return False, (
                 f"Target deployment '{target_deployment}' was scaled to "
                 f"{d.spec.replicas} replicas. Scaling to zero is not an accepted fix; "
@@ -364,21 +359,6 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _wait_for_rollout_settle(self, namespace: str) -> None:
-        deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
-        while time.monotonic() < deadline:
-            deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
-            settled = True
-            for dep in deployments.items:
-                if not deployment_rollout_complete(dep):
-                    # only block on the target; let the others settle in background
-                    if dep.metadata.name == self.problem.TARGET_DEPLOYMENT:
-                        settled = False
-                        break
-            if settled:
-                return
-            time.sleep(_ROLLOUT_POLL_INTERVAL)
-
     def _list_sregym_webhooks(self, backend_names) -> list:
         """Return the list of SREGym-created MutatingWebhookConfigurations
         that still exist. The webhook config name equals the backend name

@@ -14,6 +14,14 @@ with patch.object(sys, "path", [str(ROOT / "docker"), *sys.path]):
 IMAGES = json.loads((ROOT / "docker/images.lock.json").read_text())
 
 
+def test_mcp_kubectl_matches_the_default_kind_kubernetes_release():
+    kubernetes_version = IMAGES["kind-node"].split(":k8s-", 1)[1].split("-containerd-", 1)[0]
+    dockerfile = (ROOT / "mcp_server/Dockerfile").read_text()
+    assert f"ARG KUBECTL_VERSION={kubernetes_version}" in dockerfile
+    assert "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" in dockerfile
+    assert "release/stable.txt" not in dockerfile
+
+
 def test_ansible_storage_and_cleanup_jobs_use_the_same_pinned_release():
     documents = list(yaml.safe_load_all((ROOT / "scripts/ansible/tidb/local-volume-provisioner.yaml").read_text()))
     daemonset = next(doc for doc in documents if doc["kind"] == "DaemonSet")
@@ -104,11 +112,13 @@ def test_chaos_install_passes_the_multiarch_pause_image_for_both_runtimes(runtim
     with (
         patch.object(stress_injector, "KubeCtl") as kubectl,
         patch.object(stress_injector, "Helm") as helm,
+        patch.object(stress_injector, "get_noise_manager") as noise_manager,
     ):
         kubectl.return_value.get_container_runtime.return_value = runtime
         kubectl.return_value.exec_command.return_value = ""
         helm.exists_release.return_value = False
         stress_injector.ChaosInjector("test")
+    noise_manager.return_value.wait_for_chaos_mesh_ready.assert_called_once_with()
     values = yaml.safe_load(Path(helm.install.call_args.kwargs["values_file"]).read_text())
     assert helm.install.call_args.kwargs["remote_chart"] is True
     assert values["controllerManager"]["podChaos"]["podFailure"]["pauseImage"] == IMAGES["chaos-pause"]
@@ -132,10 +142,13 @@ def test_noise_install_uses_the_same_multiarch_overrides(runtime, socket_path):
             return "controller 1/1 Running"
         return ""
 
-    with patch.object(manager.NoiseManager, "_instance", None), patch.object(manager, "KubeCtl") as kubectl:
+    with (
+        patch.object(manager.NoiseManager, "_instance", None),
+        patch.object(manager, "KubeCtl") as kubectl,
+        patch.object(manager.NoiseManager, "wait_for_chaos_mesh_ready") as wait_for_ready,
+    ):
         kubectl.return_value.exec_command.side_effect = execute
-        noise = manager.NoiseManager()
-        noise._ensure_chaos_mesh_installed()
+        manager.NoiseManager()._ensure_chaos_mesh_installed()
 
     commands = [call.args[0] for call in kubectl.return_value.exec_command.call_args_list]
     install_command = next(command for command in commands if command.startswith("helm upgrade --install"))
@@ -147,4 +160,4 @@ def test_noise_install_uses_the_same_multiarch_overrides(runtime, socket_path):
     assert f"chaosDaemon.runtime={runtime}" in args
     assert f"chaosDaemon.socketPath={socket_path}" in args
     assert args[args.index("--version") + 1] == "2.8.0"
-    assert noise._chaos_mesh_ready is True
+    wait_for_ready.assert_called_once_with()

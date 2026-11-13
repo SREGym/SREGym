@@ -134,6 +134,7 @@ assert any(route.path == "/api/health" for route in server.app.routes)
     kind-node)
         run_image --entrypoint sh "$IMAGE" -ec '
             kubelet --version
+            containerd --version
             command -v udevadm
             command -v socat
         '

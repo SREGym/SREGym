@@ -6,7 +6,9 @@ from fastmcp.server.http import create_sse_app
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.routing import Mount
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+from starlette.routing import Mount, Route
 
 from mcp_server.configs.load_all_cfg import mcp_server_cfg, str_to_bool
 from mcp_server.jaeger_server import mcp as observability_mcp
@@ -19,7 +21,18 @@ from sregym.service.k8s_proxy import KubernetesAPIProxy
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
+async def healthz(_request: Request) -> PlainTextResponse:
+    """Liveness route.
+
+    The SSE mounts answer 200 and then stream forever, so a probe cannot
+    use them. This route returns at once and ends the response.
+    """
+    return PlainTextResponse("ok")
+
+
 routes = [
+    Route("/healthz", healthz),
     Mount("/kubectl", app=create_sse_app(kubectl_mcp, "/messages/", "/sse")),
     Mount("/jaeger", app=create_sse_app(observability_mcp, "/messages/", "/sse")),
     Mount("/loki", app=create_sse_app(loki_mcp, "/messages/", "/sse")),

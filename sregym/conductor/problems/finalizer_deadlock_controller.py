@@ -96,22 +96,33 @@ class FinalizerDeadlockController(Problem):
         self._create_clusterrole(_correct_clusterrole_rules())
         self._create_clusterrolebinding()
         self._create_controller_script()
-        self._create_finalized_configmap()
+
+        # The controller must be ready before the finalizer exists. Only a live
+        # controller can remove it, and the controller skips ConfigMaps without
+        # a deletionTimestamp, so it is safe to start it first.
         self._deploy_controller()
         self._wait_for_controller_ready()
         print(f"Controller `{self.controller_name}` started with valid RBAC")
 
-        self._replace_clusterrole(_broken_clusterrole_rules())
-        print(f"ClusterRole `{self.clusterrole_name}` changed to read-only")
+        self._create_finalized_configmap()
 
-        self.kubectl.core_v1_api.delete_namespaced_config_map(
-            self.configmap_name,
-            self.namespace,
-            body=client.V1DeleteOptions(grace_period_seconds=0),
-            _request_timeout=10,
-        )
-        print(f"Deleted ConfigMap `{self.configmap_name}` with --wait=false semantics")
-        self._wait_for_forbidden_log()
+        # A failure after this point leaves the namespace undeletable. Undo the
+        # trap before re-raising so the caller can retry.
+        try:
+            self._replace_clusterrole(_broken_clusterrole_rules())
+            print(f"ClusterRole `{self.clusterrole_name}` changed to read-only")
+
+            self.kubectl.core_v1_api.delete_namespaced_config_map(
+                self.configmap_name,
+                self.namespace,
+                body=client.V1DeleteOptions(grace_period_seconds=0),
+                _request_timeout=10,
+            )
+            print(f"Deleted ConfigMap `{self.configmap_name}` with --wait=false semantics")
+            self._wait_for_forbidden_log()
+        except BaseException:
+            self._undo_finalizer_trap()
+            raise
 
         print(
             f"Resource: configmap/{self.configmap_name} | Controller: deployment/{self.controller_name} "
@@ -504,6 +515,27 @@ class FinalizerDeadlockController(Problem):
                 raise
             time.sleep(2)
         return False
+
+    def _undo_finalizer_trap(self) -> None:
+        """Leave the namespace deletable after a failed injection.
+
+        Restores the ClusterRole first so the running controller can clear the
+        finalizer itself. The kubectl patch below runs as the harness identity
+        and does not depend on the ClusterRole. The restore also leaves the
+        cluster in the state the next retry expects.
+
+        Reports failures instead of raising. This runs from an except block,
+        so an exception here would hide the error that broke the injection.
+        _ignore_not_found is not used because it re-raises anything but a 404.
+        """
+        for step, action in (
+            ("restore the ClusterRole", self._restore_clusterrole),
+            ("clear the finalizer", self._force_clear_finalizer),
+        ):
+            try:
+                action()
+            except Exception as exc:  # noqa: BLE001 - must not mask the original failure
+                print(f"Could not {step} after a failed injection: {type(exc).__name__}: {exc}", flush=True)
 
     def _force_clear_finalizer(self):
         try:

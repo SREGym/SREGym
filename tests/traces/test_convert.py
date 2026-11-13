@@ -404,3 +404,15 @@ def test_gemini_extra_sregym_populated(tmp_path):
     assert sregym["application"] == "Hotel Reservation"
     assert sregym["run"] == 1
     assert sregym["results_path"].endswith("gemini/service_port_conflict_hotel_reservation/run_1")
+
+
+def test_claudecode_radar_runs_convert_as_claudecode(tmp_path):
+    # The Radar client writes the stock Claude Code session format.
+    run_dir = tmp_path / "results" / "b" / "claudecode_radar" / "service_port_conflict_hotel_reservation" / "run_1"
+    run_dir.parent.mkdir(parents=True)
+    shutil.copytree(FIXTURE_RUN, run_dir)
+
+    traj = convert.convert_run(run_dir)
+
+    assert isinstance(traj, Trajectory)
+    Trajectory.model_validate(traj.to_json_dict())

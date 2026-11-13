@@ -34,7 +34,40 @@ class RunArtifacts:
 
     def save_network_audit(self, audit: dict[str, Any]) -> None:
         """Retain the audit even if agent artifact validation later fails."""
-        _write_json(self.network_audit_path, audit)
+        write_json_artifact(self.network_audit_path, audit)
+
+    @property
+    def judge_responses_path(self) -> Path:
+        return self.active_dir.with_name(f"{self.artifact_id}.judge-responses.json")
+
+    def save_judge_responses(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Keep full replies outside the agent mount and CSV-size limits.
+
+        Includes replies nested in multi-cause results. The returned snapshot
+        contains artifact references; the caller's evaluation remains intact.
+        """
+        responses: dict[str, str] = {}
+
+        def extract(value: Any, location: str) -> Any:
+            if isinstance(value, dict):
+                result = {}
+                for key, item in value.items():
+                    path = f"{location}.{key}" if location else key
+                    if key == "judge_raw_response" or key.endswith(".judge_raw_response"):
+                        if item:
+                            responses[path] = item
+                        result[f"{key}_artifact"] = f"judge_responses.json#{path}" if item else ""
+                    else:
+                        result[key] = extract(item, path)
+                return result
+            if isinstance(value, list):
+                return [extract(item, f"{location}[{i}]") for i, item in enumerate(value)]
+            return value
+
+        row = extract(snapshot, "")
+        if responses:
+            write_json_artifact(self.judge_responses_path, responses)
+        return row
 
     @classmethod
     def create(
@@ -93,13 +126,14 @@ class RunArtifacts:
                 raise ArtifactFinalizationError(f"invalid per-attempt CSV: {attempt_csv}")
             if any(self.artifact_id in path.name for path in _walk(self.active_dir)):
                 raise ArtifactFinalizationError("opaque artifact name remains after canonicalization")
-            if self.network_audit_path.exists():
-                # Add trusted metadata only after validating agent artifacts.
-                # Atomic replacement does not follow an agent-created symlink.
-                _write_json(
-                    self.active_dir / "internet_audit.json",
-                    json.loads(self.network_audit_path.read_text(encoding="utf-8")),
-                )
+            # Add trusted metadata only after validating agent artifacts.
+            # Atomic replacement does not follow an agent-created symlink.
+            for name, source in (
+                ("internet_audit.json", self.network_audit_path),
+                ("judge_responses.json", self.judge_responses_path),
+            ):
+                if source.exists():
+                    write_json_artifact(self.active_dir / name, json.loads(source.read_text(encoding="utf-8")))
         except ArtifactFinalizationError:
             raise
         except (OSError, csv.Error, ValueError) as exc:
@@ -112,8 +146,9 @@ class RunArtifacts:
         except OSError as exc:
             raise ArtifactFinalizationError(f"could not publish artifact directory: {exc}") from exc
         # A leftover host copy must not turn successful publication into failure.
-        with contextlib.suppress(OSError):
-            self.network_audit_path.unlink(missing_ok=True)
+        for source in (self.network_audit_path, self.judge_responses_path):
+            with contextlib.suppress(OSError):
+                source.unlink(missing_ok=True)
         _remove_empty_parents(self.active_dir.parent, self.staging_root.parent)
         return self.final_dir
 
@@ -224,7 +259,7 @@ def _rewrite_json(path: Path, artifact_id: str, problem_id: str) -> None:
         return
     if data["problem_id"] == artifact_id:
         data["problem_id"] = problem_id
-        _write_json(path, data)
+        write_json_artifact(path, data)
     elif data["problem_id"] != problem_id:
         raise ArtifactFinalizationError(f"non-semantic problem_id in JSON artifact: {path}")
 
@@ -289,6 +324,91 @@ def _csv_problem_ids(path: Path) -> list[str]:
         return [row.get("problem_id", "") for row in reader] if reader.fieldnames else []
 
 
+@dataclass(frozen=True)
+class HeaderStabilizationResult:
+    """rewritten: files whose header was widened to the run's union.
+    overflow_dropped: files that had at least one row with more values than
+    that file's own header -- a real bug somewhere upstream (something wrote
+    a malformed line), not benign header drift, so a caller should surface
+    it distinctly rather than folding it into a routine "normalized N
+    files" count."""
+
+    rewritten: list[Path]
+    overflow_dropped: list[Path]
+
+
+def stabilize_run_csv_headers(root: Path) -> HeaderStabilizationResult:
+    """Give every per-attempt result CSV under root the same header.
+
+    finalize_and_publish() writes each attempt's row against whatever
+    fieldnames the driver had accumulated by that point in the run, so a
+    file published early sees fewer columns than one published once some
+    later attempt's oracle has contributed a key of its own.
+
+    Call this once a run's attempts are all in. It rewrites every already-
+    published per-attempt CSV to the union of every header seen under root,
+    so a reader can trust the first line regardless of which file it opens
+    first. A column a specific row never produced comes back empty
+    (csv.DictWriter's own restval=""), distinct from a column that ran and
+    recorded False -- the row for that column is simply absent from that
+    file's original data, not written as "".
+
+    Returns which files were actually rewritten (header was not already the
+    union) and which had a ragged row's overflow dropped, so a caller can
+    log each distinctly; a run with a uniform header, or fewer than two
+    files, is left untouched.
+
+    A file that cannot be read, decoded or parsed as CSV is skipped rather
+    than aborting the whole pass: this is best-effort header normalization,
+    not a correctness-critical step. A row with more values than its file's
+    own header (a ragged row) has its unlabeled overflow dropped in the
+    rewrite: DictWriter has no fieldname to write it under, and would
+    otherwise raise. Such a file is always rewritten, so the report that
+    its overflow was dropped is true even when its header already matched.
+
+    Only the files finalize_and_publish writes are considered, at exactly
+    <agent>/<problem>/run_<n>/<problem>_results.csv. The run directory also
+    holds the agent's own artifacts, which may contain CSVs of any name and
+    symlinks pointing anywhere; neither is followed.
+    """
+    # Check the CSV and its run/problem/agent directories, not the caller-selected root.
+    paths = sorted(
+        path
+        for path in root.glob("*/*/run_*/*_results.csv")
+        if path.name == f"{path.parent.parent.name}_results.csv"
+        and not any(component.is_symlink() for component in (path, *path.parents[:3]))
+        and path.is_file()
+    )
+    if len(paths) < 2:
+        return HeaderStabilizationResult([], [])
+
+    parsed: list[tuple[Path, list[str], list[dict[str, Any]], bool]] = []
+    fields: set[str] = set()
+    overflow_dropped: list[Path] = []
+    for path in paths:
+        try:
+            with path.open(newline="", encoding="utf-8") as csvfile:
+                reader = csv.DictReader(csvfile)
+                file_fields = list(reader.fieldnames or [])
+                raw_rows = list(reader)
+        except (OSError, UnicodeDecodeError, csv.Error):
+            continue
+        ragged = any(None in row for row in raw_rows)
+        if ragged:
+            overflow_dropped.append(path)
+        rows = [{k: v for k, v in row.items() if k is not None} for row in raw_rows]
+        parsed.append((path, file_fields, rows, ragged))
+        fields.update(file_fields)
+
+    union = sorted(fields)
+    rewritten = []
+    for path, file_fields, rows, ragged in parsed:
+        if file_fields != union or ragged:
+            _write_csv(path, union, rows)
+            rewritten.append(path)
+    return HeaderStabilizationResult(rewritten, overflow_dropped)
+
+
 def _write_csv(path: Path, fields: list[str], rows: list[dict[str, Any]]) -> None:
     tmp = _temp_path(path)
     try:
@@ -301,7 +421,8 @@ def _write_csv(path: Path, fields: list[str], rows: list[dict[str, Any]]) -> Non
         tmp.unlink(missing_ok=True)
 
 
-def _write_json(path: Path, data: dict[str, Any]) -> None:
+def write_json_artifact(path: Path, data: dict[str, Any]) -> None:
+    """Atomically replace a JSON artifact without following an existing symlink."""
     tmp = _temp_path(path)
     try:
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

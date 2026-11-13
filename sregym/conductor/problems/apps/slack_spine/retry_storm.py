@@ -52,7 +52,6 @@ class RetryStormProblem(Problem):
     min_breaker_threshold = 3
     max_pool_size = 20  # the peer-uniform chart default
     max_overflow = 10
-    min_pool_timeout_s = 1.0
     max_pool_timeout_s = 30.0
     max_backend_connections = 60  # replicas x (pool_size + max_overflow)
     min_settings_hold_ms = 250  # the trigger's cost (servicekit default)

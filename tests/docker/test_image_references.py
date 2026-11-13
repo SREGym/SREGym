@@ -3,6 +3,7 @@ import importlib
 import json
 import re
 import shlex
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -135,22 +136,45 @@ def test_hotel_manifests_and_recovery_use_the_published_image():
 
 
 def test_social_network_chart_uses_published_images():
-    chart = ROOT / "SREGym-applications/socialNetwork/helm-chart/socialnetwork"
-    defaults = yaml.safe_load((chart / "values.yaml").read_text())["global"]
+    with patch("sregym.service.apps.social_network.KubeCtl"):
+        app = SocialNetwork()
+    rendered = subprocess.run(
+        [
+            "helm",
+            "template",
+            app.helm_configs["release_name"],
+            app.helm_configs["chart_path"],
+            "--namespace",
+            app.namespace,
+            "-f",
+            app.helm_configs["values_file"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout
     services = 0
-    for path in (chart / "charts").glob("*/values.yaml"):
-        values = yaml.safe_load(path.read_text())
-        container = values.get("container", {})
-        name = values.get("name", "")
+    tracing_configs = 0
+    for manifest in yaml.safe_load_all(rendered):
+        if manifest and manifest.get("kind") == "ConfigMap":
+            for filename, content in manifest.get("data", {}).items():
+                if filename in {"jaeger-config.json", "jaeger-config.yml"}:
+                    config = yaml.safe_load(content)
+                    assert config["reporter"]["localAgentHostPort"] == "otel-collector.observe.svc.cluster.local:6831"
+                    tracing_configs += 1
+        if not manifest or manifest.get("kind") != "Deployment":
+            continue
+        name = manifest["metadata"]["name"]
         if name.endswith("-service") or name in {"nginx-thrift", "media-frontend"}:
-            version = container.get("imageVersion", defaults["defaultImageVersion"])
-            image = f"{container.get('dockerRegistry', defaults['dockerRegistry'])}/{container['image']}:{version}"
+            container = manifest["spec"]["template"]["spec"]["containers"][0]
             target = {"nginx-thrift": "openresty-thrift", "media-frontend": "media-frontend"}.get(
                 name, "social-network"
             )
-            assert image == IMAGES[target], name
+            assert container["image"] == IMAGES[target], name
             services += 1
     assert services == 13
+    assert tracing_configs == 18
 
 
 def test_social_deploy_does_not_switch_images_or_accumulate_overrides():
@@ -165,6 +189,25 @@ def test_social_deploy_does_not_switch_images_or_accumulate_overrides():
     assert app.helm_configs["extra_args"] == ["--wait"]
     assert install.call_count == 2
     app.kubectl.get_node_architectures.assert_not_called()
+
+
+@pytest.mark.parametrize("operation,mode", [("inject", "requireTLS"), ("recover", "disabled")])
+def test_social_tls_fault_preserves_the_application_image_values(operation, mode):
+    from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+
+    with (
+        patch("sregym.generators.fault.inject_virtual.KubeCtl"),
+        patch("sregym.service.apps.social_network.KubeCtl"),
+        patch.object(Helm, "upgrade") as upgrade,
+    ):
+        app = SocialNetwork()
+        injector = VirtualizationFaultInjector(namespace=app.namespace)
+        injector.kubectl.list_pods.return_value.items = []
+        getattr(injector, f"{operation}_auth_miss_mongodb")(["url-shorten-mongodb"])
+
+    values = upgrade.call_args.kwargs
+    assert Path(values["values_file"]) == Path(app.helm_configs["values_file"])
+    assert values["set_values"]["url-shorten-mongodb.tls.mode"] == mode
 
 
 def test_locust_image_override_preserves_the_complete_upstream_sidecar():
@@ -190,6 +233,12 @@ def test_workload_node_and_agent_use_the_recorded_releases():
     assert IMAGES["agent-base"] == DEFAULT_AGENT_IMAGE
     config = yaml.safe_load((ROOT / "kind/kind-config.yaml").read_text())
     assert [node["image"] for node in config["nodes"]] == [IMAGES["kind-node"]] * 4
+
+
+def test_mcp_server_uses_the_recorded_release():
+    config = yaml.safe_load((ROOT / "mcp_server/k8s/kustomization.yaml").read_text())
+    image = next(image for image in config["images"] if image["name"] == "sregym")
+    assert f"{image['newName']}:{image['newTag']}@{image['digest']}" == IMAGES["sregym-mcp"]
 
 
 def test_fleetcast_loads_the_published_backend_override():

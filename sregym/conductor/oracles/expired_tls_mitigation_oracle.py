@@ -1,103 +1,177 @@
 import base64
+import binascii
+import contextlib
 import datetime
 import logging
+import re
+import selectors
+import socket
+import ssl
+import subprocess
+import time
 
+from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
 from kubernetes import client
 
-from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.mitigation import MitigationOracle
 
 logger = logging.getLogger(__name__)
 
 
-class ExpiredTlsMitigationOracle(Oracle):
-    """Mitigation oracle for the ExpiredTlsHotelReservation problem.
+class ExpiredTlsMitigationOracle(MitigationOracle):
+    """Check application health and the TLS configuration actually served.
 
-    The default MitigationOracle only checks pod health, which is insufficient
-    here because an expired TLS certificate does not crash any pods. This oracle
-    instead verifies that the frontend Ingress no longer references an expired
-    TLS certificate, accepting any of the following as a valid mitigation:
-
-    - The faulty Ingress has been deleted entirely.
-    - The Ingress still exists but its TLS secret has been replaced with a
-    certificate that is currently valid (not_valid_after > now).
-    - The Ingress still exists but the TLS secret has been removed entirely.
+    The fault adds an Ingress outside the healthy baseline, so deleting it or
+    removing TLS remains valid. A retained TLS route must have usable key
+    material and complete a verified handshake for its configured hostname.
     """
 
-    def __init__(self, problem):
-        super().__init__(problem=problem)
+    TLS_SETTLE_SECONDS = 30
+    CONTROLLER_SERVICE = "svc/ingress-nginx-controller"
+    CONTROLLER_NAMESPACE = "ingress-nginx"
 
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation (Expired TLS) ==")
 
-        namespace = self.problem.namespace
-        networking_v1 = client.NetworkingV1Api()
-        v1 = client.CoreV1Api()  # used below to read TLS secrets referenced by the Ingress
+        result = super().evaluate()
+        if not result.get("success"):
+            return result
 
-        # check if the ingress still exists.
-        try:
-            ingress = networking_v1.read_namespaced_ingress(name=self.problem.ingress_name, namespace=namespace)
-        except client.exceptions.ApiException as e:
-            if e.status == 404:
-                logger.info("frontend-ingress has been deleted, mitigation accepted.")
-                return {"success": True}
-            raise
+        ingresses = client.NetworkingV1Api().list_namespaced_ingress(self.problem.namespace).items
+        routes = [
+            ingress
+            for ingress in ingresses
+            if ingress.metadata.name == self.problem.ingress_name
+            or any(rule.host == self.problem.HOST for rule in ingress.spec.rules or [])
+            or any(self.problem.HOST in (entry.hosts or []) for entry in ingress.spec.tls or [])
+        ]
+        if not any(ingress.spec.tls for ingress in routes):
+            logger.info("Fault-added TLS configuration has been removed.")
+            return result
 
-        # check if ingress still exists/check every TLS secret it references.
-        if not ingress.spec.tls:
-            logger.info("Ingress exists but has no TLS config -- mitigation accepted.")
-            return {"success": True}
-
-        now = datetime.datetime.now(datetime.UTC)
-
-        for tls_entry in ingress.spec.tls:
-            secret_name = tls_entry.secret_name
-            if not secret_name:
-                continue
-
-            try:
-                secret = v1.read_namespaced_secret(name=secret_name, namespace=namespace)
-            except client.exceptions.ApiException as e:
-                if e.status == 404:
-                    # Secret has been deleted, no expired cert present.
+        contexts = []
+        for ingress in routes:
+            for entry in ingress.spec.tls or []:
+                hosts = entry.hosts or [rule.host for rule in ingress.spec.rules or [] if rule.host]
+                if not hosts:
+                    return self.fail("fault_still_present", error="TLS route has no hostname")
+                if not entry.secret_name:
+                    contexts.extend((host, ssl.create_default_context()) for host in hosts)
                     continue
-                raise
+                try:
+                    secret = client.CoreV1Api().read_namespaced_secret(entry.secret_name, self.problem.namespace)
+                except client.exceptions.ApiException as exc:
+                    if exc.status != 404:
+                        raise
+                    return self.fail("fault_still_present", secret=entry.secret_name, error="TLS Secret is missing")
+                try:
+                    context = self._tls_context(secret.data or {})
+                except (ValueError, TypeError, binascii.Error, UnsupportedAlgorithm, ssl.SSLError) as exc:
+                    logger.info("Invalid TLS material in Secret '%s': %s", entry.secret_name, exc)
+                    return self.fail("fault_still_present", secret=entry.secret_name, error=str(exc))
+                contexts.extend((host, context) for host in hosts)
 
-            cert_data = (secret.data or {}).get("tls.crt")
-            if not cert_data:
-                continue
+        try:
+            with self._controller_port() as port:
+                for host, context in contexts:
+                    self._verify_served_certificate(port, host, context)
+        except ssl.SSLCertVerificationError as exc:
+            return self.fail("fault_still_present", error=str(exc))
+        except (OSError, ssl.SSLError) as exc:
+            return self.fail("connectivity_probe_failed", error=str(exc))
 
-            expiry = self._get_cert_expiry(cert_data)
-            if expiry is None:
-                logger.warning("Could not parse certificate in secret '%s'.", secret_name)
-                continue
-
-            if expiry <= now:
-                logger.info(
-                    "Secret '%s' still contains an expired certificate (expired %s).",
-                    secret_name,
-                    expiry.isoformat(),
-                )
-                # An expired certificate in the Ingress Secret is the injected
-                # fault, read straight off the object. Was free text; the
-                # sentence is already in the log line above.
-                return self.fail("fault_still_present", secret=secret_name, expired_on=expiry.isoformat())
-
-        logger.info("No expired TLS certificates found on the Ingress -- mitigation accepted.")
-        return {"success": True}
+        logger.info("Configured TLS routes complete verified handshakes.")
+        return result
 
     @staticmethod
-    def _get_cert_expiry(cert_b64: str) -> datetime.datetime | None:
-        """Decode a base64-encoded PEM certificate and return its expiry datetime."""
-        try:
-            from cryptography import x509
-        except ImportError:
-            logger.error("Missing 'cryptography' library. Run `uv add cryptography`.")
-            return None
+    def _tls_context(data: dict[str, str]) -> ssl.SSLContext:
+        """Validate the leaf/key and trust the configured certificate chain.
 
+        The benchmark uses a private, self-signed certificate. Trusting its
+        public material still verifies dates, hostname, and the served key;
+        requiring a public CA would reject the intended renewal.
+        """
         try:
-            pem_bytes = base64.b64decode(cert_b64)
-            cert = x509.load_pem_x509_certificate(pem_bytes)
-            return cert.not_valid_after_utc
-        except Exception as exc:
-            logger.warning("Failed to parse certificate: %s", exc)
-            return None
+            pem = base64.b64decode(data["tls.crt"], validate=True)
+            key_pem = base64.b64decode(data["tls.key"], validate=True)
+        except KeyError as exc:
+            raise ValueError(f"TLS Secret is missing {exc.args[0]}") from exc
+        certificate = x509.load_pem_x509_certificates(pem)[0]
+        now = datetime.datetime.now(datetime.UTC)
+        if not certificate.not_valid_before_utc <= now < certificate.not_valid_after_utc:
+            raise ValueError(
+                f"Certificate is not currently valid ({certificate.not_valid_before_utc.isoformat()} "
+                f"to {certificate.not_valid_after_utc.isoformat()})"
+            )
+        key = serialization.load_pem_private_key(key_pem, password=None)
+        encoding = serialization.Encoding.DER
+        key_format = serialization.PublicFormat.SubjectPublicKeyInfo
+        if certificate.public_key().public_bytes(encoding, key_format) != key.public_key().public_bytes(
+            encoding, key_format
+        ):
+            raise ValueError("Certificate and private key do not match")
+        context = ssl.create_default_context()
+        context.load_verify_locations(cadata=pem.decode("ascii"))
+        context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+        return context
+
+    def _verify_served_certificate(self, port: int, host: str, context: ssl.SSLContext) -> None:
+        # Allow the controller to observe a Secret update, but use a fresh
+        # connection each time so a cached expired certificate cannot pass.
+        deadline = time.monotonic() + self.TLS_SETTLE_SECONDS
+        while True:
+            try:
+                with (
+                    socket.create_connection(("127.0.0.1", port), timeout=5) as connection,
+                    context.wrap_socket(connection, server_hostname=host),
+                ):
+                    return
+            except (OSError, ssl.SSLError):
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(2)
+
+    @contextlib.contextmanager
+    def _controller_port(self):
+        """Reach the controller through the API, on KIND and external clusters."""
+        process = subprocess.Popen(
+            [
+                "kubectl",
+                "port-forward",
+                "--address=127.0.0.1",
+                "-n",
+                self.CONTROLLER_NAMESPACE,
+                self.CONTROLLER_SERVICE,
+                ":443",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    if not selector.select(timeout=max(0, deadline - time.monotonic())):
+                        break
+                    line = process.stdout.readline()
+                    match = re.search(r"Forwarding from 127\.0\.0\.1:(\d+) ->", line)
+                    if match:
+                        yield int(match.group(1))
+                        return
+                    if not line and process.poll() is not None:
+                        break
+            raise subprocess.CalledProcessError(
+                process.poll() or 1, process.args, output="Could not start the ingress controller port-forward"
+            )
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            process.stdout.close()

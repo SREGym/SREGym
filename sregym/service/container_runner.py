@@ -23,8 +23,8 @@ logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_AGENT_IMAGE = (
-    "ghcr.io/sregym/agent-base:sha-802e7e8595a75e44b3bd6071157f0369722d2100"
-    "@sha256:4f547bf83bc0f28d04025f2d37d81ed2980e01e0eba0d3aefbc948be5a270150"
+    "ghcr.io/sregym/agent-base:sha-a4c6bf32ea763712d100bfe3d107ff097c5dc014"
+    "@sha256:9df755b042158a94896701c44028bd145aabefb9355784901b1bab7e7b445ef2"
 )
 LOCAL_AGENT_IMAGE = "sregym-agent-base:latest"
 HARDENING_FLAGS = (
@@ -33,7 +33,9 @@ HARDENING_FLAGS = (
     "--security-opt=no-new-privileges",
 )
 AGENT_TOOLS_CONTAINER_PATH = "/opt/agent-tools"
-CONTAINER_PATH = f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+CONTAINER_PATH = (
+    f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
 
 
 def _docker_uses_separate_host() -> bool:
@@ -118,6 +120,7 @@ class ContainerConfig:
     egress_proxy_image: str = DEFAULT_EGRESS_PROXY_IMAGE
     harden_container: bool = True
     k8s_proxy_port: int = 16443
+    cluster_access: bool = True  # False: no kubeconfig mount and no egress rule for the API proxy
     published_ports: list[str] = field(default_factory=list)
     forward_host_credentials: bool = True
     codex_auth: Literal["copy", "shared", "none"] = "copy"
@@ -313,9 +316,14 @@ class ContainerRunner:
     def _configured_egress_rules(self, env_vars: dict[str, str]) -> tuple[EndpointRule, ...]:
         rules = {
             EndpointRule("host.docker.internal", int(env_vars.get("API_PORT", "8000")), inspect_tools=False),
-            EndpointRule("host.docker.internal", self.config.k8s_proxy_port, inspect_tools=False),
-            EndpointRule("host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954")), inspect_tools=False),
         }
+        # The API proxy and SREGym's MCP server (whose /kubectl tools run kubectl on the agent's
+        # behalf) are both routes to the cluster; cluster_access: false withholds both.
+        if self.config.cluster_access:
+            rules.add(EndpointRule("host.docker.internal", self.config.k8s_proxy_port, inspect_tools=False))
+            rules.add(
+                EndpointRule("host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954")), inspect_tools=False)
+            )
         rules.update(
             provider_endpoint_rules(
                 self.config.internet_policy,
@@ -467,6 +475,12 @@ class ContainerRunner:
             env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])
             env_vars.setdefault("TYPESAFE_API_KEY", os.environ.get("TYPESAFE_API_KEY", ""))
 
+        # Chiron MCP for any agent; set only on runs that measure Chiron.
+        if self.config.forward_host_credentials:
+            for name in ("CHIRON_MCP_URL", "CHIRON_MCP_TOKEN"):
+                if os.environ.get(name):
+                    env_vars.setdefault(name, os.environ[name])
+
         env_vars["AGENT_INTERNET_ACCESS"] = self.internet_access_mode
 
         # Docker Desktop and filtered containers cannot reach host loopback
@@ -505,6 +519,10 @@ class ContainerRunner:
         return flags
 
     def _build_base_docker_args(self, extra_env: dict[str, str] | None = None) -> list[str]:
+        if not self.config.cluster_access and not self.config.internet_policy.is_filtered:
+            # Only the filtered egress boundary withholds the API proxy and SREGym's MCP server;
+            # with open internet the container shares the host's network and reaches both.
+            raise ValueError("cluster_access: false requires filtered internet access (--internet-access filtered)")
         args = [
             "docker",
             "run",
@@ -536,7 +554,7 @@ class ContainerRunner:
             args.extend(["-v", f"{self._agent_tools_volume}:{AGENT_TOOLS_CONTAINER_PATH}:ro"])
 
         # Mount kubeconfig (read-only)
-        if self.config.kubeconfig_path and self.config.kubeconfig_path.exists():
+        if self.config.cluster_access and self.config.kubeconfig_path and self.config.kubeconfig_path.exists():
             kubeconfig_path = self._prepare_kubeconfig(self.config.kubeconfig_path)
             args.extend(["-v", f"{kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])

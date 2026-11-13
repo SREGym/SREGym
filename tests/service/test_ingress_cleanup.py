@@ -1,4 +1,5 @@
 import json
+import shlex
 from unittest.mock import Mock
 
 import pytest
@@ -36,6 +37,9 @@ def test_existing_release_keeps_its_cluster_objects():
     ingress.run_cmd = Mock(return_value='[{"name":"ingress-nginx"}]')
     ingress._remove_orphaned_cluster_objects()
     ingress.run_cmd.assert_called_once()
+    command = shlex.split(ingress.run_cmd.call_args.args[0])
+    assert "--all" not in command
+    assert {"--deployed", "--failed", "--pending", "--uninstalled", "--uninstalling", "--superseded"} <= set(command)
 
 
 @pytest.mark.parametrize("responses", [[RuntimeError("Helm unavailable")], ["[]", RuntimeError("API unavailable")]])

@@ -16,6 +16,7 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.hooks import AttemptHookError, FaultContext
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
@@ -42,7 +43,7 @@ from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
-from sregym.service.kubectl import KubeCtl
+from sregym.service.kubectl import WAIT_FOR_POD_READY_TIMEOUT, KubeCtl
 from sregym.service.mcp_server import MCPServer
 from sregym.service.rollout import deployment_rollout_complete
 from sregym.service.telemetry.loki import Loki
@@ -78,10 +79,19 @@ class ConductorConfig:
 
 
 class Conductor:
-    def __init__(self, config: ConductorConfig | None = None, *, judge_preflight: Callable[[], None] | None = None):
+    def __init__(
+        self,
+        config: ConductorConfig | None = None,
+        *,
+        judge_preflight: Callable[[], None] | None = None,
+        hooks: object | None = None,
+    ):
         self.config = config or ConductorConfig()
         self._judge_preflight = judge_preflight
         self._judge_preflight_done = False
+        # See sregym.conductor.hooks. None, or an object with before_fault_injection
+        # and/or after_fault_injection.
+        self._hooks = hooks
 
         # core services
         self.problems = ProblemRegistry()
@@ -140,6 +150,10 @@ class Conductor:
         self.waiting_for_agent: bool = False
         self._evaluating: bool = False  # True while a submission is being evaluated
         self.fault_injected: bool = False
+        # Ground truth for the injected fault, kept in memory until the attempt
+        # publishes: the problem object is gone by then, and the spec names the
+        # faulty component, so it must not be on disk while the agent runs.
+        self.fault_spec: dict | None = None
 
     @property
     def current_problem(self):
@@ -260,6 +274,7 @@ class Conductor:
         self._evaluating = False
         self._accepting_submissions = False
         self.fault_injected = False
+        self.fault_spec = None
 
         if not self.tasklist:
             self.logger.warning("Empty tasklist; no stages configured for this problem.")
@@ -332,6 +347,13 @@ class Conductor:
             mitigation_oracle.capture_baseline()
 
         problem.inject_fault()
+        # getattr throughout: tests call this on bare conductors and stand-in problems.
+        self.fault_spec = {
+            "problem_id": getattr(self, "problem_id", None),
+            "namespace": getattr(problem, "namespace", None),
+            "root_cause": getattr(problem, "root_cause", None),
+            "fault_injected_at": time.time(),
+        }
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
 
@@ -417,6 +439,31 @@ class Conductor:
         ledger = getattr(self, "phases", None)
         return ledger is not None and ledger.is_open(name)
 
+    async def _run_hook(self, name: str, *, fault_injected_at: float | None = None) -> None:
+        """Call the registered hook `name`, if any, as its own phase.
+
+        `getattr` on `_hooks` as `_phase` does: a Conductor built without
+        __init__ has no hooks. The hook is usually a wait, so it runs in a
+        thread. Any exception becomes AttemptHookError, which main.py does not
+        answer with a redeploy.
+        """
+        hook = getattr(getattr(self, "_hooks", None), name, None)
+        if hook is None:
+            return
+        ctx = FaultContext(
+            problem_id=self.problem_id,
+            namespace=self.problem.namespace,
+            fault_injected_at=fault_injected_at,
+        )
+        with self._phase(f"hook:{name}"):
+            try:
+                await asyncio.to_thread(hook, ctx)
+            except AttemptHookError:
+                raise
+            except Exception as exc:
+                self.logger.exception(f"[HOOK] {name} failed")
+                raise AttemptHookError(f"{name} failed: {exc}") from exc
+
     async def _advance_to_next_stage(self, start_index: int = 0):
         """
         Advance to the next stage starting from start_index.
@@ -433,8 +480,10 @@ class Conductor:
 
         # Inject the fault once before the first stage.
         if start_index == 0 and not self.fault_injected:
+            await self._run_hook("before_fault_injection")
             with self._phase("inject_fault"):
                 self._inject_fault()
+            injected_at = self.fault_spec["fault_injected_at"]
 
             # Let the fault surface in telemetry before the agent sees it.
             propagation = (
@@ -447,6 +496,10 @@ class Conductor:
                 with self._phase("propagation", seconds=propagation):
                     await asyncio.sleep(propagation)
                 self.logger.info("[PROPAGATION] Propagation window complete.")
+
+            # After propagation, so a hook that waits for the fault to show up
+            # on the agent's side overlaps the sleep instead of adding to it.
+            await self._run_hook("after_fault_injection", fault_injected_at=injected_at)
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -1172,7 +1225,18 @@ class Conductor:
         if self.missing_submission_stages():
             self.record_incomplete_attempt("missing_stage_results")
         else:
-            self.results["run_status"] = "complete"
+            unscored = [
+                stage["name"]
+                for stage in self.stage_sequence
+                if isinstance(outcome := self.results[stage["name"].capitalize()], dict)
+                and outcome.get("success") is None
+            ]
+            if unscored:
+                self.record_incomplete_attempt("unscored_stage_results")
+                self.results["incomplete_stage"] = unscored[0]
+                self.results["unscored_stages"] = ",".join(unscored)
+            else:
+                self.results["run_status"] = "complete"
         return self.results["run_status"]
 
     @staticmethod
@@ -1397,6 +1461,9 @@ class Conductor:
                 self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
             self._baseline_captured = True
 
+        self.logger.info("[DEPLOY] Checking Kubernetes pod networking…")
+        self.kubectl.assert_pod_networking()
+
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         # metrics-server lives in kube-system, which is protected from
         # reconciliation, so it survives between problems. Re-applying it fetches
@@ -1458,8 +1525,17 @@ class Conductor:
         # earlier full-profile run on the same cluster.
         if svelte:
             self._trim_openebs_ndm()
+        # An interrupted preload can leave completed non-Job pods behind.
+        # Remove only our disposable helpers before checking OpenEBS readiness.
+        self.kubectl.exec_command_checked(
+            "kubectl delete pods -n openebs -l app=sregym-image-preload "
+            "--ignore-not-found=true --grace-period=0 --wait=true "
+            f"--timeout={WAIT_FOR_POD_READY_TIMEOUT}s",
+            timeout=WAIT_FOR_POD_READY_TIMEOUT + 10,
+        )
         self.kubectl.wait_for_ready("openebs")
         self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
+        self._preload_openebs_helper_image()
         if not svelte:
             self._ensure_openebs_device_storageclass()
 
@@ -1639,6 +1715,30 @@ class Conductor:
             and status.number_ready == desired
             and status.number_available == desired
             and (status.number_misscheduled or 0) == 0
+        )
+
+    def _preload_openebs_helper_image(self) -> None:
+        """Make LocalPV's helper image available before workload PVC creation."""
+        deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(
+            "openebs-localpv-provisioner", "openebs", _request_timeout=10
+        )
+        containers = deployment.spec.template.spec.containers or []
+        helper_image = next(
+            (
+                env.value
+                for container in containers
+                for env in (container.env or [])
+                if env.name == "OPENEBS_IO_HELPER_IMAGE" and env.value
+            ),
+            None,
+        )
+        if not helper_image:
+            raise RuntimeError("OpenEBS provisioner does not declare OPENEBS_IO_HELPER_IMAGE")
+        self.logger.info("[DEPLOY] Preloading OpenEBS helper image %s on every node…", helper_image)
+        self.kubectl.preload_image_on_nodes(
+            helper_image,
+            namespace="openebs",
+            timeout=WAIT_FOR_POD_READY_TIMEOUT,
         )
 
     # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV

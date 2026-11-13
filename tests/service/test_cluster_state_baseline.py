@@ -15,6 +15,7 @@ def manager():
     for name in ("core_v1", "rbac_v1", "storage_v1", "apiextensions_v1", "admission_v1"):
         setattr(manager, name, MagicMock())
     for client_name, method_name in (
+        ("core_v1", "read_namespace"),
         ("core_v1", "list_namespace"),
         ("rbac_v1", "list_cluster_role"),
         ("rbac_v1", "list_cluster_role_binding"),
@@ -28,12 +29,14 @@ def manager():
         ("core_v1", "list_node"),
     ):
         getattr(getattr(manager, client_name), method_name).return_value = SimpleNamespace(items=[])
+    manager.core_v1.read_namespace.return_value = SimpleNamespace(metadata=SimpleNamespace(uid="cluster-1"))
     return manager
 
 
 @pytest.mark.parametrize(
     ("client", "method", "call_number"),
     [
+        ("core_v1", "read_namespace", 1),
         ("core_v1", "list_namespace", 1),
         ("rbac_v1", "list_cluster_role", 1),
         ("rbac_v1", "list_cluster_role_binding", 1),
@@ -69,6 +72,7 @@ def test_empty_successful_reads_remain_valid(manager, tmp_path):
 
     manager.save_baseline_state(path)
 
+    assert json.loads(path.read_text())["cluster_uid"] == "cluster-1"
     assert json.loads(path.read_text())["cluster_roles"] == []
     assert manager.load_baseline_state(path)
 
@@ -87,9 +91,25 @@ def test_legacy_baseline_preserves_preexisting_admission_policies(manager, tmp_p
         SimpleNamespace(metadata=SimpleNamespace(name="existing-policy"))
     ]
     path = tmp_path / "baseline.json"
-    path.write_text("{}")
+    path.write_text(json.dumps({"cluster_uid": "cluster-1"}))
     assert manager.load_baseline_state(path)
     assert manager.baseline.validating_admission_policies == {"existing-policy"}
+
+
+def test_baseline_without_cluster_identity_is_rejected(manager, tmp_path):
+    path = tmp_path / "baseline.json"
+    path.write_text("{}")
+
+    assert not manager.load_baseline_state(path)
+    assert manager.baseline is None
+
+
+def test_baseline_from_another_cluster_is_rejected(manager, tmp_path):
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps({"cluster_uid": "old-cluster"}))
+
+    assert not manager.load_baseline_state(path)
+    assert manager.baseline is None
 
 
 @pytest.mark.parametrize("resource", ["policies", "bindings"])

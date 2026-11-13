@@ -1,11 +1,13 @@
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import sregym.conductor.conductor as conductor_module
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.problems.calico_route_reflector_label_drift import (
     CalicoRouteReflectorLabelDriftHotelReservation,
 )
+from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
 
 
 class _FakeKubeCtl:
@@ -250,9 +252,13 @@ def test_fix_kubernetes_keeps_kubelet_eviction_global_cleanup(monkeypatch):
         "_fix_calico_route_reflector_label_drift",
         lambda self: calico_cleanup_calls.append(True),
     )
+    # This cleanup creates SDK clients directly, bypassing the fake KubeCtl.
+    nightly_cleanup = Mock()
+    monkeypatch.setattr(NightlyRebalanceOOM, "cleanup_leftover_actor", nightly_cleanup)
 
     conductor.fix_kubernetes()
 
+    nightly_cleanup.assert_called_once_with()
     assert remote_calls == ["recover_kubelet_crash", "recover_disk_pressure_all"]
     assert (
         "kubectl delete pods --all-namespaces "

@@ -1,7 +1,6 @@
 import re
 
 from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.service.rollout import deployment_rollout_complete
 
 
 def _parse_config_threshold(value: str) -> float | None:
@@ -13,7 +12,45 @@ def _parse_config_threshold(value: str) -> float | None:
 
 
 class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
-    """Pass when the kubelet eviction threshold is lowered/removed AND DiskPressure is cleared."""
+    """Require a healthy application plus either a node repair or safe relocation."""
+
+    def pods_unready(self, pods, **detail):
+        def controller(pod):
+            return next((owner for owner in (pod.metadata.owner_references or []) if owner.controller), None)
+
+        # Node-local agents can remain evicted on a quarantined node. Require a
+        # healthy peer of that same DaemonSet, not an unrelated Ready pod.
+        healthy_daemonsets = {
+            owner.uid
+            for pod in pods
+            if (owner := controller(pod)) is not None
+            and owner.kind == "DaemonSet"
+            and pod.spec.node_name != self.problem.target_node
+            and pod.metadata.deletion_timestamp is None
+            and pod.status.phase == "Running"
+            and pod.status.container_statuses
+            and all(container.ready for container in pod.status.container_statuses)
+        }
+        pressured = self._disk_pressure_active(self.problem.kubectl, self.problem.target_node)
+        current = []
+        for pod in pods:
+            owner = controller(pod)
+            history = pod.status.phase == "Succeeded" or (
+                pod.status.phase == "Failed" and pod.status.reason == "Evicted"
+            )
+            # Current Deployment capacity is checked separately.
+            if history and owner is not None and owner.kind == "ReplicaSet":
+                continue
+            if (
+                owner is not None
+                and owner.kind == "DaemonSet"
+                and owner.uid in healthy_daemonsets
+                and pod.spec.node_name == self.problem.target_node
+                and (history or (pressured and pod.status.phase == "Pending"))
+            ):
+                continue
+            current.append(pod)
+        return super().pods_unready(current, **detail)
 
     def _read_kubelet_config(self, injector, node_name: str) -> str:
         cmd = "grep 'nodefs.available' /var/lib/kubelet/config.yaml || true"
@@ -69,37 +106,26 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
         print(f"✅ Node {target_node} DiskPressure cleared")
         return True
 
-    def _app_recovered(self, kubectl, namespace: str, faulty_service: str) -> bool:
-        """True when the faulty service no longer runs on a DiskPressure node AND every
-        deployment has its desired ready replicas.
-        """
-        self._wait_for_rollouts(kubectl, namespace)
+    def _placement_recovered(self, kubectl, namespace: str, faulty_service: str) -> bool:
+        """Check the placement constraint after shared application-health checks."""
         deployments = kubectl.list_deployments(namespace)
-        if not deployments.items:
-            print(f"❌ No deployments found in namespace {namespace}")
-            return False
-
         faulty = next((d for d in deployments.items if d.metadata.name == faulty_service), None)
-        if faulty is not None:
-            pinned_node = faulty.spec.template.spec.node_name
-            if pinned_node and self._disk_pressure_active(kubectl, pinned_node):
-                print(f"❌ {faulty_service} still pinned to DiskPressure node {pinned_node}")
-                return False
-
-        all_ready = True
-        for dep in deployments.items:
-            desired = dep.spec.replicas or 1
-            ready = dep.status.ready_replicas or 0
-            if not deployment_rollout_complete(dep):
-                print(f"❌ Deployment {dep.metadata.name}: incomplete rollout ({ready}/{desired} ready)")
-                all_ready = False
-
-        if all_ready:
-            print(f"✅ All deployments in {namespace} ready; {faulty_service} not on a DiskPressure node")
-        return all_ready
+        if faulty is None:
+            print(f"❌ Deployment {faulty_service} not found in namespace {namespace}")
+            return False
+        pinned_node = faulty.spec.template.spec.node_name
+        if pinned_node and self._disk_pressure_active(kubectl, pinned_node):
+            print(f"❌ {faulty_service} still pinned to DiskPressure node {pinned_node}")
+            return False
+        print(f"✅ {faulty_service} no longer pinned to a DiskPressure node")
+        return True
 
     def evaluate(self, solution=None, trace=None, duration=None) -> dict:
         print("== Kubelet Eviction Threshold Misconfig Mitigation Evaluation ==")
+
+        result = super().evaluate()
+        if not result.get("success"):
+            return result
 
         injector = self.problem.injector
         kubectl = self.problem.kubectl
@@ -113,7 +139,7 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
         if self._node_fix_applied(injector, kubectl, target_node):
             return {"success": True}
 
-        if self._app_recovered(kubectl, namespace, self.problem.faulty_service):
+        if self._placement_recovered(kubectl, namespace, self.problem.faulty_service):
             return {"success": True}
 
         # Two independent acceptance paths both failed: the kubelet threshold is

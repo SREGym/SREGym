@@ -226,8 +226,6 @@ class PriorityPreemptionCascadeSaleor(PriorityPreemptionCascadeHotelReservation)
             ),
             oracle_factory=PriorityPreemptionMitigationOracle,
         )
-        self._app_cleanup = self.app.cleanup
-        self.app.cleanup = self._cleanup
 
     def _protect_peer_deployments(self):
         peer_names = [

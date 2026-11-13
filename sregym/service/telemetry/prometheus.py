@@ -8,7 +8,8 @@ import yaml
 from sregym.paths import BASE_DIR, PROMETHEUS_METADATA
 from sregym.profile import is_svelte
 from sregym.service.helm import Helm
-from sregym.service.kubectl import KubeCtl
+from sregym.service.kubectl import WAIT_FOR_POD_READY_TIMEOUT, KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class Prometheus:
@@ -73,6 +74,7 @@ class Prometheus:
         self._wait_for_namespace_termination()
 
         Helm.uninstall(**self.helm_configs)
+        self._delete_retained_pvcs()
 
         helm_configs = dict(self.helm_configs)
         if is_svelte():
@@ -82,6 +84,34 @@ class Prometheus:
 
         Helm.install(**helm_configs)
         Helm.assert_if_deployed(self.namespace)
+
+    def _delete_retained_pvcs(self) -> None:
+        """Remove release PVCs that Helm intentionally retains on uninstall.
+
+        A failed LocalPV helper can leave a claim Bound even though its node
+        directory was never created. Reusing that claim makes every later
+        Prometheus install fail at mount time, so a fresh Helm install must also
+        start with fresh release storage.
+        """
+        release_name = self.helm_configs["release_name"]
+        subprocess.run(
+            [
+                "kubectl",
+                "delete",
+                "pvc",
+                "-n",
+                self.namespace,
+                "-l",
+                f"app.kubernetes.io/instance={release_name}",
+                "--ignore-not-found=true",
+                "--wait=true",
+                f"--timeout={WAIT_FOR_POD_READY_TIMEOUT}s",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=WAIT_FOR_POD_READY_TIMEOUT + 10,
+        )
 
     def _matches_requested_profile(self) -> bool:
         """Compare installed Helm values with the settings controlled by the profile."""
@@ -134,12 +164,60 @@ class Prometheus:
             KubeCtl().wait_for_namespace_deletion(self.namespace)
 
     def _is_prometheus_running(self) -> bool:
-        """Check if Prometheus is already running in the cluster."""
-        command = f"kubectl get pods -n {self.namespace} -l app.kubernetes.io/name=prometheus"
+        """Require a current server rollout as well as Ready release pods."""
+        release_name = self.helm_configs["release_name"]
+        command = (
+            f"kubectl get pods,deployments,statefulsets -n {self.namespace} "
+            f"-l app.kubernetes.io/instance={release_name} -o json"
+        )
         try:
-            result = KubeCtl().exec_command(command)
-            if "Running" in result:
-                return True
-        except subprocess.CalledProcessError:
+            resources = json.loads(KubeCtl().exec_command(command)).get("items", [])
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
             return False
-        return False
+
+        pods = [resource for resource in resources if resource.get("kind") == "Pod"]
+        servers = [
+            resource
+            for resource in resources
+            if resource.get("kind") in {"Deployment", "StatefulSet"}
+            and resource.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/name") == "prometheus"
+        ]
+        server_pods = [
+            pod
+            for pod in pods
+            if pod.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/name") == "prometheus"
+        ]
+        return (
+            bool(server_pods)
+            and bool(servers)
+            and all(self._server_rollout_complete(server) for server in servers)
+            and all(
+                not pod.get("metadata", {}).get("deletionTimestamp")
+                and any(
+                    condition.get("type") == "Ready" and condition.get("status") == "True"
+                    for condition in pod.get("status", {}).get("conditions", [])
+                )
+                for pod in pods
+            )
+        )
+
+    @staticmethod
+    def _server_rollout_complete(server: dict) -> bool:
+        if server["kind"] == "Deployment":
+            return deployment_rollout_complete(server)
+
+        metadata = server.get("metadata", {})
+        status = server.get("status", {})
+        desired = server.get("spec", {}).get("replicas", 1)
+        generation = metadata.get("generation")
+        observed = status.get("observedGeneration")
+        return (
+            not metadata.get("deletionTimestamp")
+            and desired > 0
+            and generation is not None
+            and observed is not None
+            and observed >= generation
+            and all(status.get(field, 0) == desired for field in ("replicas", "updatedReplicas", "readyReplicas"))
+            and bool(status.get("updateRevision"))
+            and status.get("currentRevision") == status["updateRevision"]
+        )

@@ -124,7 +124,7 @@ def collect_sources(inventory):
 
 def collect_charts(inventory):
     for name, chart, values in (
-        ("social-network", "socialNetwork/helm-chart/socialnetwork", None),
+        ("social-network", "socialNetwork/helm-chart/socialnetwork", "social-network-images.yaml"),
         ("flight-ticket", "flight-ticket", "flight-ticket-images.yaml"),
         ("train-ticket", "train-ticket", "train-ticket-images.yaml"),
         ("fleetcast", "FleetCast/satellite-app", "fleetcast-images.yaml"),

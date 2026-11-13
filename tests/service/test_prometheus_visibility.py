@@ -1,3 +1,4 @@
+import asyncio
 import re
 from pathlib import Path
 
@@ -53,8 +54,8 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
 
     monkeypatch.setattr(prometheus_server, "ObservabilityClient", FakeClient)
 
-    metrics = prometheus_server.get_metrics.fn("kube_pod_info")
-    alerts = prometheus_server.get_alerts.fn()
+    metrics = asyncio.run(prometheus_server.get_metrics.fn("kube_pod_info"))
+    alerts = asyncio.run(prometheus_server.get_alerts.fn())
 
     assert "checkout" in metrics
     assert "chaos-mesh" not in metrics

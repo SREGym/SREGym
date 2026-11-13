@@ -37,10 +37,11 @@ class CronJobSidecarBlocksCompletionIA(CronJobSidecarBlocksCompletionHotelReserv
                 f"cleanly, and a log-shipper sidecar ('{self.SIDECAR_CONTAINER}') that never terminates. A Job is "
                 "Complete only when every container in its pod terminates, so each pod stays Running after the "
                 "primary exits and each schedule adds another active Job that never completes; "
-                "successfulJobsHistoryLimit does not apply to active Jobs, so they accumulate. The fix is to make "
-                "the sidecar a native sidecar (an initContainer with restartPolicy: Always) so it is stopped when "
-                "the primary exits, and to clean up the accumulated active Jobs; activeDeadlineSeconds, removing "
-                "the sidecar, or deleting the CronJob are not acceptable."
+                "successfulJobsHistoryLimit does not apply to active Jobs, so they accumulate. A repair must "
+                "preserve archival and forwarding while letting each Job complete, using native sidecars "
+                "(initContainers with restartPolicy: Always) or cooperative regular-sidecar shutdown. The "
+                "accumulated active Jobs must also be cleaned up. Killing unfinished Jobs at a deadline, "
+                "removing the sidecar, or deleting the CronJob are not acceptable."
             ),
             oracle_factory=CronJobSidecarBlocksCompletionMitigationOracle,
         )
@@ -108,6 +109,7 @@ class ServiceWrongPodSelectionIA(Problem):
         self.faulty_service_selector = {self.route_label_key: self.route_label_value}
         self.expected_endpoint_pod_label = target_deployment
         self.original_selector: dict | None = None
+        self.original_target_port: str | int | None = None
         configure_port(
             self,
             app_name,
@@ -129,8 +131,15 @@ class ServiceWrongPodSelectionIA(Problem):
             f"kubectl rollout status deployment/{deployment} -n {self.namespace} --timeout=600s", timeout=630
         )
 
-    def _set_selector(self, selector: dict) -> None:
-        patch = json.dumps([{"op": "replace", "path": "/spec/selector", "value": selector}])
+    def _set_route(self, selector: dict, target_port: str | int) -> None:
+        service = self.kubectl.core_v1_api.read_namespaced_service(self.frontend_service, self.namespace)
+        index = next(i for i, port in enumerate(service.spec.ports) if port.port == self.expected_service_port)
+        patch = json.dumps(
+            [
+                {"op": "replace", "path": "/spec/selector", "value": selector},
+                {"op": "replace", "path": f"/spec/ports/{index}/targetPort", "value": target_port},
+            ]
+        )
         self.kubectl.exec_command_checked(
             f"kubectl patch svc {self.frontend_service} -n {self.namespace} --type=json -p='{patch}'"
         )
@@ -138,19 +147,27 @@ class ServiceWrongPodSelectionIA(Problem):
     @mark_fault_injected
     def inject_fault(self):
         service = self.kubectl.core_v1_api.read_namespaced_service(self.frontend_service, self.namespace)
-        self.original_selector = dict(service.spec.selector or {})
+        if self.original_selector is None:
+            self.original_selector = dict(service.spec.selector or {})
+            port = next(port for port in service.spec.ports if port.port == self.expected_service_port)
+            self.original_target_port = port.target_port or port.port
         for deployment in (self.target_deployment, self.wrong_deployment):
             self._patch_route_label(deployment, self.route_label_value)
-        self._set_selector(self.faulty_service_selector)
+        # A named port excludes workers that do not declare it. A numeric port
+        # makes kube-proxy route to their IPs, where no HTTP server listens.
+        self._set_route(self.faulty_service_selector, self.expected_service_port)
         print(f"Service {self.frontend_service} now selects {self.faulty_service_selector}")
 
-    @mark_fault_injected
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
+        if self.original_selector is None:
+            print("No Service route was changed by this problem; nothing to restore")
+            return
         selector = self.original_selector
         if not selector:
             deployment = self.kubectl.get_deployment(self.target_deployment, self.namespace)
             selector = dict(deployment.spec.selector.match_labels)
-        self._set_selector(selector)
+        self._set_route(selector, self.original_target_port or self.expected_service_port)
         for deployment in (self.target_deployment, self.wrong_deployment):
             self._patch_route_label(deployment, None)
 

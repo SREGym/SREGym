@@ -263,6 +263,15 @@ class IngressMisrouteSlack(IngressMisroute):
         self._app_deploy = self.app.deploy
         self.app.deploy = self._deploy_with_edge
 
+    @property
+    def ingress_probe_path(self) -> str:
+        return f"{self.path}/channels/chan-0/messages?limit=1"
+
+    @staticmethod
+    def ingress_response_valid(payload) -> bool:
+        # svc-thread also exposes /healthz, but does not serve message history.
+        return isinstance(payload, dict) and isinstance(payload.get("messages"), list)
+
     def _ingress(self, backend: str) -> dict:
         return {
             "apiVersion": "networking.k8s.io/v1",
@@ -442,16 +451,3 @@ class InternalTrafficPolicyLocalIA(InternalTrafficPolicyLocalAstronomyShop):
         victim_node = loadgen_nodes[0] if loadgen_nodes else workers[1]
         pod_node = next(node for node in workers if node != victim_node)
         return pod_node, victim_node
-
-    @mark_fault_injected
-    def inject_fault(self):
-        super().inject_fault()
-        # Connections opened before the policy change survive it (conntrack),
-        # and the load generator keeps its keep-alive connections open. Replace
-        # the backend pod (still pinned to pod_node) so they all have to reconnect.
-        self.kubectl.exec_command(f"kubectl rollout restart deployment/{self.FAULTY_SERVICE} -n {self.namespace}")
-        self.kubectl.exec_command(
-            f"kubectl rollout status deployment/{self.FAULTY_SERVICE} -n {self.namespace} --timeout=300s"
-        )
-        self._wait_for_pod_on_node(self.pod_node)
-        print(f"Replaced the {self.FAULTY_SERVICE} pod on {self.pod_node} to drop pre-existing connections")

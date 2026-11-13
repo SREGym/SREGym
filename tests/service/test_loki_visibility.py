@@ -1,3 +1,5 @@
+import asyncio
+
 from mcp_server import loki_server
 from sregym.service.agent_visibility_policy import HIDDEN_NAMESPACES, visible_log_value
 
@@ -47,8 +49,8 @@ def test_loki_tools_hide_chaos_streams_and_label_values(monkeypatch):
 
     monkeypatch.setattr(loki_server, "ObservabilityClient", FakeClient)
 
-    logs = loki_server.get_logs.fn('{namespace=~".+"}')
-    values = loki_server.get_label_values.fn("namespace")
+    logs = asyncio.run(loki_server.get_logs.fn('{namespace=~".+"}'))
+    values = asyncio.run(loki_server.get_label_values.fn("namespace"))
 
     assert "checkout completed" in logs
     assert "database connection timed out" in logs

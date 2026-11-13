@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from sregym.conductor.oracles.llm_as_a_judge.judge import (
+    UNSCORED_JUDGE_PARSE_FAILURE,
     ChecklistParseError,
     DiagnosisJudge,
 )
@@ -168,7 +169,7 @@ def test_grading_retries_malformed_checklist_before_scoring(malformed):
     assert backend.inference.call_count == 2
 
 
-def test_grading_preserves_retry_exhaustion_behavior():
+def test_grading_leaves_retry_exhaustion_unscored():
     judge = DiagnosisJudge()
     backend = Mock(model_name="checklist-test")
     backend.inference.return_value = SimpleNamespace(content="[]")
@@ -176,6 +177,8 @@ def test_grading_preserves_retry_exhaustion_behavior():
 
     report = judge.judge_detailed("checkout has a misconfigured port", "checkout has a misconfigured port")
 
-    assert report.composite_score == 0.0
-    assert backend.inference.call_count == 2
-    assert all(q.evidence == "parse failure — defaulting to No" for d in report.dimensions for q in d.questions)
+    # No verdict and no dimensions, rather than every question defaulting to No.
+    assert report.verdict is None
+    assert report.unscored_reason == UNSCORED_JUDGE_PARSE_FAILURE
+    assert report.dimensions == []
+    assert backend.inference.call_count == DiagnosisJudge.MAX_PARSE_ATTEMPTS

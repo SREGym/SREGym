@@ -5,7 +5,29 @@ import yaml
 from sregym.service.apps.hotel_reservation import HotelReservation
 
 
-def test_standard_rate_policy_has_headroom_above_the_default_workload():
+def test_tracing_uses_the_central_collector_without_changing_source(offline_kubectl):
+    app = HotelReservation()
+    source = {
+        path.relative_to(app.k8s_deploy_path): path.read_text() for path in Path(app.k8s_deploy_path).rglob("*.yaml")
+    }
+    traced = set()
+    with app._rendered_deployment_configs() as rendered_path:
+        for relative, original in source.items():
+            expected = yaml.safe_load(original)
+            actual = yaml.safe_load((rendered_path / relative).read_text())
+            name = expected.get("metadata", {}).get("name")
+            if expected.get("kind") == "Deployment" and name in app.services:
+                container = expected["spec"]["template"]["spec"]["containers"][0]
+                container["args"] = ["-jaegeraddr", "otel-collector.observe.svc.cluster.local:6831"]
+                traced.add(name)
+            assert actual == expected
+
+    assert traced == app.services
+    assert not rendered_path.exists()
+    assert all((Path(app.k8s_deploy_path) / path).read_text() == content for path, content in source.items())
+
+
+def test_standard_rate_policy_has_headroom_above_the_default_workload(offline_kubectl):
     app = HotelReservation()
     deployment_path = Path(app.k8s_deploy_path) / "rate" / "rate-deployment.yaml"
     deployment = yaml.safe_load(deployment_path.read_text())
@@ -29,6 +51,8 @@ spec:
     spec:
       containers:
         - name: hotel-reserv-rate
+          command: [rate]
+          args: ["-consuladdr", "consul:8500"]
           env:
             - name: JAEGER_SAMPLE_RATIO
               value: \"1\"
@@ -56,6 +80,12 @@ spec:
             "RATE_BACKEND_QPS_LIMIT": "20",
             "RATE_QUEUE_CAPACITY": "256",
         }
+        assert rendered["spec"]["template"]["spec"]["containers"][0]["args"] == [
+            "-consuladdr",
+            "consul:8500",
+            "-jaegeraddr",
+            "otel-collector.observe.svc.cluster.local:6831",
+        ]
 
     assert deployment_path.read_text() == original
 
