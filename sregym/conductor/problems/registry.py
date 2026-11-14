@@ -112,6 +112,7 @@ from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop im
     StaleHostAliasesDNSPoisoningAstronomyShop,
 )
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
+from sregym.conductor.problems.apps.mattermost.transit_saturation import MattermostTransitSaturationProblem
 from sregym.conductor.problems.apps.stripe.feature_config import StripeFeatureConfigProblem
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.apps.train_ticket.f17 import TrainTicketF17
@@ -212,6 +213,7 @@ class ProblemRegistry:
             "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittentProblem(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAuditProblem(scale_tier="replicated"),
             "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
+            "mattermost_transit_saturation_tier2": lambda: MattermostTransitSaturationProblem(scale_tier="2"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
