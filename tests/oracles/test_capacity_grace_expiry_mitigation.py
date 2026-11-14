@@ -1,16 +1,24 @@
+from itertools import count
 from types import SimpleNamespace
 
 import pytest
 from kubernetes.client.rest import ApiException
 
-from sregym.conductor.oracles.capacity_grace_expiry_mitigation import CapacityGraceExpiryMitigationOracle
+from sregym.conductor.oracles.capacity_grace_expiry_mitigation import (
+    CapacityGraceExpiryMitigationOracle,
+    read_policy,
+    read_usage,
+)
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mitigation import MitigationOracle
 
 LOGIN_OK = '  HTTP/1.1 200 OK\n{"message":"Login successfully!"}'
 LOGIN_500 = "  HTTP/1.1 500 Internal Server Error\nwget: server returned error"
 LOGIN_REJECTED = '  HTTP/1.1 200 OK\n{"message":"Failed. Please check your username and password. "}'
+NO_ANSWER = "Connecting to frontend:5000 (10.96.1.2:5000)\nwget: download timed out"
 INJECTED_START = 1_000
+POLICY = {"enforcement": "enabled", "effective_from": str(INJECTED_START), "sync_interval_seconds": "0"}
+MISSING = object()
 
 
 def _deployment(replicas, ready):
@@ -29,16 +37,31 @@ class _Api:
         self.objects = objects
 
     def _read(self, name, namespace):
-        if name not in self.objects:
+        value = self.objects.get(name, MISSING)
+        if callable(value):
+            value = value()
+        if value is MISSING:
             raise ApiException(status=404)
-        return self.objects[name]
+        return value
 
     read_namespaced_deployment = _read
     read_namespaced_config_map = _read
 
 
 class _KubeCtl:
-    def __init__(self, *, target_states, logins, controller_replicas=1, usage=None, policy=None, pods=None):
+    """A cluster in which the controller completes a sync between every two looks, unless ``syncing`` is off."""
+
+    def __init__(
+        self,
+        *,
+        target_states=((1, 1),),
+        logins=(LOGIN_OK,),
+        controller_replicas=1,
+        usage=None,
+        policy=None,
+        status="syncing",
+        pods=None,
+    ):
         self.target_states = list(target_states)
         self.logins = list(logins)
         self.commands = []
@@ -48,14 +71,17 @@ class _KubeCtl:
             if controller_replicas is None
             else {"capacity-controller": SimpleNamespace(spec=SimpleNamespace(replicas=controller_replicas))}
         )
+        ticks = count(1)
+        statuses = {
+            "syncing": lambda: SimpleNamespace(data={"syncs": str(next(ticks)), "last_sync": "0"}),
+            "stalled": lambda: SimpleNamespace(data={"syncs": "7", "last_sync": "0"}),
+            "missing": MISSING,
+        }
         self.core_v1_api = _Api(
             {
                 "capacity-usage": SimpleNamespace(data=usage if usage is not None else {"user": "0"}),
-                "capacity-policy": SimpleNamespace(
-                    data=policy
-                    if policy is not None
-                    else {"enforcement": "enabled", "effective_from": str(INJECTED_START), "sync_interval_seconds": "0"}
-                ),
+                "capacity-policy": SimpleNamespace(data=policy if policy is not None else dict(POLICY)),
+                "capacity-status": statuses[status],
             }
         )
 
@@ -85,6 +111,7 @@ def _oracle(kubectl, *, effective_from=INJECTED_START):
         controller_namespace="capacity-system",
         usage_configmap="capacity-usage",
         policy_configmap="capacity-policy",
+        status_configmap="capacity-status",
         sync_interval_seconds=0,
         _effective_from=effective_from,
     )
@@ -92,18 +119,69 @@ def _oracle(kubectl, *, effective_from=INJECTED_START):
     oracle.problem = problem
     oracle.settle_seconds = 0
     oracle.poll_seconds = 0
+    oracle.observed_syncs = 1
     return oracle
+
+
+# -- reading configuration the way the controller does ----------------------------
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (POLICY, (True, 1_000, 0)),
+        ({**POLICY, "effective_from": " 5000 "}, (True, 5_000, 0)),
+        ({**POLICY, "effective_from": "5000\n"}, (True, 5_000, 0)),
+        ({**POLICY, "sync_interval_seconds": "\t3600 "}, (True, 1_000, 3_600)),
+        ({**POLICY, "enforcement": " enabled "}, (True, 1_000, 0)),
+        ({**POLICY, "enforcement": "Enabled"}, (False, 1_000, 0)),
+        ({**POLICY, "enforcement": "disabled"}, (False, 1_000, 0)),
+        ({**POLICY, "effective_from": "soon"}, (False, None, 0)),
+        ({**POLICY, "effective_from": "١٠٠٠"}, (False, None, 0)),
+        ({**POLICY, "sync_interval_seconds": "fast"}, (True, 1_000, None)),
+        # A value with a space in it shifts the fields that follow, as it does in the shell.
+        ({**POLICY, "effective_from": "5000 77"}, (True, 5_000, 77)),
+        ({"enforcement": "enabled", "sync_interval_seconds": "10"}, (False, None, None)),
+        ({}, (False, None, None)),
+        (None, (False, None, None)),
+    ],
+)
+def test_policy_is_read_the_way_the_controller_reads_it(data, expected):
+    assert read_policy(data) == expected
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ({"user": "0"}, 0),
+        ({"user": " 0 "}, 0),
+        ({"user": "0\n"}, 0),
+        ({"user": "2 extra"}, 2),
+        ({"user": ""}, None),
+        ({"user": "none"}, None),
+        ({"user": "-1"}, None),
+        ({"user": "٠"}, None),
+        ({"search": "1"}, None),
+        ({}, None),
+        (None, None),
+    ],
+)
+def test_usage_record_is_read_the_way_the_controller_reads_it(data, expected):
+    assert read_usage(data, "user") == expected
+
+
+# -- verdicts ---------------------------------------------------------------------
 
 
 def test_generic_failure_is_returned_unchanged(monkeypatch):
     verdict = MitigationOracle.fail("required_deployment_scaled_to_zero", deployment="user")
     monkeypatch.setattr(MitigationOracle, "evaluate", lambda self: verdict)
 
-    assert _oracle(_KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK])).evaluate() is verdict
+    assert _oracle(_KubeCtl()).evaluate() is verdict
 
 
-def test_passes_when_usage_record_is_corrected():
-    kubectl = _KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK], usage={"user": "1"})
+def test_passes_when_usage_record_is_corrected_and_the_controller_keeps_syncing():
+    kubectl = _KubeCtl(usage={"user": "1"})
 
     assert _oracle(kubectl).evaluate() == {"success": True}
     assert "consul-1" in kubectl.commands[0]
@@ -115,27 +193,25 @@ def test_passes_when_usage_record_is_corrected():
     [
         {"controller_replicas": 0},
         {"controller_replicas": None},
-        {"policy": {"enforcement": "disabled", "effective_from": "9999", "sync_interval_seconds": "0"}},
+        {"policy": {**POLICY, "enforcement": "disabled"}},
     ],
     ids=["controller-stopped", "controller-removed", "enforcement-disabled"],
 )
-def test_passes_for_each_way_of_stopping_enforcement(kwargs):
-    kubectl = _KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK], **kwargs)
+def test_stopping_enforcement_passes_without_waiting_for_syncs(kwargs):
+    kubectl = _KubeCtl(status="stalled", **kwargs)
 
     assert _oracle(kubectl).evaluate() == {"success": True}
 
 
 def test_fails_while_target_has_no_ready_replica():
-    result = _oracle(_KubeCtl(target_states=[(1, 0)], logins=[LOGIN_OK])).evaluate()
+    result = _oracle(_KubeCtl(target_states=[(1, 0)])).evaluate()
 
     assert result["success"] is False
     assert result["reason"] == "fault_still_present"
 
 
 def test_fails_when_restored_replicas_are_removed_again():
-    kubectl = _KubeCtl(target_states=[(1, 1), (0, 0)], logins=[LOGIN_OK])
-
-    result = _oracle(kubectl).evaluate()
+    result = _oracle(_KubeCtl(target_states=[(1, 1), (0, 0)])).evaluate()
 
     assert result["reason"] == "fix_reverted_by_automation"
     assert result["failure_class"] == FailureClass.AGENT_ERROR
@@ -144,12 +220,16 @@ def test_fails_when_restored_replicas_are_removed_again():
 @pytest.mark.parametrize(
     ("policy", "change"),
     [
-        ({"enforcement": "enabled", "effective_from": "5000", "sync_interval_seconds": "0"}, "effective_from"),
-        ({"enforcement": "enabled", "effective_from": "1000", "sync_interval_seconds": "3600"}, "sync_interval"),
+        ({**POLICY, "effective_from": "5000"}, "effective_from"),
+        ({**POLICY, "effective_from": "5000 "}, "effective_from"),
+        ({**POLICY, "effective_from": "\n5000"}, "effective_from"),
+        ({**POLICY, "sync_interval_seconds": "3600"}, "sync_interval"),
+        ({**POLICY, "sync_interval_seconds": " 3600\n"}, "sync_interval"),
     ],
+    ids=["later-start", "later-start-padded", "later-start-leading-newline", "slower-sync", "slower-sync-padded"],
 )
 def test_fails_when_enforcement_is_only_postponed(policy, change):
-    kubectl = _KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK], policy=policy)
+    kubectl = _KubeCtl(policy=policy)
 
     result = _oracle(kubectl).evaluate()
 
@@ -158,16 +238,52 @@ def test_fails_when_enforcement_is_only_postponed(policy, change):
     assert kubectl.commands == []
 
 
+@pytest.mark.parametrize("usage", [{"user": "0"}, {"user": " 0"}, {"user": "0\n"}])
+def test_postponement_is_caught_however_the_wrong_record_is_padded(usage):
+    kubectl = _KubeCtl(policy={**POLICY, "effective_from": "5000"}, usage=usage)
+
+    assert _oracle(kubectl).evaluate()["reason"] == "enforcement_only_deferred"
+
+
 def test_postponement_is_fine_once_the_usage_record_is_right():
-    policy = {"enforcement": "enabled", "effective_from": "5000", "sync_interval_seconds": "3600"}
-    kubectl = _KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK], policy=policy, usage={"user": "1"})
+    policy = {**POLICY, "effective_from": "5000"}
+    kubectl = _KubeCtl(policy=policy, usage={"user": "1"})
 
     assert _oracle(kubectl).evaluate() == {"success": True}
 
 
-@pytest.mark.parametrize("response", [LOGIN_500, LOGIN_REJECTED], ids=["http-500", "200-without-login"])
+def test_fails_when_an_enabled_controller_is_never_seen_reconciling():
+    kubectl = _KubeCtl(usage={"user": "1"}, status="stalled")
+
+    result = _oracle(kubectl).evaluate()
+
+    assert result["reason"] == "reconciliation_not_observed"
+    assert result["failure_class"] == FailureClass.AMBIGUOUS
+    assert result["detail"]["syncs_seen"] == 0
+
+
+def test_every_required_sync_has_to_be_seen():
+    oracle = _oracle(_KubeCtl(usage={"user": "1"}))
+    oracle.observed_syncs = 3
+
+    assert oracle.evaluate()["detail"] == {
+        "controller": "capacity-controller",
+        "syncs_seen": 1,
+        "syncs_required": 3,
+    }
+
+
+def test_falls_back_to_the_clock_when_the_progress_record_is_gone():
+    kubectl = _KubeCtl(usage={"user": "1"}, status="missing")
+
+    assert _oracle(kubectl).evaluate() == {"success": True}
+
+
+@pytest.mark.parametrize(
+    "response", [LOGIN_500, LOGIN_REJECTED, NO_ANSWER], ids=["http-500", "200-without-login", "timeout"]
+)
 def test_fails_when_logins_do_not_work(response):
-    kubectl = _KubeCtl(target_states=[(1, 1)], logins=[response], controller_replicas=0)
+    kubectl = _KubeCtl(logins=[response], controller_replicas=0)
 
     result = _oracle(kubectl).evaluate()
 
@@ -175,18 +291,26 @@ def test_fails_when_logins_do_not_work(response):
     assert result["failure_class"] == FailureClass.AGENT_ERROR
 
 
-def test_one_failed_login_in_the_window_is_tolerated_but_two_are_not():
-    oracle = _oracle(_KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK, LOGIN_500], controller_replicas=0))
-    assert oracle.evaluate() == {"success": True}
+def test_unanswered_probes_are_retried_while_logins_settle():
+    kubectl = _KubeCtl(logins=[NO_ANSWER, LOGIN_500, LOGIN_OK], controller_replicas=0)
+    oracle = _oracle(kubectl)
+    oracle.settle_seconds = 30
 
-    oracle = _oracle(_KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK, LOGIN_500], controller_replicas=0))
-    oracle.problem.sync_interval_seconds = 0.05
-    oracle.observed_syncs = 1
-    assert oracle.evaluate()["reason"] == "login_failing"
+    assert oracle.evaluate() == {"success": True}
+    assert len(kubectl.commands) == 4
+
+
+def test_a_failed_login_at_the_end_of_the_window_must_be_followed_by_a_good_one():
+    kubectl = _KubeCtl(logins=[LOGIN_OK, LOGIN_500, LOGIN_OK], controller_replicas=0)
+    assert _oracle(kubectl).evaluate() == {"success": True}
+    assert len(kubectl.commands) == 3
+
+    kubectl = _KubeCtl(logins=[LOGIN_OK, LOGIN_500, LOGIN_500], controller_replicas=0)
+    assert _oracle(kubectl).evaluate()["reason"] == "login_failing"
 
 
 def test_missing_probe_pod_is_a_harness_error():
-    kubectl = _KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK], pods=[_pod("frontend-1")], controller_replicas=0)
+    kubectl = _KubeCtl(pods=[_pod("frontend-1")], controller_replicas=0)
 
     result = _oracle(kubectl).evaluate()
 
@@ -194,21 +318,30 @@ def test_missing_probe_pod_is_a_harness_error():
     assert result["failure_class"] == FailureClass.HARNESS_ERROR
 
 
-def test_unparseable_probe_output_is_ambiguous():
-    kubectl = _KubeCtl(target_states=[(1, 1)], logins=["sh: wget: not found"], controller_replicas=0)
+@pytest.mark.parametrize("output", ["sh: wget: not found", "sh: 1: wget: not found", "wget: No such file or directory"])
+def test_missing_probe_tooling_is_reported_at_once_not_retried(output):
+    kubectl = _KubeCtl(logins=[output, LOGIN_OK], controller_replicas=0)
+    oracle = _oracle(kubectl)
+    oracle.settle_seconds = 30
 
-    result = _oracle(kubectl).evaluate()
+    result = oracle.evaluate()
 
     assert result["reason"] == "http_probe_response_missing"
     assert result["failure_class"] == FailureClass.AMBIGUOUS
+    assert len(kubectl.commands) == 1
 
 
-def test_probe_command_failure_is_classified_not_raised():
-    kubectl = _KubeCtl(target_states=[(1, 1)], logins=[LOGIN_OK], controller_replicas=0)
+def test_failure_to_exec_into_the_probe_pod_is_classified_not_retried():
+    kubectl = _KubeCtl(controller_replicas=0)
+    calls = []
 
     def boom(command, timeout=None):
+        calls.append(command)
         raise RuntimeError("Command failed (exit 1): kubectl exec")
 
     kubectl.exec_command_checked = boom
+    oracle = _oracle(kubectl)
+    oracle.settle_seconds = 30
 
-    assert _oracle(kubectl).evaluate()["success"] is False
+    assert oracle.evaluate()["success"] is False
+    assert len(calls) == 1

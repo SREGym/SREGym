@@ -24,6 +24,7 @@ from sregym.utils.decorators import mark_fault_injected
 # neutral: nothing below may describe what goes wrong.
 _CONTROLLER_SCRIPT = r"""
 set -u
+syncs=0
 while true; do
   policy=$(kubectl get configmap "$POLICY_CONFIGMAP" -o go-template='{{index .data "enforcement"}} {{index .data "effective_from"}} {{index .data "sync_interval_seconds"}}' 2>/dev/null) || policy=""
   set -- $policy
@@ -34,16 +35,18 @@ while true; do
   [ "$interval" -lt 1 ] && interval=1
   case "$start" in ''|*[!0-9]*) mode="" ;; esac
   if [ "$mode" = "enabled" ] && [ "$(date +%s)" -ge "$start" ]; then
-    kubectl get configmap "$USAGE_CONFIGMAP" -o go-template='{{range $k, $v := .data}}{{$k}} {{$v}}{{"\n"}}{{end}}' 2>/dev/null |
+    caps=$(kubectl get configmap "$USAGE_CONFIGMAP" -o go-template='{{range $k, $v := .data}}{{$k}} {{$v}}{{"\n"}}{{end}}' 2>/dev/null) || caps=""
+    current=$(kubectl -n "$TARGET_NAMESPACE" get deployments -o go-template='{{range .items}}{{.metadata.name}} {{.spec.replicas}}{{"\n"}}{{end}}' 2>/dev/null) || current=""
+    printf '%s\n---\n%s\n' "$caps" "$current" |
+      awk '$0 == "---" { live = 1; next }
+           !live { cap[$1] = $2; next }
+           ($1 in cap) && cap[$1] ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $2 + 0 > cap[$1] + 0 { print $1, cap[$1] }' |
       while read -r name cap; do
-        case "$cap" in ''|*[!0-9]*) continue ;; esac
-        cur=$(kubectl -n "$TARGET_NAMESPACE" get deployment "$name" -o jsonpath='{.spec.replicas}' 2>/dev/null) || continue
-        case "$cur" in ''|*[!0-9]*) continue ;; esac
-        if [ "$cur" -gt "$cap" ]; then
-          kubectl -n "$TARGET_NAMESPACE" scale deployment "$name" --replicas="$cap" >/dev/null 2>&1
-        fi
+        kubectl -n "$TARGET_NAMESPACE" scale deployment "$name" --replicas="$cap" >/dev/null 2>&1
       done
   fi
+  syncs=$((syncs + 1))
+  kubectl patch configmap "$STATUS_CONFIGMAP" --type merge -p "{\"data\":{\"syncs\":\"$syncs\",\"last_sync\":\"$(date +%s)\"}}" >/dev/null 2>&1
   sleep "$interval"
 done
 """
@@ -55,11 +58,14 @@ class CapacityGraceExpiry(Problem):
     app_namespace = "hotel-reservation"
     usage_configmap = "capacity-usage"
     policy_configmap = "capacity-policy"
-    # bitnami/kubectl is no longer pulled freely from Docker Hub.
-    controller_image = "alpine/k8s:1.28.3"
+    status_configmap = "capacity-status"
+    # Multi-arch index digest. The kubectl in this tag matches the kind node image (v1.32).
+    controller_image = "alpine/k8s:1.32.5@sha256:bb8e5be4a1ed2d24bf7f7ccab74b594849c6b59feab1b9c8c0f39554e69678c1"
     grace_seconds = 60
     sync_interval_seconds = 10
     inject_timeout_seconds = 300
+    # How long a target whose pod is still starting gets to become ready before injection.
+    baseline_timeout_seconds = 120
     poll_interval_seconds = 3
 
     def __init__(
@@ -102,8 +108,8 @@ class CapacityGraceExpiry(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        dep = self.kubectl.get_deployment(self.faulty_service, self.namespace)
-        self._original_replicas = dep.spec.replicas or 1
+        dep = self._healthy_target()
+        self._original_replicas = dep.spec.replicas
 
         self._teardown_controller()
         created_at = self._create_namespace()
@@ -123,6 +129,25 @@ class CapacityGraceExpiry(Problem):
 
     # -- injection -----------------------------------------------------------------
 
+    def _healthy_target(self):
+        """The target deployment, once it serves. A fault injected into a broken service proves nothing.
+
+        A pod that is still starting is given time; a deployment that is scaled
+        down, or never becomes ready, is a setup failure.
+        """
+        deadline = time.monotonic() + self.baseline_timeout_seconds
+        while True:
+            dep = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+            replicas, ready = dep.spec.replicas or 0, dep.status.ready_replicas or 0
+            if replicas >= 1 and ready >= 1:
+                return dep
+            if replicas < 1 or time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"deployment/{self.faulty_service} is not healthy before injection "
+                    f"(spec.replicas={dep.spec.replicas}, ready={dep.status.ready_replicas})"
+                )
+            time.sleep(self.poll_interval_seconds)
+
     def _create_namespace(self) -> int:
         """Create the controller namespace; return its creation time (cluster clock, epoch seconds)."""
         body = {"metadata": {"name": self.controller_namespace}}
@@ -135,71 +160,71 @@ class CapacityGraceExpiry(Problem):
         usage[self.faulty_service] = "0"
         return usage
 
+    def _policy_data(self) -> dict[str, str]:
+        return {
+            "enforcement": "enabled",
+            "effective_from": str(self._effective_from),
+            "sync_interval_seconds": str(self.sync_interval_seconds),
+        }
+
     def _create_configmaps(self):
         core = self.kubectl.core_v1_api
         labels = {"app": self.controller_name}
-        core.create_namespaced_config_map(
-            self.controller_namespace,
-            {"metadata": {"name": self.usage_configmap, "labels": labels}, "data": self._usage_data()},
-        )
-        core.create_namespaced_config_map(
-            self.controller_namespace,
+        for name, data in (
+            (self.usage_configmap, self._usage_data()),
+            (self.policy_configmap, self._policy_data()),
+            (self.status_configmap, {"syncs": "0"}),
+        ):
+            core.create_namespaced_config_map(
+                self.controller_namespace, {"metadata": {"name": name, "labels": labels}, "data": data}
+            )
+
+    def _own_namespace_rules(self) -> list[dict]:
+        """What the controller may do in its own namespace: read its inputs, record its progress."""
+        return [
             {
-                "metadata": {"name": self.policy_configmap, "labels": labels},
-                "data": {
-                    "enforcement": "enabled",
-                    "effective_from": str(self._effective_from),
-                    "sync_interval_seconds": str(self.sync_interval_seconds),
-                },
+                "apiGroups": [""],
+                "resources": ["configmaps"],
+                "resourceNames": [self.usage_configmap, self.policy_configmap, self.status_configmap],
+                "verbs": ["get"],
             },
-        )
+            {
+                "apiGroups": [""],
+                "resources": ["configmaps"],
+                "resourceNames": [self.status_configmap],
+                "verbs": ["patch"],
+            },
+        ]
+
+    @staticmethod
+    def _app_namespace_rules() -> list[dict]:
+        """What the controller may do in the app namespace: read deployments and set their scale."""
+        return [
+            {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "list"]},
+            {"apiGroups": ["apps"], "resources": ["deployments/scale"], "verbs": ["get", "patch", "update"]},
+        ]
 
     def _create_rbac(self):
         core, rbac = self.kubectl.core_v1_api, client.RbacAuthorizationV1Api()
         name = self.controller_name
-        subject = {"kind": "ServiceAccount", "name": name, "namespace": self.controller_namespace}
+        binding = {
+            "metadata": {"name": name},
+            "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": name},
+            "subjects": [{"kind": "ServiceAccount", "name": name, "namespace": self.controller_namespace}],
+        }
         core.create_namespaced_service_account(self.controller_namespace, {"metadata": {"name": name}})
         rbac.create_namespaced_role(
-            self.controller_namespace,
-            {
-                "metadata": {"name": name},
-                "rules": [{"apiGroups": [""], "resources": ["configmaps"], "verbs": ["get", "list", "watch"]}],
-            },
+            self.controller_namespace, {"metadata": {"name": name}, "rules": self._own_namespace_rules()}
         )
-        rbac.create_namespaced_role_binding(
-            self.controller_namespace,
-            {
-                "metadata": {"name": name},
-                "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": name},
-                "subjects": [subject],
-            },
-        )
+        rbac.create_namespaced_role_binding(self.controller_namespace, binding)
         with self._ignore_conflict():
             rbac.create_namespaced_role(
-                self.namespace,
-                {
-                    "metadata": {"name": name},
-                    "rules": [
-                        {"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["get", "list"]},
-                        {
-                            "apiGroups": ["apps"],
-                            "resources": ["deployments/scale"],
-                            "verbs": ["get", "patch", "update"],
-                        },
-                    ],
-                },
+                self.namespace, {"metadata": {"name": name}, "rules": self._app_namespace_rules()}
             )
         with self._ignore_conflict():
-            rbac.create_namespaced_role_binding(
-                self.namespace,
-                {
-                    "metadata": {"name": name},
-                    "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": name},
-                    "subjects": [subject],
-                },
-            )
+            rbac.create_namespaced_role_binding(self.namespace, binding)
 
-    def _create_controller(self):
+    def _controller_manifest(self) -> dict:
         labels = {"app": self.controller_name}
         container = {
             "name": "controller",
@@ -209,10 +234,11 @@ class CapacityGraceExpiry(Problem):
                 {"name": "TARGET_NAMESPACE", "value": self.namespace},
                 {"name": "USAGE_CONFIGMAP", "value": self.usage_configmap},
                 {"name": "POLICY_CONFIGMAP", "value": self.policy_configmap},
+                {"name": "STATUS_CONFIGMAP", "value": self.status_configmap},
             ],
             "resources": {"requests": {"cpu": "20m", "memory": "32Mi"}, "limits": {"memory": "128Mi"}},
         }
-        body = {
+        return {
             "metadata": {"name": self.controller_name, "labels": labels},
             "spec": {
                 "replicas": 1,
@@ -227,7 +253,9 @@ class CapacityGraceExpiry(Problem):
                 },
             },
         }
-        self.kubectl.apps_v1_api.create_namespaced_deployment(self.controller_namespace, body)
+
+    def _create_controller(self):
+        self.kubectl.apps_v1_api.create_namespaced_deployment(self.controller_namespace, self._controller_manifest())
 
     def _target_is_down(self) -> tuple[bool, str]:
         dep = self.kubectl.get_deployment(self.faulty_service, self.namespace)
@@ -263,17 +291,19 @@ class CapacityGraceExpiry(Problem):
             self.kubectl.scale_deployment(self.faulty_service, self.namespace, wanted)
 
     def _teardown_controller(self):
-        self._remove_controller(self.kubectl.core_v1_api, self.kubectl.apps_v1_api, self.namespace)
+        self._remove_controller(
+            self.kubectl.core_v1_api, self.kubectl.apps_v1_api, client.RbacAuthorizationV1Api(), self.namespace
+        )
 
     @classmethod
     def cleanup_leftover_controller(cls):
         """Remove a controller left behind by a run that did not reach recover_fault()."""
-        cls._remove_controller(client.CoreV1Api(), client.AppsV1Api(), cls.app_namespace)
+        cls._remove_controller(
+            client.CoreV1Api(), client.AppsV1Api(), client.RbacAuthorizationV1Api(), cls.app_namespace
+        )
 
     @classmethod
-    def _remove_controller(cls, core, apps, app_namespace: str, timeout: float = 180, poll: float = 2):
-        rbac = client.RbacAuthorizationV1Api(core.api_client)
-
+    def _remove_controller(cls, core, apps, rbac, app_namespace: str, timeout: float = 180, poll: float = 2):
         def ignore_404(fn, *args, **kwargs):
             try:
                 fn(*args, **kwargs)
