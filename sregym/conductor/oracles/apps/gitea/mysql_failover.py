@@ -393,19 +393,21 @@ class GiteaMySQLFailoverOracle(GiteaDivergentRecoveryOracle):
         problem, app = self.problem, self.problem.app
         if not self.baseline or self.volumes is None:
             return self.fail("baseline_not_captured")
-        # Sampled, then paused while grading so checksums see a still primary; the pause is not an outage.
-        traffic = None
+        # Paused while grading so checksums see a still primary, with one fresh user write checked first.
+        paused_at = None
         try:
             if problem.live_users is not None:
-                traffic = app.live_traffic()
                 app.live_traffic("pause")
+                paused_at = app.live_traffic()["now"]
+                app.live_traffic("write")
+            traffic = app.live_traffic() if problem.live_users is not None else None
             verdict = self.grade(traffic)
         except Exception as exc:
             verdict = self.fail_from_exception(exc)
-        if traffic is not None:
+        if paused_at is not None:
             try:
                 app.live_traffic("resume")
-                self.graded = [*self.graded, (traffic["now"], app.live_traffic()["now"])]
+                self.graded = [*self.graded, (paused_at, app.live_traffic()["now"])]
             except Exception as exc:
                 return self.fail_from_exception(exc)
         return verdict

@@ -13,11 +13,15 @@ from sregym.service.apps.gitea.mysql_failover import (
     HIDDEN,
     LIVE_TRAFFIC,
     MEMBER_SECRET,
+    ORCHESTRATOR,
     RECEIVER,
     RELAY,
     GiteaMySQLApplication,
     undeliverable,
 )
+from sregym.service.runtime_images import PYMYSQL_CLIENT_IMAGE
+
+pytestmark = pytest.mark.usefixtures("offline_kubectl")
 
 
 def by_kind(documents, kind):
@@ -259,6 +263,15 @@ def test_live_users_write_through_gitea_from_east_only():
     spec = next(d for d in documents if d["kind"] == "Deployment")["spec"]["template"]
     assert spec["metadata"]["labels"]["region"] == "east"
     assert {"name": "credentials", "secret": {"secretName": MEMBER_SECRET}} in spec["spec"]["volumes"]
+
+
+def test_orchestrator_uses_prebuilt_pymysql_runtime_image_without_pip():
+    documents = GiteaMySQLApplication().orchestrator_documents({"master": "gitea-db-east-0"})
+    deployment = next(d for d in by_kind(documents, "Deployment") if d["metadata"]["name"] == ORCHESTRATOR)
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"] == PYMYSQL_CLIENT_IMAGE
+    assert container["command"] == ["python", "-u", "/app/main.py"]
+    assert "pip" not in json.dumps(container)
 
 
 def test_description_states_requirements_but_not_the_regions_or_the_fault():

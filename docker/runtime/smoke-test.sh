@@ -2,7 +2,7 @@
 # Run on native AMD64 or ARM64 Linux, including Docker Desktop on macOS.
 set -euo pipefail
 
-kind=${1:?Usage: smoke-test.sh redis|kafka|tls|grafana IMAGE amd64|arm64}
+kind=${1:?Usage: smoke-test.sh redis|kafka|pymysql|tls|grafana IMAGE amd64|arm64}
 image=${2:?An image reference is required}
 arch=${3:?An architecture is required}
 
@@ -23,6 +23,10 @@ case "$kind" in
   kafka)
     docker run --rm --network none "$image" python3 -c \
       'import confluent_kafka as k; assert k.__version__ == "2.5.3"; assert k.libversion()[0] == "2.5.3"; k.Producer({"bootstrap.servers": "127.0.0.1:1", "log_level": 0}); k.Consumer({"group.id": "smoke"}).close(); print(k.libversion())'
+    ;;
+  pymysql)
+    docker run --rm --network none "$image" python3 -c \
+      'import pymysql; assert pymysql.__version__ == "1.1.1"; print(pymysql.__version__)'
     ;;
   tls)
     docker run --rm --network none "$image" sh -ec '

@@ -219,6 +219,36 @@ def test_only_the_oracles_own_pauses_are_excused():
     assert live_traffic_report(writes, [issue(1, 4, "f1", created=5)], 5, graded=[(10, 62)])["longest_outage"] == 8
 
 
+def test_evaluate_requires_a_fresh_live_user_write_while_paused():
+    app = Mock()
+    app.live_traffic.side_effect = [None, {"now": 10}, None, {"now": 11}, None, {"now": 12}]
+    problem = SimpleNamespace(app=app, live_users=[("users", 0)])
+    check = GiteaMySQLFailoverOracle(problem)
+    check.baseline = {"token": "t"}
+    check.volumes = {"gitea-repositories": "v"}
+    check.grade = Mock(return_value={"success": True})
+
+    assert check.evaluate() == {"success": True}
+    assert [c.args for c in app.live_traffic.call_args_list] == [("pause",), (), ("write",), (), ("resume",), ()]
+    assert check.graded == [(10, 12)]
+
+
+def test_evaluate_fails_and_still_resumes_when_the_live_user_cannot_write():
+    app = Mock()
+    app.live_traffic.side_effect = [None, {"now": 10}, RuntimeError("HTTP Error 401: Unauthorized"), None, {"now": 12}]
+    problem = SimpleNamespace(app=app, live_users=[("users", 0)])
+    check = GiteaMySQLFailoverOracle(problem)
+    check.baseline = {"token": "t"}
+    check.volumes = {"gitea-repositories": "v"}
+    check.grade = Mock(return_value={"success": True})
+
+    verdict = check.evaluate()
+    assert verdict["success"] is False
+    assert [c.args for c in app.live_traffic.call_args_list] == [("pause",), (), ("write",), ("resume",), ()]
+    assert check.graded == [(10, 12)]
+    check.grade.assert_not_called()
+
+
 @pytest.fixture
 def resource_oracle():
     app = Mock()

@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import json
 import os
 import secrets
@@ -41,20 +42,24 @@ def open_issue(title, body):
         return json.loads(response.read())["number"]
 
 
+def record_write():
+    started = time.time()
+    title = f"{secrets.choice(SUBJECTS)} {secrets.token_hex(4)}"
+    body = secrets.choice(BODIES)
+    number = open_issue(title, body)
+    with lock:
+        now = time.time()
+        entry = {"number": number, "title": title, "body": body, "at": now, "took": now - started}
+        acknowledged.append(entry)
+        return entry
+
+
 def write_forever():
     while True:
         running.wait()
         started = time.time()
-        title = f"{secrets.choice(SUBJECTS)} {secrets.token_hex(4)}"
-        body = secrets.choice(BODIES)
-        try:
-            number = open_issue(title, body)
-        except Exception:
-            pass
-        else:
-            with lock:
-                now = time.time()
-                acknowledged.append({"number": number, "title": title, "body": body, "at": now, "took": now - started})
+        with contextlib.suppress(Exception):
+            record_write()
         pause = INTERVAL * (0.75 + secrets.randbelow(51) / 100)
         time.sleep(max(0.0, pause - (time.time() - started)))
 
@@ -64,6 +69,19 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        if self.path == "/write":
+            try:
+                data = json.dumps(record_write()).encode()
+            except Exception as exc:
+                data = json.dumps({"error": str(exc)}).encode()
+                self.send_response(502)
+            else:
+                self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path == "/pause":
             running.clear()
         elif self.path == "/resume":

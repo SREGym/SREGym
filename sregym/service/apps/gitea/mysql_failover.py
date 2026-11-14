@@ -15,6 +15,7 @@ from sregym.service.apps.components.mysql import MYSQL_IMAGE, REGION_LABEL, REGI
 from sregym.service.apps.gitea.application import FIXTURES, GiteaApplication
 from sregym.service.apps.gitea.failover import GiteaFailoverApplication
 from sregym.service.apps.gitea.recovery import GiteaRecoveryApplication
+from sregym.service.runtime_images import PYMYSQL_CLIENT_IMAGE
 
 #: Shared-history issues, issues opened on the stale primary during the partition, issues opened after failover.
 DIVERGENCE_COUNTS = {"small": (200, 120, 60), "large": (600, 360, 180)}
@@ -478,8 +479,8 @@ class GiteaMySQLApplication(GiteaApplication):
         }
         container = {
             "name": "main",
-            "image": PYTHON_IMAGE,
-            "command": ["sh", "-c", "pip install -q --no-cache-dir PyMySQL==1.1.1 && exec python -u /app/main.py"],
+            "image": PYMYSQL_CLIENT_IMAGE,
+            "command": ["python", "-u", "/app/main.py"],
             "env": [
                 *({"name": k, "value": v} for k, v in env.items()),
                 {"name": "MYSQL_ROOT_PASSWORD", "valueFrom": {"secretKeyRef": {**secret, "key": "root-password"}}},
