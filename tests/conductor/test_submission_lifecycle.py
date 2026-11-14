@@ -968,6 +968,33 @@ def test_cleanup_continues_after_recovery_error_and_reaches_terminal_state():
     assert "recover_fault: RuntimeError: recovery failed" in conductor.results["cleanup_error"]
 
 
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_retry_storm_trigger_cleanup_reaches_the_conductor(monkeypatch, cleanup_fails):
+    from sregym.conductor.problems import load_spike_rpc_retry_storm as problem_module
+
+    problem = problem_module.LoadSpikeRPCRetryStorm.__new__(problem_module.LoadSpikeRPCRetryStorm)
+    problem.namespace = "blueprint-hotel-reservation"
+    problem.faulty_service = "rpc"
+    problem.app = SimpleNamespace(cleanup=Mock())
+    cleanup = Mock(side_effect=RuntimeError("stress cleanup failed") if cleanup_fails else None)
+    problem.wrk = SimpleNamespace(cleanup_cpu_stress=cleanup)
+    monkeypatch.setattr(problem_module, "VirtualizationFaultInjector", Mock())
+    conductor = _conductor()
+    conductor.problem = problem
+    conductor._baseline_captured = True
+    conductor.cluster_state = Mock()
+    conductor.cluster_state.reconcile_to_baseline.return_value = {}
+
+    conductor._cleanup_sync()
+
+    cleanup.assert_called_once_with(wait=True)
+    problem.app.cleanup.assert_called_once_with()
+    conductor.cluster_state.reconcile_to_baseline.assert_called_once_with()
+    assert conductor.results.get("cleanup_failed", False) is cleanup_fails
+    if cleanup_fails:
+        assert "stress cleanup failed" in conductor.results["cleanup_error"]
+
+
 def test_abandoned_cleanup_does_not_run_later_cleanup_phases():
     conductor = _conductor()
     recovery_started = threading.Event()
