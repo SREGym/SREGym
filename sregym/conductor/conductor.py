@@ -1436,6 +1436,14 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not clean up NightlyRebalanceOOM actor: {e}")
 
+        self.logger.info("[FIX] CapacityGraceExpiry controller leftover if any")
+        try:
+            from sregym.conductor.problems.capacity_grace_expiry import CapacityGraceExpiry
+
+            CapacityGraceExpiry.cleanup_leftover_controller()
+        except Exception as e:
+            self.logger.warning(f"Could not clean up CapacityGraceExpiry controller: {e}")
+
         self.logger.info("[FIX] Clock drift leftover if any")
         try:
             injector = RemoteOSFaultInjector()
