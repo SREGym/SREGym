@@ -13,6 +13,7 @@ from sregym.conductor.problems.calico_route_reflector_label_drift import (
     CalicoRouteReflectorLabelDriftHotelReservation,
 )
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
+from sregym.conductor.problems.capacity_grace_expiry import CapacityGraceExpiry
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.cpu_throttling import CpuThrottling
@@ -178,6 +179,7 @@ class ProblemRegistry:
             "missing_stale_cache_fallback_long_delay_astronomy_shop": lambda: MissingStaleCacheFallbackAstronomyShop(delay="5s"),
             "namespace_memory_limit": NamespaceMemoryLimit,
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
+            "capacity_grace_expiry_hotel_reservation": lambda: CapacityGraceExpiry(faulty_service="user"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
             "postgres_lock_contention_product_catalog": PostgresLockContentionProductCatalog,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,

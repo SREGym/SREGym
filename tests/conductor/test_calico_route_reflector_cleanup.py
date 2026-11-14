@@ -7,6 +7,7 @@ from sregym.conductor.conductor import Conductor
 from sregym.conductor.problems.calico_route_reflector_label_drift import (
     CalicoRouteReflectorLabelDriftHotelReservation,
 )
+from sregym.conductor.problems.capacity_grace_expiry import CapacityGraceExpiry
 from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
 
 
@@ -255,10 +256,13 @@ def test_fix_kubernetes_keeps_kubelet_eviction_global_cleanup(monkeypatch):
     # This cleanup creates SDK clients directly, bypassing the fake KubeCtl.
     nightly_cleanup = Mock()
     monkeypatch.setattr(NightlyRebalanceOOM, "cleanup_leftover_actor", nightly_cleanup)
+    capacity_cleanup = Mock()
+    monkeypatch.setattr(CapacityGraceExpiry, "cleanup_leftover_controller", capacity_cleanup)
 
     conductor.fix_kubernetes()
 
     nightly_cleanup.assert_called_once_with()
+    capacity_cleanup.assert_called_once_with()
     assert remote_calls == ["recover_kubelet_crash", "recover_disk_pressure_all"]
     assert (
         "kubectl delete pods --all-namespaces "
