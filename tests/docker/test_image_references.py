@@ -19,6 +19,7 @@ from sregym.generators.images import (
     WORKLOAD_IMBALANCE_PROXY_IMAGE,
 )
 from sregym.generators.workload.blueprint_hotel_work import BHotelWrkWorkloadManager
+from sregym.service.agent_visibility_policy import HIDDEN_NAMESPACES
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.apps.flight_ticket import FlightTicket
 from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
@@ -114,12 +115,32 @@ def test_geo_injection_and_recovery_do_not_change_sidecar_images():
 def test_blueprint_cpu_stress_daemonset_preserves_its_command():
     workload = BHotelWrkWorkloadManager.__new__(BHotelWrkWorkloadManager)
     workload.namespace = "blueprint-hotel-reservation"
-    with patch("sregym.generators.workload.blueprint_hotel_work.client.AppsV1Api") as api:
+    with (
+        patch("sregym.generators.workload.blueprint_hotel_work.client.AppsV1Api") as api,
+        patch("sregym.generators.workload.blueprint_hotel_work.client.CoreV1Api"),
+    ):
         workload._deploy_cpu_stress_daemonset()
     body = api.return_value.create_namespaced_daemon_set.call_args.kwargs["body"]
     assert body["spec"]["template"]["spec"]["containers"] == [
         {"name": "stress", "image": STRESS_IMAGE, "command": ["/bin/sh", "-c"], "args": ["stress --cpu $(nproc)"]}
     ]
+
+
+def test_blueprint_cpu_stress_daemonset_runs_in_a_hidden_namespace():
+    workload = BHotelWrkWorkloadManager.__new__(BHotelWrkWorkloadManager)
+    workload.namespace = "blueprint-hotel-reservation"
+    with (
+        patch("sregym.generators.workload.blueprint_hotel_work.client.AppsV1Api") as apps,
+        patch("sregym.generators.workload.blueprint_hotel_work.client.CoreV1Api") as core,
+    ):
+        workload._deploy_cpu_stress_daemonset()
+        workload._delete_cpu_stress_daemonset()
+    created = apps.return_value.create_namespaced_daemon_set.call_args.kwargs
+    assert created["namespace"] in HIDDEN_NAMESPACES
+    assert created["body"]["metadata"]["namespace"] == created["namespace"]
+    assert core.return_value.create_namespace.call_args.kwargs["body"].metadata.name == created["namespace"]
+    for call in apps.return_value.delete_namespaced_daemon_set.call_args_list:
+        assert call.kwargs["namespace"] == created["namespace"]
 
 
 def test_hotel_manifests_and_recovery_use_the_published_image():

@@ -53,9 +53,16 @@ class CapacityDecreaseRPCRetryStorm(Problem):
             "[Step 3] Done — metastable state established: retry storm is self-sustaining under permanent capacity restraint\n"
         )
 
-    @mark_fault_injected
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         print("== Fault Recovery (Hard Reboot) ==")
+        try:
+            self._restore_application()
+        finally:
+            if hasattr(self, "wrk"):
+                self.wrk.cleanup_cpu_stress(wait=True)
+
+    def _restore_application(self):
         injector = VirtualizationFaultInjector(namespace=self.namespace)
 
         # 1. Restore rpc ConfigMap (removes misconfigured timeout + retries)
