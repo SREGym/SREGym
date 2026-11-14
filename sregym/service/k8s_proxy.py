@@ -356,6 +356,29 @@ def _is_proxy_subresource_request(path: str) -> bool:
     return resource in {"pods", "services", "nodes"} and _object_subresource(path) == "proxy"
 
 
+def _is_node_proxy_request(path: str) -> bool:
+    """Return whether a request reaches a kubelet, which serves every pod on its node, hidden or not."""
+    resource, _ = _resource_request(path)
+    return resource == "nodes" and _object_subresource(path) == "proxy"
+
+
+def _is_credential_request(path: str, method: str, body: bytes | None, content_type: str) -> bool:
+    """Return whether a request mints a credential that could be used without this proxy."""
+    resource, _ = _resource_request(path)
+    if resource == "serviceaccounts" and _object_subresource(path) == "token":
+        return method == "POST"
+    # A server-side apply PATCH creates the Secret when it does not exist.
+    if resource == "secrets" and method in {"POST", "PUT", "PATCH"} and body:
+        data = _decode_mutation(body, content_type)
+        if isinstance(data, dict):
+            annotations = (data.get("metadata") or {}).get("annotations") or {}
+            return (
+                data.get("type") == "kubernetes.io/service-account-token"
+                or "kubernetes.io/service-account.name" in annotations
+            )
+    return False
+
+
 def _is_exec_or_attach_request(path: str) -> bool:
     """Return whether a request opens an exec/attach stream into a pod."""
     resource, _ = _resource_request(path)
@@ -765,6 +788,10 @@ class KubernetesAPIProxy:
                     self.send_error(403, "Forbidden: cluster outbound policy changes are disabled in filtered mode")
                     return
 
+                if _is_node_proxy_request(path):
+                    self.send_error(403, "Forbidden: Proxying to a node is not allowed")
+                    return
+
                 if restrict_network_access and _is_proxy_subresource_request(path):
                     self.send_error(403, "Forbidden: Proxying through a workload's status is not allowed")
                     return
@@ -804,6 +831,9 @@ class KubernetesAPIProxy:
                 body = self.rfile.read(content_length) if content_length > 0 else None
 
                 try:
+                    if _is_credential_request(path, method, body, self.headers.get("Content-Type", "")):
+                        self.send_error(403, "Forbidden: Minting cluster credentials is not allowed")
+                        return
                     workload_inspection = self._validate_mutation(
                         path,
                         method,
