@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 from sregym.service.apps.tidb_cluster_operator import TiDBClusterDeployer
@@ -8,6 +9,12 @@ class TiDBClusterDeployHelper:
 
     @classmethod
     def running_cluster(self):
+        # The between-problem reset can remove the operator, CRDs and cluster, so re-check.
+        if self._ready:
+            found = subprocess.run(
+                ["kubectl", "get", "tidbcluster", "basic", "-n", "tidb-cluster"], capture_output=True
+            )
+            self._ready = found.returncode == 0
         if not self._ready:
             base_dir = Path(__file__).parent.parent
             meta_path = base_dir / "service" / "metadata" / "tidb_metadata.json"
