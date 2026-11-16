@@ -83,7 +83,9 @@ spec:
             cpu: 100m
             memory: 256Mi
           limits:
-            memory: 1Gi
+            # Retained spans and concurrent query copies share this budget.
+            # See README.md for the observed failure and capacity limits.
+            memory: 2Gi
         ports:
         - containerPort: 5775
           protocol: UDP
