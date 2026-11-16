@@ -39,7 +39,11 @@ def run_preflight() -> None:
     # drop ANTHROPIC_API_KEY for this subprocess so the Claude CLI authenticates
     # via OAuth (and the preflight tests the same path the actual run uses).
     env = os.environ.copy()
-    if env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+    if os.environ["AGENT_MODEL_ID"].startswith("bedrock/"):
+        env["CLAUDE_CODE_USE_BEDROCK"] = "1"
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    elif env.get("CLAUDE_CODE_OAUTH_TOKEN"):
         env.pop("ANTHROPIC_API_KEY", None)
 
     command = ["claude", "-p", "say ok", "--model", m]

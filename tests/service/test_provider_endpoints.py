@@ -212,3 +212,23 @@ def test_claude_code_clients_reach_the_anthropic_api(agent):
     policy = InternetPolicy.from_mode("filtered", agent_name=agent, model_id="anthropic/claude-opus-5-5")
 
     assert provider_endpoint_rules(policy, {"ANTHROPIC_API_KEY": "secret"}) == (EndpointRule("api.anthropic.com", 443),)
+
+
+@pytest.mark.parametrize(
+    ("agent", "model"),
+    [
+        ("claudecode", "bedrock/us.anthropic.claude-sonnet-5"),
+        ("claudecode_radar", "bedrock/us.anthropic.claude-sonnet-5"),
+        ("codex", "bedrock/us.openai.gpt-5.5"),
+    ],
+)
+def test_bedrock_models_allow_only_bedrock_in_the_region(agent, model):
+    # Claude Code and Codex call Bedrock for bedrock/<inference-profile> models, never the vendor API.
+    policy = InternetPolicy.from_mode("filtered", agent_name=agent, model_id=model)
+
+    rules = provider_endpoint_rules(policy, {"AWS_REGION": "us-west-2", "ANTHROPIC_API_KEY": "judge-key"})
+
+    assert rules == (
+        EndpointRule("bedrock-runtime.us-west-2.amazonaws.com", 443),
+        EndpointRule("sts.us-west-2.amazonaws.com", 443),
+    )
