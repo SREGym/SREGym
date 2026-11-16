@@ -281,11 +281,15 @@ class MCPServer:
                 "--address",
                 "0.0.0.0",
             ]
+            # DEVNULL, not PIPE: kubectl prints a line per connection
+            # ("Handling connection for 9954"), and nothing ever read the
+            # pipes. After ~2,175 connections the ~64 KiB pipe buffer filled,
+            # kubectl blocked writing its next log line, and the forward
+            # silently stopped answering for the rest of the run (#1195).
             self.port_forward_process = subprocess.Popen(
                 command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             # Accept the forward once it serves traffic, not once the process
             # exists. `kubectl port-forward` stays alive while forwarding to a
