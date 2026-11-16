@@ -88,8 +88,6 @@ def test_start_port_forward_waits_for_traffic_before_accepting(monkeypatch):
     assert s._is_port_forward_healthy.call_count == 3
     s.stop_port_forward.assert_not_called()
     assert mcp_server.os.environ["MCP_SERVER_PORT"] == "9954"
-    # DEVNULL, not PIPE: nothing reads kubectl's per-connection output, so a
-    # pipe fills after ~2k connections and kubectl blocks on write (#1195).
     mcp_server.subprocess.Popen.assert_called_once_with(
         ["kubectl", "port-forward", "svc/mcp-server", "9954:9954", "-n", "sregym", "--address", "0.0.0.0"],
         stdout=subprocess.DEVNULL,
