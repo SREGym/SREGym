@@ -786,18 +786,10 @@ def _firewall_fix(ports: list[str], run: Runner) -> str:
 
 
 def _known_problem_ids() -> list[str]:
-    """Every problem id a run accepts for --problem.
+    """Every problem id a run accepts for --problem. Needs no kubeconfig."""
+    from sregym.conductor.problems.registry import ProblemRegistry
 
-    ProblemRegistry() ends by creating a KubeCtl, which exits the process when there is no
-    kubeconfig. The ids do not need the cluster, so stand in for it: this check must still
-    work, and report, when the cluster is the thing that is broken.
-    """
-    from unittest import mock
-
-    from sregym.conductor.problems import registry
-
-    with mock.patch.object(registry, "KubeCtl"):
-        return registry.ProblemRegistry().get_problem_ids(all=True)
+    return ProblemRegistry().get_problem_ids(all=True)
 
 
 def _is_opencode_local_model(agent: str, model: str) -> bool:

@@ -1,5 +1,6 @@
 # ruff: noqa: I001
 
+from functools import cached_property
 from pathlib import Path
 
 import yaml
@@ -311,8 +312,12 @@ class ProblemRegistry:
         if duplicates:
             raise ValueError(f"SLO problem IDs already registered: {', '.join(sorted(duplicates))}")
         self.PROBLEM_REGISTRY.update(slo_entries)
-        self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
+
+    @cached_property
+    def kubectl(self) -> KubeCtl:
+        # Built on first use: listing problems must work without a kubeconfig.
+        return KubeCtl()
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
