@@ -12,6 +12,7 @@ import sregym.conductor.conductor as conductor_module
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.registry import ProblemRegistry
+from sregym.utils.decorators import mark_fault_injected
 
 
 class _App:
@@ -48,9 +49,11 @@ class _NoClusterProblem(Problem):
         super().__init__(_App(self.log))
         self.mitigation_oracle = _MitigationOracle(self.log)
 
+    @mark_fault_injected
     def inject_fault(self):
         self.log.append("inject")
 
+    @mark_fault_injected
     def recover_fault(self):
         self.log.append("recover")
 
