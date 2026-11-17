@@ -316,16 +316,22 @@ class ProblemRegistry:
 
     @cached_property
     def kubectl(self) -> KubeCtl:
-        # Built on first use: listing problems must work without a kubeconfig.
+        # Built on first use: listing problems, or running one that does not
+        # use the cluster, must work without a kubeconfig.
         return KubeCtl()
+
+    def uses_cluster(self, problem_id: str) -> bool:
+        """Whether the problem runs on the test cluster. Factory entries (lambdas, partials) do."""
+        return getattr(self.PROBLEM_REGISTRY.get(problem_id), "uses_cluster", True)
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
 
-        is_emulated_cluster = self.kubectl.is_emulated_cluster()
-        if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
-            raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
+        if self.uses_cluster(problem_id):
+            is_emulated_cluster = self.kubectl.is_emulated_cluster()
+            if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
+                raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
 
         return self.PROBLEM_REGISTRY.get(problem_id)()
 

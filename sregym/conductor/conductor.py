@@ -70,6 +70,9 @@ class ConductorConfig:
     stages: tuple[str, ...] | None = None
     baseline_override_s: int | None = None  # overrides per-problem baseline_duration_s when set
     propagation_override_s: int | None = None  # overrides per-problem propagation_duration_s when set
+    # False when no selected problem uses the test cluster: the conductor then
+    # needs no kubeconfig and builds no cluster clients, proxy or egress boundary.
+    uses_cluster: bool = True
 
     @property
     def restrict_network_access(self) -> bool:
@@ -95,26 +98,27 @@ class Conductor:
 
         # core services
         self.problems = ProblemRegistry()
-        self.kubectl = KubeCtl()
-        self.prometheus = Prometheus()
-        self.jaeger = Jaeger()
-        self.otel_collector = OtelCollector()
-        self.loki = Loki()
-        self.mcp_server = MCPServer(restrict_network_access=self.config.restrict_network_access)
         self.apps = AppRegistry()
         self.agent_name = None
-
-        self.cluster_state = ClusterStateManager(self.kubectl)
-        self.cluster_egress = ClusterEgressBoundary(self.kubectl)
         self._baseline_captured = False
-
-        # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
-        self.k8s_proxy = KubernetesAPIProxy(
-            listen_port=self.config.k8s_proxy_listen_port,
-            listen_host=self.config.k8s_proxy_listen_host,
-            restrict_network_access=self.config.restrict_network_access,
-        )
         self._agent_kubeconfig_path: str | None = None
+
+        if self.config.uses_cluster:
+            self.kubectl = KubeCtl()
+            self.prometheus = Prometheus()
+            self.jaeger = Jaeger()
+            self.otel_collector = OtelCollector()
+            self.loki = Loki()
+            self.mcp_server = MCPServer(restrict_network_access=self.config.restrict_network_access)
+            self.cluster_state = ClusterStateManager(self.kubectl)
+            self.cluster_egress = ClusterEgressBoundary(self.kubectl)
+
+            # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
+            self.k8s_proxy = KubernetesAPIProxy(
+                listen_port=self.config.k8s_proxy_listen_port,
+                listen_host=self.config.k8s_proxy_listen_host,
+                restrict_network_access=self.config.restrict_network_access,
+            )
 
         self.problem_id: str | None = None
         self.problem = None
@@ -170,6 +174,9 @@ class Conductor:
         Start the Kubernetes API proxy that hides chaos engineering namespaces.
         Should be called before launching agents.
         """
+        if not self.config.uses_cluster:
+            self.logger.info("No selected problem uses the test cluster; no Kubernetes API proxy")
+            return
         self.logger.info("Starting Kubernetes API filtering proxy...")
         if self.config.internet_policy.is_filtered:
             self.cluster_egress.start()
@@ -185,6 +192,8 @@ class Conductor:
 
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
+        if not self.config.uses_cluster:
+            return
         self.logger.info("Stopping Kubernetes API filtering proxy...")
         try:
             self.k8s_proxy.stop()
@@ -196,7 +205,8 @@ class Conductor:
 
     def clear_cluster_egress_boundary(self):
         """Remove a policy left by a previously interrupted filtered run."""
-        self.cluster_egress.stop()
+        if self.config.uses_cluster:
+            self.cluster_egress.stop()
 
     def get_agent_kubeconfig_path(self) -> str | None:
         """
@@ -760,8 +770,9 @@ class Conductor:
         self._build_stage_sequence()
         self._preflight_active_oracles()
 
-        with self._phase("fix_kubernetes"):
-            self.fix_kubernetes()
+        if self.problem.uses_cluster:
+            with self._phase("fix_kubernetes"):
+                self.fix_kubernetes()
 
         self.logger.info("Undeploying app leftovers...")
         with self._phase("undeploy_leftovers"):
@@ -769,7 +780,10 @@ class Conductor:
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
         with self._phase("deploy"):
-            self.deploy_app()
+            if self.problem.uses_cluster:
+                self.deploy_app()
+            else:
+                self.app.deploy()
         self.logger.info("App deployed.")
 
         baseline = (
