@@ -33,6 +33,7 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.apps.gitea.mysql_failover import GiteaMySQLRegionalFailoverProblem
 from sregym.conductor.problems.apps.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
 from sregym.conductor.problems.apps.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
 from sregym.conductor.problems.apps.gitlab.notification_unannounced import (
@@ -42,6 +43,7 @@ from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
 from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
 from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import FrappeWritesAndQueueOOM
+from sregym.conductor.problems.apps.workspace.gateway_cascade import WorkspaceGatewayCascadeProblem
 from sregym.conductor.problems.apps.saleor.statement_timeout import SaleorCheckoutStatementTimeoutCanary
 from sregym.conductor.problems.apps.slack_spine.lock_leaks import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
 from sregym.conductor.problems.apps.slack_spine.store_consistency import SlackLoginsUnreadSendsAllSlow
@@ -213,7 +215,11 @@ class ProblemRegistry:
             ),
             "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittentProblem(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAuditProblem(scale_tier="replicated"),
+            "gitea_mysql_regional_failover_small": lambda: GiteaMySQLRegionalFailoverProblem(scale_tier="small"),
+            "gitea_mysql_regional_failover_large": lambda: GiteaMySQLRegionalFailoverProblem(scale_tier="large"),
             "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
+            "workspace_gateway_cascade_single": lambda: WorkspaceGatewayCascadeProblem(scale_tier="single"),
+            "workspace_gateway_cascade_replicated": lambda: WorkspaceGatewayCascadeProblem(scale_tier="replicated"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,

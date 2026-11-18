@@ -283,9 +283,8 @@ class MCPServer:
             ]
             self.port_forward_process = subprocess.Popen(
                 command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             # Accept the forward once it serves traffic, not once the process
             # exists. `kubectl port-forward` stays alive while forwarding to a

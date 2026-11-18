@@ -90,9 +90,8 @@ def test_start_port_forward_waits_for_traffic_before_accepting(monkeypatch):
     assert mcp_server.os.environ["MCP_SERVER_PORT"] == "9954"
     mcp_server.subprocess.Popen.assert_called_once_with(
         ["kubectl", "port-forward", "svc/mcp-server", "9954:9954", "-n", "sregym", "--address", "0.0.0.0"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
 
