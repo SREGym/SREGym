@@ -317,14 +317,13 @@ To add a new problem:
    collaborator post this PR comment:
 
    ```text
-   /evaluate-problem <problem_id> [3|5] [deepseek-v4.1-flash-1017|claude-opus-5-5|claude-sonnet-5-5|glm-5.3-flash]
+   /evaluate-problem <problem_id> [3|5] [claude-opus-5-5|claude-sonnet-5-5|deepseek-v4.1-flash-1017|glm-5.3-flash]
    ```
 
-   By default the workflow runs the Codex harness on `deepseek-v4.1-flash-1017`
-   through NCSA Lumen for five attempts. Name `claude-opus-5-5` for the final
-   check of a problem, which runs Claude Code through the Anthropic API for
-   three attempts. Name `glm-5.3-flash` to run Codex against the Z.ai Coding
-   Plan. When the requested provider is unusable (for example, when its
+   By default the workflow runs Claude Code on `claude-opus-5-5` through the
+   Anthropic API for three attempts. Name `deepseek-v4.1-flash-1017` to run the
+   Codex harness through NCSA Lumen for five attempts, or `glm-5.3-flash` to
+   run Codex against the Z.ai Coding Plan. When the requested provider is unusable (for example, when its
    credits are spent, or the Lumen model cannot make tool calls), the run falls
    back to Lumen, then Z.ai, then the Cursor CLI, and the report says why. Both
    optional values can be omitted independently. The workflow publishes diagnosis, mitigation, and overall
