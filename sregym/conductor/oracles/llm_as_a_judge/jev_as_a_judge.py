@@ -106,17 +106,38 @@ def question_key(qid: str) -> str:
 
 
 def parse_expectation(text: str) -> dict[str, str]:
-    """'[fault_spec] component=X; namespace=Y || description' -> {component, namespace, description}."""
+    """Parse one canonical fault spec; preserve unsupported references as plain text."""
+    original = {"description": text.strip()}
+    if not text.lstrip().startswith("[fault_spec]") or text.count("[fault_spec]") != 1:
+        return original
     spec, sep, desc = text.partition("||")
-    if not sep:
-        return {"description": text.strip()}
+    if not sep or not desc.strip():
+        return original
     out = {}
     for part in re.sub(r"^\s*\[fault_spec\]\s*", "", spec).split(";"):
         key, eq, value = part.partition("=")
-        if eq and value.strip():
-            out[key.strip()] = value.strip()
+        key = key.strip()
+        if not eq or not value.strip() or key not in {"component", "namespace"} or key in out:
+            return original
+        out[key] = value.strip()
+    if set(out) != {"component", "namespace"}:
+        return original
     out["description"] = desc.strip()
     return out
+
+
+def supports_expectation(text: str) -> bool:
+    """The calibrated Jev questions require exactly one complete, structured fault reference."""
+    return set(parse_expectation(text)) == {"component", "namespace", "description"}
+
+
+def require_supported_expectation(text: str) -> None:
+    """Reject unsupported grading input instead of turning it into a model verdict."""
+    if not supports_expectation(text):
+        raise ValueError(
+            "Jev-only grading requires one complete [fault_spec] reference. "
+            "Use --judge-mode mixed or llm for compound or unstructured references."
+        )
 
 
 @dataclass
@@ -180,6 +201,7 @@ class JevAsAJudge:
     def ask(self, solution: str, expectation: str) -> dict[str, float]:
         """P(yes) per checklist question id, from one Jev request."""
         self.resolved_model = None
+        require_supported_expectation(expectation)
         state = {"ground_truth": parse_expectation(expectation), "diagnosis": solution}
         response = self.client.system_one(state, self.questions(), model=self.model)
         self.resolved_model = response.model

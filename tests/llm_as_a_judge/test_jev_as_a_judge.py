@@ -12,11 +12,23 @@ from sregym.conductor.oracles.llm_as_a_judge.jev_as_a_judge import (
     judge_mode,
     parse_expectation,
     question_key,
+    supports_expectation,
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 
 EXPECTED = "[fault_spec] component=deployment/cart; namespace=shop || cart reads the wrong REDIS_ADDR port."
 CALIBRATED_MODEL = "jev-1.14.0"
+UNSUPPORTED_EXPECTATIONS = [
+    "plain text",
+    "plain text with a shell command: first || second",
+    "Fault 1:\n" + EXPECTED,
+    EXPECTED + "\nFault 2:\n[fault_spec] component=deployment/frontend; namespace=hotel || Bad image tag.",
+    "[fault_spec] component=deployment/cart || Wrong Redis port.",
+    "[fault_spec] namespace=shop || Wrong Redis port.",
+    "[fault_spec] component=deployment/cart; namespace=shop || ",
+    "[fault_spec] component=deployment/cart; component=deployment/redis; namespace=shop || Wrong Redis port.",
+    "[fault_spec] component=deployment/cart; namespace=shop; extra=unknown || Wrong Redis port.",
+]
 
 
 class FakeJev:
@@ -245,3 +257,83 @@ def test_native_sdk_transport_checks_resolved_model_without_network(response_mod
             with pytest.raises(ValueError, match="calibrated thresholds require"):
                 judge.judge("cart uses the wrong port", EXPECTED, "jev")
     assert requests[0]["model"] == CALIBRATED_MODEL
+
+
+@pytest.mark.parametrize("expected", UNSUPPORTED_EXPECTATIONS)
+def test_unsupported_reference_is_preserved_without_a_partial_parse(expected):
+    assert parse_expectation(expected) == {"description": expected.strip()}
+    assert supports_expectation(expected) is False
+
+
+@pytest.mark.parametrize("expected", UNSUPPORTED_EXPECTATIONS)
+def test_mixed_mode_sends_unsupported_references_to_the_llm_without_asking_jev(monkeypatch, expected):
+    jev = FakeJev(0.99)
+    o = LLMAsAJudgeOracle(None, expected, mode="mixed", jev_as_a_judge=JevAsAJudge(client=jev))
+    calls = []
+
+    def evaluate(solution):
+        calls.append((solution, o.expected))
+        return {"success": False, "judgment": "False"}
+
+    monkeypatch.setattr(o, "_evaluate_llm", evaluate)
+    result = o.evaluate("the submitted diagnosis")
+    assert calls == [("the submitted diagnosis", expected)]
+    assert jev.calls == [] and result["success"] is False
+    assert result["jev"]["skip_reason"] == "unsupported_expectation"
+    assert result["jev"]["sent_to_llm"] is True and result["jev"]["model"] is None
+    assert "score" not in result["jev"]
+
+
+@pytest.mark.parametrize("expected", UNSUPPORTED_EXPECTATIONS)
+def test_jev_only_rejects_unsupported_references_during_construction(monkeypatch, expected):
+    def forbidden(**_):
+        pytest.fail("Unsupported Jev-only input must not construct an LLM judge")
+
+    monkeypatch.setattr("sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle.DiagnosisJudge", forbidden)
+    jev = FakeJev(0.99)
+    with pytest.raises(ValueError, match="Use --judge-mode mixed or llm"):
+        LLMAsAJudgeOracle(None, expected, mode="jev", jev_as_a_judge=JevAsAJudge(client=jev))
+    assert jev.calls == []
+
+
+def test_direct_jev_call_rejects_compound_input_without_a_request():
+    jev = FakeJev(0.99)
+    with pytest.raises(ValueError, match="one complete"):
+        JevAsAJudge(client=jev).judge("the submitted diagnosis", UNSUPPORTED_EXPECTATIONS[3], "mixed")
+    assert jev.calls == []
+
+
+def test_actual_compound_problem_keeps_the_complete_reference_for_llm_grading(monkeypatch):
+    from unittest.mock import Mock
+
+    from sregym.conductor.oracles.llm_as_a_judge.judge import JudgmentResult
+    from sregym.conductor.problems.base import Problem
+    from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures
+
+    monkeypatch.setenv("JUDGE_MODE", "mixed")
+    monkeypatch.setattr(
+        "sregym.conductor.problems.multiple_failures.CompositeApp", lambda _: SimpleNamespace(namespace="shop")
+    )
+    second = Problem.build_structured_root_cause(
+        component="deployment/frontend", namespace="hotel", description="frontend uses an unavailable image tag."
+    )
+    problems = [
+        SimpleNamespace(app=SimpleNamespace(), namespace=namespace, root_cause=expected)
+        for namespace, expected in [("shop", EXPECTED), ("hotel", second)]
+    ]
+    problem = MultipleIndependentFailures(problems)
+    assert not supports_expectation(problem.root_cause)
+    assert EXPECTED in problem.root_cause and second in problem.root_cause
+    oracle = problem.diagnosis_oracle
+    llm = Mock(
+        return_value=SimpleNamespace(
+            verdict=JudgmentResult.TRUE, composite_score=1.0, reasoning="both faults identified", dimensions=[]
+        )
+    )
+    monkeypatch.setattr(oracle.judge, "judge_detailed", llm)
+    monkeypatch.setattr(oracle.jev, "ask", lambda *_: pytest.fail("Compound references must bypass Jev"))
+    submission = "cart has the wrong Redis port and frontend uses an unavailable image"
+    result = oracle.evaluate(submission)
+    assert result["success"] is True
+    llm.assert_called_once_with(solution=submission, expectation=problem.root_cause)
+    assert result["jev"]["skip_reason"] == "unsupported_expectation"

@@ -1,7 +1,13 @@
 """LLM-as-a-Judge Oracle for evaluating agent solutions using LLM judgment."""
 
 from sregym.conductor.oracles.base import Oracle
-from sregym.conductor.oracles.llm_as_a_judge.jev_as_a_judge import JevAsAJudge, JevVerdict, judge_mode
+from sregym.conductor.oracles.llm_as_a_judge.jev_as_a_judge import (
+    JevAsAJudge,
+    JevVerdict,
+    judge_mode,
+    require_supported_expectation,
+    supports_expectation,
+)
 from sregym.conductor.oracles.llm_as_a_judge.judge import DiagnosisJudge, JudgmentResult
 
 
@@ -28,6 +34,8 @@ class LLMAsAJudgeOracle(Oracle):
         super().__init__(problem)
         self.expected = expected if expected else ""
         self.mode = judge_mode(mode)
+        if self.mode == "jev":
+            require_supported_expectation(self.expected)
         self.jev = jev_as_a_judge or (JevAsAJudge() if self.mode != "llm" else None)
 
         self.judge = (
@@ -60,6 +68,17 @@ class LLMAsAJudgeOracle(Oracle):
 
         if self.mode == "llm":
             return self._evaluate_llm(solution)
+
+        if self.mode == "mixed" and not supports_expectation(self.expected):
+            print("== Unsupported Jev reference: using LLM-as-a-Judge ==")
+            results = self._evaluate_llm(solution)
+            results["jev"] = {
+                **self._jev_model_info(),
+                "model": None,
+                "sent_to_llm": True,
+                "skip_reason": "unsupported_expectation",
+            }
+            return results
 
         print(f"== Jev-as-a-Judge Evaluation ({self.mode}) ==")
         try:

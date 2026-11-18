@@ -1113,7 +1113,8 @@ if __name__ == "__main__":
         choices=("llm", "jev", "mixed"),
         default=None,
         help=(
-            "Diagnosis judge: the LLM judge (default), Jev alone, or Jev first with the LLM judge for the reports "
+            "Diagnosis judge: the LLM judge (default), Jev alone for single-fault references, or Jev first "
+            "with the LLM judge for the reports "
             "Jev is unsure about (thresholds in sregym/conductor/oracles/llm_as_a_judge/jev_as_a_judge.yaml). "
             "jev and mixed require TYPESAFE_API_KEY. Default: JUDGE_MODE env, else llm"
         ),

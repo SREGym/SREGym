@@ -463,6 +463,11 @@ In `jev` mode, the runner does not start an LLM judge bridge or require LLM judg
 `--agent jev_diag`, `--judge-model` is needed only in `llm` and `mixed` modes. In those modes, the existing
 LLM judge settings and preflight checks still apply.
 
+The calibrated Jev questions support one complete, structured fault reference. In `mixed` mode, compound
+and unstructured references go directly to the LLM judge, with the complete reference unchanged. Their
+results record `jev.skip_reason: unsupported_expectation` and have no Jev score. `jev` mode rejects these
+references during oracle construction; use `mixed` or `llm` for those scenarios.
+
 ## Cite This
 If our work is useful for you, please cite it:
 
