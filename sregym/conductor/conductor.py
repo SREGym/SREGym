@@ -1243,6 +1243,40 @@ class Conductor:
     def _q(value):
         return shlex.quote(str(value))
 
+    def _delete_evicted_pods(self, skip_namespace: str):
+        """Delete the pods an eviction leaves behind outside skip_namespace.
+
+        Most evicted pods end Failed. A container that exits 0 on SIGTERM ends
+        Succeeded instead (openebs-ndm-operator does), and wait_for_ready only
+        excuses Succeeded pods a Job owns, so the next deploy's openebs wait
+        times out on it. A ReplicaSet, StatefulSet or DaemonSet replaces a
+        terminated pod, so a Succeeded pod one of them owns is stale. Completed
+        Job pods are left alone.
+        """
+        self.kubectl.exec_command(
+            f"kubectl delete pods --all-namespaces "
+            f"--field-selector=status.phase=Failed,metadata.namespace!={skip_namespace} "
+            "--ignore-not-found=true"
+        )
+        output = self.kubectl.exec_command(
+            f"kubectl get pods --all-namespaces "
+            f"--field-selector=status.phase=Succeeded,metadata.namespace!={skip_namespace} -o json"
+        )
+        try:
+            pods = json.loads(output).get("items", [])
+        except (json.JSONDecodeError, AttributeError):
+            self.logger.warning(f"Could not list Succeeded pods to clean up: {output}")
+            return
+        for pod in pods:
+            metadata = pod.get("metadata", {})
+            owners = metadata.get("ownerReferences") or []
+            if not any(owner.get("kind") in ("ReplicaSet", "StatefulSet", "DaemonSet") for owner in owners):
+                continue
+            self.kubectl.exec_command(
+                f"kubectl delete pod {self._q(metadata['name'])} -n {self._q(metadata['namespace'])} "
+                "--ignore-not-found=true"
+            )
+
     def _fix_calico_route_reflector_label_drift(self):
         self.logger.info("[FIX] Calico route-reflector label drift leftovers if any")
         try:
@@ -1386,15 +1420,11 @@ class Conductor:
 
         self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
         injector.recover_disk_pressure_all()
-        # Delete Failed pods left by the eviction loop. Skip the app namespace
+        # Delete pods left by the eviction loop. Skip the app namespace
         # because undeploy_app() tears down the application namespace anyway.
         from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 
-        self.kubectl.exec_command(
-            f"kubectl delete pods --all-namespaces "
-            f"--field-selector=status.phase=Failed,metadata.namespace!={KubeletEvictionThresholdMisconfig.NAMESPACE} "
-            "--ignore-not-found=true"
-        )
+        self._delete_evicted_pods(KubeletEvictionThresholdMisconfig.NAMESPACE)
 
         self.logger.info("[FIX] Calico IPPool/strictAffinity leftover if any")
         try:
