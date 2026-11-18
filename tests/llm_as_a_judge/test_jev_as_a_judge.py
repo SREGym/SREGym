@@ -204,6 +204,15 @@ def test_empty_diagnosis_does_not_reuse_previous_response_model(monkeypatch):
     assert result["success"] is False and result["jev"]["model"] is None
 
 
+def test_jev_only_does_not_construct_an_llm_judge(monkeypatch):
+    def forbidden(**_):
+        pytest.fail("Jev-only mode must not construct an LLM judge")
+
+    monkeypatch.setattr("sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle.DiagnosisJudge", forbidden)
+    o = LLMAsAJudgeOracle(None, EXPECTED, mode="JEV", jev_as_a_judge=JevAsAJudge(client=FakeJev(0.9)))
+    assert o.judge is None and o.evaluate("cart uses the wrong port")["success"] is True
+
+
 @pytest.mark.parametrize("response_model", [CALIBRATED_MODEL, "jev-1.13.0"])
 def test_native_sdk_transport_checks_resolved_model_without_network(response_model):
     import json

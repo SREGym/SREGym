@@ -27,17 +27,20 @@ class LLMAsAJudgeOracle(Oracle):
     ):
         super().__init__(problem)
         self.expected = expected if expected else ""
-        self.mode = mode or judge_mode()
+        self.mode = judge_mode(mode)
         self.jev = jev_as_a_judge or (JevAsAJudge() if self.mode != "llm" else None)
 
-        # Initialize the LLM judge
-        self.judge = DiagnosisJudge(
-            provider=provider,
-            model_name=model_name,
-            url=url,
-            api_key=api_key,
-            temperature=temperature,
-            max_tokens=max_tokens,
+        self.judge = (
+            DiagnosisJudge(
+                provider=provider,
+                model_name=model_name,
+                url=url,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            if self.mode != "jev"
+            else None
         )
 
     def evaluate(self, solution, duration=None) -> dict:
@@ -136,6 +139,8 @@ class LLMAsAJudgeOracle(Oracle):
         results = {}
 
         try:
+            if self.judge is None:
+                raise RuntimeError("The LLM judge is disabled in Jev-only mode")
             # Get detailed judgment from DiagnosisJudge using root-cause-only ground truth
             report = self.judge.judge_detailed(
                 solution=solution,

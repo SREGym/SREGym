@@ -325,7 +325,7 @@ SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings dire
 | CLI Flag | Default | Purpose |
 |----------|---------|---------|
 | `--model` | `gpt-5` | Sets both agent and judge model; for `jev_diag`, the Jev model (default `jev-latest`) |
-| `--judge-model` | (same as `--model`) | Override just the judge evaluator model; required for `jev_diag` |
+| `--judge-model` | (same as `--model`) | Override the LLM judge model; required for `jev_diag` in `llm` and `mixed` modes |
 | `--judge-backend` | `api` | Judge access through the existing API endpoint, or `codex`, `claudecode`, `copilot`, or `cursor` |
 | `--judge-mode` | `llm` | Diagnosis judge: LLM-as-a-Judge (`llm`), Jev-as-a-Judge (`jev`), or the Mixed Judge (`mixed`) |
 
@@ -458,6 +458,10 @@ match that pin; another model requires a separately calibrated judge configurati
 the pinned model before its score can be used. In `mixed` mode, LLM-as-a-Judge also decides when the Jev request
 fails or returns another model. Jev's requested and resolved model, calibration release, score, P(yes) for each
 question, and whether the diagnosis went to LLM-as-a-Judge are recorded in the `jev` field of the results JSON.
+
+In `jev` mode, the runner does not start an LLM judge bridge or require LLM judge credentials. With
+`--agent jev_diag`, `--judge-model` is needed only in `llm` and `mixed` modes. In those modes, the existing
+LLM judge settings and preflight checks still apply.
 
 ## Cite This
 If our work is useful for you, please cite it:

@@ -18,7 +18,7 @@ from sregym.service.container_runner import DEFAULT_AGENT_IMAGE, LOCAL_AGENT_IMA
 def environment(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    for key in ("CODEX_HOME", "SREGYM_JUDGE_BRIDGE_URL"):
+    for key in ("CODEX_HOME", "SREGYM_JUDGE_BRIDGE_URL", "JUDGE_MODE"):
         monkeypatch.delenv(key, raising=False)
     for key, value in {
         "CURSOR_API_KEY": "cursor-test",
@@ -205,3 +205,83 @@ def test_cli_judge_does_not_require_or_inherit_agent_endpoint(docker, monkeypatc
         backend = get_llm_backend_for_judge()
         assert backend.api_base == "http://127.0.0.1:41001/v1" and backend.api_key == "dummy"
         assert "JUDGE_API_BASE" not in os.environ and "JUDGE_API_KEY" not in os.environ
+
+
+@pytest.mark.parametrize("backend", runtime.JUDGE_BACKENDS)
+@pytest.mark.parametrize("agent", ["codex", "jev_diag"])
+@pytest.mark.parametrize("mode_source", ["flag", "environment"])
+def test_jev_only_startup_needs_no_llm_settings(docker, monkeypatch, backend, agent, mode_source):
+    import main
+
+    class StopBeforeCluster(Exception):
+        pass
+
+    for variable in (*runtime.AUTH_VARIABLES.values(), "JUDGE_API_KEY", "JUDGE_API_BASE", "JEV_DIAG_BACKEND"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-placeholder")
+    monkeypatch.setenv("AGENT_JEV_MODEL", "")
+    if mode_source == "environment":
+        monkeypatch.setenv("JUDGE_MODE", "JEV")
+    preflight = Mock()
+    monkeypatch.setattr(main, "init_logger", lambda: None)
+    monkeypatch.setattr(main, "set_profile", lambda _: None)
+    monkeypatch.setattr(main, "LAUNCHER", Mock(_container_runner=None))
+    monkeypatch.setattr(main, "run_judge_preflight_check", preflight)
+    monkeypatch.setattr(main, "run_preflight_check", Mock())
+    monkeypatch.setattr(main, "Conductor", Mock(side_effect=StopBeforeCluster))
+    args = SimpleNamespace(
+        judge_backend=backend,
+        judge_mode="jev" if mode_source == "flag" else None,
+        use_external_harness=False,
+        force_build=False,
+        agent=agent,
+        model="jev-latest" if agent == "jev_diag" else "gpt-5",
+        judge_model=None,
+        internet_access="open",
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        stages=["diagnosis"],
+    )
+    with pytest.raises(StopBeforeCluster):
+        main.main(args)
+    assert os.environ["JUDGE_MODE"] == "jev"
+    preflight.assert_not_called()
+    runtime.subprocess.Popen.assert_not_called()
+    assert "JUDGE_API_KEY" not in os.environ and "JUDGE_API_BASE" not in os.environ
+
+
+@pytest.mark.parametrize("mode", ["llm", "mixed"])
+def test_jev_agent_still_requires_a_model_for_an_llm_judge(monkeypatch, mode):
+    import main
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-placeholder")
+    monkeypatch.setenv("AGENT_JEV_MODEL", "")
+    args = SimpleNamespace(
+        agent="jev_diag", model="jev-latest", judge_model=None, judge_mode=mode, use_external_harness=False
+    )
+    with pytest.raises(ValueError, match="--judge-model"):
+        main.main(args)
+
+
+def test_jev_only_does_not_configure_a_local_llm_endpoint(monkeypatch):
+    import main
+
+    for name in ("AGENT_API_BASE", "JUDGE_API_BASE", "JUDGE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    args = SimpleNamespace(agent="opencode", model="local/gpt-5", judge_model=None, judge_mode="jev")
+    assert main._configure_model_environment(args) == ("local/gpt-5", "local/gpt-5")
+    assert "JUDGE_API_BASE" not in os.environ and "JUDGE_API_KEY" not in os.environ
+
+
+def test_judge_mode_flag_wins_before_backend_startup(docker, monkeypatch):
+    import main
+
+    monkeypatch.setenv("JUDGE_MODE", "mixed")
+    monkeypatch.setattr(main, "init_logger", lambda: None)
+    run = Mock(return_value="finished")
+    monkeypatch.setattr(main, "_run_benchmark", run)
+    args = SimpleNamespace(judge_backend="cursor", judge_mode="jev", use_external_harness=False, force_build=False)
+    assert main.main(args) == "finished"
+    run.assert_called_once_with(args, judge_backend="api", agent_image=None)
+    runtime.subprocess.Popen.assert_not_called()

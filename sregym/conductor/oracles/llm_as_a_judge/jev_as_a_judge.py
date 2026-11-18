@@ -92,9 +92,9 @@ QUESTIONS = {
 }
 
 
-def judge_mode() -> str:
-    """The judge mode from ``JUDGE_MODE`` (``llm`` when unset)."""
-    mode = os.environ.get("JUDGE_MODE", "").strip().lower() or "llm"
+def judge_mode(override: str | None = None) -> str:
+    """Resolve a flag before ``JUDGE_MODE``, defaulting to ``llm``."""
+    mode = (override if override is not None else os.environ.get("JUDGE_MODE", "")).strip().lower() or "llm"
     if mode not in MODES:
         raise ValueError(f"JUDGE_MODE must be one of {', '.join(MODES)}, got {mode!r}")
     return mode
