@@ -3,8 +3,9 @@
 #   jev     pass iff score >= cut_jev_alone
 #   mixed   the LLM judge decides if band_low <= score <= band_high; otherwise pass iff score > band_high
 #
-# model_release is the jev-latest release the thresholds were chosen with. jev-latest is an alias and can move.
-model: jev-latest
+# Pin the version used for calibration. Moving aliases must not change benchmark grades.
+# model_release records the release timestamp used during calibration.
+model: jev-1.14.0
 model_release: "2026-10-22T02:00:00+00:00"
 band_low: 0.3278
 band_high: 0.7522

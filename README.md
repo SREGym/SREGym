@@ -453,9 +453,11 @@ export TYPESAFE_API_KEY="..."
 uv run main.py --suite sregym-lite --agent stratus --model gpt-5 --judge-mode mixed
 ```
 
-`JUDGE_JEV_MODEL` overrides the Jev model (default `jev-latest`). In `mixed` mode, LLM-as-a-Judge also decides when
-the Jev request fails. Jev's score, its P(yes) for each question, and whether the diagnosis went to LLM-as-a-Judge
-are recorded in the `jev` field of the results JSON.
+The Jev judge is pinned to `jev-1.14.0`, the version used to calibrate its thresholds. `JUDGE_JEV_MODEL` must
+match that pin; another model requires a separately calibrated judge configuration. Each response must report
+the pinned model before its score can be used. In `mixed` mode, LLM-as-a-Judge also decides when the Jev request
+fails or returns another model. Jev's requested and resolved model, calibration release, score, P(yes) for each
+question, and whether the diagnosis went to LLM-as-a-Judge are recorded in the `jev` field of the results JSON.
 
 ## Cite This
 If our work is useful for you, please cite it:

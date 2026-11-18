@@ -128,6 +128,7 @@ class JevVerdict:
     dimensions: dict[str, float] = field(default_factory=dict)  # mean P(yes) per dimension
     passed: bool | None = None  # Jev's own verdict; None when the LLM judge decides
     send_to_llm: bool = False
+    model: str | None = None  # resolved response model; None when no request was made
 
 
 class JevAsAJudge:
@@ -143,6 +144,12 @@ class JevAsAJudge:
         self._dimensions = [(d["id"], [q["id"] for q in d["questions"]]) for d in checklist["dimensions"]]
         self._weights = checklist["scoring"]["weights"]
         self.model = os.environ.get("JUDGE_JEV_MODEL", "").strip() or self.config["model"]
+        if self.model != self.config["model"]:
+            raise ValueError(
+                f"JUDGE_JEV_MODEL must match the calibrated model {self.config['model']!r}, got {self.model!r}. "
+                "A different model requires a separately calibrated judge configuration."
+            )
+        self.resolved_model: str | None = None
 
     @property
     def client(self):
@@ -172,8 +179,14 @@ class JevAsAJudge:
 
     def ask(self, solution: str, expectation: str) -> dict[str, float]:
         """P(yes) per checklist question id, from one Jev request."""
+        self.resolved_model = None
         state = {"ground_truth": parse_expectation(expectation), "diagnosis": solution}
-        response = self.client.system_one(state, self.questions())
+        response = self.client.system_one(state, self.questions(), model=self.model)
+        self.resolved_model = response.model
+        if self.resolved_model != self.model:
+            raise ValueError(
+                f"Jev returned model {self.resolved_model!r}; the calibrated thresholds require {self.model!r}"
+            )
         return {qid: float(response.answers[question_key(qid)].noul) for _, qids in self._dimensions for qid in qids}
 
     def score(self, p: dict[str, float]) -> tuple[float, dict[str, float]]:
@@ -184,7 +197,7 @@ class JevAsAJudge:
     def decide(self, p: dict[str, float], mode: str) -> JevVerdict:
         """Apply the frozen rule of ``mode`` (``jev`` or ``mixed``) to Jev's answers."""
         score, dims = self.score(p)
-        verdict = JevVerdict(score=score, p=p, dimensions=dims)
+        verdict = JevVerdict(score=score, p=p, dimensions=dims, model=self.resolved_model)
         if mode == "jev":
             verdict.passed = score >= self.config["cut_jev_alone"]
         elif mode == "mixed":
@@ -198,6 +211,7 @@ class JevAsAJudge:
     def judge(self, solution: str, expectation: str, mode: str) -> JevVerdict:
         """Ask Jev about one diagnosis and decide; an empty diagnosis fails without a request."""
         if not solution or not solution.strip():
+            self.resolved_model = None
             p = {qid: 0.0 for _, qids in self._dimensions for qid in qids}
             verdict = self.decide(p, mode)
             verdict.passed, verdict.send_to_llm = False, False  # as the LLM judge does for an empty answer

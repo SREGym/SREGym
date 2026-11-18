@@ -16,22 +16,26 @@ from sregym.conductor.oracles.llm_as_a_judge.jev_as_a_judge import (
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 
 EXPECTED = "[fault_spec] component=deployment/cart; namespace=shop || cart reads the wrong REDIS_ADDR port."
+CALIBRATED_MODEL = "jev-1.14.0"
 
 
 class FakeJev:
     """system_one answers every checklist question with `p`."""
 
-    def __init__(self, p: float, fail: bool = False):
+    def __init__(self, p: float, fail: bool = False, model: str = CALIBRATED_MODEL):
         """Answer every checklist question with `p`; raise on every request when `fail`."""
         self.p, self.fail = p, fail
+        self.model = model
         self.calls: list[tuple[dict, dict]] = []
+        self.requested_models: list[str] = []
 
-    def system_one(self, state, questions):
+    def system_one(self, state, questions, *, model):
         """Record the request and answer it the way TypeSafe's system_one does."""
         self.calls.append((state, questions))
+        self.requested_models.append(model)
         if self.fail:
             raise RuntimeError("jev down")
-        return SimpleNamespace(answers={k: SimpleNamespace(noul=self.p) for k in questions})
+        return SimpleNamespace(model=self.model, answers={k: SimpleNamespace(noul=self.p) for k in questions})
 
 
 def oracle(mode: str, jev: FakeJev, monkeypatch, llm_success: bool = True) -> tuple[LLMAsAJudgeOracle, list]:
@@ -66,6 +70,7 @@ def test_request_has_the_nine_checklist_questions():
     assert state == {"ground_truth": parse_expectation(EXPECTED), "diagnosis": "cart has the wrong port"}
     assert list(questions) == [question_key(q) for q in QUESTIONS]
     assert len(questions) == 9
+    assert jev.requested_models == [CALIBRATED_MODEL]
 
 
 def test_score_uses_checklist_weights():
@@ -160,3 +165,74 @@ def test_oracle_llm_mode_does_not_build_a_jev_as_a_judge(monkeypatch):
     monkeypatch.delenv("JUDGE_MODE", raising=False)
     o = LLMAsAJudgeOracle(problem=None, expected=EXPECTED)
     assert o.mode == "llm" and o.jev is None
+
+
+@pytest.mark.parametrize("model", ["jev-latest", "jev-preview", "jev-1.13.0"])
+def test_uncalibrated_model_override_is_rejected(monkeypatch, model):
+    monkeypatch.setenv("JUDGE_JEV_MODEL", model)
+    with pytest.raises(ValueError, match="must match the calibrated model"):
+        JevAsAJudge(client=FakeJev(0.9))
+
+
+def test_calibrated_override_is_allowed_and_resolved_model_is_recorded(monkeypatch):
+    monkeypatch.setenv("JUDGE_JEV_MODEL", CALIBRATED_MODEL)
+    o, _ = oracle("mixed", FakeJev(0.9), monkeypatch)
+    result = o.evaluate("cart uses the wrong port")
+    assert result["jev"]["model"] == CALIBRATED_MODEL
+    assert result["jev"]["requested_model"] == CALIBRATED_MODEL
+    assert result["jev"]["model_release"] == "2026-10-22T02:00:00+00:00"
+
+
+@pytest.mark.parametrize("mode", ["jev", "mixed"])
+def test_other_response_model_cannot_use_the_calibrated_thresholds(monkeypatch, mode):
+    o, llm_calls = oracle(mode, FakeJev(0.99, model="jev-1.13.0"), monkeypatch)
+    result = o.evaluate("cart uses the wrong port")
+    assert result["jev"]["model"] == "jev-1.13.0"
+    assert result["jev"]["requested_model"] == CALIBRATED_MODEL
+    assert "calibrated thresholds require" in result["jev"]["error"]
+    assert "score" not in result["jev"]
+    if mode == "jev":
+        assert result["judgment"] == "Error" and llm_calls == []
+    else:
+        assert llm_calls == ["cart uses the wrong port"] and result["jev"]["sent_to_llm"]
+
+
+def test_empty_diagnosis_does_not_reuse_previous_response_model(monkeypatch):
+    o, _ = oracle("jev", FakeJev(0.9), monkeypatch)
+    assert o.evaluate("cart uses the wrong port")["jev"]["model"] == CALIBRATED_MODEL
+    result = o.evaluate(" ")
+    assert result["success"] is False and result["jev"]["model"] is None
+
+
+@pytest.mark.parametrize("response_model", [CALIBRATED_MODEL, "jev-1.13.0"])
+def test_native_sdk_transport_checks_resolved_model_without_network(response_model):
+    import json
+
+    import httpx2
+    from typesafe_sdk import RetryPolicy, TypeSafeClient
+
+    requests = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        return httpx2.Response(
+            200,
+            json={
+                "model": response_model,
+                "usage": {"input_tokens": 10, "output_tokens": 9},
+                "answers": {key: {"type": "noul", "noul": 0.9} for key in body["questions"]},
+            },
+        )
+
+    with TypeSafeClient(
+        api_key="test-placeholder", retry=RetryPolicy(max_retries=0), transport=httpx2.MockTransport(respond)
+    ) as client:
+        judge = JevAsAJudge(client=client)
+        if response_model == CALIBRATED_MODEL:
+            verdict = judge.judge("cart uses the wrong port", EXPECTED, "jev")
+            assert verdict.passed and verdict.model == CALIBRATED_MODEL
+        else:
+            with pytest.raises(ValueError, match="calibrated thresholds require"):
+                judge.judge("cart uses the wrong port", EXPECTED, "jev")
+    assert requests[0]["model"] == CALIBRATED_MODEL

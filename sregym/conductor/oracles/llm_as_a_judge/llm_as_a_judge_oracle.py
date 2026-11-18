@@ -71,11 +71,11 @@ class LLMAsAJudgeOracle(Oracle):
                     "accuracy": 0.0,
                     "checklist": [],
                     "error": str(e),
-                    "jev": {"mode": self.mode, "model": self.jev.model, "error": str(e)},
+                    "jev": {**self._jev_model_info(), "error": str(e)},
                 }
             print("   Falling back to the LLM judge")
             results = self._evaluate_llm(solution)
-            results["jev"] = {"mode": self.mode, "model": self.jev.model, "error": str(e), "sent_to_llm": True}
+            results["jev"] = {**self._jev_model_info(), "error": str(e), "sent_to_llm": True}
             return results
 
         info = self._jev_info(verdict)
@@ -86,11 +86,20 @@ class LLMAsAJudgeOracle(Oracle):
             return results
         return self._jev_results(verdict, info)
 
+    def _jev_model_info(self) -> dict:
+        """Keep the requested pin and the actual response model separate."""
+        return {
+            "mode": self.mode,
+            "requested_model": self.jev.model,
+            "model": self.jev.resolved_model,
+            "model_release": self.jev.config["model_release"],
+        }
+
     def _jev_info(self, verdict: JevVerdict) -> dict:
         """What Jev answered and whether the report went to the LLM judge, kept under ``results["jev"]``."""
         return {
-            "mode": self.mode,
-            "model": self.jev.model,
+            **self._jev_model_info(),
+            "model": verdict.model,
             "score": verdict.score,
             "p": verdict.p,
             "sent_to_llm": verdict.send_to_llm,
