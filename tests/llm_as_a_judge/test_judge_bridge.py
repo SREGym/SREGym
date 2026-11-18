@@ -15,7 +15,8 @@ from llm_backend.init_backend import get_llm_backend_for_judge
 def bridge_server(monkeypatch):
     requests = []
 
-    def run(prompt, model, backend):
+    def run(prompt, model, backend, effort=None):
+        assert effort is None
         requests.append((prompt, model, backend))
         return '{"judgment":"True","reasoning":"Matches the supplied cause"}'
 
