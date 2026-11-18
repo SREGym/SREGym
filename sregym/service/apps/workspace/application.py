@@ -464,7 +464,7 @@ class WorkspaceApplication(MattermostApplication):
             (
                 day(128),
                 "edge-gw",
-                "Release 2026.07.2 (connection handling update for gateway hosts), staged region by "
+                "Release 2026.07.2 (fix for gateway hosts), staged region by "
                 "region over three weeks. No regressions.",
             ),
             (day(110), "mailbox", "Mailbox storage grown to 2Gi."),

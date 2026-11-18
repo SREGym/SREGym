@@ -103,8 +103,11 @@ the shared durability checks.
   narrate every ejection and redirect.
 - **The drift before the incident**: `max_ejection_percent = 100`,
   `spillover = global`, `anomaly_redirect = enabled`. The `operations-log`
-  ConfigMap records them among other ordinary changes, and also records the
-  shared-session-cache rollout 128 days earlier.
+  ConfigMap records them among other ordinary changes, and also records release
+  2026.07.2 128 days earlier, worded the way the PIR describes the July change
+  before its cause was known: "fix for gateway hosts ... No regressions." It
+  does not say which area the fix touched; the PIR only calls it the
+  connection-handling code path in hindsight, in its repair items.
 - **Mail** runs real Postfix and Dovecot (`docker/apps/workspace/mail`). The
   `maximal_queue_lifetime` of 30m is a tenant policy in the
   `mail-transport-site` ConfigMap, applied at start. Postfix's queue lives on a
@@ -205,8 +208,10 @@ read the `operations-log` entry "Release 2026.07.2 (connection handling
 update ...)", inspected the StatefulSet controller revisions, rolled back to
 2026.06.4 and removed the rejected tuning keys. Across both hardened cohorts
 the score is 2/8. The host's core count sets `worker_threads = auto`, so the
-CPU-throttling decoy is louder on large hosts (96 workers versus 8), and that
-change-log wording is the main lever left for raising the difficulty.
+CPU-throttling decoy is louder on large hosts (96 workers versus 8), and the
+change-log wording was the main signpost. It used the PIR's hindsight phrase
+("connection handling"), so it was reworded afterwards to match the PIR's
+description of the change at rollout time.
 
 The first screen is three Codex attempts on `gpt-6.1-sol` with the single
 tier, a frozen problem and grader, and a 60-minute agent budget. Results are
