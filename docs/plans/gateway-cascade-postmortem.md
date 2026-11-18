@@ -178,7 +178,8 @@ fails: it sets one worker thread, rolls back to the previous release
 recover, but the per-unit load test fails (`unit_fails_load_test`, about 200 of
 700 connections held). The reference repair passes: 1,573 external messages
 were each delivered exactly once with no bounces, and the burst, unit-load,
-unit-loss and region-loss checks held.
+unit-loss and region-loss checks held. A re-run on a dedicated Chameleon node
+with the multi-arch images (2026-11-18) gave the same three verdicts.
 
 ## Difficulty
 
@@ -221,6 +222,18 @@ moved chat to `edge-alt` and contained redirection, then failed
 `unit_fails_load_test`. Four of the five listed the StatefulSet controller
 revisions, so the release trail was in view, but none rolled back. With the
 hindsight wording gone, the hardened problem is 0/5 on a dedicated node.
+
+Fifth cohort (2026-11-18, reworded change log, multi-arch images
+`20261118-*`; frozen image `workspace-frozen4` = frozen3 plus the new lockfile;
+Chameleon `compute_skylake`, 48 threads, so `worker_threads = auto` starts 48
+workers; 5 attempts): 0/5 passes. Four attempts capped workers and failed
+`unit_fails_load_test`. One rolled back, but to 2026.07.2, the release the
+change log records as "No regressions", which is the first defective one; it
+failed `gateway_collapses_under_burst`. That is the PIR's point that rollback
+could not revert the change. With the PIR-faithful wording, Codex is 0/10
+across two hosts. The live validator passed on the same node with these
+images: no-op fails, the partial fix fails (units held 188–234 of 700) and
+the reference repair passes with 1,644 mails delivered exactly once.
 
 The first screen is three Codex attempts on `gpt-6.1-sol` with the single
 tier, a frozen problem and grader, and a 60-minute agent budget. Results are
