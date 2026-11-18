@@ -1272,10 +1272,18 @@ class Conductor:
             owners = metadata.get("ownerReferences") or []
             if not any(owner.get("kind") in ("ReplicaSet", "StatefulSet", "DaemonSet") for owner in owners):
                 continue
-            self.kubectl.exec_command(
-                f"kubectl delete pod {self._q(metadata['name'])} -n {self._q(metadata['namespace'])} "
-                "--ignore-not-found=true"
-            )
+            try:
+                # A StatefulSet can replace a terminal pod under the same name
+                # after the list. Delete only the instance we actually observed.
+                self.kubectl.core_v1_api.delete_namespaced_pod(
+                    name=metadata["name"],
+                    namespace=metadata["namespace"],
+                    body={"preconditions": {"uid": metadata["uid"]}},
+                    _request_timeout=30,
+                )
+            except ApiException as exc:
+                if exc.status not in (404, 409):
+                    raise
 
     def _fix_calico_route_reflector_label_drift(self):
         self.logger.info("[FIX] Calico route-reflector label drift leftovers if any")
