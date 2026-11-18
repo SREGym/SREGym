@@ -42,6 +42,7 @@ from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
 from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
 from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import FrappeWritesAndQueueOOM
+from sregym.conductor.problems.apps.workspace.gateway_cascade import WorkspaceGatewayCascadeProblem
 from sregym.conductor.problems.apps.saleor.statement_timeout import SaleorCheckoutStatementTimeoutCanary
 from sregym.conductor.problems.apps.slack_spine.lock_leaks import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
 from sregym.conductor.problems.apps.slack_spine.store_consistency import SlackLoginsUnreadSendsAllSlow
@@ -215,6 +216,8 @@ class ProblemRegistry:
             "gitea_mysql_regional_failover_small": lambda: GiteaMySQLRegionalFailoverProblem(scale_tier="small"),
             "gitea_mysql_regional_failover_large": lambda: GiteaMySQLRegionalFailoverProblem(scale_tier="large"),
             "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
+            "workspace_gateway_cascade_single": lambda: WorkspaceGatewayCascadeProblem(scale_tier="single"),
+            "workspace_gateway_cascade_replicated": lambda: WorkspaceGatewayCascadeProblem(scale_tier="replicated"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
