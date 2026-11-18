@@ -31,12 +31,12 @@ ENV_VARS = (
 )
 
 
-def configure(args) -> None:
+def configure(args, *, require_llm_judge: bool = True) -> None:
     """Take the Jev model from ``--model`` for ``--agent jev_diag`` and reject unsupported runs early.
 
     The model goes into AGENT_JEV_MODEL, the variable ``--jev-model`` sets for Codex decision support.
     The container runner forwards TYPESAFE_API_KEY only while it is set, so other runs never receive the
-    key. Because ``--model`` names a Jev model here, the judge needs its own ``--judge-model``.
+    key. When an LLM judge is used, it needs its own ``--judge-model`` because ``--model`` names a Jev model here.
     """
     agent = getattr(args, "agent", None)
     if agent not in AGENT_NAMES or getattr(args, "use_external_harness", False):
@@ -44,7 +44,7 @@ def configure(args) -> None:
     model = (getattr(args, "model", None) or DEFAULT_MODEL).strip()
     if not model:
         raise ValueError(f"--model must name a Jev model for --agent {agent}")
-    if not getattr(args, "judge_model", None):
+    if require_llm_judge and not getattr(args, "judge_model", None):
         raise ValueError(f"--agent {agent} takes the Jev model from --model; set the judge's model with --judge-model")
     if os.environ.get("JEV_DIAG_BACKEND", "").strip() == "openai_decisions":
         if not os.environ.get("DECISIONS_OPENAI_API_KEY", "").strip():

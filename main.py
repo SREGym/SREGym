@@ -31,6 +31,7 @@ from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.oracles.llm_as_a_judge.jev_as_a_judge import judge_mode as configured_judge_mode
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
@@ -155,10 +156,12 @@ def _normalize_opencode_local_model_for_litellm(model: str) -> str:
 
 
 def _configure_model_environment(args) -> tuple[str, str]:
+    mode = configured_judge_mode(getattr(args, "judge_mode", None))
+    os.environ["JUDGE_MODE"] = mode
     agent_model = args.model or DEFAULT_AGENT_MODEL
     raw_judge_model = args.judge_model or agent_model
     reasoning_effort = getattr(args, "reasoning_effort", None)
-    normalizes_opencode_local_judge = _is_opencode_local_model(args.agent, raw_judge_model)
+    normalizes_opencode_local_judge = mode != "jev" and _is_opencode_local_model(args.agent, raw_judge_model)
     judge_model = (
         _normalize_opencode_local_model_for_litellm(raw_judge_model)
         if normalizes_opencode_local_judge
@@ -174,8 +177,7 @@ def _configure_model_environment(args) -> tuple[str, str]:
     # The judge's effort is independent of the agent's; the flag wins over an inherited env value.
     if judge_effort := getattr(args, "judge_reasoning_effort", None):
         os.environ["JUDGE_REASONING_EFFORT"] = judge_effort
-
-    if os.environ.get("SREGYM_JUDGE_BRIDGE_URL"):
+    if mode == "jev" or os.environ.get("SREGYM_JUDGE_BRIDGE_URL"):
         return agent_model, judge_model
 
     if not getattr(args, "judge_model", None) or normalizes_opencode_local_judge:
@@ -836,13 +838,16 @@ def _run_driver_and_shutdown(
 
 
 def main(args):
+    mode = configured_judge_mode(getattr(args, "judge_mode", None))
+    os.environ["JUDGE_MODE"] = mode
     configure_jev(args)
-    configure_jev_diag(args)  # after configure_jev, which clears AGENT_JEV_MODEL unless --jev-model is set
+    # Run after configure_jev, which clears AGENT_JEV_MODEL unless --jev-model is set.
+    configure_jev_diag(args, require_llm_judge=mode != "jev")
     init_logger()
     if judge_effort := getattr(args, "judge_reasoning_effort", None):
         # Exported before the judge bridge starts so a CLI judge receives it too.
         os.environ["JUDGE_REASONING_EFFORT"] = judge_effort
-    backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
+    backend = "api" if args.use_external_harness or mode == "jev" else getattr(args, "judge_backend", "api")
     with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
         return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
 
@@ -881,6 +886,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         f"judge_backend: {judge_backend}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
         f"judge_reasoning_effort: {os.environ.get('JUDGE_REASONING_EFFORT') or 'provider default'}, "
+        f"judge_mode: {configured_judge_mode()}, "
         f"jev_model: {os.environ.get('AGENT_JEV_MODEL') or 'disabled'}, "
         f"deployment_profile: {get_profile()}, "
         f"internet_access: {internet_policy.mode.value}, "
@@ -906,7 +912,11 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         )
 
     if not args.use_external_harness:
-        run_judge_preflight_check()
+        judge_mode = configured_judge_mode()
+        if judge_mode in ("jev", "mixed") and not os.environ.get("TYPESAFE_API_KEY", "").strip():
+            raise ValueError(f"--judge-mode {judge_mode} requires TYPESAFE_API_KEY")
+        if judge_mode != "jev":  # Jev alone never calls the LLM judge
+            run_judge_preflight_check()
 
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
@@ -1081,7 +1091,10 @@ if __name__ == "__main__":
         "--judge-model",
         type=str,
         default=None,
-        help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set; required for --agent jev_diag)",
+        help=(
+            "Model for the LLM-as-a-judge evaluator (defaults to --model if not set; "
+            "required for Jev agents in llm and mixed judge modes)"
+        ),
     )
     parser.add_argument(
         "--judge-backend",
@@ -1094,6 +1107,17 @@ if __name__ == "__main__":
         choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
         default=None,
         help="Reasoning effort for Codex, Copilot, OpenCode, and Claude Code (uses the agent default when omitted)",
+    )
+    parser.add_argument(
+        "--judge-mode",
+        choices=("llm", "jev", "mixed"),
+        default=None,
+        help=(
+            "Diagnosis judge: the LLM judge (default), Jev alone for single-fault references, or Jev first "
+            "with the LLM judge for the reports "
+            "Jev is unsure about (thresholds in sregym/conductor/oracles/llm_as_a_judge/jev_as_a_judge.yaml). "
+            "jev and mixed require TYPESAFE_API_KEY. Default: JUDGE_MODE env, else llm"
+        ),
     )
     parser.add_argument(
         "--judge-reasoning-effort",

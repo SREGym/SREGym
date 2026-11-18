@@ -16,7 +16,8 @@ def _option(command: list[str], name: str) -> str:
 def test_run_agent_uses_fresh_cwds_and_rejects_empty_judgment(monkeypatch):
     seen = []
 
-    def fake_runner(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> str:
+    def fake_runner(prompt: str, model: str, cwd: Path, env: dict[str, str], *, effort: str | None = None) -> str:
+        assert effort is None
         assert cwd.is_dir()
         seen.append(cwd)
         return "judgment"
@@ -27,7 +28,7 @@ def test_run_agent_uses_fresh_cwds_and_rejects_empty_judgment(monkeypatch):
     assert len(seen) == 2 and seen[0] != seen[1]
     assert all(not cwd.exists() for cwd in seen)
 
-    monkeypatch.setitem(judge_bridge.CLI_RUNNERS, "cursor", lambda *_args: " \n")
+    monkeypatch.setitem(judge_bridge.CLI_RUNNERS, "cursor", lambda *_args, effort=None: " \n")
     with pytest.raises(RuntimeError, match="empty judgment"):
         judge_bridge._run_agent("prompt", "model", "cursor")
 
