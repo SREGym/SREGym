@@ -213,6 +213,15 @@ change-log wording was the main signpost. It used the PIR's hindsight phrase
 ("connection handling"), so it was reworded afterwards to match the PIR's
 description of the change at rollout time.
 
+Fourth cohort (2026-11-18, change-log entry reworded to "fix for gateway
+hosts"; frozen image `workspace-frozen3` = the third cohort's image with only
+`application.py` replaced; same Chameleon node type; 5 attempts): 0/5 passes.
+Every attempt diagnosed worker oversubscription (judge 0.67), capped workers,
+moved chat to `edge-alt` and contained redirection, then failed
+`unit_fails_load_test`. Four of the five listed the StatefulSet controller
+revisions, so the release trail was in view, but none rolled back. With the
+hindsight wording gone, the hardened problem is 0/5 on a dedicated node.
+
 The first screen is three Codex attempts on `gpt-6.1-sol` with the single
 tier, a frozen problem and grader, and a 60-minute agent budget. Results are
 recorded separately, with infrastructure failures excluded.
