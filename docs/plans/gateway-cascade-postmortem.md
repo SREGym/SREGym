@@ -196,6 +196,18 @@ but each attempt failed the per-unit load test: a tuned shared-table unit holds
 only 118–219 of 700 connections. Each attempt spent 1–2 minutes on diagnosis
 and 0.5–1.5 minutes on mitigation, then stopped on green signals.
 
+Third cohort (2026-11-18, same frozen image, run on a dedicated Chameleon
+`compute_cascadelake_r` node with no other workloads; 5 attempts): 2/5 passes.
+The three failures repeated the second cohort's path: 96 workers on a 150m
+quota, so CPU oversubscription; one worker, chat to `edge-alt`, containment;
+judge 0.67 and `unit_fails_load_test`. The two passes (judge 0.89 and 1.0)
+read the `operations-log` entry "Release 2026.07.2 (connection handling
+update ...)", inspected the StatefulSet controller revisions, rolled back to
+2026.06.4 and removed the rejected tuning keys. Across both hardened cohorts
+the score is 2/8. The host's core count sets `worker_threads = auto`, so the
+CPU-throttling decoy is louder on large hosts (96 workers versus 8), and that
+change-log wording is the main lever left for raising the difficulty.
+
 The first screen is three Codex attempts on `gpt-6.1-sol` with the single
 tier, a frozen problem and grader, and a 60-minute agent budget. Results are
 recorded separately, with infrastructure failures excluded.
