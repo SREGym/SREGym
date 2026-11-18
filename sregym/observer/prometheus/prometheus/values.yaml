@@ -1376,6 +1376,24 @@ extraScrapeConfigs: |
           - redpanda.slack-spine.svc.cluster.local:9644
         labels:
           namespace: slack-spine
+  - job_name: 'workspace'
+    scrape_interval: 10s
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [workspace]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        regex: metrics
+        action: keep
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+      - source_labels: [__meta_kubernetes_pod_label_region]
+        target_label: region
   - job_name: 'incident-arena-frappe'
     scrape_interval: 15s
     static_configs:
