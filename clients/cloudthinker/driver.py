@@ -25,6 +25,7 @@ from pathlib import Path
 
 import requests
 
+from clients.harness.environment import require_cluster
 from clients.harness.problem_id import resolve_problem_id
 
 # Add SREGym root to path
@@ -1059,6 +1060,7 @@ def main():
         sys.exit(1)
 
     app_info = get_app_info()
+    require_cluster(app_info, "CloudThinker")
     problem_id = resolve_problem_id()
     logger.info(f"Problem ID (harness): {problem_id}")
 

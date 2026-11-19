@@ -264,6 +264,8 @@ async def get_app():
         "descriptions": str(app_inst.description),
         # Lets agents tailor their workflow, e.g. to mitigation-only problems.
         "stages": [stage["name"] for stage in getattr(_conductor, "stage_sequence", None) or []],
+        # False tells agents the problem's environment is not the test cluster.
+        "uses_cluster": getattr(getattr(_conductor, "problem", None), "uses_cluster", True),
     }
     return info
 

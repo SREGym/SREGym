@@ -70,6 +70,7 @@ class DockerEgress:
         self._proxy_ca: Path | None = None
         self._ca_bundle: Path | None = None
         self._rules: tuple[EndpointRule, ...] = ()
+        self._idle_timeout: int | None = None
 
     def _require_ready(self) -> None:
         if not all(
@@ -166,7 +167,7 @@ class DockerEgress:
                 return []
             raise
 
-    def ensure_started(self, rules: tuple[EndpointRule, ...]) -> None:
+    def ensure_started(self, rules: tuple[EndpointRule, ...], *, idle_timeout: int | None = None) -> None:
         if self._proxy_name is not None:
             running = subprocess.run(
                 ["docker", "inspect", "-f", "{{.State.Running}}", self._proxy_name],
@@ -183,6 +184,7 @@ class DockerEgress:
         self._proxy_name = f"evaluation-egress-proxy-{suffix}"
         self._cert_volume = f"evaluation-egress-certs-{suffix}"
         self._rules = rules
+        self._idle_timeout = idle_timeout
 
         repo_root = Path(__file__).resolve().parents[2]
         addon_path = repo_root / "docker" / "egress_proxy.py"
@@ -264,12 +266,14 @@ class DockerEgress:
         Docker client copy the addon and policy into the container before
         mitmdump becomes its long-running process.
         """
+        idle_timeout = () if self._idle_timeout is None else (f"--set tcp_timeout={self._idle_timeout}",)
         return " ".join(
             (
                 f"while [ ! -f {PROXY_BOOTSTRAP_SENTINEL} ]; do sleep 0.05; done;",
                 "exec mitmdump --listen-host 0.0.0.0",
                 f"--listen-port {EGRESS_PROXY_PORT}",
                 "--set connection_strategy=lazy",
+                *idle_timeout,
                 # Keep the local Kubernetes TLS connection as an end-to-end
                 # tunnel. The agent trusts the per-run certificate from its
                 # kubeconfig; mitmproxy must not replace it with an egress CA.

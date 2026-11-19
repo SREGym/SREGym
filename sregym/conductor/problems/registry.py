@@ -119,6 +119,7 @@ from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.apps.train_ticket.f17 import TrainTicketF17
 from sregym.conductor.problems.apps.train_ticket.f22 import TrainTicketF22
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
+from sregym.conductor.problems.usage_reporting import UsageReporting
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
 from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
@@ -308,6 +309,8 @@ class ProblemRegistry:
             "slack_distractor_volume_seq_lock": SlackDistractorVolumeSeqLock,
             # Existing faults ported to Frappe, Saleor and Slack Spine.
             **PORTED_PROBLEMS,
+            # ==================== SMART METER (SAVED VM WORLD) ====================
+            "usage_reporting": UsageReporting,
         }
 # fmt: on
         slo_entries = slo_problems()
@@ -326,6 +329,14 @@ class ProblemRegistry:
     def uses_cluster(self, problem_id: str) -> bool:
         """Whether the problem runs on the test cluster. Factory entries (lambdas, partials) do."""
         return getattr(self.PROBLEM_REGISTRY.get(problem_id), "uses_cluster", True)
+
+    def agent_endpoints(self, problem_id: str) -> tuple[str, ...]:
+        """Host URLs the problem's environment serves to the agent. Factory entries serve none."""
+        return tuple(getattr(self.PROBLEM_REGISTRY.get(problem_id), "agent_endpoints", ()))
+
+    def egress_idle_timeout(self, problem_id: str) -> int | None:
+        """The egress proxy idle timeout the problem asks for. Factory entries ask for none."""
+        return getattr(self.PROBLEM_REGISTRY.get(problem_id), "egress_idle_timeout", None)
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:

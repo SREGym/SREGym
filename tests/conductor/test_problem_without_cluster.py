@@ -5,10 +5,12 @@ client built on this path fails the test.
 """
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
 import sregym.conductor.conductor as conductor_module
+from sregym.conductor import conductor_api
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.problems.base import Problem
 from sregym.conductor.problems.registry import ProblemRegistry
@@ -99,7 +101,16 @@ def test_registry_lists_and_builds_such_a_problem_without_a_kubeconfig(log):
 
     assert not registry.uses_cluster("no_cluster")
     assert isinstance(registry.get_problem_instance("no_cluster"), _NoClusterProblem)
-    # Classes and factory entries (lambdas, partials) of existing problems use the cluster.
-    existing = [problem_id for problem_id in registry.get_problem_ids(all=True) if problem_id != "no_cluster"]
-    assert all(map(registry.uses_cluster, existing))
+    # Factory entries (lambdas, partials) carry no attribute and use the cluster.
+    factories = [problem_id for problem_id, entry in registry.PROBLEM_REGISTRY.items() if not isinstance(entry, type)]
+    assert factories and all(map(registry.uses_cluster, factories))
     assert "kubectl" not in vars(registry)
+
+
+@pytest.mark.parametrize("uses_cluster", [True, False])
+def test_get_app_tells_agents_whether_the_problem_uses_the_cluster(monkeypatch, uses_cluster):
+    app = SimpleNamespace(app_name="app", namespace="ns", description="text")
+    conductor = SimpleNamespace(app=app, problem=SimpleNamespace(uses_cluster=uses_cluster))
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+
+    assert asyncio.run(conductor_api.get_app())["uses_cluster"] is uses_cluster

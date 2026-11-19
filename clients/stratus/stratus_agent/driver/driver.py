@@ -11,9 +11,6 @@ import asyncio  # noqa: E402
 import contextlib  # noqa: E402
 import json  # noqa: E402
 import time  # noqa: E402
-
-# for parsing return values from benchmark app info as python dict
-from ast import literal_eval  # noqa: E402
 from datetime import datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -29,6 +26,7 @@ init_logger()
 
 import logging  # noqa: E402
 
+from clients.harness.environment import require_cluster  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.harness.token_usage import TOKEN_METRICS_VERSION  # noqa: E402
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig  # noqa: E402
@@ -250,7 +248,8 @@ def get_app_info():
         logger.debug(f"Agent gets response: status: {response.status_code}, text: {response.text}")
         app_info_str = str(response.text)
         logger.debug(f"App info as str: {app_info_str} ")
-        app_info = literal_eval(app_info_str)
+        app_info = json.loads(app_info_str)
+        require_cluster(app_info, "Stratus")
         logger.debug(f"App info: {app_info}")
         return app_info
     except Exception as e:

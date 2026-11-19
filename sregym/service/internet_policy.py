@@ -20,6 +20,7 @@ class InternetPolicy:
     agent_name: str | None = None
     model_id: str | None = None
     additional_allowed_endpoints: tuple[str, ...] = ()
+    idle_timeout: int | None = None  # seconds the egress proxy keeps a silent connection; None = mitmproxy's default
 
     @classmethod
     def from_mode(
@@ -29,6 +30,7 @@ class InternetPolicy:
         agent_name: str | None = None,
         model_id: str | None = None,
         additional_allowed_endpoints: tuple[str, ...] | list[str] = (),
+        idle_timeout: int | None = None,
     ) -> InternetPolicy:
         endpoints = tuple(additional_allowed_endpoints)
         for endpoint in endpoints:
@@ -38,6 +40,7 @@ class InternetPolicy:
             agent_name=agent_name,
             model_id=model_id,
             additional_allowed_endpoints=endpoints,
+            idle_timeout=idle_timeout,
         )
 
     @property

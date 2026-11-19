@@ -155,6 +155,8 @@ def test_no_oracle_claims_a_harness_error_for_itself():
         "DataPlaneProgressOracle",
         # Slack Spine's index-lane port of DataPlaneProgressOracle; same table.
         "IndexLaneProgressOracle",
+        # The world could not be frozen, kept or graded, so nothing was measured.
+        "UsageMitigationOracle",
     }
     for name, table in _all_subclass_tables().items():
         if name in allowed:

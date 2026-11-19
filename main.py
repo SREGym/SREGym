@@ -638,6 +638,10 @@ def driver_loop(
                     agent=agent_to_run,
                     attempt=attempt,
                 )
+                app = getattr(conductor, "app", None)
+                if hasattr(app, "agent_workspace"):
+                    # The application's grader reads the files the agent leaves in this workspace.
+                    app.agent_workspace = run.active_dir
                 agent_proc = None
                 conductor.agent_timeout_seconds = agent_timeout
 
@@ -1060,7 +1064,18 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     problem = getattr(args, "problem", None)
     problem_selection = (problem,) if problem else PROBLEM_SETS.get(suite)
     problems = ProblemRegistry()
-    uses_cluster = any(map(problems.uses_cluster, problem_selection or problems.get_problem_ids()))
+    selected_problems = problem_selection or problems.get_problem_ids()
+    uses_cluster = any(map(problems.uses_cluster, selected_problems))
+    # One egress proxy serves the whole run, so it keeps the longest idle timeout a selected problem asks for.
+    idle_timeouts = [t for t in map(problems.egress_idle_timeout, selected_problems) if t is not None]
+    internet_policy = InternetPolicy.from_mode(
+        internet_policy.mode,
+        agent_name=internet_policy.agent_name,
+        model_id=internet_policy.model_id,
+        additional_allowed_endpoints=internet_policy.additional_allowed_endpoints
+        + tuple(url for problem_id in selected_problems for url in problems.agent_endpoints(problem_id)),
+        idle_timeout=max(idle_timeouts, default=None),
+    )
 
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
