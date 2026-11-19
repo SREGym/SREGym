@@ -205,26 +205,20 @@ def repair_customers(app):
 
 
 def repair_finance(problem):
+    """Send finance each ledger change it missed, through its own rule; skip lines still on their way."""
     app = problem.app
-    billing = {row["line_id"]: row for row in app.rows(app.billing, "select row_to_json(l) from ledger_lines l;")}
-    lines = sorted({line for line, _account in finance_differences(app)})
     present = set(ledger(app.finance))
-    for line in lines:
-        row = billing.get(line)
-        if row is None:
-            app.finance(f"delete from ledger_lines where line_id = {line};")
-        elif line in present:
+    for line in sorted({line for line, _account in finance_differences(app)} & present):
+        rows = app.rows(app.billing, f"select row_to_json(l) from ledger_lines l where line_id = {line};")
+        if rows:
+            row = rows[0]
             app.finance(
                 f"update ledger_lines set account = {sql_literal(row['account'])}, metric = {sql_literal(row['metric'])}, "
                 f"quantity = {row['quantity']}, amount = {row['amount']}, rated_at = {sql_literal(row['rated_at'])} "
                 f"where line_id = {line};"
             )
-        else:
-            app.finance(
-                "insert into ledger_lines (line_id, account, metric, quantity, amount, rated_at) values "
-                f"({line}, {sql_literal(row['account'])}, {sql_literal(row['metric'])}, {row['quantity']}, "
-                f"{row['amount']}, {sql_literal(row['rated_at'])});"
-            )
+        elif not app.core(f"select 1 from usage_events where event_id = {line};").strip():
+            app.finance(f"delete from ledger_lines where line_id = {line};")
     handoff = problem.load_state()["handoff_at"]
     for credit in app.rows(
         app.finance,

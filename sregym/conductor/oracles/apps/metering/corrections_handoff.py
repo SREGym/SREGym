@@ -163,6 +163,22 @@ class MeteringOracle(Oracle):
         ]
         return problem.corrections(plan, pause=(0.5, 1.5))
 
+    def wait_ledgers_delivered(self, timeout=900):
+        """Billing has every usage change from core, and finance has every billing line, before invoicing."""
+        app = self.app
+        deadline = time.monotonic() + timeout
+        try:
+            app.wait_caught_up(slots=["billing_usage"], timeout=timeout)
+        except TimeoutError as exc:
+            return [self.fail("billing_ledger_wrong", error=str(exc)[:500])]
+        while True:
+            missing = set(ledger(app.billing)) - set(ledger(app.finance))
+            if not missing:
+                return []
+            if time.monotonic() > deadline:
+                return [self.fail("finance_ledger_wrong", undelivered=sorted(missing)[:20], count=len(missing))]
+            time.sleep(5)
+
     # -------------------------------------------------------------- checks
     def subscription_errors(self):
         rows = self.app.customer(
@@ -194,7 +210,7 @@ class MeteringOracle(Oracle):
         )
         for line in streaming.split():
             name, enabled, pid = line.split("|")
-            if enabled != "t" or not pid:
+            if enabled not in ("t", "true") or not pid:
                 failures.append(self.fail("subscription_not_streaming", subscription=name))
         errors_after = self.subscription_errors()
         grown = {
@@ -320,9 +336,7 @@ class MeteringOracle(Oracle):
                 failures.append(self.fail("ingest_unavailable", error=str(exc)[:500]))
             with contextlib.suppress(TimeoutError):
                 app.wait_caught_up(timeout=240)
-            with contextlib.suppress(TimeoutError):
-                app.wait_caught_up(app.billing, timeout=240)
-            time.sleep(20)
+            failures += self.wait_ledgers_delivered()
             try:
                 app.invoice_run([*TENANTS, NEW_CUSTOMER[0]], f"invoice-run-{int(time.time())}")
             except Exception as exc:  # noqa: BLE001
