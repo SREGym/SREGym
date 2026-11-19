@@ -153,12 +153,12 @@ class MeteringOracle(Oracle):
     def fresh_corrections(self):
         problem = self.problem
         plan = [
-            ("pell", "void", None, False),
-            ("quill", "reduce", None, False),
-            ("larkspur", "move", "ostrava", False),
-            ("arden", "move", "larkspur", False),
-            ("vale", "move", "wren", False),
-            ("larkspur", "reduce", None, False),
+            ("pell", "void", None, None),
+            ("quill", "reduce", None, None),
+            ("larkspur", "move", "ostrava", None),
+            ("arden", "move", "larkspur", None),
+            ("vale", "move", "wren", None),
+            ("larkspur", "reduce", None, None),
             ("garnet", "void", None, True),
         ]
         return problem.corrections(plan, pause=(0.5, 1.5))
