@@ -34,6 +34,7 @@ from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorE
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.apps.gitea.mysql_failover import GiteaMySQLRegionalFailoverProblem
+from sregym.conductor.problems.apps.metering.corrections_handoff import MeteringCorrectionsHandoff
 from sregym.conductor.problems.apps.gitlab.notification_delayed_audit import GitLabNotificationDelayedAuditProblem
 from sregym.conductor.problems.apps.gitlab.notification_intermittent import GitLabNotificationIntermittentProblem
 from sregym.conductor.problems.apps.gitlab.notification_unannounced import (
@@ -217,6 +218,7 @@ class ProblemRegistry:
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAuditProblem(scale_tier="replicated"),
             "gitea_mysql_regional_failover_small": lambda: GiteaMySQLRegionalFailoverProblem(scale_tier="small"),
             "gitea_mysql_regional_failover_large": lambda: GiteaMySQLRegionalFailoverProblem(scale_tier="large"),
+            "metering_corrections_handoff": MeteringCorrectionsHandoff,
             "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
             "workspace_gateway_cascade_single": lambda: WorkspaceGatewayCascadeProblem(scale_tier="single"),
             "workspace_gateway_cascade_replicated": lambda: WorkspaceGatewayCascadeProblem(scale_tier="replicated"),
