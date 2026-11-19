@@ -194,3 +194,44 @@ def test_rejects_probe_without_expected_application_response():
     oracle = _oracle(_KubeCtl(core_v1=core_v1))
 
     assert oracle.evaluate()["success"] is False
+
+
+def test_end_to_end_request_is_retried_while_the_frontend_reconnects():
+    """inject_fault restarts the frontend under the policy, so after the policy is
+    removed the frontend only recovers on grpc-go's next reconnect attempt (its
+    120s MaxDelay plus 20% jitter). Probing once would fail a real fix."""
+    core_v1 = _CoreV1()
+    oracle = _oracle(_KubeCtl(core_v1=core_v1))
+
+    oracle.evaluate()
+
+    script = core_v1.created_pods[0][1].spec.containers[0].command[-1]
+    assert f"while [ $attempt -lt {oracle.probe_retry_attempts} ]" in script
+    assert f"sleep {oracle.probe_retry_interval_seconds}" in script
+    # The in-pod retry budget has to fit inside the oracle's own wait.
+    worst_case = oracle.probe_retry_attempts * (
+        oracle.probe_request_timeout_seconds + oracle.probe_retry_interval_seconds
+    )
+    assert worst_case <= oracle.probe_timeout_seconds
+    # A disconnected frontend fail-fasts, so only the sleeps are guaranteed to
+    # elapse -- they alone have to outlast grpc-go's jittered 120s MaxDelay.
+    assert oracle.probe_retry_attempts * oracle.probe_retry_interval_seconds >= 120 * 1.2
+
+
+def test_direct_reachability_is_not_retried():
+    """A fresh connection to the target succeeds the moment the policy is gone, so
+    retrying it would only blur the difference between fixed and still-blocked."""
+    core_v1 = _CoreV1(probe_phase="Failed", probe_logs="RECOMMENDATION_UNREACHABLE\n")
+    oracle = _oracle(_KubeCtl(core_v1=core_v1))
+
+    assert oracle.evaluate()["success"] is False
+    script = core_v1.created_pods[0][1].spec.containers[0].command[-1]
+    assert script.splitlines()[0].startswith("nc -z -w 5 ")
+    assert "RECOMMENDATION_UNREACHABLE; exit 1" in script
+
+
+def test_rejects_probe_that_exhausted_its_retries():
+    core_v1 = _CoreV1(probe_phase="Failed", probe_logs="RECOMMENDATION_STILL_FAILING\n")
+    oracle = _oracle(_KubeCtl(core_v1=core_v1))
+
+    assert oracle.evaluate()["success"] is False
