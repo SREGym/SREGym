@@ -48,7 +48,7 @@ REASONS = {
     "void": (
         "duplicate meter flush after gateway retry",
         "customer sandbox traffic billed as production",
-        "load test from our own staging key",
+        "load run from our own staging key",
         "double count during gateway failover",
     ),
     "reduce": (
