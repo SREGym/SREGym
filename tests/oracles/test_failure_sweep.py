@@ -151,6 +151,7 @@ def test_no_oracle_claims_a_harness_error_for_itself():
         "RollingUpdateMitigationOracle",
         # No probe pod means nothing was measured.
         "FeatureFlagHttpProbeMitigationOracle",
+        "CapacityGraceExpiryMitigationOracle",
         # The problem never recorded the offset to measure against.
         "DataPlaneProgressOracle",
         # Slack Spine's index-lane port of DataPlaneProgressOracle; same table.

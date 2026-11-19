@@ -1257,6 +1257,48 @@ class Conductor:
     def _q(value):
         return shlex.quote(str(value))
 
+    def _delete_evicted_pods(self, skip_namespace: str):
+        """Delete the pods an eviction leaves behind outside skip_namespace.
+
+        Most evicted pods end Failed. A container that exits 0 on SIGTERM ends
+        Succeeded instead (openebs-ndm-operator does), and wait_for_ready only
+        excuses Succeeded pods a Job owns, so the next deploy's openebs wait
+        times out on it. A ReplicaSet, StatefulSet or DaemonSet replaces a
+        terminated pod, so a Succeeded pod one of them owns is stale. Completed
+        Job pods are left alone.
+        """
+        self.kubectl.exec_command(
+            f"kubectl delete pods --all-namespaces "
+            f"--field-selector=status.phase=Failed,metadata.namespace!={skip_namespace} "
+            "--ignore-not-found=true"
+        )
+        output = self.kubectl.exec_command(
+            f"kubectl get pods --all-namespaces "
+            f"--field-selector=status.phase=Succeeded,metadata.namespace!={skip_namespace} -o json"
+        )
+        try:
+            pods = json.loads(output).get("items", [])
+        except (json.JSONDecodeError, AttributeError):
+            self.logger.warning(f"Could not list Succeeded pods to clean up: {output}")
+            return
+        for pod in pods:
+            metadata = pod.get("metadata", {})
+            owners = metadata.get("ownerReferences") or []
+            if not any(owner.get("kind") in ("ReplicaSet", "StatefulSet", "DaemonSet") for owner in owners):
+                continue
+            try:
+                # A StatefulSet can replace a terminal pod under the same name
+                # after the list. Delete only the instance we actually observed.
+                self.kubectl.core_v1_api.delete_namespaced_pod(
+                    name=metadata["name"],
+                    namespace=metadata["namespace"],
+                    body={"preconditions": {"uid": metadata["uid"]}},
+                    _request_timeout=30,
+                )
+            except ApiException as exc:
+                if exc.status not in (404, 409):
+                    raise
+
     def _fix_calico_route_reflector_label_drift(self):
         self.logger.info("[FIX] Calico route-reflector label drift leftovers if any")
         try:
@@ -1400,15 +1442,11 @@ class Conductor:
 
         self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
         injector.recover_disk_pressure_all()
-        # Delete Failed pods left by the eviction loop. Skip the app namespace
+        # Delete pods left by the eviction loop. Skip the app namespace
         # because undeploy_app() tears down the application namespace anyway.
         from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 
-        self.kubectl.exec_command(
-            f"kubectl delete pods --all-namespaces "
-            f"--field-selector=status.phase=Failed,metadata.namespace!={KubeletEvictionThresholdMisconfig.NAMESPACE} "
-            "--ignore-not-found=true"
-        )
+        self._delete_evicted_pods(KubeletEvictionThresholdMisconfig.NAMESPACE)
 
         self.logger.info("[FIX] Calico IPPool/strictAffinity leftover if any")
         try:
@@ -1449,6 +1487,14 @@ class Conductor:
             NightlyRebalanceOOM.cleanup_leftover_actor()
         except Exception as e:
             self.logger.warning(f"Could not clean up NightlyRebalanceOOM actor: {e}")
+
+        self.logger.info("[FIX] CapacityGraceExpiry controller leftover if any")
+        try:
+            from sregym.conductor.problems.capacity_grace_expiry import CapacityGraceExpiry
+
+            CapacityGraceExpiry.cleanup_leftover_controller()
+        except Exception as e:
+            self.logger.warning(f"Could not clean up CapacityGraceExpiry controller: {e}")
 
         self.logger.info("[FIX] Clock drift leftover if any")
         try:

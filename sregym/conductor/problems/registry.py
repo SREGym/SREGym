@@ -14,6 +14,7 @@ from sregym.conductor.problems.calico_route_reflector_label_drift import (
     CalicoRouteReflectorLabelDriftHotelReservation,
 )
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
+from sregym.conductor.problems.capacity_grace_expiry import CapacityGraceExpiry
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.cpu_throttling import CpuThrottling
@@ -43,6 +44,7 @@ from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.environment_ports import PORTED_PROBLEMS
 from sregym.conductor.problems.apps.frappe.desk_and_queue_outage import FrappeDeskAndQueueOutage
 from sregym.conductor.problems.apps.frappe.writes_and_queue_oom import FrappeWritesAndQueueOOM
+from sregym.conductor.problems.apps.workspace.gateway_cascade import WorkspaceGatewayCascadeProblem
 from sregym.conductor.problems.apps.saleor.statement_timeout import SaleorCheckoutStatementTimeoutCanary
 from sregym.conductor.problems.apps.slack_spine.lock_leaks import SlackDistractorVolumeSeqLock, SlackSeqLockLeak
 from sregym.conductor.problems.apps.slack_spine.store_consistency import SlackLoginsUnreadSendsAllSlow
@@ -181,6 +183,7 @@ class ProblemRegistry:
             "missing_stale_cache_fallback_long_delay_astronomy_shop": lambda: MissingStaleCacheFallbackAstronomyShop(delay="5s"),
             "namespace_memory_limit": NamespaceMemoryLimit,
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
+            "capacity_grace_expiry_hotel_reservation": lambda: CapacityGraceExpiry(faulty_service="user"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
             "postgres_lock_contention_product_catalog": PostgresLockContentionProductCatalog,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
@@ -217,6 +220,8 @@ class ProblemRegistry:
             "gitea_mysql_regional_failover_small": lambda: GiteaMySQLRegionalFailoverProblem(scale_tier="small"),
             "gitea_mysql_regional_failover_large": lambda: GiteaMySQLRegionalFailoverProblem(scale_tier="large"),
             "stripe_feature_config_single": lambda: StripeFeatureConfigProblem(scale_tier="single"),
+            "workspace_gateway_cascade_single": lambda: WorkspaceGatewayCascadeProblem(scale_tier="single"),
+            "workspace_gateway_cascade_replicated": lambda: WorkspaceGatewayCascadeProblem(scale_tier="replicated"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
