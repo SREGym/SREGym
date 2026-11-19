@@ -38,7 +38,7 @@ from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.phases import PhaseLedger
 from sregym.profile import is_svelte
-from sregym.service.apps.app_registry import AppRegistry
+from sregym.service.apps.app_registry import APPLICATIONS, AppRegistry
 from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.internet_policy import InternetPolicy
@@ -766,6 +766,7 @@ class Conductor:
         self.logger.info("Undeploying app leftovers...")
         with self._phase("undeploy_leftovers"):
             self.undeploy_app()  # Cleanup any leftovers
+            self.undeploy_other_apps()
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
         with self._phase("deploy"):
@@ -1638,6 +1639,22 @@ class Conductor:
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""
         if self.problem:
             self.problem.app.cleanup()
+
+    def undeploy_other_apps(self, timeout_s: int = 300):
+        """Delete the namespaces of registered apps other than this problem's.
+
+        A teardown cut short (a killed or stalled run) leaves an earlier problem's app
+        running; its pods and alerts then look like part of the next incident.
+        """
+        app = self.problem.app
+        keep = set(getattr(app, "namespaces", None) or [app.namespace])
+        for definition in APPLICATIONS:
+            namespace = json.loads(definition.metadata_file.read_text()).get("Namespace")
+            if not namespace or namespace in keep:
+                continue
+            if self.kubectl.exec_command(f"kubectl get namespace {namespace} --ignore-not-found -o name").strip():
+                self.logger.info(f"Deleting leftover namespace {namespace} from an earlier problem")
+                self.kubectl.exec_command(f"kubectl delete namespace {namespace} --timeout={timeout_s}s")
 
     def _wait_for_infrastructure_ready(self, name: str, is_ready: Callable[[], bool], timeout: float = 180) -> None:
         """Require functional infrastructure, not just Ready surviving pods."""
