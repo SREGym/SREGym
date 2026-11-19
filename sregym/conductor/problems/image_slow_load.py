@@ -12,6 +12,8 @@ from sregym.utils.decorators import mark_fault_injected
 class ImageSlowLoad(Problem):
     def __init__(self):
         super().__init__(app=AstronomyShop())
+        # Only clients that fetch product images with the delay header trigger the flag.
+        self.app.image_client_enabled = True
         self.kubectl = KubeCtl()
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "frontend"
