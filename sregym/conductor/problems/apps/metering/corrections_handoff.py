@@ -43,7 +43,6 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.metering.application import (
     CUSTOMER_DATABASES,
-    NEW_IMAGE,
     STREAMED,
     TENANTS,
     MeteringApplication,
@@ -339,11 +338,7 @@ class MeteringCorrectionsHandoff(Problem):
             facts = self.support_story()
             self.close_invoices(["quill", "garnet", "hollis"])
         with self.phase("patch"):
-            # Routine patching moves both publishers to the current minor release.
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                billing = pool.submit(self.app.set_server, "billing", NEW_IMAGE)
-                self.app.set_server("core", NEW_IMAGE)
-                billing.result()
+            self.app.patch_publishers()
         return {"credits": len(credits), "target": target, **facts}
 
     def seed_usage(self, batches):

@@ -1043,6 +1043,30 @@ select pg_current_wal_lsn();
         self.wait_rollout("statefulset", name)
         self.wait_pod_ready(f"{name}-0")
 
+    def patch_publishers(self):
+        """Pause the reciprocal feeds while their publisher services roll."""
+        self.billing("alter subscription billing_usage disable;")
+        self.finance("alter subscription finance_ledger disable;")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            billing = pool.submit(self.set_server, "billing", NEW_IMAGE)
+            self.set_server("core", NEW_IMAGE)
+            billing.result()
+        for pod, service in (("billing-0", "core"), ("core-0", "billing")):
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    self.command(
+                        "exec", pod, "-c", "postgres", "--", "pg_isready", "-q", "-t", "2", "-U", "postgres", "-h", service,
+                        timeout=10,
+                    )
+                    break
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(f"{service} did not accept connections from {pod} after patching") from exc
+                    time.sleep(0.5)
+        self.billing("alter subscription billing_usage enable;")
+        self.finance("alter subscription finance_ledger enable;")
+
     # ------------------------------------------------------------------ cleanup
     def remove_hidden(self):
         with contextlib.suppress(subprocess.CalledProcessError, subprocess.TimeoutExpired):
