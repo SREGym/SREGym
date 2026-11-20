@@ -977,13 +977,23 @@ def _run_driver_and_shutdown(
         _driver_error = exc
         logger.exception("Driver thread crashed")
     finally:
-        with _launcher_cleanup_lock:
-            LAUNCHER.cleanup_all()
-        if stop_event is not None and stop_event.is_set():
-            # This thread owns deployment, so its setup work has stopped before
-            # recovery starts. The main thread must not tear down concurrently.
-            cleanup_interrupted_problem(conductor)
-        request_shutdown()
+        try:
+            with _launcher_cleanup_lock:
+                LAUNCHER.cleanup_all()
+            if stop_event is not None and stop_event.is_set():
+                # This thread owns deployment, so its setup work has stopped before
+                # recovery starts. The main thread must not tear down concurrently.
+                cleanup_interrupted_problem(conductor)
+        finally:
+            try:
+                if not use_external_harness:
+                    # Keep MCP available through problem teardown, then reap only
+                    # this campaign's forward (borrowed forwards have no handle).
+                    conductor.mcp_server.stop_port_forward()
+            except Exception:
+                logger.exception("Could not stop the MCP port-forward")
+            finally:
+                request_shutdown()
 
 
 def main(args):
