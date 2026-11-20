@@ -21,7 +21,7 @@ import secrets
 import subprocess
 import time
 from collections import defaultdict
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.service.apps.metering.application import (
@@ -91,8 +91,32 @@ def ledger_rates(run):
     return {int(e): rate for e, rate in digest_rows(rows).items()}
 
 
+def parse_rate(rate):
+    """Read the numeric price and band from either version of the rate snapshot."""
+    if not rate.startswith("(") or not rate.endswith(")"):
+        return None
+    price, _, band = rate[1:-1].partition(",")
+    try:
+        unit_price = Decimal(price)
+    except InvalidOperation:
+        return None
+    if not unit_price.is_finite():
+        return None
+    return unit_price, "" if band == '""' else band
+
+
+def rate_differences(billing, finance):
+    wrong = set()
+    for line, rate in billing.items():
+        received = parse_rate(finance.get(line, ""))
+        if received is None or received != parse_rate(rate):
+            wrong.add(line)
+    return wrong
+
+
 def rate_band(rate):
-    return rate.partition(",")[2].removesuffix(")")
+    parsed = parse_rate(rate)
+    return parsed[1] if parsed is not None else ""
 
 
 def usage_charge(account, amount, rate):
@@ -526,7 +550,7 @@ class MeteringOracle(Oracle):
         billing = ledger_rates(self.app.billing)
         finance = ledger_rates(self.app.finance)
         # Closed voids remain in finance with their original invoice and offset.
-        wrong = sorted(line for line, rate in billing.items() if finance.get(line) != rate)
+        wrong = sorted(rate_differences(billing, finance))
         return [self.fail("finance_rates_wrong", lines=wrong[:20], count=len(wrong))] if wrong else []
 
     def check_statement_return(self):

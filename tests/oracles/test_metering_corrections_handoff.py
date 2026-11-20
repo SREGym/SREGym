@@ -10,6 +10,7 @@ from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     digest_rows,
     usage_charge,
 )
+from sregym.conductor.problems.apps.metering import reference_repair
 from sregym.service.apps.metering.application import ledger_conf, publications_conf
 
 
@@ -27,6 +28,43 @@ def test_differences_reports_moves_on_both_accounts():
 
 def test_digest_rows_splits_on_first_bar():
     assert digest_rows("10|abc\n11|d|e\n") == {"10": "abc", "11": "d|e"}
+
+
+@pytest.mark.parametrize(
+    ("billing_rate", "finance_rate", "matches"),
+    [
+        ("(1.5,)", "(1.5)", True),
+        ("(1.5,committed)", "(1.5)", False),
+        ("(1.5,committed)", "(1.50,committed)", True),
+        ("(1.5,)", '(1.5,"")', True),
+        ("(1.5,committed)", "(1.6,committed)", False),
+        ("(1.5,)", None, False),
+        ("(1.5,)", "(invalid,)", False),
+    ],
+)
+def test_check_rates_compares_price_and_band(billing_rate, finance_rate, matches):
+    app = SimpleNamespace(
+        billing=Mock(return_value=f"10|{billing_rate}\n"),
+        finance=Mock(return_value=f"10|{finance_rate}\n" if finance_rate is not None else ""),
+    )
+    oracle = MeteringOracle(SimpleNamespace(app=app))
+
+    assert oracle.check_rates() == ([] if matches else [oracle.fail("finance_rates_wrong", lines=[10], count=1)])
+
+
+def test_finance_repair_preserves_equivalent_rate_snapshots(monkeypatch):
+    app = SimpleNamespace(
+        billing=Mock(side_effect=["1|(1.5,)\n2|(1.5,)\n3|(1.5,committed)\n", ""]),
+        finance=Mock(return_value="1|(1.5)\n2|(1.5)\n3|(1.5)\n"),
+        rows=Mock(return_value=[]),
+    )
+    problem = SimpleNamespace(app=app, load_state=lambda: {"handoff_at": "2026-11-20T00:00:00+00:00"})
+    monkeypatch.setattr(reference_repair, "finance_differences", lambda app: [(2, "pell")])
+
+    reference_repair.repair_finance(problem)
+
+    assert "where line_id in (2,3)" in app.billing.call_args.args[0]
+    assert "rate = case when r.line_id in (3) then r.rate else f.rate end" in app.finance.call_args.args[0]
 
 
 @pytest.mark.parametrize(

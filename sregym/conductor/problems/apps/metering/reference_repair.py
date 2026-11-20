@@ -38,6 +38,7 @@ from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     copy_digest,
     finance_differences,
     ledger_rates,
+    rate_differences,
 )
 from sregym.service.apps.metering.application import extracts_conf, parse_extracts_conf, sql_literal
 
@@ -408,18 +409,20 @@ def repair_finance(problem, linked=False, wrong=()):
     billing = ledger_rates(app.billing)
     finance = ledger_rates(app.finance)
     changed = {line for line, _account in finance_differences(app)}
+    rate = "f.rate"
     if "keep_rates" not in wrong:
-        changed.update(line for line, rate in billing.items() if finance.get(line) != rate)
+        if "fill_legacy_rates" in wrong:
+            # Exercise the incorrect repair that stamps a band on legacy snapshots.
+            changed.update(line for line, snapshot in billing.items() if finance.get(line) != snapshot)
+            rate = "case when split_part(r.rate, ',', 2) = ')' then replace(r.rate, ')', 'committed)') else r.rate end"
+        elif rate_changes := rate_differences(billing, finance):
+            changed.update(rate_changes)
+            rate = f"case when r.line_id in ({ids(rate_changes)}) then r.rate else f.rate end"
     columns = "line_id, account, metric, quantity, amount, occurred_at, rated_at, rate"
     if updates := changed & billing.keys():
         rows = app.billing(
             f"copy (select {columns}::text from ledger_lines where line_id in ({ids(updates)})) to stdout;"
         )
-        rate = "r.rate"
-        if "keep_rates" in wrong:
-            rate = "f.rate"
-        elif "fill_legacy_rates" in wrong:
-            rate = "case when split_part(r.rate, ',', 2) = ')' then replace(r.rate, ')', 'committed)') else r.rate end"
         app.finance(
             f"begin;\ncreate temp table rated as select {columns} from ledger_lines with no data;\n"
             f"copy rated from stdin;\n{rows}\\.\n"
