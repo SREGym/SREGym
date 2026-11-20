@@ -531,6 +531,10 @@ class CapacityDecreaseRPCRetryStormSlack(ChannelRetryStormBase):
 class LoadSpikeRPCRetryStormSlack(ChannelRetryStormBase):
     """Trigger: a one-shot load spike of extra senders (the original: 30 s at a multiple of the base rate)."""
 
+    # Deployed with the 8-connection pool from the start (unlike CapacityDecrease, which cuts its
+    # 12-connection baseline pool only at injection). Use the same 750 ms per-try timeout as
+    # RetryStormCollapseIA so baseline jitter does not trip retries before the spike.
+    caller_mesh = {**ChannelRetryStormBase.caller_mesh, "perTryTimeoutMs": 750}
     backend_db = {"pool_size": 6, "max_overflow": 2}
     SPIKE_RPS = 60
     SPIKE_SECONDS = 30
@@ -547,7 +551,8 @@ class LoadSpikeRPCRetryStormSlack(ChannelRetryStormBase):
                 f"(ACTIVE_EVENTS=read_consistency_strict, ACL_HOLD_MS={self.backend_env['ACL_HOLD_MS']}) through a "
                 f"{self.backend_db['pool_size']}+{self.backend_db['max_overflow']}-connection pool (`roles.channel.db`), "
                 "enough for base traffic. A transient burst of sends (an extra ~"
-                f"{self.SPIKE_RPS}/s for {self.SPIKE_SECONDS} s, already over) queued resolves past the 300 ms per-try "
+                f"{self.SPIKE_RPS}/s for {self.SPIKE_SECONDS} s, already over) queued resolves past the "
+                f"{mesh['perTryTimeoutMs']} ms per-try "
                 "timeout; svc-message retried the timed-out calls while the abandoned attempts still waited for and "
                 "held channel connections, so ~3 attempts per send keep demand above the pool's capacity at base "
                 "load: the pool stays saturated, every attempt times out and sends fail with 503 "
