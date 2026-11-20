@@ -6,7 +6,8 @@ CREATE TABLE usage_events (
     metric      text NOT NULL,
     quantity    numeric(12,3) NOT NULL,
     occurred_at timestamptz NOT NULL,
-    batch_id    bigint NOT NULL
+    batch_id    bigint NOT NULL,
+    billing_period date NOT NULL
 );
 
 CREATE TABLE price_book (

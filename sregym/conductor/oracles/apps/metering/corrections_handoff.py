@@ -34,7 +34,7 @@ from sregym.service.apps.metering.application import (
     sql_literal,
 )
 
-COLUMNS = "record_id, tenant_id, metric, quantity::text, occurred_at::text, batch_id"
+COLUMNS = "record_id, tenant_id, metric, quantity::text, occurred_at::text, batch_id, billing_period"
 NEW_CUSTOMER = ("wren", "Wren Studios", "wren_usage")
 CENT = Decimal("0.01")
 #: Finance's own closed-period rule books only these reasons (finance.sql, hold_invoiced_line).
@@ -57,9 +57,16 @@ def digest_rows(text):
 
 def copy_digest(app, database, tenant):
     """Rows a customer copy has that core does not, lacks, or holds with other values."""
-    digest = f"select event_id || '|' || md5(concat_ws('|', {COLUMNS})) from usage_events"
-    truth = digest_rows(app.core(f"{digest} where tenant_id = {sql_literal(tenant)};"))
-    copy = digest_rows(app.customer(database, f"{digest};"))
+    row = f"md5(concat_ws('|', {COLUMNS}))"
+    where = f"where tenant_id = {sql_literal(tenant)}"
+    # Quill can legitimately store rows with the same event ID in different periods.
+    if database == "quill_usage":
+        copy_sql = f"select event_id || '|' || string_agg({row}, ',' order by billing_period) from usage_events"
+        copy_sql += " group by event_id;"
+    else:
+        copy_sql = f"select event_id || '|' || {row} from usage_events;"
+    truth = digest_rows(app.core(f"select event_id || '|' || {row} from usage_events {where};"))
+    copy = digest_rows(app.customer(database, copy_sql))
     return {
         "extra": sorted(int(e) for e in copy.keys() - truth.keys()),
         "missing": sorted(int(e) for e in truth.keys() - copy.keys()),
@@ -385,10 +392,14 @@ class MeteringOracle(Oracle):
                 int(e)
                 for e in app.core(f"select event_id from usage_events where tenant_id = {sql_literal(tenant)};").split()
             }
+            stray = ""
+            if database == "quill_usage":
+                stray = f"and line_id <> {self.state()['quill_period']['entering']['stray_line']}"
             reversed_ = {
                 int(e)
                 for e in app.customer(
-                    database, f"select event_id from statement_lines where kind = 'reversal' and close_id = {close};"
+                    database,
+                    f"select event_id from statement_lines where kind = 'reversal' and close_id = {close} {stray};",
                 ).split()
             }
             wrong = sorted(reversed_ & truth)
@@ -415,7 +426,7 @@ class MeteringOracle(Oracle):
             rows = app.customer(
                 database,
                 "select s.event_id || '|' || s.line_id || '|' || coalesce(u.line_id::text, '') from handoff.sealed s "
-                "left join usage_events u using (event_id) where s.correct;",
+                "left join usage_events u using (event_id, billing_period) where s.correct;",
             )
             rebooked = sorted(
                 int(e)
@@ -440,7 +451,8 @@ class MeteringOracle(Oracle):
         waived = self.state()["statement_return"]["genuine"]
         target = {
             (line, account): usage_charge(account, amount, rates.get(line, ""))
-            for line, (account, amount) in truth.items() if line != waived
+            for line, (account, amount) in truth.items()
+            if line != waived
         }
         billed = defaultdict(Decimal)
         usage_items = defaultdict(int)

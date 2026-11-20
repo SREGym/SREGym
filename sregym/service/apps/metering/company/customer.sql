@@ -2,15 +2,23 @@
 CREATE SEQUENCE statement_line_seq;
 CREATE SEQUENCE statement_close_seq;
 CREATE TABLE usage_events (
-    event_id    bigint PRIMARY KEY,
+    event_id    bigint NOT NULL,
     record_id   text NOT NULL,
     tenant_id   text NOT NULL,
     metric      text NOT NULL,
     quantity    numeric(12,3) NOT NULL,
     occurred_at timestamptz NOT NULL,
     batch_id    bigint NOT NULL,
-    line_id     bigint NOT NULL DEFAULT nextval('statement_line_seq')
-);
+    billing_period date NOT NULL,
+    line_id     bigint NOT NULL DEFAULT nextval('statement_line_seq'),
+    PRIMARY KEY (:identity_columns)
+) :partition_clause;
+\if :partition_by_period
+SELECT format('CREATE TABLE usage_events_prior PARTITION OF usage_events FOR VALUES IN (%L)',
+              (:'open_period'::date - interval '1 month')::date) \gexec
+CREATE TABLE usage_events_open PARTITION OF usage_events FOR VALUES IN (:'open_period');
+CREATE TABLE usage_events_other PARTITION OF usage_events DEFAULT;
+\endif
 CREATE INDEX usage_events_line ON usage_events (line_id);
 
 -- Every row we receive is booked once on our usage statement; a booked row
@@ -19,6 +27,7 @@ CREATE TABLE statement_lines (
     line_id     bigint NOT NULL,
     event_id    bigint NOT NULL,
     kind        text NOT NULL CHECK (kind IN ('line', 'reversal')),
+    billing_period date NOT NULL,
     tenant_id   text NOT NULL,
     metric      text NOT NULL,
     quantity    numeric(12,3) NOT NULL,
@@ -31,12 +40,12 @@ CREATE FUNCTION close_statement() RETURNS bigint LANGUAGE plpgsql SET search_pat
 DECLARE
     c bigint := nextval('statement_close_seq');
 BEGIN
-    INSERT INTO statement_lines (line_id, event_id, kind, tenant_id, metric, quantity, close_id)
-    SELECT u.line_id, u.event_id, 'line', u.tenant_id, u.metric, u.quantity, c
+    INSERT INTO statement_lines (line_id, event_id, kind, billing_period, tenant_id, metric, quantity, close_id)
+    SELECT u.line_id, u.event_id, 'line', u.billing_period, u.tenant_id, u.metric, u.quantity, c
     FROM usage_events u
     WHERE NOT EXISTS (SELECT 1 FROM statement_lines s WHERE s.line_id = u.line_id AND s.kind = 'line');
-    INSERT INTO statement_lines (line_id, event_id, kind, tenant_id, metric, quantity, close_id)
-    SELECT s.line_id, s.event_id, 'reversal', s.tenant_id, s.metric, s.quantity, c
+    INSERT INTO statement_lines (line_id, event_id, kind, billing_period, tenant_id, metric, quantity, close_id)
+    SELECT s.line_id, s.event_id, 'reversal', s.billing_period, s.tenant_id, s.metric, s.quantity, c
     FROM statement_lines s
     WHERE s.kind = 'line'
       AND NOT EXISTS (SELECT 1 FROM usage_events u WHERE u.line_id = s.line_id)
@@ -73,8 +82,8 @@ BEGIN
     FOR r IN SELECT value FROM jsonb_array_elements(p_rows) ORDER BY (value->>'correction_id')::bigint LOOP
         DELETE FROM usage_events WHERE event_id = (r->>'event_id')::bigint;
         IF jsonb_typeof(r->'after') = 'object' AND r->'after'->>'tenant_id' = p_tenant THEN
-            INSERT INTO usage_events (event_id, record_id, tenant_id, metric, quantity, occurred_at, batch_id)
-            SELECT event_id, record_id, tenant_id, metric, quantity, occurred_at, batch_id
+            INSERT INTO usage_events (event_id, record_id, tenant_id, metric, quantity, occurred_at, batch_id, billing_period)
+            SELECT event_id, record_id, tenant_id, metric, quantity, occurred_at, batch_id, billing_period
             FROM jsonb_populate_record(null::usage_events, r->'after');
         END IF;
         n := n + 1;

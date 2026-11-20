@@ -32,17 +32,27 @@ CREATE TABLE usage_events (
     metric      text NOT NULL,
     quantity    numeric(12,3) NOT NULL CHECK (quantity >= 0),
     occurred_at timestamptz NOT NULL,
-    batch_id    bigint NOT NULL
+    batch_id    bigint NOT NULL,
+    billing_period date NOT NULL
 );
 CREATE INDEX usage_events_tenant ON usage_events (tenant_id, occurred_at);
 CREATE INDEX usage_events_batch ON usage_events (batch_id);
 -- Feeds filter on tenant_id, so updates and deletes need the whole old row.
 ALTER TABLE usage_events REPLICA IDENTITY FULL;
 
+-- Keep the period in the published row so subscribers can route by it.
+CREATE FUNCTION set_billing_period() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.billing_period := date_trunc('month', NEW.occurred_at AT TIME ZONE 'UTC')::date;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER set_billing_period BEFORE INSERT OR UPDATE OF occurred_at ON usage_events
+    FOR EACH ROW EXECUTE FUNCTION set_billing_period();
+
 CREATE TABLE usage_corrections (
     correction_id bigserial PRIMARY KEY,
     event_id     bigint NOT NULL,
-    kind         text NOT NULL CHECK (kind IN ('void', 'reduce', 'move')),
+    kind         text NOT NULL CHECK (kind IN ('void', 'reduce', 'move', 'redate')),
     before       jsonb NOT NULL,
     after        jsonb,
     reason       text NOT NULL,
@@ -52,7 +62,7 @@ CREATE TABLE usage_corrections (
 );
 
 -- Used by the support console. Voids delete the event, reductions lower its
--- quantity, moves give it to the account that really used it.
+-- quantity, moves change the account and re-dates correct the usage timestamp.
 CREATE FUNCTION correct_usage(p_event bigint, p_kind text, p_value text, p_reason text, p_by text,
                               p_batch text DEFAULT NULL)
 RETURNS bigint LANGUAGE plpgsql AS $$
@@ -74,6 +84,8 @@ BEGIN
         UPDATE usage_events SET quantity = p_value::numeric WHERE event_id = p_event RETURNING * INTO new_row;
     ELSIF p_kind = 'move' THEN
         UPDATE usage_events SET tenant_id = p_value WHERE event_id = p_event RETURNING * INTO new_row;
+    ELSIF p_kind = 'redate' THEN
+        UPDATE usage_events SET occurred_at = p_value::timestamptz WHERE event_id = p_event RETURNING * INTO new_row;
     ELSE
         RAISE EXCEPTION 'unknown correction %', p_kind;
     END IF;

@@ -92,14 +92,20 @@ def parse_extracts_conf(text):
     return accounts
 
 
-def publications_conf(revision, comment, operations):
+def publications_conf(revision, comment, operations, *, quill_period=None):
     """The declared publication set; operations maps publication -> publish list."""
     lines = [f"# revision: {revision} {comment}", "# publication | table | row filter | publish"]
     lines.append(f"billing_usage | usage_events | | {operations.get('billing_usage', 'insert,update,delete')}")
-    for tenant in operations.get("tenants", STREAMED):
+    tenants = operations.get("tenants", STREAMED)
+    for tenant in tenants:
         usage, corr = operations.get(tenant, ("insert,update,delete", ""))
         lines.append(f"usage_{tenant} | usage_events | tenant_id = '{tenant}' | {usage}")
         lines.append(f"corr_{tenant} | usage_events | tenant_id = '{tenant}' | {corr}")
+    if quill_period is not None and "quill" in tenants:
+        lines.append(
+            "corr_open_quill | usage_events | tenant_id = 'quill' "
+            f"AND billing_period = DATE {sql_literal(quill_period)} | update"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -112,6 +118,7 @@ def ledger_conf(revision, comment, ledger_all, ledger_corr):
 
 class MeteringApplication(KubernetesCommands, Application):
     def __init__(self):
+        self.quill_period = datetime.now(UTC).date().replace(day=1)
         super().__init__(HERE / "metadata.json")
         self.load_app_json()
         self.app_name = self.name
@@ -654,7 +661,17 @@ class MeteringApplication(KubernetesCommands, Application):
 
     def create_customer_database(self, db):
         self.psql(f"{SUBSCRIBERS}-0", "postgres", f"create database {db};\n", hidden=True)
-        self.customer(db, (COMPANY / "customer.sql").read_text())
+        quill = db == "quill_usage"
+        columns = "event_id, billing_period" if quill else "event_id"
+        partition = "partition by list (billing_period)" if quill else ""
+        self.customer(
+            db,
+            f"\\set partition_by_period {str(quill).lower()}\n"
+            f"\\set open_period {self.quill_period.isoformat()}\n"
+            f"\\set identity_columns '{columns}'\n"
+            f"\\set partition_clause '{partition}'\n"
+            + (COMPANY / "customer.sql").read_text(),
+        )
 
     def subscribe_customers(self, databases=None, *, copy_data=True):
         for db in databases or CUSTOMER_DATABASES:
@@ -667,10 +684,13 @@ class MeteringApplication(KubernetesCommands, Application):
             options = f"copy_data = {str(copy_data).lower()}"
             if db in STOP_ON_ERROR:
                 options += ", disable_on_error = true"
+            publications = f"usage_{tenant}, corr_{tenant}"
+            if db == "quill_usage":
+                publications += ", corr_open_quill"
             self.customer(
                 db,
                 f"create subscription {db} connection {sql_literal(conninfo)} "
-                f"publication usage_{tenant}, corr_{tenant} with ({options});\n",
+                f"publication {publications} with ({options});\n",
             )
 
     def subscribe_files(self, account="pell", database="pell_usage"):

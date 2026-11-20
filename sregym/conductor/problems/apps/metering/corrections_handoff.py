@@ -24,6 +24,7 @@ which stopped Pell's feed on a duplicate key; on-call moved its slot forward
 past everything sent meanwhile), a quantity fixed directly on core, nightly
 correction files that Pell receives by subscription and loads automatically,
 an omission on Pell's statement return recorded as a waiver in finance,
+two Quill statement discrepancies when re-dates crossed the open-period filter,
 and two readers paused with a backlog (Larkspur's month-end copy, which stops on
 its first error, during its close; Vale during its site maintenance). Every
 server has since been patched to 17.6; only the damage and the patches remain.
@@ -78,6 +79,7 @@ REASONS = {
         "token count included cached prompt",
         "partial outage credit on metered calls",
     ),
+    "redate": ("usage timestamp corrected from the meter export",),
     "move": (
         "API key belongs to {to}",
         "subsidiary key reassigned to {to}",
@@ -104,49 +106,64 @@ class MeteringCorrectionsHandoff(Problem):
         self.tickets = set()
         self.state = {}
         self.root_cause = self.build_structured_root_cause(
-            component="logical decoding on the core and billing PostgreSQL servers (statefulset/core, "
-            "statefulset/billing) during the corrections handoffs and the billing rate-band release, "
-            "on PostgreSQL 17.4",
+            component=(
+                "logical decoding in the walsenders of the core and billing PostgreSQL servers (statefulset/core, "
+                "statefulset/billing) while they ran PostgreSQL 17.4: pubsync's corrections handoffs (stale "
+                "publication actions) and billing's r5 rate_info release (stale composite type encoding of ledger "
+                "lines sent to finance); plus Quill's UPDATE-only, open-period publication corr_open_quill on core "
+                "and its application to Quill's period-partitioned usage copy."
+            ),
             namespace=self.namespace,
             description=(
                 "PostgreSQL 17.4 logical decoding did not pass catalog invalidations to transactions already in "
-                "progress (data loss bug fixed in 17.5, commit 4909b38af034). pubsync moved corrections (UPDATE and "
-                "DELETE) with a make-before-break handoff: first ALTER PUBLICATION corr_<tenant> (and, a week "
-                "earlier on billing, ledger_corr) SET (publish = 'update, delete'), then after every active slot "
-                "confirmed past it, a quiet ALTER PUBLICATION usage_<tenant> (ledger_all) SET (publish = 'insert'). "
-                "Each make step committed while an ingest batch (or billing apply transaction) that had already "
-                "written was in flight; every walsender that decoded that transaction first cached the corrections "
-                "publication's pre-change definition (publishing nothing) under its older snapshot. The later break "
-                "was loaded fresh, so those walsenders published inserts only, a configuration never committed, "
-                "until their own next restart. A walsender that restarted between the steps was cured only if its "
-                "slot had already confirmed past the in-flight batch; one that started before that position decoded "
-                "the batch again and cached the same stale definition. Affected: finance's subscription "
-                "finance_ledger to billing (week one, until finance's subscription was disabled and enabled during "
-                "maintenance; it missed ledger re-ratings, voids and moves, and invoices and support credit notes "
-                "were issued from that ledger). After finance's maintenance restart, r5 rate bands committed "
-                "ALTER TYPE rate_info ADD ATTRIBUTE band text while billing's re-rate transaction was still "
-                "applying ratings to the ledger. The same 17.4 defect left billing's walsender encoding rate_info "
-                "with its pre-release shape. Finance received the lines without their band and invoiced committed-use "
-                "customers at list price. That lasted until the 17.6 restart. Finance's rule for legacy rates and "
-                "billing's price book worked as intended. The customer subscriptions pell_usage, quill_usage and "
-                "larkspur_live (from the break until each one's own restart) and ostrava_usage (its link dropped "
-                "across the make and it reconnected before its slot passed the in-flight batch, so it stayed stale "
-                "until the 17.6 restart). They kept voided and moved-out rows and stale quantities, and lacked "
-                "moved-in rows, including support's bulk correction CF-31. Pell's statement return was built "
-                "from the copy that never received one of these moves, so the importer recorded that omission "
-                "as a customer waiver in core's finance database alongside a genuine dispute. The same return is queued to be "
-                "imported again. larkspur_monthend and vale_usage were "
-                "not stale (their walsenders restarted after their slots passed the batch); they are paused with a "
-                "backlog at the customers' requests (month-end's subscription stops on its first error). Billing's "
-                "incoming feed from core stayed intact. Both servers were patched to 17.6, so only the damage remains, "
-                "along "
-                "with workarounds that are not the cause: support's correction files, the re-keyed usage row, the "
-                "refund, the nightly correction files, on-call's direct UPDATE of a Quill quantity on core (no "
-                "correction record), and on-call's pg_replication_slot_advance of Pell's slot after its feed "
-                "stopped on a duplicate key (which also skipped every Pell change committed in between). Also not "
-                "the cause: the collation version warnings (they started with the 17.6 image), the customers' "
-                "databases, billing's rating, finance's closed-period rule (by design), the add-table race (pubsync "
-                "locks the table), subscriber lag, the paused feeds, or a need to reconnect after publication changes."
+                "progress (data loss bug fixed in 17.5, commit 4909b38af034). A walsender that decoded such a "
+                "transaction rebuilt its caches under the older catalog snapshot and kept them until its own restart. "
+                "It hit this platform twice, in two different ways, and the records already affected still needed repair "
+                "after the 17.6 rollout."
+                "\n\n"
+                "(1) Publication actions. pubsync moved corrections (UPDATE and DELETE) with a make-before-break "
+                "handoff: first ALTER PUBLICATION corr_<tenant> (and, a week earlier on billing, ledger_corr) SET "
+                "(publish = 'update, delete'), then, after every active slot confirmed past it, a quiet ALTER "
+                "PUBLICATION usage_<tenant> (ledger_all) SET (publish = 'insert'). Each make step committed while an "
+                "ingest batch (or billing apply transaction) that had already written was in flight. Every walsender "
+                "that decoded that transaction first cached the corrections publication's pre-change definition "
+                "(publishing nothing), then loaded the later step fresh, so it published only inserts through the "
+                "ordinary usage and ledger publications, a configuration never committed, until its own next restart. A walsender that restarted between the "
+                "steps was cured only if its slot had already confirmed past the in-flight batch. Affected: "
+                "finance_ledger (billing to finance, week one, until finance's maintenance restart), pell_usage, "
+                "quill_usage and larkspur_live (from the later step until each one's own restart), and ostrava_usage "
+                "(it reconnected between the steps before its slot passed the in-flight batch, so it stayed stale "
+                "until the 17.6 restart). larkspur_monthend and vale_usage were not stale; they are paused with a "
+                "backlog. Billing's own feed was not affected."
+                "\n\n"
+                "(2) Composite type encoding. Billing's release r5 added the band attribute to the composite type "
+                "rate_info (ALTER TYPE rate_info ADD ATTRIBUTE band) while a billing re-rate transaction that had "
+                "already written ledger_lines was in flight. Billing's walsender to finance kept encoding rate_info "
+                "with its pre-release shape, so every ledger line it sent from then until the 17.6 restart reached "
+                "finance without its band. Finance stores the rate as received and invoices lines without a band at "
+                "list price, so committed-use customers were over-charged on those lines. Every row arrived; only the "
+                "content was wrong."
+                "\n\n"
+                "(3) Period crossings. While Quill's walsender held the stale corrections publication definition, "
+                "corr_open_quill was still publishing UPDATEs for Quill's open billing period. When support re-dated "
+                "a usage row into the period, PostgreSQL sent an INSERT. Quill kept the prior-period copy and booked "
+                "the open-period copy as a second charge because its local key is (event_id, billing_period). A "
+                "re-date out of the open period became a DELETE. Quill reversed the old charge and had no row to "
+                "re-issue in the prior period. On 17.6, the full-period corrections publication supplies the wider "
+                "filter and these changes are sent as UPDATEs. Restarting on 17.6 did not repair rows already "
+                "delivered or lost."
+                "\n\n"
+                "(4) Damage written back. Pell's statement return, built from a copy that never received usage moved "
+                "to Pell during its stale window, was imported into finance with MERGE ... WHEN NOT MATCHED BY "
+                "SOURCE, so the company recorded that missing charge as a customer waiver, next to a genuine agreed "
+                "waiver of a similar charge."
+                "\n\n"
+                "Not the cause: support's correction files, the re-keyed usage row, the refund, the nightly "
+                "correction files, on-call's direct UPDATE of a Quill quantity on core (no correction record), "
+                "on-call's pg_replication_slot_advance of Pell's slot (which also skipped every Pell change in "
+                "between), finance's closed-period rule and legacy-rate rule (by design), billing's price book, the "
+                "collation version warnings, the add-table race (pubsync locks the table), subscriber lag, the paused "
+                "feeds, or a need to reconnect after publication changes."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -195,7 +212,7 @@ class MeteringCorrectionsHandoff(Problem):
             if quantity is None:
                 quantity = self.app.core(f"select quantity from usage_events where event_id = {event};").strip()
             return f"{round(float(quantity) * self.rng.choice((0.25, 0.4, 0.5, 0.6)), 3):.3f}"
-        return to if kind == "move" else None
+        return to if kind in ("move", "redate") else None
 
     def reason(self, kind, to=None):
         return self.rng.choice(REASONS[kind]).format(to=TENANTS.get(to, ("",))[0])
@@ -434,7 +451,11 @@ class MeteringCorrectionsHandoff(Problem):
                 app.replay_pubsync, "billing", ledger_conf("r1", "ledger feed for finance", "insert,update,delete", "")
             )
             app.replay_pubsync(
-                "core", publications_conf("r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED})
+                "core",
+                publications_conf(
+                    "r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED},
+                    quill_period=app.quill_period,
+                ),
             )
             billing.result()
         # Finance shares core's PostgreSQL instance. Creating both reciprocal
@@ -458,7 +479,8 @@ class MeteringCorrectionsHandoff(Problem):
             status="closed",
         )
         # Months of ordinary operation, compressed: corrections flow to every reader; first invoices.
-        self.seed_usage(105)
+        prior_period = f"DATE {sql_literal(app.quill_period)} - interval '1 month' + interval '1 hour'"
+        self.seed_usage(105, starting_at=prior_period)
         self.corrections(self.random_plan(10))
         self.wait_for_finance()
         self.close_invoices(TENANTS)
@@ -564,6 +586,7 @@ class MeteringCorrectionsHandoff(Problem):
                 "r2",
                 "customer corrections: enable updates and deletes on corr_* (1/2)",
                 {t: ("insert,update,delete", "update,delete") for t in STREAMED},
+                quill_period=app.quill_period,
             ),
         )
         app.customer("ostrava_usage", "alter subscription ostrava_usage enable;")
@@ -579,7 +602,8 @@ class MeteringCorrectionsHandoff(Problem):
         app.replay_pubsync(
             "core",
             publications_conf(
-                "r3", "customer corrections: withdraw updates and deletes from usage_* (2/2)", DECLARED_CORE
+                "r3", "customer corrections: withdraw updates and deletes from usage_* (2/2)", DECLARED_CORE,
+                quill_period=app.quill_period,
             ),
         )
         self.seed_usage(30)
@@ -620,6 +644,8 @@ class MeteringCorrectionsHandoff(Problem):
         # Every customer closes its statement once.
         with ThreadPoolExecutor(max_workers=len(CUSTOMER_DATABASES)) as pool:
             list(pool.map(app.close_statement, CUSTOMER_DATABASES))
+
+        quill_period = self.quill_period_corrections()
 
         # Vale's planned site maintenance: Vale takes its own database offline, in a quiet minute.
         self.ticket(
@@ -778,7 +804,8 @@ class MeteringCorrectionsHandoff(Problem):
         q_row = app.rows(
             app.core,
             "select json_build_object('event', event_id, 'record', record_id, 'quantity', quantity) from usage_events "
-            f"where tenant_id = 'quill' and metric = 'api_calls' and quantity >= 2 "
+            f"where tenant_id = 'quill' and billing_period < DATE {sql_literal(app.quill_period)} "
+            "and metric = 'api_calls' and quantity >= 2 "
             f"and event_id not in ({','.join(map(str, self.corrected))}) and event_id in "
             f"({','.join(map(str, self.issued('quill_usage')))}) order by random() limit 1;",
         )[0]
@@ -922,8 +949,54 @@ class MeteringCorrectionsHandoff(Problem):
             "lsn_before_cf31": lsn_before,
             "refund_capture": int(capture),
             "statement_return": statement_return,
+            "quill_period": quill_period,
             **gap,
         }
+
+    def quill_period_corrections(self):
+        app = self.app
+        open_period = sql_literal(app.quill_period)
+        booked = ",".join(map(str, sorted(self.issued("quill_usage"))))
+        used = ",".join(map(str, sorted(self.corrected)))
+        rows = app.rows(
+            app.core,
+            f"""
+            select distinct on (billing_period) json_build_object(
+                'event', event_id, 'record', record_id, 'before', occurred_at,
+                'from_period', billing_period,
+                'after', occurred_at + case when billing_period = DATE {open_period}
+                                          then -interval '1 month' else interval '1 month' end,
+                'to_period', case when billing_period = DATE {open_period}
+                                  then DATE {open_period} - interval '1 month' else DATE {open_period} end
+            )
+            from usage_events
+            where tenant_id = 'quill' and event_id in ({booked}) and event_id not in ({used})
+              and billing_period in (DATE {open_period}, DATE {open_period} - interval '1 month')
+            order by billing_period, event_id;
+            """,
+        )
+        if len(rows) != 2:
+            raise WorldDidNotTake("Quill did not book usable rows in both billing periods")
+        entering, leaving = rows
+        for item in rows:
+            item["to_period"] = item["to_period"][:10]
+        self.correct_batch("Quill statement dates", [(r["event"], "redate", r["after"]) for r in rows])
+        app.wait_caught_up(slots=["quill_usage"])
+        app.close_statement("quill_usage")
+        for case, subject, symptom in (
+            (entering, "Usage appears on two statements", "It now appears on both statements."),
+            (leaving, "Reversed usage was not re-issued", "The old charge was reversed, but the new statement is missing it."),
+        ):
+            self.ticket(
+                "quill",
+                subject,
+                [
+                    (self.staff(), f"We corrected the date for record {case['record']} "
+                     f"from {case['before'][:10]} to {case['after'][:10]}."),
+                    (self.customer_name("quill"), symptom),
+                ],
+            )
+        return {"entering": entering, "leaving": leaving}
 
     def pell_gap(self, review, y):
         """Support reverts Y to Pell; Pell never heard it leave, so its feed stops on Y. On-call skips the
@@ -1069,6 +1142,7 @@ class MeteringCorrectionsHandoff(Problem):
         facts["paused_slots"] = {db: slots[db]["confirmed"] for db in PAUSED if db in slots}
         problems += self.seal_readers(facts, diffs, slots)
         problems += self.seal_statement_return(facts["statement_return"], diffs["pell_usage"])
+        problems += self.seal_quill_period(facts["quill_period"])
         held = {
             int(e)
             for e in app.customer(
@@ -1118,10 +1192,19 @@ class MeteringCorrectionsHandoff(Problem):
         # What each customer copy holds now, beside it, for the statement checks.
         for db in CUSTOMER_DATABASES:
             wrong = diffs[db]["extra"] + diffs[db]["changed"]
+            stray = ""
+            if db == "quill_usage":
+                entering = facts["quill_period"]["entering"]
+                wrong = [event for event in wrong if event != entering["event"]]
+                stray = (
+                    f"update handoff.sealed set correct = false where event_id = {entering['event']} "
+                    f"and billing_period = DATE {sql_literal(entering['from_period'])};\n"
+                )
             app.customer(
                 db,
                 "create schema if not exists handoff;\ndrop table if exists handoff.sealed;\n"
-                "create table handoff.sealed as select event_id, line_id, true as correct from usage_events;\n"
+                "create table handoff.sealed as select event_id, billing_period, line_id, true as correct from usage_events;\n"
+                + stray
                 + (
                     f"update handoff.sealed set correct = false where event_id in ({','.join(map(str, wrong))});\n"
                     if wrong
@@ -1186,6 +1269,43 @@ class MeteringCorrectionsHandoff(Problem):
             if account not in counts["sent_at_list"] or account not in counts["legacy_sent"]:
                 problems.append(f"{account} has no sent invoice with both the expected rate cases")
         return problems, counts
+
+    def seal_quill_period(self, cases):
+        app = self.app
+        entering, leaving = cases["entering"], cases["leaving"]
+        events = f"{entering['event']}, {leaving['event']}"
+        truth = app.core(
+            f"select event_id || '|' || billing_period from usage_events where event_id in ({events}) order by event_id;"
+        ).split()
+        if set(truth) != {f"{case['event']}|{case['to_period']}" for case in cases.values()}:
+            return [f"core did not re-date both Quill events: {truth}"]
+        held = app.rows(
+            lambda q: app.customer("quill_usage", q),
+            "select json_build_object('event', event_id, 'period', billing_period, 'line', line_id) "
+            f"from usage_events where event_id in ({events}) order by billing_period;",
+        )
+        if [(r["event"], r["period"]) for r in held] != [
+            (entering["event"], entering["from_period"]), (entering["event"], entering["to_period"])
+        ]:
+            return [f"Quill did not duplicate the incoming row and lose the outgoing row: {held}"]
+        booked = app.rows(
+            lambda q: app.customer("quill_usage", q),
+            "select json_build_object('event', event_id, 'period', billing_period, 'line', line_id, 'kind', kind) "
+            f"from statement_lines where event_id in ({events});",
+        )
+        old = [r for r in booked if r["event"] == leaving["event"]]
+        active = [r for r in booked if r["event"] == entering["event"]]
+        if (
+            len(old) != 2 or {r["kind"] for r in old} != {"line", "reversal"}
+            or {r["period"] for r in old} != {leaving["from_period"]}
+            or len({r["line"] for r in old}) != 1
+            or len(active) != 2 or any(r["kind"] != "line" for r in active)
+            or {r["line"] for r in active} != {r["line"] for r in held}
+        ):
+            return [f"Quill's statement did not book both copies and reverse only the outgoing row: {booked}"]
+        entering.update(stray_line=held[0]["line"], correct_line=held[1]["line"])
+        leaving["reversed_line"] = old[0]["line"]
+        return []
 
     def seal_statement_return(self, returned, pell):
         app = self.app

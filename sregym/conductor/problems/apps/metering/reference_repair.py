@@ -282,6 +282,55 @@ def repair_pell(app, declared, state, wrong=()):
     return {event: offer_alone(app, declared, "pell", PELL, event) for event in state["moved_in"]}
 
 
+def repair_quill(app, declared, state, wrong):
+    entering, leaving = (state["quill_period"][key] for key in ("entering", "leaving"))
+    into, out = entering["event"], leaving["event"]
+    skip = {into, out}
+    if "quill_from_corrections" in wrong:
+        skip.add(state["q"])
+    send_net(app, declared, "quill", QUILL, skip=skip)
+
+    def redate(case, date):
+        return f"update usage_events set occurred_at = {sql_literal(case[date])} where event_id = {case['event']};"
+
+    rewind = redate(entering, "before")
+    if "quill_period_updates" in wrong:
+        # This uses the regular corrections publication to send each change as an UPDATE.
+        # Quill has no old row for the first update and already holds the destination of the second.
+        app.core(transaction(declared, "quill", redate(leaving, "before"), redate(leaving, "after")))
+        app.core(transaction(declared, "quill", rewind, redate(entering, "after")))
+        end = lsn(app)
+        if not wait_confirmed(app, QUILL, end, 15):
+            print(f"Quill rejected the period update for {into}; skip that transaction so the feed can resume.")
+            hold(app, QUILL)
+            advance(app, QUILL, end)
+            release(app, QUILL)
+        return
+
+    rewind += f"update usage_events set tenant_id = 'arden' where event_id = {out};"
+    replay = (
+        f"update usage_events set tenant_id = 'arden', occurred_at = {sql_literal(entering['after'])} "
+        f"where event_id = {into};"
+        f"update usage_events set tenant_id = 'quill' where event_id = {out};"
+    )
+    if "quill_period_rebook" in wrong:
+        replay += (
+            f"alter publication corr_quill set (publish = '');"
+            f"update usage_events set tenant_id = 'quill' where event_id = {into};"
+            f"alter publication corr_quill set (publish = 'update, delete');"
+            f"update usage_events set tenant_id = 'arden' where event_id = {into};"
+            f"update usage_events set tenant_id = 'quill' where event_id = {into};"
+        )
+    else:
+        replay += (
+            f"alter publication corr_quill set (publish = '');"
+            f"update usage_events set tenant_id = 'quill' where event_id = {into};"
+        )
+    app.core(transaction(declared, "quill", rewind, replay))
+    if not wait_confirmed(app, QUILL, lsn(app), 300):
+        raise RuntimeError("Quill did not accept its period repair")
+
+
 def hidden_head(app):
     """Larkspur rows month-end applied past its slot's position (read from a copy of its slot; for a mistake)."""
     origin = app.subscription_origin(MONTH_END)
@@ -444,7 +493,7 @@ def repair(problem, wrong=()):
     declared = declared_publications(app)
     with ingest_paused(app):
         outcomes = repair_pell(app, declared, state, wrong)
-        send_net(app, declared, "quill", QUILL, skip={state["q"]} if "quill_from_corrections" in wrong else ())
+        repair_quill(app, declared, state, wrong)
         if "ostrava_alone" not in wrong:
             send_net(app, declared, "ostrava", OSTRAVA)
         outcomes.update(repair_larkspur(app, declared, state, wrong))
