@@ -322,10 +322,11 @@ class MeteringCorrectionsHandoff(Problem):
                 "core", publications_conf("r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED}), "r1"
             )
             billing.result()
-            finance = pool.submit(app.subscribe_finance)
-            app.subscribe_billing()
-            app.subscribe_customers()
-            finance.result()
+        # Finance shares core's PostgreSQL instance. Creating both reciprocal
+        # subscriptions together makes each slot wait for the other's transaction.
+        app.subscribe_billing()
+        app.subscribe_finance()
+        app.subscribe_customers()
         lark = self.customer_name("larkspur")
         self.ticket(
             "larkspur",
