@@ -30,6 +30,7 @@ import json
 import random
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     MeteringOracle,
@@ -467,18 +468,19 @@ class MeteringCorrectionsHandoff(Problem):
         # Week two: the same handoff for every opted-in customer on core, during ingest's busy hour.
         app.set_rate(1500)
         time.sleep(25)
+        app.set_rate(0)
+        app.wait_inbox_empty()
+        app.wait_caught_up()
         # Ostrava's link drops just before the first step and is back right after it, before its slot has
         # confirmed past the ingest batch in flight at the step.
         app.customer("ostrava_usage", "alter subscription ostrava_usage disable;")
         app.wait_slot("ostrava_usage", False)
-        app.pubsync(
-            "core",
+        self.make_during_ingest(
             publications_conf(
                 "r2",
                 "customer corrections: enable updates and deletes on corr_* (1/2)",
                 {t: ("insert,update,delete", "update,delete") for t in STREAMED},
-            ),
-            "r2",
+            )
         )
         app.customer("ostrava_usage", "alter subscription ostrava_usage enable;")
         app.wait_slot("ostrava_usage", True)
@@ -535,6 +537,53 @@ class MeteringCorrectionsHandoff(Problem):
             if not set(week2) & {e for kind in digest.values() for e in kind}:
                 raise WorldDidNotTake(f"{db} received every week-two correction")
         return target
+
+    def make_during_ingest(self, conf):
+        """Run the publication change while the next ingest batch is open."""
+        app = self.app
+        revision = sql_literal(conf.splitlines()[0].removeprefix("# revision: "))
+        # An ingest batch writes its header first. The job locks usage_events, so wait for its audit row
+        # before the batch writes usage and commits. The other workers have drained their inbox.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            batch = pool.submit(
+                app.core,
+                f"""
+                begin;
+                set local application_name = 'ingest-0/0';
+                insert into ingest_batches (source) values ('ingest-0/0');
+                do $$
+                declare deadline timestamptz := clock_timestamp() + interval '180 seconds';
+                begin
+                    while not exists (select 1 from ops.pubsync_log where revision = {revision}) loop
+                        if clock_timestamp() > deadline then
+                            raise exception 'publication update did not finish';
+                        end if;
+                        perform pg_sleep(0.1);
+                    end loop;
+                end $$;
+                insert into usage_events (record_id, tenant_id, metric, quantity, occurred_at, batch_id)
+                select gen_random_uuid()::text, tenant_id, 'api_calls', 1 + floor(random() * 5000), now(),
+                       currval('ingest_batches_batch_id_seq') from tenants;
+                update ingest_batches set records = (select count(*) from tenants)
+                where batch_id = currval('ingest_batches_batch_id_seq');
+                commit;
+                """,
+            )
+            deadline = time.monotonic() + 60
+            while True:
+                if batch.done():
+                    batch.result()
+                    raise WorldDidNotTake("ingest batch committed before the publication change")
+                if app.core(
+                    "select exists (select 1 from pg_stat_activity where application_name = 'ingest-0/0' "
+                    "and backend_xid is not null and query like 'do $$%');"
+                ).strip() == "t":
+                    break
+                if time.monotonic() > deadline:
+                    raise WorldDidNotTake("ingest did not open the batch for the publication change")
+                time.sleep(0.2)
+            app.pubsync("core", conf, "r2")
+            batch.result()
 
     def support_story(self, return_period, statement_return):
         """Support's bulk correction CF-31 and the patches it caused, while four feeds still drop corrections."""
