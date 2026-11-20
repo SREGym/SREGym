@@ -118,6 +118,29 @@ def test_proxy_bootstrap_uses_docker_copy_instead_of_host_bind_mounts(monkeypatc
     egress.close()
 
 
+def test_proxy_idle_timeout_is_set_only_when_the_policy_asks_for_one(monkeypatch):
+    def proxy_command(policy):
+        runner = ContainerRunner(ContainerConfig(internet_policy=policy))
+        commands = []
+
+        def docker(command, **kwargs):
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0)
+
+        monkeypatch.setattr(runner._egress, "_ensure_proxy_image_exists", lambda: None)
+        monkeypatch.setattr(runner._egress, "_copy_proxy_certificate", lambda: None)
+        monkeypatch.setattr("sregym.service.docker_egress.subprocess.run", docker)
+        runner._ensure_filtered_egress({})
+        runner.cleanup_egress_proxy()
+        return next(command for command in commands if command[1:3] == ["run", "-d"])[-1]
+
+    default = proxy_command(InternetPolicy())
+    assert "tcp_timeout" not in default
+    assert proxy_command(InternetPolicy(idle_timeout=3600)) == default.replace(
+        "--set connection_strategy=lazy", "--set connection_strategy=lazy --set tcp_timeout=3600"
+    )
+
+
 def test_blocked_request_audit_reads_the_proxy_state(monkeypatch):
     egress = DockerEgress()
     egress._proxy_name = "test-proxy"

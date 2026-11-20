@@ -298,7 +298,9 @@ class ContainerRunner:
 
     def _ensure_filtered_egress(self, env_vars: dict[str, str]) -> None:
         if self.config.internet_policy.is_filtered:
-            self._egress.ensure_started(self._configured_egress_rules(env_vars))
+            self._egress.ensure_started(
+                self._configured_egress_rules(env_vars), idle_timeout=self.config.internet_policy.idle_timeout
+            )
 
     def cleanup_egress_proxy(self) -> None:
         self._egress.close()

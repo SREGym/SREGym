@@ -14,6 +14,7 @@ from pathlib import Path
 import requests
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
+from clients.harness.environment import outside_cluster_opening
 from clients.harness.problem_id import resolve_problem_id
 from clients.harness.stages import mitigation_workflow
 from logger import init_logger
@@ -186,10 +187,17 @@ For MITIGATION stage:
     if app_info.get("stages") == ["mitigation"]:
         workflow = mitigation_workflow(get_api_base_url())
 
-    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
+    if app_info.get("uses_cluster", True):
+        opening = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
 
 Application: {app_name}
-{namespace_block}
+{namespace_block}"""
+        tools = f"""- You have access to kubectl commands to inspect and modify resources in namespace(s): {", ".join(namespaces)}
+- You can query metrics and traces through the available observability tools"""
+    else:
+        opening, tools = outside_cluster_opening(app_name)
+
+    instruction = f"""{opening}
 
 {descriptions}
 
@@ -198,8 +206,7 @@ CRITICAL: You are running in an AUTOMATED environment. Work autonomously and mak
 {workflow}
 
 Important:
-- You have access to kubectl commands to inspect and modify resources in namespace(s): {", ".join(namespaces)}
-- You can query metrics and traces through the available observability tools
+{tools}
 - The conductor API is available at {get_api_base_url()}
 """
     if os.environ.get("CHIRON_MCP_URL"):

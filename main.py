@@ -32,6 +32,7 @@ from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
 from sregym.conductor.hooks import AttemptHookError, load_hooks
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
@@ -637,6 +638,10 @@ def driver_loop(
                     agent=agent_to_run,
                     attempt=attempt,
                 )
+                app = getattr(conductor, "app", None)
+                if hasattr(app, "agent_workspace"):
+                    # The application's grader reads the files the agent leaves in this workspace.
+                    app.agent_workspace = run.active_dir
                 agent_proc = None
                 conductor.agent_timeout_seconds = agent_timeout
 
@@ -1055,6 +1060,23 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     # An invalid hook registration must fail before agent resources are prepared.
     agent_hooks = load_hooks(agent_reg.hooks) if agent_reg else None
 
+    suite = getattr(args, "suite", None)
+    problem = getattr(args, "problem", None)
+    problem_selection = (problem,) if problem else PROBLEM_SETS.get(suite)
+    problems = ProblemRegistry()
+    selected_problems = problem_selection or problems.get_problem_ids()
+    uses_cluster = any(map(problems.uses_cluster, selected_problems))
+    # One egress proxy serves the whole run, so it keeps the longest idle timeout a selected problem asks for.
+    idle_timeouts = [t for t in map(problems.egress_idle_timeout, selected_problems) if t is not None]
+    internet_policy = InternetPolicy.from_mode(
+        internet_policy.mode,
+        agent_name=internet_policy.agent_name,
+        model_id=internet_policy.model_id,
+        additional_allowed_endpoints=internet_policy.additional_allowed_endpoints
+        + tuple(url for problem_id in selected_problems for url in problems.agent_endpoints(problem_id)),
+        idle_timeout=max(idle_timeouts, default=None),
+    )
+
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
         if internet_policy.is_filtered and not args.use_external_harness
@@ -1070,6 +1092,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         stages=tuple(args.stages) if args.stages else None,
         baseline_override_s=getattr(args, "baseline", None),
         propagation_override_s=getattr(args, "propagation", None),
+        uses_cluster=uses_cluster,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)
@@ -1103,8 +1126,6 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         hooks=agent_hooks,
     )
 
-    suite = getattr(args, "suite", None)
-    problem_selection = (args.problem,) if args.problem else PROBLEM_SETS.get(suite)
     if suite:
         logger.info(f"Running {suite}: {len(problem_selection)} problems")
 

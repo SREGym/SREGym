@@ -5,6 +5,17 @@ from abc import ABC, abstractmethod
 
 class Problem(ABC):
     run_default_workload = True
+    # False for a problem whose environment is not the test cluster. The
+    # conductor then builds no cluster clients for it and deploys with the
+    # application's own deploy().
+    uses_cluster = True
+    # HTTP(S) URLs on the host that the problem's environment serves to the
+    # agent. main.py adds them to the filtered-egress allowlist, as it does
+    # for --allow-agent-endpoint.
+    agent_endpoints: tuple[str, ...] = ()
+    # Seconds the filtered-egress proxy keeps a silent connection open. None
+    # keeps mitmproxy's own default.
+    egress_idle_timeout: int | None = None
 
     def __init__(self, app, namespace: str | None = None):
         self.app = app

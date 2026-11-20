@@ -22,6 +22,7 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
+from clients.harness.environment import outside_cluster_opening  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.opencode.opencode_agent import OpenCodeAgent  # noqa: E402
 
@@ -153,10 +154,17 @@ def build_instruction(app_info: dict) -> str:
     namespace = app_info.get("namespace", "default")
     descriptions = app_info.get("descriptions", "")
 
-    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
+    if app_info.get("uses_cluster", True):
+        opening = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
 
 Application: {app_name}
-Namespace: {namespace}
+Namespace: {namespace}"""
+        tools = f"""- You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
+- You can query metrics and traces through the available observability tools"""
+    else:
+        opening, tools = outside_cluster_opening(app_name)
+
+    instruction = f"""{opening}
 
 {descriptions}
 
@@ -192,8 +200,7 @@ For MITIGATION stage:
 - This submission is MANDATORY - the conductor needs it to validate your fix
 
 Important:
-- You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
-- You can query metrics and traces through the available observability tools
+{tools}
 - The conductor API is available at {get_api_base_url()}
 """
 

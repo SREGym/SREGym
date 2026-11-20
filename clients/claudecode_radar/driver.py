@@ -14,6 +14,7 @@ import requests
 
 import clients.claudecode.driver as base
 from clients.claudecode_radar.claudecode_agent import RadarClaudeCodeAgent, radar_mcp_url
+from clients.harness.environment import require_cluster
 
 base.ClaudeCodeAgent = RadarClaudeCodeAgent
 
@@ -28,6 +29,7 @@ _upstream_build_instruction = base.build_instruction
 
 
 def build_instruction(app_info: dict) -> str:
+    require_cluster(app_info, "Claude Code with Radar")
     instruction = _upstream_build_instruction(app_info)
     if instruction.count(KUBECTL_TOOL_LINE) != 1:
         raise RuntimeError("upstream's kubectl tool line not found once in the task instruction")

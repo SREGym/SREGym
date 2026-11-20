@@ -1,0 +1,10 @@
+{
+    "Name": "Smart Meter",
+    "Namespace": "company",
+    "Desc": "Smart Meter is a two-region IoT telemetry company on QEMU hosts: per region a Kubernetes cluster (Cilium 1.13.2), EMQX 5.0.26, Kafka 3.4 with ZooKeeper or KRaft, PostgreSQL ledgers and usage reporting, MirrorMaker partner statements, a Gitea platform repository, a platform role, a package channel, a capacity controller and an auto-healer, with 2,000 device clients. Problems revive a saved world from SREGym-applications/smart-meter; the agent works through companyctl and company endpoints.",
+    "Supported Operations": [
+        "Ingest device readings over MQTT into regional Kafka and ledgers",
+        "Serve customer usage totals and partner statements",
+        "Run fleet maintenance: platform role, package channel, capacity controller, auto-healer"
+    ]
+}
