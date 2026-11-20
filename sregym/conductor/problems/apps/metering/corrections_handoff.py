@@ -108,33 +108,9 @@ class MeteringCorrectionsHandoff(Problem):
         self.tickets = set()
         self.state = {}
         self.root_cause = self.build_structured_root_cause(
-            component=(
-                "Finance's period-close reconciliation of Pell, Quill, Larkspur live and Ostrava statement returns, specifically "
-                'the per-tenant omission waiver import that treated four independently timed PostgreSQL 17.6 statement snapshots '
-                'as one approved allocation.'
-            ),
+            component="Finance's acceptance of a never-committed allocation at the point where it reconciled four individually correct customer snapshots from different approved revisions against one eligible close allocation.",
             namespace=self.namespace,
-            description=(
-                "The customers' REPEATABLE READ transactions fixed their views at revisions 5 (Pell), 3 (Quill), 1 (Larkspur "
-                'live) and 4 (Ostrava). Each return correctly represented its local rows at that revision. Their combined '
-                "ownership A, B, C, D never existed on core. Revision 6 was the last approval eligible at support's cutoff and "
-                "assigned A, B, D, C. The customers' revision-6 settlement acknowledgements confirm that the actual feeds "
-                'delivered that allocation before the files were signed. The later amendment belonged to the next close. Finance '
-                'matched on tenant, period and event ID without checking that the statement snapshots agreed with the approved '
-                "allocation. Its MERGE WHEN NOT MATCHED BY SOURCE waived Larkspur's earned lot D ($60,000) and Ostrava's earned "
-                'lot C ($40,000) because those events were absent from the respective returns. Pell and Quill filed the correct '
-                'lots for the eligible allocation. The customers resend the same files until acknowledged, so clearing the '
-                'waivers without recording their revocation lets the next import waive them again.'
-                "\n\n"
-                'Separately, PostgreSQL 17.4 logical decoding missed catalog invalidations for already-running transactions '
-                "(fixed in 17.5 by 4909b38af034). During pubsync's corrections handoff, stale publication actions caused the "
-                'Pell, Quill, Larkspur live, Ostrava and billing-to-finance senders to omit updates and deletes until their own '
-                "restarts. Quill's UPDATE-only open-period publication still transformed re-dates across its filter into an "
-                'INSERT or DELETE. The period-partitioned copy booked the incoming usage twice and lost the outgoing usage. '
-                "Billing's stale composite rate_info encoding omitted the r5 band on a separate cohort, leading finance to apply "
-                "list prices to committed usage. Pell's earlier return also turned an actual missing transfer into a false "
-                'waiver. The four allocation lots were created after the 17.6 patch and were independent of that earlier damage.'
-            ),
+            description="For the four-return close, each PostgreSQL 17.6 REPEATABLE READ transaction fixed its view at a different approved revision. Pell read revision 5 and returned A, Quill read revision 3 and returned B, Larkspur live read revision 1 and returned C, and Ostrava read revision 4 and returned D. Every return was correct in its own view. Together the returns assigned A, B, C, D to those customers, an allocation core never committed. Revision 6 was the last approval eligible at support's cutoff and assigned A, B, D, C. The revision-6 settlement acknowledgements show the feeds delivered that allocation before the files were signed. The later amendment belonged to the next close.\n\nFinance imported the returns one tenant at a time against the eligible allocation, matching by tenant and event ID within the close's period. It treated the returns as if their ownership agreed on one allocation. Its MERGE WHEN NOT MATCHED BY SOURCE treated the missing eligible charges as waivers. Larkspur live returned C instead of its earned D ($60,000), and Ostrava returned D instead of its earned C ($40,000). Pell and Quill returned their eligible lots. Customers resend the same signed files until acknowledged, so clearing the waivers without recording revocations lets the next import waive the charges again.\n\nFor this close, locating the fault means identifying Finance's reconciliation of locally correct returns pinned to different approved revisions as one allocation. The scope is the joint four-return allocation that core never committed and the two false waivers that followed even though both customers had received their eligible lots. An account of origin or scope must tie the component or impact it names to that incompatible combination. Naming where the waivers were written, who received them, or what was missing describes the outcome. Exact revision numbers, amounts, lot labels and SQL syntax are supporting details.\n\nSeparately, PostgreSQL 17.4 logical decoding missed catalog invalidations for already-running transactions (fixed in 17.5 by 4909b38af034). During pubsync's corrections handoff, stale publication actions caused the Pell, Quill, Larkspur live, Ostrava and billing-to-finance senders to omit updates and deletes until their own restarts. Quill's UPDATE-only open-period publication still transformed re-dates across its filter into an INSERT or DELETE. The period-partitioned copy booked the incoming usage twice and lost the outgoing usage. Billing's stale composite rate_info encoding omitted the r5 band on a separate cohort, leading finance to apply list prices to committed usage. Pell's earlier return also turned an actual missing transfer into a false waiver. The four allocation lots were created after the 17.6 patch and were independent of that earlier damage.",
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = MeteringOracle(problem=self)
