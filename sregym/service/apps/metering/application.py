@@ -996,23 +996,47 @@ select pg_current_wal_lsn();
 
     def pause_reader(self, database, *, applied_ahead=False):
         """Refuse new connections and end the walsender, optionally before it confirms an applied batch."""
-        self.core(f"alter role feed_{database} nologin;")
-        condition = ""
-        deadline = time.monotonic() + 30
+        slot = sql_literal(database)
+        deadline = time.monotonic() + 60
         while True:
-            if applied_ahead:
-                origin = self.subscription_origin(database)
-                condition = f"and confirmed_flush_lsn < {sql_literal(origin)}::pg_lsn"
-            terminated = self.core(
-                "select pg_terminate_backend(active_pid) from pg_replication_slots "
-                f"where slot_name = {sql_literal(database)} and active_pid is not null {condition};"
-            ).strip()
-            if not applied_ahead or terminated == "t":
-                break
+            self.core(f"alter role feed_{database} nologin;")
+            while True:
+                condition = ""
+                if applied_ahead:
+                    origin = self.subscription_origin(database)
+                    condition = f"and confirmed_flush_lsn < {sql_literal(origin)}::pg_lsn"
+                terminated = self.core(
+                    "select pg_terminate_backend(active_pid) from pg_replication_slots "
+                    f"where slot_name = {slot} and active_pid is not null {condition};"
+                ).strip()
+                if not applied_ahead or terminated == "t":
+                    break
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"{database} did not apply a batch ahead of its slot")
+                time.sleep(0.1)
+            self.wait_slot(database, False)
+            if not applied_ahead:
+                return
+            origin = self.subscription_origin(database)
+            if self.core(
+                f"select confirmed_flush_lsn < {sql_literal(origin)}::pg_lsn "
+                f"from pg_replication_slots where slot_name = {slot};"
+            ).strip() == "t":
+                return
+            # An acknowledgement can reach the sender between the query and shutdown.
+            # Reconnect only after the original apply worker has handled the disconnect.
+            while self.customer(
+                database,
+                f"select exists (select 1 from pg_stat_subscription where subname = {slot} and pid is not null);",
+            ).strip() == "t":
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"{database} did not stop after confirming the pause position")
+                time.sleep(0.1)
             if time.monotonic() > deadline:
-                raise TimeoutError(f"{database} did not apply a batch ahead of its slot")
-            time.sleep(0.1)
-        self.wait_slot(database, False)
+                raise TimeoutError(f"{database} kept confirming its applied batch before the pause")
+            self.core(f"alter role feed_{database} login;")
+            self.customer(database, f"alter subscription {database} enable;")
+            self.wait_slot(database, True)
 
     def set_server(self, name, image):
         self.apply_documents([self.server_statefulset(name, image)])
