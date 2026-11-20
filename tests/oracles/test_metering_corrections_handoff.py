@@ -1,6 +1,10 @@
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-from sregym.conductor.oracles.apps.metering.corrections_handoff import differences, digest_rows
+import pytest
+
+from sregym.conductor.oracles.apps.metering.corrections_handoff import MeteringOracle, differences, digest_rows
 from sregym.service.apps.metering.application import ledger_conf, publications_conf
 
 
@@ -88,3 +92,17 @@ def test_changed_documents_reports_edits_and_deletions_not_new_rows():
     before = {"invoice:1": "a", "invoice:2": "b", "refund:1": "c"}
     after = {"invoice:1": "a", "invoice:2": "x", "invoice:3": "new"}
     assert changed_documents(before, after) == ["invoice:2", "refund:1"]
+
+
+@pytest.mark.parametrize(
+    ("quantities", "reason"),
+    [([], "duplicate_usage_missing"), ([4], None), ([4, 4], "usage_entered_twice"), ([2], "duplicate_usage_changed")],
+)
+def test_duplicate_check_preserves_one_unchanged_usage_event(quantities, reason):
+    usage = {"tenant_id": "larkspur", "metric": "calls", "quantity": 4, "occurred_at": "2026-11-20T00:00:00+00:00"}
+    app = SimpleNamespace(core=Mock(), rows=Mock(return_value=[{**usage, "quantity": q} for q in quantities]))
+    oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: {"w": 7, "w2": 11, "duplicate_usage": usage}))
+
+    failures = oracle.check_duplicate_usage()
+
+    assert [failure["reason"] for failure in failures] == ([reason] if reason else [])

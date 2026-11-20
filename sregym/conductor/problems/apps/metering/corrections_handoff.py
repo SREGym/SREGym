@@ -698,6 +698,7 @@ class MeteringCorrectionsHandoff(Problem):
             "z": z,
             "w": w,
             "w2": w2,
+            "duplicate_usage": {"tenant_id": "larkspur", **row},
             "v1": v1,
             "p": p,
             "pell_voids": pell_voids,

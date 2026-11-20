@@ -142,6 +142,8 @@ class MeteringOracle(Oracle):
     precheck = True
     FAILURE_CLASSES = {
         "usage_entered_twice": "agent",
+        "duplicate_usage_missing": "agent",
+        "duplicate_usage_changed": "agent",
         "documents_changed": "agent",
         "customer_copy_wrong": "agent",
         "statement_reversed": "agent",
@@ -275,15 +277,23 @@ class MeteringOracle(Oracle):
                 return behind.split()
             time.sleep(3)
 
-    def check_both_entries(self):
+    def check_duplicate_usage(self):
         state = self.state()
         if "w" not in state:
             return []
-        both = self.app.core(
-            f"select count(*) from usage_events where event_id in ({state['w']}, {state['w2']});"
-        ).strip()
-        if both == "2":
-            return [self.fail("usage_entered_twice", events=[state["w"], state["w2"]])]
+        original, rekeyed = state["w"], state["w2"]
+        rows = self.app.rows(
+            self.app.core,
+            "select row_to_json(u) from (select tenant_id, metric, quantity, occurred_at from usage_events "
+            f"where event_id in ({original}, {rekeyed})) u;",
+        )
+        if len(rows) > 1:
+            return [self.fail("usage_entered_twice", events=[original, rekeyed])]
+        if not rows:
+            return [self.fail("duplicate_usage_missing", events=[original, rekeyed])]
+        expected = state.get("duplicate_usage")
+        if expected is not None and rows[0] != expected:
+            return [self.fail("duplicate_usage_changed", expected=expected, actual=rows[0])]
         return []
 
     def check_documents(self):
@@ -294,7 +304,7 @@ class MeteringOracle(Oracle):
         return []
 
     def prechecks(self):
-        failures = self.check_both_entries() + self.check_documents()
+        failures = self.check_duplicate_usage() + self.check_documents()
         lagging = self.lagging_feeds([db for db in CUSTOMER_DATABASES if db != VALE])
         if lagging:
             failures.append(self.fail("subscription_not_streaming", feeds=lagging))
@@ -553,7 +563,7 @@ class MeteringOracle(Oracle):
             except Exception as exc:  # noqa: BLE001
                 failures.append(self.fail("routine_jobs_failed", error=f"invoice run: {exc}"[:2000]))
             closes = {db: app.close_statement(db) for db in [*CUSTOMER_DATABASES, NEW_CUSTOMER[2]]}
-            failures = self.check_both_entries() + self.check_documents() + failures
+            failures = self.check_duplicate_usage() + self.check_documents() + failures
             failures += self.check_readers(errors_before)
             failures += self.check_statements(closes, touched)
             failures += self.check_ledgers()
