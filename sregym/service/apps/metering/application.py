@@ -708,6 +708,11 @@ class MeteringApplication(KubernetesCommands, Application):
         self.apply_documents([self.config_map(name, {"publications.conf": conf}), job])
         return self.wait_job(job["metadata"]["name"])
 
+    def replay_pubsync(self, target, conf):
+        self.apply_documents([self.config_map(f"pubsync-{target}", {"publications.conf": conf})])
+        database = "billing" if target == "billing" else "usage"
+        return self.replay_job("pubsync.sh", database, pod=f"{target}-0", config=conf)
+
     def wait_job(self, name, timeout=1200):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -737,12 +742,22 @@ class MeteringApplication(KubernetesCommands, Application):
         # The CronJob's own job, with the accounts to close passed explicitly.
         return self.run_cronjob("invoice-run", name, accounts)
 
-    def replay_job(self, script, database, *args, input_text=None):
-        """Run a company job's script against core while replaying its past runs."""
+    def replay_job(self, script, database, *args, pod="core-0", config=None):
+        """Run a company job's script in the database pod while replaying its past runs."""
+        body = (COMPANY / script).read_text()
+        if config is not None:
+            args = (body,)
+            body = """
+set -eu
+config_file=$(mktemp)
+trap 'rm -f "$config_file"' EXIT
+cat > "$config_file"
+bash -c "$1" "$0" "$config_file"
+"""
         return self.command(
             "exec",
             "-i",
-            "core-0",
+            pod,
             "-c",
             "postgres",
             "--",
@@ -751,10 +766,10 @@ class MeteringApplication(KubernetesCommands, Application):
             f"PGDATABASE={database}",
             "bash",
             "-c",
-            (COMPANY / script).read_text(),
+            body,
             script,
             *args,
-            input_text=input_text,
+            input_text=config,
         )
 
     def capture_invoices(self):
@@ -901,7 +916,7 @@ select pg_current_wal_lsn();
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"{target} writer did not reach the publication make")
                 time.sleep(0.2)
-            self.pubsync(target, conf, "r2")
+            self.replay_pubsync(target, conf)
             return writer.result().splitlines()[-1]
 
     def slot_lsns(self, run=None):

@@ -360,10 +360,10 @@ class MeteringCorrectionsHandoff(Problem):
         app.truncate_server_logs()
         with ThreadPoolExecutor(max_workers=2) as pool:
             billing = pool.submit(
-                app.pubsync, "billing", ledger_conf("r1", "ledger feed for finance", "insert,update,delete", ""), "r1"
+                app.replay_pubsync, "billing", ledger_conf("r1", "ledger feed for finance", "insert,update,delete", "")
             )
-            app.pubsync(
-                "core", publications_conf("r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED}), "r1"
+            app.replay_pubsync(
+                "core", publications_conf("r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED})
             )
             billing.result()
         # Finance shares core's PostgreSQL instance. Creating both reciprocal
@@ -412,7 +412,7 @@ class MeteringCorrectionsHandoff(Problem):
         app.wait_caught_up(app.billing, target=target)
         self.corrections(self.random_plan(4))
         self.wait_for_finance()
-        app.pubsync(
+        app.replay_pubsync(
             "billing",
             ledger_conf(
                 "r3",
@@ -420,7 +420,6 @@ class MeteringCorrectionsHandoff(Problem):
                 "insert",
                 "update,delete",
             ),
-            "r3",
         )
         self.seed_usage(20)
         self.wait_for_finance()
@@ -474,12 +473,11 @@ class MeteringCorrectionsHandoff(Problem):
         app.wait_caught_up(slots=["ostrava_usage"], target=target)
         self.corrections(self.random_plan(5))
         app.wait_caught_up()
-        app.pubsync(
+        app.replay_pubsync(
             "core",
             publications_conf(
                 "r3", "customer corrections: withdraw updates and deletes from usage_* (2/2)", DECLARED_CORE
             ),
-            "r3",
         )
         self.seed_usage(30)
         week2 = self.corrections(
@@ -691,7 +689,7 @@ class MeteringCorrectionsHandoff(Problem):
                 self.staff(),
                 "Until the feed is fixed we will send you a file of corrections for your account every night.",
             )
-        app.replay_job("correction-extracts.sh", "usage", "/dev/stdin", input_text=extracts_conf(extract_accounts))
+        app.replay_job("correction-extracts.sh", "usage", config=extracts_conf(extract_accounts))
         app.load_extract_files("pell", "pell_usage")
         self.note(pell_ticket, pell, "Thanks, we load your nightly file automatically.")
 
@@ -786,7 +784,7 @@ class MeteringCorrectionsHandoff(Problem):
         app.wait_inbox_empty()
         app.wait_caught_up(skip=PAUSED)
         self.wait_for_finance()
-        app.replay_job("correction-extracts.sh", "usage", "/dev/stdin", input_text=extracts_conf(extract_accounts))
+        app.replay_job("correction-extracts.sh", "usage", config=extracts_conf(extract_accounts))
         app.wait_caught_up(slots=["files_pell"])
         # The customers that are online close their statements as every day.
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -926,7 +924,9 @@ class MeteringCorrectionsHandoff(Problem):
         app.wait_caught_up(skip=PAUSED)
         app.wait_caught_up(app.billing)
         problems = []
-        diffs = {db: copy_digest(app, db, tenant) for db, tenant in CUSTOMER_DATABASES.items()}
+        with ThreadPoolExecutor(max_workers=len(CUSTOMER_DATABASES)) as pool:
+            readings = {db: pool.submit(copy_digest, app, db, tenant) for db, tenant in CUSTOMER_DATABASES.items()}
+            diffs = {db: reading.result() for db, reading in readings.items()}
         for db in VICTIMS:
             if not any(diffs[db].values()):
                 problems.append(f"{db} received every correction")
@@ -1010,8 +1010,6 @@ class MeteringCorrectionsHandoff(Problem):
                     else ""
                 ),
             )
-        # The handoff steps ran days ago; their Job records are long gone.
-        app.command("delete", "job", "-l", "app=pubsync", "--ignore-not-found", "--wait=true", timeout=180)
         handoff = app.core("select now();").strip()
         app.set_rate(60)
         return problems, {
