@@ -121,18 +121,21 @@ _SPIKE_SCRIPT = """
 import asyncio, json, time
 RPS, DUR = {rps}, {seconds}
 TOTAL = RPS * DUR
-sent = written = 0
+sent = written = finished_writes = 0
 async def send(i):
-    global written
+    global written, finished_writes
     body = json.dumps({{'channel_id': f'spike-{{i % 64}}', 'client_msg_id': f'spike-{{time.time_ns()}}-{{i}}', 'text': 'spike'}}).encode()
     head = ('POST /messages HTTP/1.1\\r\\nHost: svc-message\\r\\nContent-Type: application/json\\r\\n'
             f'Content-Length: {{len(body)}}\\r\\nConnection: close\\r\\n\\r\\n').encode()
     w = None
     try:
-        r, w = await asyncio.wait_for(asyncio.open_connection('svc-message', 8000), 10)
-        w.write(head + body)
-        await w.drain()
-        written += 1
+        try:
+            r, w = await asyncio.wait_for(asyncio.open_connection('svc-message', 8000), 10)
+            w.write(head + body)
+            await asyncio.wait_for(w.drain(), 10)
+            written += 1
+        finally:
+            finished_writes += 1
         await asyncio.wait_for(r.read(), 10)
     except Exception:
         pass
@@ -149,11 +152,14 @@ async def main():
         task.add_done_callback(tasks.discard)
         sent = i + 1
         await asyncio.sleep(max(0.0, start + sent / RPS - time.monotonic()))
-    deadline = time.monotonic() + 5
-    while written < sent and time.monotonic() < deadline:
+    # Each connect/write has its own timeout. Do not cancel pending writes,
+    # but do not wait for responses from the service we are overloading.
+    while finished_writes < sent:
         await asyncio.sleep(0.05)
 asyncio.run(main())
-print('spike sent', sent)
+print('spike sent', written, 'of', sent)
+if written != sent:
+    raise SystemExit(f'{{sent - written}} requests were not written')
 """
 
 
