@@ -34,7 +34,11 @@ import subprocess
 import time
 from decimal import Decimal
 
-from sregym.conductor.oracles.apps.metering.corrections_handoff import copy_digest, finance_differences, ledger
+from sregym.conductor.oracles.apps.metering.corrections_handoff import (
+    copy_digest,
+    finance_differences,
+    ledger_rates,
+)
 from sregym.service.apps.metering.application import extracts_conf, parse_extracts_conf, sql_literal
 
 PELL, QUILL, OSTRAVA = "pell_usage", "quill_usage", "ostrava_usage"
@@ -349,21 +353,37 @@ def retire_nightly_files(app, account="pell", through_feed=True):
     recall_files(app, account, through_feed)
 
 
-def repair_finance(problem, linked=False):
+def repair_finance(problem, linked=False, wrong=()):
     """Send finance each ledger change it missed, through its own rule; offset what was already given back."""
     app = problem.app
-    present = set(ledger(app.finance))
-    for line in sorted({line for line, _account in finance_differences(app)} & present):
-        rows = app.rows(app.billing, f"select row_to_json(l) from ledger_lines l where line_id = {line};")
-        if rows:
-            row = rows[0]
-            app.finance(
-                f"update ledger_lines set account = {sql_literal(row['account'])}, metric = {sql_literal(row['metric'])}, "
-                f"quantity = {row['quantity']}, amount = {row['amount']}, rated_at = {sql_literal(row['rated_at'])} "
-                f"where line_id = {line};"
-            )
-        elif not app.core(f"select 1 from usage_events where event_id = {line};").strip():
-            app.finance(f"delete from ledger_lines where line_id = {line};")
+    billing = ledger_rates(app.billing)
+    finance = ledger_rates(app.finance)
+    changed = {line for line, _account in finance_differences(app)}
+    if "keep_rates" not in wrong:
+        changed.update(line for line, rate in billing.items() if finance.get(line) != rate)
+    columns = "line_id, account, metric, quantity, amount, rated_at, rate"
+    if updates := changed & billing.keys():
+        rows = app.billing(
+            f"copy (select {columns}::text from ledger_lines where line_id in ({ids(updates)})) to stdout;"
+        )
+        rate = "r.rate"
+        if "keep_rates" in wrong:
+            rate = "f.rate"
+        elif "fill_legacy_rates" in wrong:
+            rate = "case when split_part(r.rate, ',', 2) = ')' then replace(r.rate, ')', 'committed)') else r.rate end"
+        app.finance(
+            f"begin;\ncreate temp table rated as select {columns} from ledger_lines with no data;\n"
+            f"copy rated from stdin;\n{rows}\\.\n"
+            "update ledger_lines f set account = r.account, metric = r.metric, quantity = r.quantity, "
+            f"amount = r.amount, rated_at = r.rated_at, rate = {rate} from rated r where f.line_id = r.line_id;\n"
+            f"insert into ledger_lines ({columns}) select {columns} from rated r "
+            "where not exists (select 1 from ledger_lines f where f.line_id = r.line_id);\ncommit;"
+        )
+    if voids := changed & (finance.keys() - billing.keys()):
+        rows = app.core(f"select event_id from usage_events where event_id in ({ids(voids)});")
+        still_in_use = set(map(int, rows.split()))
+        if deletions := voids - still_in_use:
+            app.finance(f"delete from ledger_lines where line_id in ({ids(deletions)});")
     handoff = problem.load_state()["handoff_at"]
     offsets = [
         (c["account"], Decimal(str(c["amount"])), f"credit note {c['credit_id']} already refunded this usage")
@@ -418,4 +438,4 @@ def repair(problem, wrong=()):
         if not wrong:  # only a deliberate mistake may leave a reader stopped on a row it already holds
             raise
     app.wait_caught_up(app.billing, timeout=300)
-    repair_finance(problem, linked="linked_offset" in wrong)
+    repair_finance(problem, linked="linked_offset" in wrong, wrong=wrong)

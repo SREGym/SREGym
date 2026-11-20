@@ -4,7 +4,12 @@ from unittest.mock import Mock
 
 import pytest
 
-from sregym.conductor.oracles.apps.metering.corrections_handoff import MeteringOracle, differences, digest_rows
+from sregym.conductor.oracles.apps.metering.corrections_handoff import (
+    MeteringOracle,
+    differences,
+    digest_rows,
+    usage_charge,
+)
 from sregym.service.apps.metering.application import ledger_conf, publications_conf
 
 
@@ -22,6 +27,55 @@ def test_differences_reports_moves_on_both_accounts():
 
 def test_digest_rows_splits_on_first_bar():
     assert digest_rows("10|abc\n11|d|e\n") == {"10": "abc", "11": "d|e"}
+
+
+@pytest.mark.parametrize(
+    ("rate", "expected"),
+    [
+        ("(0.002000)", "1.0006"),
+        ("(0.002000,)", "1.0006"),
+        ("(0.002000,list)", "1.0006"),
+        ("(0.002000,committed)", "0.7505"),
+    ],
+)
+def test_only_committed_rates_get_the_contract_discount(rate, expected):
+    assert usage_charge("quill", Decimal("1.0006"), rate) == Decimal(expected)
+    assert usage_charge("pell", Decimal("1.0006"), rate) == Decimal("1.0006")
+
+
+def test_failed_precheck_still_runs_jobs_and_reports_later_failures(monkeypatch):
+    app = Mock()
+    app.finance.return_value = "12"
+    app.customer.return_value = "larkspur_monthend"
+    app.close_statement.return_value = 3
+    app.load_extract_files.side_effect = RuntimeError("loader did not finish")
+    oracle = MeteringOracle(SimpleNamespace(app=app, load_state=dict))
+    monkeypatch.setattr(oracle, "observe", lambda: {})
+    monkeypatch.setattr(oracle, "subscription_errors", dict)
+    monkeypatch.setattr(oracle, "lagging_feeds", lambda databases: ["larkspur_monthend"])
+    monkeypatch.setattr(oracle, "check_documents", list)
+    monkeypatch.setattr(oracle, "onboard_new_customer", lambda: None)
+    monkeypatch.setattr(oracle, "fresh_corrections", lambda: [22])
+    monkeypatch.setattr(oracle, "nightly_files", lambda: None)
+    monkeypatch.setattr(oracle, "wait_ledgers_delivered", list)
+    monkeypatch.setattr(oracle, "check_readers", lambda errors: [oracle.fail("customer_copy_wrong")])
+    monkeypatch.setattr(oracle, "check_statements", lambda closes, touched: [])
+    monkeypatch.setattr(oracle, "check_ledgers", lambda boundary: [oracle.fail("charges_wrong")])
+    monkeypatch.setattr(oracle, "check_rates", list)
+    monkeypatch.setattr(oracle, "check_ingest", lambda: [oracle.fail("ingest_wrong")])
+
+    result = oracle.evaluate()
+
+    assert not result["success"]
+    assert [failure["reason"] for failure in result["detail"]["failures"]] == [
+        "subscription_not_streaming",
+        "routine_jobs_failed",
+        "customer_copy_wrong",
+        "charges_wrong",
+        "ingest_wrong",
+    ]
+    app.invoice_run.assert_called_once()
+    app.set_rate.assert_called_with(60)
 
 
 def test_publications_conf_declares_both_feeds_per_tenant():

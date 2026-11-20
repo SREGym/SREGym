@@ -32,6 +32,7 @@ NEW_IMAGE = "postgres:17.6"
 CUSTOMER_IMAGE = "postgres:17.6-bookworm"
 STORAGE_CLASS = "openebs-hostpath"
 PRICES = {"api_calls": "0.002", "tokens_k": "0.0150", "storage_gb_h": "0.0400"}
+COMMITTED_DISCOUNTS = {"quill": 25, "hollis": 15}
 
 #: tenant -> (name, plan, weight in gateway traffic, billing day)
 TENANTS = {
@@ -509,7 +510,8 @@ class MeteringApplication(KubernetesCommands, Application):
                 self.config_map("pubsync", {"pubsync.sh": (COMPANY / "pubsync.sh").read_text()}),
                 self.config_map("finance-jobs", {"invoice-run.sh": (COMPANY / "invoice-run.sh").read_text()}),
                 self.config_map(
-                    "billing-jobs", {name: (COMPANY / name).read_text() for name in ("rerate.sh", "rerate.sql")}
+                    "billing-jobs",
+                    {name: (COMPANY / name).read_text() for name in ("rerate.sh", "rerate.sql", "r5-rate-bands.sql")},
                 ),
                 self.config_map(
                     "support-jobs", {"correction-extracts.sh": (COMPANY / "correction-extracts.sh").read_text()}
@@ -604,7 +606,8 @@ class MeteringApplication(KubernetesCommands, Application):
             database="meter",
         )
         accounts = ",\n".join(
-            f"({sql_literal(t)}, {sql_literal(spec[0])}, {spec[3]}, {sql_literal('billing@' + t + '.example')})"
+            f"({sql_literal(t)}, {sql_literal(spec[0])}, {spec[3]}, {sql_literal('billing@' + t + '.example')}, "
+            f"{COMMITTED_DISCOUNTS.get(t, 0)})"
             for t, spec in TENANTS.items()
         )
         self.finance((COMPANY / "finance.sql").read_text() + f"insert into accounts values\n{accounts};\n")
@@ -840,25 +843,71 @@ from (
             if target == "billing"
             else (self.core, self.usage_batch_sql(1, 60))
         )
-        # The audit row commits with the publication change. Wait for it inside the writer
-        # transaction so that the first usage/ledger changes decoded after the make are its own.
+        return self.change_while_writing(
+            run, "metering handoff", write,
+            f"select 1 from ops.pubsync_log where revision = {sql_literal(revision)}",
+            lambda: self.pubsync(target, conf, "r2"),
+        )
+
+    def release_rate_bands(self):
+        job = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {"name": "billing-r5-rate-bands"},
+            "spec": {
+                "backoffLimit": 0,
+                "template": {
+                    "spec": self.job_pod(
+                        "release",
+                        ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-f", "/opt/billing/r5-rate-bands.sql"],
+                        self.client_env("billing", "billing", "postgres", "billing-postgres"),
+                        {"billing-jobs": "/opt/billing"},
+                    )
+                },
+            },
+        }
+
+        def release():
+            self.apply_documents([job])
+            self.wait_job(job["metadata"]["name"])
+
+        # The hourly job is applying the newest batch. Older invoices keep
+        # their existing rate bands, including usage booked before r5.
+        batch = """
+from price_book p where l.metric = p.metric
+and l.line_id > (select max(line_id) - 60 from ledger_lines)
+"""
+        return self.change_while_writing(
+            self.billing,
+            "billing hourly re-rate",
+            f"update ledger_lines l set amount = round(l.quantity * p.unit_price, 4), "
+            f"rate.unit_price = p.unit_price {batch};",
+            "select 1 from ops.billing_releases where revision = 'r5 rate bands'",
+            release,
+            f"update ledger_lines l set rate = rate_snapshot(p), rated_at = statement_timestamp() {batch};",
+        )
+
+    def change_while_writing(self, run, writer_name, write, released, change, finish=""):
+        # The release record and catalog change commit together. The writer
+        # cannot commit until then, and the release waits for its first write.
         with ThreadPoolExecutor(max_workers=1) as pool:
             writer = pool.submit(
                 run,
                 f"""
 begin;
-set local application_name = 'metering handoff';
+set local application_name = {sql_literal(writer_name)};
 {write}
 do $$
 declare deadline timestamptz := clock_timestamp() + interval '90 seconds';
 begin
-    while not exists (select 1 from ops.pubsync_log where revision = {sql_literal(revision)}) loop
+    while not exists ({released}) loop
         if clock_timestamp() > deadline then
-            raise exception 'publication make did not commit';
+            raise exception 'catalog change did not commit';
         end if;
         perform pg_sleep(0.05);
     end loop;
 end $$;
+{finish}
 commit;
 select pg_current_wal_lsn();
 """,
@@ -868,16 +917,17 @@ select pg_current_wal_lsn();
             while True:
                 if writer.done():
                     writer.result()
-                    raise RuntimeError(f"{target} writer committed before the publication make")
+                    raise RuntimeError(f"{writer_name} committed before the catalog change")
                 if run(
-                    "select exists (select 1 from pg_stat_activity where application_name = 'metering handoff' "
+                    "select exists (select 1 from pg_stat_activity "
+                    f"where application_name = {sql_literal(writer_name)} "
                     "and backend_xid is not null and query like 'do $$%');"
                 ).strip() == "t":
                     break
                 if time.monotonic() > deadline:
-                    raise TimeoutError(f"{target} writer did not reach the publication make")
+                    raise TimeoutError(f"{writer_name} did not finish its first write")
                 time.sleep(0.2)
-            self.pubsync(target, conf, "r2")
+            change()
             return writer.result().splitlines()[-1]
 
     def slot_lsns(self, run=None):

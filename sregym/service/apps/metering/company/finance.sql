@@ -3,7 +3,8 @@ CREATE TABLE accounts (
     account     text PRIMARY KEY,
     name        text NOT NULL,
     billing_day integer NOT NULL CHECK (billing_day BETWEEN 1 AND 28),
-    email       text NOT NULL
+    email       text NOT NULL,
+    committed_discount numeric NOT NULL DEFAULT 0 CHECK (committed_discount BETWEEN 0 AND 100)
 );
 
 CREATE TABLE ledger_lines (
@@ -13,7 +14,8 @@ CREATE TABLE ledger_lines (
     quantity    numeric(12,3) NOT NULL,
     amount      numeric(14,4) NOT NULL,
     rated_at    timestamptz NOT NULL,
-    invoice_id  bigint
+    invoice_id  bigint,
+    rate        text NOT NULL
 );
 CREATE INDEX ledger_lines_open ON ledger_lines (account) WHERE invoice_id IS NULL;
 
@@ -30,7 +32,8 @@ CREATE TABLE invoice_items (
     kind        text NOT NULL CHECK (kind IN ('usage', 'adjustment')),
     ref         bigint NOT NULL,
     line_id     bigint,
-    amount      numeric(14,4) NOT NULL
+    amount      numeric(14,4) NOT NULL,
+    rate        text
 );
 CREATE INDEX invoice_items_line ON invoice_items (line_id);
 
@@ -56,11 +59,21 @@ CREATE TABLE credit_notes (
     issued_at   timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE FUNCTION usage_charge(list_amount numeric, rate text, discount numeric) RETURNS numeric
+    LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE WHEN split_part(rate, ',', 2) = 'committed)'
+                THEN round(list_amount * (1 - discount / 100), 4)
+                ELSE list_amount END
+$$;
+
 CREATE FUNCTION hold_invoiced_line() RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $$
 DECLARE
     acct text;
+    sent numeric;
     billed numeric;
+    new_charge numeric := 0;
     target numeric;
+    corrected_rate text;
 BEGIN
     IF OLD.invoice_id IS NULL THEN
         IF TG_OP = 'DELETE' THEN
@@ -68,16 +81,22 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
+    SELECT amount INTO STRICT sent FROM invoice_items
+    WHERE invoice_id = OLD.invoice_id AND line_id = OLD.line_id AND kind = 'usage';
+    IF TG_OP = 'UPDATE' THEN
+        SELECT usage_charge(NEW.amount, NEW.rate, committed_discount) INTO STRICT new_charge
+        FROM accounts WHERE account = NEW.account;
+    END IF;
     FOR acct IN
         SELECT OLD.account
         UNION SELECT account FROM ledger_adjustments WHERE line_id = OLD.line_id
         UNION SELECT NEW.account WHERE TG_OP = 'UPDATE'
     LOOP
-        SELECT CASE WHEN acct = OLD.account THEN OLD.amount ELSE 0 END
+        SELECT CASE WHEN acct = OLD.account THEN sent ELSE 0 END
                + coalesce(sum(amount), 0)
           INTO billed
           FROM ledger_adjustments WHERE line_id = OLD.line_id AND account = acct;
-        target := CASE WHEN TG_OP = 'UPDATE' AND acct = NEW.account THEN NEW.amount ELSE 0 END;
+        target := CASE WHEN TG_OP = 'UPDATE' AND acct = NEW.account THEN new_charge ELSE 0 END;
         IF target <> billed THEN
             INSERT INTO ledger_adjustments (account, line_id, amount, reason)
             VALUES (acct, OLD.line_id, target - billed,
@@ -87,6 +106,15 @@ BEGIN
                          ELSE 'usage re-rated after invoice' END);
         END IF;
     END LOOP;
+    -- A local reconciliation can correct the snapshot. The sent item retains
+    -- the rate used at close and the money changes only through adjustments.
+    IF TG_OP = 'UPDATE' AND current_setting('session_replication_role') <> 'replica'
+       AND NEW.rate IS DISTINCT FROM OLD.rate THEN
+        corrected_rate := NEW.rate;
+        NEW := OLD;
+        NEW.rate := corrected_rate;
+        RETURN NEW;
+    END IF;
     RETURN NULL;
 END $$;
 
@@ -98,11 +126,12 @@ ALTER TABLE ledger_lines ENABLE ALWAYS TRIGGER hold_invoiced_line;
 CREATE FUNCTION run_invoices(p_accounts text[]) RETURNS integer LANGUAGE plpgsql AS $$
 DECLARE
     acct text;
+    discount numeric;
     inv bigint;
     n integer := 0;
 BEGIN
     FOREACH acct IN ARRAY p_accounts LOOP
-        PERFORM 1 FROM accounts WHERE account = acct FOR UPDATE;
+        SELECT committed_discount INTO discount FROM accounts WHERE account = acct FOR UPDATE;
         IF NOT EXISTS (SELECT 1 FROM ledger_lines WHERE account = acct AND invoice_id IS NULL)
            AND NOT EXISTS (SELECT 1 FROM ledger_adjustments WHERE account = acct AND invoice_id IS NULL) THEN
             CONTINUE;
@@ -111,9 +140,9 @@ BEGIN
         WITH lines AS (
             UPDATE ledger_lines SET invoice_id = inv
             WHERE account = acct AND invoice_id IS NULL
-            RETURNING line_id, amount)
-        INSERT INTO invoice_items (invoice_id, kind, ref, line_id, amount)
-        SELECT inv, 'usage', line_id, line_id, amount FROM lines;
+            RETURNING line_id, amount, rate)
+        INSERT INTO invoice_items (invoice_id, kind, ref, line_id, amount, rate)
+        SELECT inv, 'usage', line_id, line_id, usage_charge(amount, rate, discount), rate FROM lines;
         WITH adj AS (
             UPDATE ledger_adjustments SET invoice_id = inv
             WHERE account = acct AND invoice_id IS NULL

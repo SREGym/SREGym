@@ -13,6 +13,10 @@ only until their own next restart. The same handoff a week earlier cost
 finance's copy of billing's ledger its updates and deletes, and invoices went
 out from it.
 
+After that link restarted, billing released rate bands during its hourly
+re-rate. Its sender kept writing the old rate format to finance. Finance
+received the usage but used list price where the committed band was missing.
+
 While four customer feeds dropped corrections, support's bulk correction
 CF-31 and the patches it caused piled up: files of corrections for customers to
 apply by hand, a usage row keyed in again, a refund, partial reverts (one of
@@ -37,10 +41,13 @@ from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     documents,
     finance_differences,
     ledger,
+    ledger_rates,
+    rate_band,
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.metering.application import (
+    COMMITTED_DISCOUNTS,
     CUSTOMER_DATABASES,
     NEW_IMAGE,
     STREAMED,
@@ -95,7 +102,8 @@ class MeteringCorrectionsHandoff(Problem):
         self.state = {}
         self.root_cause = self.build_structured_root_cause(
             component="logical decoding on the core and billing PostgreSQL servers (statefulset/core, "
-            "statefulset/billing) during pubsync's corrections handoffs, while they ran PostgreSQL 17.4",
+            "statefulset/billing) during the corrections handoffs and the billing rate-band release, "
+            "on PostgreSQL 17.4",
             namespace=self.namespace,
             description=(
                 "PostgreSQL 17.4 logical decoding did not pass catalog invalidations to transactions already in "
@@ -112,14 +120,20 @@ class MeteringCorrectionsHandoff(Problem):
                 "the batch again and cached the same stale definition. Affected: finance's subscription "
                 "finance_ledger to billing (week one, until finance's subscription was disabled and enabled during "
                 "maintenance; it missed ledger re-ratings, voids and moves, and invoices and support credit notes "
-                "were issued from that ledger), and the customer subscriptions pell_usage, quill_usage and "
+                "were issued from that ledger). After finance's maintenance restart, r5 rate bands committed "
+                "ALTER TYPE rate_info ADD ATTRIBUTE band text while billing's re-rate transaction was still "
+                "applying ratings to the ledger. The same 17.4 defect left billing's walsender encoding rate_info "
+                "with its pre-release shape. Finance received the lines without their band and invoiced committed-use "
+                "customers at list price. That lasted until the 17.6 restart. Finance's rule for legacy rates and "
+                "billing's price book worked as intended. The customer subscriptions pell_usage, quill_usage and "
                 "larkspur_live (from the break until each one's own restart) and ostrava_usage (its link dropped "
                 "across the make and it reconnected before its slot passed the in-flight batch, so it stayed stale "
                 "until the 17.6 restart). They kept voided and moved-out rows and stale quantities, and lacked "
                 "moved-in rows, including support's bulk correction CF-31. larkspur_monthend and vale_usage were "
                 "not stale (their walsenders restarted after their slots passed the batch); they are paused with a "
-                "backlog at the customers' requests (month-end's subscription stops on its first error). billing "
-                "was not affected. Gone since both servers were patched to 17.6, so only the damage remains, along "
+                "backlog at the customers' requests (month-end's subscription stops on its first error). Billing's "
+                "incoming feed from core stayed intact. Both servers were patched to 17.6, so only the damage remains, "
+                "along "
                 "with workarounds that are not the cause: support's correction files, the re-keyed usage row, the "
                 "refund, the nightly correction files, on-call's direct UPDATE of a Quill quantity on core (no "
                 "correction record), and on-call's pg_replication_slot_advance of Pell's slot after its feed "
@@ -301,7 +315,10 @@ class MeteringCorrectionsHandoff(Problem):
                 billing = pool.submit(self.app.set_server, "billing", NEW_IMAGE)
                 self.app.set_server("core", NEW_IMAGE)
                 billing.result()
-        return {"credits": len(credits), "target": target, **facts}
+            patched_at = self.app.billing("select clock_timestamp();").strip()
+            self.seed_usage(5)
+            self.wait_for_finance()
+        return {"credits": len(credits), "target": target, "rates_patched_at": patched_at, **facts}
 
     def seed_usage(self, batches):
         self.app.core(self.app.usage_batch_sql(batches, 60))
@@ -398,12 +415,38 @@ class MeteringCorrectionsHandoff(Problem):
         credits = self.issue_credits(week1)
         # Finance's DBA maintenance: its subscription to billing is disabled and enabled again.
         app.bounce_finance()
+        target = app.release_rate_bands()
+        app.wait_caught_up(app.billing, target=target)
         self.seed_usage(65)
         self.corrections(self.random_plan(6))
         self.wait_for_finance()
         app.invoice_run([t for t in TENANTS if t not in first_half], "invoice-run-close-3")
         app.capture_invoices()
+        self.rate_ticket()
         return credits
+
+    def rate_ticket(self):
+        app = self.app
+        released = app.billing("select released_at from ops.billing_releases where revision = 'r5 rate bands';").strip()
+        row = app.finance(
+            "select l.invoice_id || '|' || l.line_id from ledger_lines l join invoices v using (invoice_id) "
+            "where l.account = 'quill' and l.metric = 'api_calls' and v.status = 'sent' "
+            f"and l.rated_at > {sql_literal(released)}::timestamptz order by l.line_id limit 1;"
+        ).strip()
+        if not row:
+            raise WorldDidNotTake("Quill has no sent invoice for the rate-band release")
+        invoice, line = row.split("|")
+        self.ticket(
+            "quill",
+            f"Committed usage charged at list price on invoice {invoice}",
+            [
+                (
+                    self.customer_name("quill"),
+                    f"Usage line {line} was billed at list price. Our committed-use rate applies.",
+                ),
+                (self.staff(), "I checked the invoice against finance's ledger. The amounts match."),
+            ],
+        )
 
     def week_two(self):
         app = self.app
@@ -894,6 +937,8 @@ class MeteringCorrectionsHandoff(Problem):
         finance_gaps = len(finance_differences(app))
         if not finance_gaps:
             problems.append("finance received every ledger change")
+        rate_problems, rate_counts = self.seal_rates(facts["rates_patched_at"])
+        problems += rate_problems
         slots = app.slot_lsns()
         for db in PAUSED:
             slot = slots.get(db)
@@ -974,9 +1019,59 @@ class MeteringCorrectionsHandoff(Problem):
         return problems, {
             "handoff_at": handoff,
             "finance_gaps": finance_gaps,
+            "rates": rate_counts,
             "documents": documents(app),
             "diffs": {db: {k: len(v) for k, v in d.items()} for db, d in diffs.items()},
         }
+
+    def seal_rates(self, patched_at):
+        app = self.app
+        finance = ledger_rates(app.finance)
+        rows = app.billing(
+            "select line_id || '|' || rate::text || '|' || case "
+            f"when rated_at >= {sql_literal(patched_at)}::timestamptz then 'patched' "
+            "when rated_at >= (select released_at from ops.billing_releases where revision = 'r5 rate bands') "
+            "then 'release' else 'legacy' end from ledger_lines;"
+        )
+        problems = []
+        wrong = []
+        window = set()
+        counts = {"window": 0, "patched": 0, "legacy": 0, "sent_at_list": {}, "legacy_sent": {}}
+        legacy = set()
+        for line, rate, period in (r.split("|") for r in rows.split()):
+            line = int(line)
+            received = finance.get(line)
+            band = rate_band(rate)
+            if period == "release" and band and received and not rate_band(received):
+                window.add(line)
+                counts["window"] += 1
+            elif period == "patched" and band and received == rate:
+                counts["patched"] += 1
+            elif period == "legacy" and not band and received and not rate_band(received):
+                legacy.add(line)
+                counts["legacy"] += 1
+            else:
+                wrong.append(line)
+        if wrong:
+            problems.append(f"unexpected rates on {len(wrong)} lines, including {sorted(wrong)[:10]}")
+        for period in ("window", "patched", "legacy"):
+            if not counts[period]:
+                problems.append(f"no {period} rates")
+        invoices = app.finance(
+            "select l.line_id || '|' || l.account from ledger_lines l join invoices v using (invoice_id) "
+            "join invoice_items i on i.invoice_id = v.invoice_id and i.line_id = l.line_id and i.kind = 'usage' "
+            "join accounts a on a.account = v.account where a.committed_discount > 0 and v.status = 'sent' "
+            "and i.amount = l.amount and split_part(i.rate, ',', 2) in ('', ')') "
+            "and l.metric in ('api_calls', 'tokens_k');"
+        )
+        for line, account in (r.split("|") for r in invoices.split()):
+            for key, lines in (("sent_at_list", window), ("legacy_sent", legacy)):
+                if int(line) in lines:
+                    counts[key][account] = counts[key].get(account, 0) + 1
+        for account in COMMITTED_DISCOUNTS:
+            if account not in counts["sent_at_list"] or account not in counts["legacy_sent"]:
+                problems.append(f"{account} has no sent invoice with both the expected rate cases")
+        return problems, counts
 
     def seal_readers(self, facts, diffs, slots):
         """Month-end ahead of its slot, Vale not, Pell resumed past a gap, Quill without the direct fix."""
