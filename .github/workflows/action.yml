@@ -22,9 +22,9 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Download CodeQL CLI v2.26.3
+    - name: Download CodeQL CLI v2.27.5
       run: |
-        curl -L https://github.com/github/codeql-cli-binaries/releases/download/v2.26.3/codeql-linux64.zip -o codeql.zip
+        curl --fail -L --retry 3 https://github.com/github/codeql-cli-binaries/releases/download/v2.27.5/codeql-linux64.zip -o codeql.zip
         unzip codeql.zip
         mv codeql /opt/codeql
         echo "/opt/codeql" >> $GITHUB_PATH
@@ -36,7 +36,7 @@ jobs:
     - name: Install CodeQL Packs
       run: |
         cd tests/sre-ql
-        codeql pack install
+        codeql pack ci
         cd ../..
 
     - name: Create CodeQL DB
