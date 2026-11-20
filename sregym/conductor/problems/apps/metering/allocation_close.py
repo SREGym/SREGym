@@ -68,6 +68,7 @@ class AllocationReplay:
         self.events = {}
         self.genuine = []
         self.approvals = []
+        self.waiver_approvals = []
 
     def seed_rows(self, ref, account, tag, total, count=1):
         price = Decimal("0.04")
@@ -139,7 +140,7 @@ class AllocationReplay:
     def dispute(self, ref, tag, account, cutoff, crossed, moved):
         line = self.events[f"{ref}/{tag}/0"]
         at = cutoff + timedelta(microseconds=1 if crossed else -1)
-        self.approvals.append(
+        self.waiver_approvals.append(
             "insert into statement_waiver_approvals (account, close_ref, line_id, approved_at, reason) values "
             f"('{account}', {sql_literal(ref)}, {line}, {sql_literal(at.isoformat())}, 'acceptance-test usage');"
         )
@@ -262,7 +263,7 @@ class AllocationReplay:
     def replay(self):
         self.noise_closes()
         self.incident_close()
-        self.app.core("\n".join(self.approvals), database="support")
+        self.app.core("\n".join(["begin;", *self.approvals, *self.waiver_approvals, "commit;"]), database="support")
         self.problem.wait_for_finance()
 
         with ThreadPoolExecutor(max_workers=len(READERS)) as pool:

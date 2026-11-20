@@ -386,10 +386,16 @@ class MeteringCorrectionsHandoff(Problem):
             statement_return = self.statement_dispute(period)
         with self.phase("week_two"):
             target = self.week_two()
-        with self.phase("support_story"):
+        with self.phase("support_story"), ThreadPoolExecutor(max_workers=2) as pool:
+            # Flush the bulk replay while support handles the close, ahead of the publisher rollout.
+            checkpoints = [pool.submit(run, "checkpoint;") for run in (app.core, app.billing)]
             facts = self.support_story(period, statement_return)
             self.close_invoices(["quill", "garnet", "hollis"])
+            for checkpoint in checkpoints:
+                checkpoint.result()
         with self.phase("patch"):
+            # The paused customer slots must also retain their positions through the rollout.
+            app.core("checkpoint;")
             app.patch_publishers()
             patched_at = self.app.billing("select clock_timestamp();").strip()
             self.seed_usage(5)
@@ -1167,7 +1173,7 @@ class MeteringCorrectionsHandoff(Problem):
         ):
             problems.append("no ready correction file waits for Pell's loader")
         # What each customer copy holds now, beside it, for the statement checks.
-        for db in CUSTOMER_DATABASES:
+        def save_reader_snapshot(db):
             wrong = diffs[db]["extra"] + diffs[db]["changed"]
             stray = ""
             if db == "quill_usage":
@@ -1188,6 +1194,8 @@ class MeteringCorrectionsHandoff(Problem):
                     else ""
                 ),
             )
+        with ThreadPoolExecutor(max_workers=len(CUSTOMER_DATABASES)) as pool:
+            list(pool.map(save_reader_snapshot, CUSTOMER_DATABASES))
         handoff = app.core("select now();").strip()
         app.set_rate(60)
         return problems, {

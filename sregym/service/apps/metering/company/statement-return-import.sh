@@ -1,25 +1,35 @@
 #!/bin/bash
-# Apply each delivery to finance before marking it imported in the support inbox.
-# Delivery acknowledgement is recorded separately in support.
+# Process the queue in delivery order and acknowledge the completed import in support.
 set -euo pipefail
-deliveries=$(psql -XAtq -v ON_ERROR_STOP=1 --dbname=support <<'SQL'
-select delivery_id from statement_return_inbox where imported_at is null order by delivery_id;
+pending=$(mktemp)
+trap 'rm -f "$pending"' EXIT
+psql -Xq -v ON_ERROR_STOP=1 --dbname=support \
+    -c '\copy (select delivery_id, account, return_ref, period_start, period_end, accepted_rows from statement_return_inbox where imported_at is null order by delivery_id) to stdout' \
+    > "$pending"
+[ -s "$pending" ] || exit 0
+
+psql -Xq -1 -v ON_ERROR_STOP=1 --dbname=finance \
+    -c 'create temp table delivery (delivery_id bigint, account text, return_ref text, period_start timestamptz,
+                                    period_end timestamptz, accepted_rows jsonb)' \
+    -c "\\copy delivery from '$pending'" \
+    -c '
+        do $import$
+        declare
+            item delivery;
+            waived integer;
+        begin
+            for item in select * from delivery order by delivery_id loop
+                waived := import_statement_return(item.account, item.return_ref, item.period_start,
+                                                  item.period_end, item.accepted_rows);
+                raise notice '"'"'Imported delivery % (% new waivers)'"'"', item.delivery_id, waived;
+            end loop;
+        end $import$;
+    '
+
+# If this step is interrupted the same deliveries may arrive again. The merge
+# and the per-charge revocations make replay safe.
+ids=$(cut -f1 "$pending" | paste -sd, -)
+psql -Xq -v ON_ERROR_STOP=1 --dbname=support -v delivery_ids="$ids" <<'SQL'
+update statement_return_inbox set imported_at = now()
+where imported_at is null and delivery_id = any (string_to_array(:'delivery_ids', ',')::bigint[]);
 SQL
-)
-while IFS= read -r id; do
-    [ -n "$id" ] || continue
-    waived=$(
-        psql -Xq -v ON_ERROR_STOP=1 --dbname=support \
-            -c "\copy (select account, return_ref, period_start, period_end, accepted_rows from statement_return_inbox where delivery_id = $id) to stdout" |
-        psql -XAtq -v ON_ERROR_STOP=1 --dbname=finance \
-            -c 'create temp table delivery (account text, return_ref text, period_start timestamptz,
-                                            period_end timestamptz, accepted_rows jsonb)' \
-            -c '\copy delivery from pstdin' \
-            -c 'select import_statement_return(account, return_ref, period_start, period_end, accepted_rows)
-                from delivery'
-    )
-    psql -Xq -v ON_ERROR_STOP=1 --dbname=support -v delivery_id="$id" <<'SQL'
-update statement_return_inbox set imported_at = now() where delivery_id = :delivery_id and imported_at is null;
-SQL
-    echo "Imported delivery $id ($waived new waivers)"
-done <<< "$deliveries"
