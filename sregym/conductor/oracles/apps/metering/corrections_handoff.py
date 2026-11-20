@@ -458,18 +458,52 @@ class MeteringOracle(Oracle):
             "where kind = 'void' group by 1) "
             "select b.batch_id || '|' || coalesce(b.records, -1) || '|' || coalesce(s.n, 0) + coalesce(v.n, 0) "
             "from ingest_batches b left join stored s using (batch_id) left join voided v using (batch_id) "
-            "where coalesce(b.records, -1) <> coalesce(s.n, 0) + coalesce(v.n, 0);"
+            # Usage keyed in by support is not an ingest batch; removing a duplicate of it is a valid repair.
+            "where b.source <> 'support-console' and coalesce(b.records, -1) <> coalesce(s.n, 0) + coalesce(v.n, 0);"
         )
         if rows.strip():
             return [self.fail("ingest_wrong", batches=rows.split()[:20], count=len(rows.split()))]
         return []
 
     # ------------------------------------------------------------ evaluate
-    def report(self, failures):
+    def observe(self):
+        """Read-only notes on the end state before tonight's routine, kept with the result for analysis (not graded)."""
+        app = self.app
+        notes = {}
+        with contextlib.suppress(Exception):
+            notes["copies"] = {
+                db: {k: len(v) for k, v in copy_digest(app, db, tenant).items()} for db, tenant in CUSTOMER_DATABASES.items()
+            }
+        with contextlib.suppress(Exception):
+            notes["finance_gaps"] = len(finance_differences(app))
+        with contextlib.suppress(Exception):
+            notes["slots_active"] = dict(
+                line.split("|")
+                for line in app.core(
+                    "select slot_name || '|' || active from pg_replication_slots where slot_type = 'logical';"
+                ).split()
+            )
+        with contextlib.suppress(Exception):
+            notes["pell_ready_files"] = app.core(
+                "select count(*) from extract_files where account = 'pell' and status = 'ready';", database="support"
+            ).strip()
+        with contextlib.suppress(Exception):
+            job = json.loads(app.command("get", "cronjob", "correction-extracts", "-o", "json"))
+            conf = json.loads(app.command("get", "configmap", "correction-extracts", "-o", "json"))["data"]
+            notes["nightly_files"] = {
+                "suspended": bool(job["spec"].get("suspend")),
+                "accounts": sorted(parse_extracts_conf(conf.get("extracts.conf", ""))),
+            }
+        return notes
+
+    def report(self, failures, observed=None):
         for failure in failures:
             print(f"❌ {failure['reason']}: {failure.get('detail')}")
         first = failures[0]
-        return {**first, "detail": {"failures": [{"reason": f["reason"], **f.get("detail", {})} for f in failures]}}
+        detail = {"failures": [{"reason": f["reason"], **f.get("detail", {})} for f in failures]}
+        if observed is not None:
+            detail["observed"] = observed
+        return {**first, "detail": detail}
 
     def evaluate(self, solution=None, trace=None, duration=None):
         app = self.app
@@ -481,12 +515,14 @@ class MeteringOracle(Oracle):
             return self.fail("routine_jobs_failed", error=f"database unavailable: {exc}")
         try:
             self.state()
+            observed = self.observe()
+            print(f"observed before tonight's routine: {json.dumps(observed)}")
             errors_before = self.subscription_errors()
             if self.precheck:
                 failures = self.prechecks()
                 if failures:
                     print("tonight's routine not run: the end state already fails checks it cannot change")
-                    return self.report(failures)
+                    return self.report(failures, observed)
         except Exception as exc:  # noqa: BLE001
             print(f"❌ grading raised: {exc}")
             return self.fail_from_exception(exc)
@@ -529,6 +565,6 @@ class MeteringOracle(Oracle):
             with contextlib.suppress(Exception):
                 app.set_rate(60)
         if failures:
-            return self.report(failures)
+            return self.report(failures, observed)
         print("✅ every reader, statement, ledger and charge matches the truth")
-        return {"success": True}
+        return {"success": True, "detail": {"observed": observed}}

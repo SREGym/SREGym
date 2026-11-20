@@ -735,7 +735,18 @@ class MeteringCorrectionsHandoff(Problem):
             line = next((r for r in rows if r["account"] == account and r["line"] in voided and r["amount"] > 0), None)
             if not line:
                 continue
-            ticket = f"SUP-{self.rng.randint(4100, 4999)}"
+            ticket = self.ticket(
+                account,
+                f"Voided usage billed on invoice {line['invoice']}",
+                [
+                    (
+                        self.customer_name(account),
+                        f"Invoice {line['invoice']} charges usage your team told us was voided.",
+                    ),
+                    (self.staff(), f"Issued a credit note of {line['amount']} for the voided usage."),
+                ],
+                status="closed",
+            )
             memo = f"Disputed usage on invoice {line['invoice']}: voided usage was billed ({ticket})"
             app.finance(
                 f"insert into credit_notes (account, amount, memo, issued_by) values ({sql_literal(account)}, "
