@@ -260,7 +260,8 @@ def forwarded_from(app, slot, fence, timeout=60):
         )
         lines = out.splitlines()
         for line, after in zip(lines, lines[1:], strict=False):
-            if f'starting logical decoding for slot "{slot}"' in after:
+            # The next line names the slot: its START_REPLICATION statement or "starting logical decoding".
+            if f'"{slot}"' in after:
                 return line.split("LOG:", 1)[1].split()[0]
         if time.monotonic() > deadline:
             raise TimeoutError(f"no forwarding line for {slot} at {fence}")

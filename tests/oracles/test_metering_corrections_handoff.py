@@ -115,7 +115,7 @@ def test_forwarded_from_reads_the_position_core_logged_for_that_slot():
         "2026-11-20 10:32:03.846 UTC [69] LOG:  0/15A0000 has been already streamed, forwarding to 0/1DAA5C0\n"
         '2026-11-20 10:32:03.846 UTC [69] LOG:  starting logical decoding for slot "vale_usage"\n'
         "2026-11-20 10:32:09.100 UTC [71] LOG:  0/15A32E8 has been already streamed, forwarding to 0/1DAA5C0\n"
-        '2026-11-20 10:32:09.100 UTC [71] LOG:  starting logical decoding for slot "larkspur_monthend"\n'
+        '2026-11-20 10:32:09.100 UTC [71] STATEMENT:  START_REPLICATION SLOT "larkspur_monthend" LOGICAL 0/15A32E8\n'
     )
     app = SimpleNamespace(command=Mock(return_value=log))
     assert forwarded_from(app, "larkspur_monthend", "0/1DAA5C0") == "0/15A32E8"
