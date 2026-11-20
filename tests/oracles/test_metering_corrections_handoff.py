@@ -294,3 +294,63 @@ def test_statement_return_requires_the_retry_and_both_charge_decisions(genuine, 
     oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: state))
 
     assert [failure["reason"] for failure in oracle.check_statement_return()] == reasons
+
+
+# ------------------------------------------------------------ v6 complaints
+from sregym.conductor.problems.apps.metering import complaints  # noqa: E402
+
+SUBSCRIBER_LOG = """2026-11-21 01:00:00.100 UTC [41] LOG:  logical replication apply worker for subscription "ostrava_usage" has started
+2026-11-21 01:00:00.200 UTC [41] ERROR:  duplicate key value violates unique constraint "usage_events_pkey"
+2026-11-21 01:00:00.200 UTC [41] DETAIL:  Key (event_id)=(812) already exists.
+2026-11-21 01:00:00.200 UTC [41] CONTEXT:  processing remote data for replication origin "pg_16501" during message type "INSERT" for replication target relation "public.usage_events" in transaction 9001, finished at 0/D1A2B30
+2026-11-21 01:00:00.300 UTC [42] ERROR:  duplicate key value violates unique constraint "usage_events_pkey"
+2026-11-21 01:00:00.300 UTC [42] CONTEXT:  processing remote data for replication origin "pg_16999" during message type "INSERT" for replication target relation "public.usage_events" in transaction 9002, finished at 0/D1B0000
+"""
+
+
+def test_failed_transaction_reads_one_origin_with_its_pasted_lines():
+    found = complaints.failed_transaction(SUBSCRIBER_LOG, "pg_16501")
+    assert found["xid"] == 9001 and found["finish"] == "0/D1A2B30"
+    assert found["pasted"].splitlines()[0].endswith('unique constraint "usage_events_pkey"')
+    assert "Key (event_id)=(812)" in found["pasted"] and "[42]" not in found["pasted"]
+    assert complaints.failed_transaction(SUBSCRIBER_LOG, "pg_1") is None
+
+
+def test_inside_is_strict_and_compares_numerically():
+    ranges = [("0/D1A0000", "0/D1A2B30")]
+    assert complaints.inside(["0/D1A0000", "0/D1A2B30", "0/D1A1000", "1/0", "0/FFFF"], ranges) == ["0/D1A1000"]
+    assert complaints.lsn_value("1/A") == (1 << 32) + 10
+
+
+def oracle_with(truth, rows):
+    oracle = MeteringOracle.__new__(MeteringOracle)
+    app = SimpleNamespace(core=Mock(return_value=""), rows=Mock(return_value=rows))
+    oracle.problem = SimpleNamespace(app=app, load_state=lambda: {"complaints": {"truth": truth}})
+    oracle.fail = lambda reason, **detail: {"reason": reason, "detail": detail}
+    return oracle
+
+
+def test_core_usage_wrong_flags_a_restored_row_and_a_voided_row():
+    truth = {
+        "5": {"tenant_id": "garnet", "metric": "api_calls", "quantity": 3.0, "occurred_at": "t1"},
+        "6": {"tenant_id": "quill", "metric": "tokens_k", "quantity": 1.5, "occurred_at": "t2"},
+        "7": {"tenant_id": "vale", "metric": "api_calls", "quantity": 2.0, "occurred_at": "t3"},
+    }
+    rows = [
+        {"event_id": 5, "tenant_id": "larkspur", "metric": "api_calls", "quantity": 3.0, "occurred_at": "t1"},
+        {"event_id": 6, "tenant_id": "quill", "metric": "tokens_k", "quantity": 1.5, "occurred_at": "t2"},
+    ]
+    assert oracle_with(truth, rows).check_core_usage() == [
+        {"reason": "core_usage_wrong", "detail": {"events": [5, 7], "count": 2}}
+    ]
+    assert oracle_with(truth, [{"event_id": int(e), **r} for e, r in truth.items()]).check_core_usage() == []
+
+
+def test_assume_applied_leaves_out_only_a_skipped_batch():
+    state = {"complaints": {"batches": {
+        "quill_usage": {"remedy": "skip", "rights": [1, 2], "redate": 3},
+        "larkspur_live": {"remedy": "local_delete", "rights": [4]},
+    }}}
+    assert reference_repair.skipped_items(state, "quill_usage", ("assume_applied",)) == {1, 2, 3}
+    assert reference_repair.skipped_items(state, "quill_usage", ()) == set()
+    assert reference_repair.skipped_items(state, "larkspur_live", ("assume_applied",)) == set()

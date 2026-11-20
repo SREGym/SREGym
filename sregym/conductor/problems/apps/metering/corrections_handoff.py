@@ -50,6 +50,7 @@ from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     rate_band,
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.problems.apps.metering import complaints
 from sregym.conductor.problems.apps.metering.allocation_close import AllocationReplay, seal_allocations
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.metering.application import (
@@ -95,6 +96,9 @@ MAX_BUILDS = 3
 
 class WorldDidNotTake(RuntimeError):
     """A handoff left no reader on the never-committed configuration; the world is rebuilt."""
+
+
+complaints.WorldDidNotTake = WorldDidNotTake
 
 
 class MeteringCorrectionsHandoff(Problem):
@@ -382,6 +386,8 @@ class MeteringCorrectionsHandoff(Problem):
             facts["allocation_returns"] = AllocationReplay(self).replay()
             # Pell's client retries its first return after the last close import, so it is still queued.
             statement_return["retry"] = self.app.deliver_statement_return("pell", "pell_usage", statement_return["ref"])
+        with self.phase("complaints"):
+            facts["complaints"] = complaints.ComplaintReplay(self).run(self.planted)
         return {"credits": len(credits), "target": target, "rates_patched_at": patched_at, **facts}
 
     def seed_usage(self, batches, *, starting_at=None):
@@ -587,6 +593,8 @@ class MeteringCorrectionsHandoff(Problem):
             ]
             + self.random_plan(4)
         )
+        # Ordinary and contract moves around the three customers who will complain after the patch.
+        self.planted = complaints.ComplaintReplay(self).plant()
         app.wait_caught_up()
         for db in VICTIMS:
             digest = copy_digest(app, db, CUSTOMER_DATABASES[db])
@@ -1103,6 +1111,14 @@ class MeteringCorrectionsHandoff(Problem):
         problems += self.seal_quill_period(facts["quill_period"])
         allocation_problems, allocation_values = seal_allocations(app, facts["allocation_returns"], facts["statement_return"])
         problems += allocation_problems
+        quill = facts["quill_period"]
+        pitfalls = {
+            facts[k] for k in ("x", "z", "w", "w2", "v1", "p", "y", "q", "pell_gap_reduced")
+        } | set(facts["pell_voids"]) | set(facts["moved_in"]) | {
+            facts["statement_return"]["genuine"], facts["statement_return"]["missing"],
+            quill["entering"]["event"], quill["leaving"]["event"],
+        } | {row["line"] for key in ("earned", "genuine") for row in facts["allocation_returns"].get(key, [])}
+        problems += complaints.ComplaintReplay(self).seal(facts["complaints"], pitfalls)
         held = {
             int(e)
             for e in app.customer(

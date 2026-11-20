@@ -202,6 +202,7 @@ class MeteringOracle(Oracle):
         "duplicate_usage_changed": "agent",
         "documents_changed": "agent",
         "customer_copy_wrong": "agent",
+        "core_usage_wrong": "agent",
         "statement_reversed": "agent",
         "statement_rebooked": "agent",
         "statement_lines_wrong": "agent",
@@ -358,6 +359,22 @@ class MeteringOracle(Oracle):
         if expected is not None and rows[0] != expected:
             return [self.fail("duplicate_usage_changed", expected=expected, actual=rows[0])]
         return []
+
+    def check_core_usage(self):
+        """The usage rows the complaint batches touched, on core, against what each row really is."""
+        truth = (self.state().get("complaints") or {}).get("truth")
+        if not truth:
+            return []
+        rows = {
+            str(r["event_id"]): {k: r[k] for k in ("tenant_id", "metric", "quantity", "occurred_at")}
+            for r in self.app.rows(
+                self.app.core,
+                "select row_to_json(u) from (select event_id, tenant_id, metric, quantity, occurred_at from usage_events "
+                f"where event_id in ({','.join(truth)})) u;",
+            )
+        }
+        wrong = sorted(int(e) for e, row in truth.items() if rows.get(e) != row)
+        return [self.fail("core_usage_wrong", events=wrong[:20], count=len(wrong))] if wrong else []
 
     def check_documents(self):
         before = self.state().get("documents") or {}
@@ -731,6 +748,7 @@ class MeteringOracle(Oracle):
         print(f"observed before tonight's routine: {json.dumps(observed)}")
         errors_before = run("subscription_errors", self.subscription_errors)
         check(self.check_duplicate_usage)
+        check(self.check_core_usage)
         check(self.check_documents)
         check(self.precheck_feeds)
         try:

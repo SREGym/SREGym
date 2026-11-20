@@ -283,13 +283,78 @@ def repair_pell(app, declared, state, wrong=()):
     return {event: offer_alone(app, declared, "pell", PELL, event) for event in state["moved_in"]}
 
 
+def complaint(state, database):
+    return (state.get("complaints") or {}).get("batches", {}).get(database)
+
+
+def repair_complaints(app, state, wrong=()):
+    """Restore each contract owner, through the correction tool; a fix the customer asked for stays."""
+    batches = (state.get("complaints") or {}).get("batches", {})
+    for batch in batches.values():
+        if "keep_all_complaints" not in wrong:
+            app.core(
+                f"select correct_usage({batch['stale']}, 'move', {sql_literal(batch['owner'])}, "
+                f"{sql_literal('restored per contract ' + batch['contract'] + ', not per ' + batch['ticket'])}, 'reference');"
+            )
+        if batch.get("redate") and "revert_all_complaints" in wrong:
+            before = app.core(
+                f"select before->>'occurred_at' from usage_corrections where event_id = {batch['redate']} "
+                f"and kind = 'redate' and batch = {sql_literal(batch['ticket'])};"
+            ).strip()
+            app.core(f"select correct_usage({batch['redate']}, 'redate', {sql_literal(before)}, 'reverted', 'reference');")
+
+
+def skipped_items(state, database, wrong):
+    """A reader that skipped its batch lacks every item; assuming it applied leaves them out."""
+    batch = complaint(state, database)
+    if not batch or batch["remedy"] != "skip" or "assume_applied" not in wrong:
+        return set()
+    return {*batch["rights"], *([batch["redate"]] if batch.get("redate") else [])}
+
+
+def delete_insert(app, declared, tenant, database, state, wrong):
+    """A deliberate mistake: re-send the batch rows as a delete and an insert, whatever the reader holds."""
+    batch = complaint(state, database)
+    if batch and "delete_insert" in wrong:
+        rows = ids(batch["rights"])
+        app.core(transaction(declared, tenant, "", (
+            f"update usage_events set tenant_id = {sql_literal(away_from(tenant))} where event_id in ({rows});"
+            f"update usage_events set tenant_id = {sql_literal(tenant)} where event_id in ({rows});"
+        )))
+        wait_confirmed(app, database, lsn(app), 120)
+
+
+def resend_all(app, declared, state):
+    """A deliberate mistake: re-send every batch row to every complaining reader as an insert."""
+    for database, batch in (state.get("complaints") or {}).get("batches", {}).items():
+        tenant = batch.get("tenant") or {LIVE: "larkspur", QUILL: "quill", OSTRAVA: "ostrava"}[database]
+        net_transaction(app, declared, tenant, database, copy_digest(app, database, tenant), inserts=batch["rights"])
+
+
 def repair_quill(app, declared, state, wrong):
     entering, leaving = (state["quill_period"][key] for key in ("entering", "leaving"))
     into, out = entering["event"], leaving["event"]
-    skip = {into, out}
+    skip = {into, out} | skipped_items(state, QUILL, wrong)
     if "quill_from_corrections" in wrong:
         skip.add(state["q"])
+    batch = complaint(state, QUILL)
+    fix = batch and batch.get("redate") and batch["redate"] not in skip and "revert_all_complaints" not in wrong
+    if fix:
+        skip.add(batch["redate"])
     send_net(app, declared, "quill", QUILL, skip=skip)
+    if fix:
+        # Quill finds an update by its old period; rewind the timestamp silently and replay the fix.
+        event = batch["redate"]
+        before = app.core(
+            f"select before->>'occurred_at' from usage_corrections where event_id = {event} and kind = 'redate' "
+            f"and batch = {sql_literal(batch['ticket'])};"
+        ).strip()
+        app.core(transaction(
+            declared, "quill",
+            f"update usage_events set occurred_at = {sql_literal(before)} where event_id = {event};",
+            f"update usage_events set occurred_at = {sql_literal(batch['redate_to'])} where event_id = {event};",
+        ))
+    delete_insert(app, declared, "quill", QUILL, state, wrong)
 
     def redate(case, date):
         return f"update usage_events set occurred_at = {sql_literal(case[date])} where event_id = {case['event']};"
@@ -347,6 +412,7 @@ def hidden_head(app):
 def repair_larkspur(app, declared, state, wrong=()):
     w = state["w"]
     send_net(app, declared, "larkspur", LIVE)
+    delete_insert(app, declared, "larkspur", LIVE, state, wrong)
     if "month_end_as_is" in wrong:
         release(app, MONTH_END)
         return {}
@@ -514,16 +580,21 @@ def repair(problem, wrong=()):
     # DBA loaded W or not, and live (which never had W) needs nothing.
     keep, drop = (state["w"], state["w2"]) if "keep_w" in wrong else (state["w2"], state["w"])
     app.core(f"select correct_usage({drop}, 'void', null, 'duplicate of usage event {keep}', 'reference');")
+    repair_complaints(app, state, wrong)
     app.wait_caught_up(skip=(MONTH_END, VALE), timeout=300)
     declared = declared_publications(app)
     with ingest_paused(app):
         outcomes = repair_pell(app, declared, state, wrong)
         repair_quill(app, declared, state, wrong)
         if "ostrava_alone" not in wrong:
-            send_net(app, declared, "ostrava", OSTRAVA)
+            send_net(app, declared, "ostrava", OSTRAVA, skip=skipped_items(state, OSTRAVA, wrong))
+            delete_insert(app, declared, "ostrava", OSTRAVA, state, wrong)
         outcomes.update(repair_larkspur(app, declared, state, wrong))
         if "vale_as_is" not in wrong:
             repair_vale(app, declared)
+    if "resend_all" in wrong:
+        with ingest_paused(app):
+            resend_all(app, declared, state)
     print(f"offered alone: {outcomes} (hand-loaded: Pell {state['pell_loaded']}, month-end W {state['w_loaded']})")
     try:
         app.wait_caught_up(skip=(VALE,), timeout=60 if wrong else 300)

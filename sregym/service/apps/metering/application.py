@@ -62,6 +62,8 @@ CUSTOMER_DATABASES = {
     "vale_usage": "vale",
 }
 STREAMED = sorted(set(CUSTOMER_DATABASES.values()))
+#: Support's holding account: usage parked while a correction is re-sent. Never invoiced, never streamed.
+HOLDING = ("suspense", "Unallocated usage (support)")
 ALLOCATION_CUSTOMERS = {
     db: CUSTOMER_DATABASES[db] for db in ("pell_usage", "quill_usage", "larkspur_live", "ostrava_usage")
 }
@@ -674,7 +676,7 @@ class MeteringApplication(KubernetesCommands, Application):
         tenants = ",\n".join(
             f"({sql_literal(t)}, {sql_literal(spec[0])}, {sql_literal(spec[1])}, {str(t in STREAMED).lower()})"
             for t, spec in TENANTS.items()
-        )
+        ) + f",\n({sql_literal(HOLDING[0])}, {sql_literal(HOLDING[1])}, 'internal', false)"
         roles = [
             f"create role ingest login password {sql_literal(p['ingest'])};",
             "grant select, delete on meter_inbox to ingest;",
@@ -701,7 +703,7 @@ class MeteringApplication(KubernetesCommands, Application):
             f"({sql_literal(t)}, {sql_literal(spec[0])}, {spec[3]}, {sql_literal('billing@' + t + '.example')}, "
             f"{COMMITTED_DISCOUNTS.get(t, 0)})"
             for t, spec in TENANTS.items()
-        )
+        ) + f",\n({sql_literal(HOLDING[0])}, {sql_literal(HOLDING[1])}, 1, 'support@metering.example', 0)"
         self.finance(
             (COMPANY / "finance.sql").read_text()
             + (COMPANY / "statement-returns.sql").read_text()
