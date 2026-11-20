@@ -472,11 +472,13 @@ class MeteringOracle(Oracle):
         if wrong:
             failures.append(self.fail("billing_ledger_wrong", lines=wrong[:20], count=len(wrong)))
         rates = ledger_rates(app.billing)
-        waived = self.state()["statement_return"]["genuine"]
+        state = self.state()
+        waived = {state["statement_return"]["genuine"]}
+        waived.update(row["line"] for row in state.get("allocation_returns", {}).get("genuine", []))
         target = {
             (line, account): usage_charge(account, amount, rates.get(line, ""))
             for line, (account, amount) in truth.items()
-            if line != waived
+            if line not in waived
         }
         billed = defaultdict(Decimal)
         usage_items = defaultdict(int)
@@ -504,7 +506,8 @@ class MeteringOracle(Oracle):
             failures.append(self.fail("finance_ledger_wrong", lines=[list(k) for k in wrong[:20]], count=len(wrong)))
         twice = sorted(line for line, n in usage_items.items() if n > 1)
         uninvoiced = app.finance(
-            f"select count(*) from ledger_lines where invoice_id is null and line_id <> {waived};"
+            "select count(*) from ledger_lines where invoice_id is null and line_id not in "
+            f"({','.join(map(str, sorted(waived)))});"
         ).strip()
         if twice or uninvoiced != "0":
             failures.append(
@@ -582,6 +585,52 @@ class MeteringOracle(Oracle):
         ).split()
         if history != ["line"]:
             failures.append(self.fail("statement_lines_wrong", database="pell_usage", event=missing, history=history))
+        return failures
+
+    def check_allocation_returns(self, delivery_boundary):
+        app = self.app
+        allocation = self.state().get("allocation_returns")
+        if not allocation:
+            return []
+        close = sql_literal(allocation["close"])
+        later = delivery_boundary if delivery_boundary is not None else 0
+        deliveries = app.rows(
+            lambda q: app.core(q, database="support"),
+            f"""
+            select json_build_object('ref', i.return_ref, 'retried', bool_or(i.delivery_id > {later}),
+                                     'pending', bool_or(i.imported_at is null), 'acknowledged',
+                                     bool_or(a.acknowledged_at is not null))
+            from statement_return_inbox i
+            left join statement_return_acknowledgements a using (account, return_ref)
+            where i.close_ref = {close} group by i.return_ref;
+            """,
+        )
+        sent = {row["ref"] for row in deliveries if not row["pending"] and (row["retried"] or row["acknowledged"])}
+        expected_refs = {row["ref"] for row in allocation["earned"]}
+        failures = []
+        if missing := expected_refs - sent:
+            failures.append(self.fail("statement_return_not_imported", returns=sorted(missing)))
+        earned = allocation["earned"]
+        genuine = allocation["genuine"]
+        ids = ",".join(str(row["line"]) for row in earned + genuine)
+        decisions = app.rows(app.finance, f"""
+            select json_build_object('line', l.line_id, 'account', l.account, 'waiver', l.waived_by_return,
+                                     'charges', coalesce(sum(i.amount), 0), 'items', count(i.invoice_id),
+                                     'billed_account', min(v.account))
+            from ledger_lines l
+            left join invoice_items i on i.line_id = l.line_id and i.kind = 'usage'
+            left join invoices v on v.invoice_id = i.invoice_id
+            where l.line_id in ({ids})
+            group by l.line_id;
+        """)
+        by_line = {row["line"]: row for row in decisions}
+        for row in earned + genuine:
+            actual = by_line.get(row["line"])
+            expected = (row["account"], row.get("amount"), None, row["account"], 1) if "amount" in row else (
+                row["account"], 0, row["ref"], None, 0
+            )
+            if not actual or tuple(actual[k] for k in ("account", "charges", "waiver", "billed_account", "items")) != expected:
+                failures.append(self.fail("statement_return_waiver_wrong", event=row["line"], decision=actual))
         return failures
 
     def check_ingest(self):
@@ -705,6 +754,14 @@ class MeteringOracle(Oracle):
             boundary = run(
                 "invoice boundary", lambda: int(app.finance("select coalesce(max(invoice_id), 0) from invoices;"))
             )
+            return_boundary = None
+            if self.state().get("allocation_returns"):
+                return_boundary = run("return delivery boundary", lambda: int(app.core(
+                    "select coalesce(max(delivery_id), 0) from statement_return_inbox;", database="support"
+                )))
+                job("customer return resend", lambda: app.run_cronjob(
+                    "statement-return-resend", f"statement-return-resend-{int(time.time())}", customer_side=True
+                ))
             job("statement return import", lambda: app.run_cronjob("statement-return-import", f"statement-return-import-{int(time.time())}"))
             job("invoice run", lambda: app.invoice_run([*TENANTS, NEW_CUSTOMER[0]], f"invoice-run-{int(time.time())}"))
             for db in [*CUSTOMER_DATABASES, NEW_CUSTOMER[2]]:
@@ -717,6 +774,7 @@ class MeteringOracle(Oracle):
             check(self.check_ledgers, boundary)
             check(self.check_rates)
             check(self.check_statement_return)
+            check(self.check_allocation_returns, return_boundary)
             check(self.check_ingest)
         finally:
             with contextlib.suppress(Exception):

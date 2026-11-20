@@ -31,7 +31,7 @@ BEGIN
     PERFORM 1 FROM accounts WHERE account = p_account FOR UPDATE;
     MERGE INTO ledger_lines AS charge
     USING jsonb_to_recordset(p_rows) AS accepted(event_id bigint, metric text, quantity numeric)
-    ON charge.line_id = accepted.event_id
+    ON charge.line_id = accepted.event_id AND charge.account = p_account
     WHEN NOT MATCHED BY SOURCE AND charge.account = p_account AND charge.invoice_id IS NULL
          AND charge.occurred_at >= p_start AND charge.occurred_at < p_end
          AND charge.waived_by_return IS DISTINCT FROM p_ref

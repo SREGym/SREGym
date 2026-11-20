@@ -134,3 +134,21 @@ CREATE TABLE ops.pubsync_log (
     publication text NOT NULL,
     change      text NOT NULL
 );
+
+-- A receipt travels on the same subscription as the usage in its allocation batch.
+CREATE TABLE allocation_receipts (
+    close_ref   text NOT NULL,
+    revision    integer NOT NULL,
+    tenant_id   text NOT NULL,
+    PRIMARY KEY (close_ref, revision, tenant_id)
+);
+ALTER TABLE allocation_receipts REPLICA IDENTITY FULL;
+
+CREATE EXTENSION pg_walinspect;
+CREATE TABLE ops.allocation_batches (
+    close_ref   text NOT NULL,
+    revision    integer NOT NULL,
+    xid         xid NOT NULL DEFAULT pg_current_xact_id()::xid,
+    commit_lsn  pg_lsn,
+    PRIMARY KEY (close_ref, revision)
+);

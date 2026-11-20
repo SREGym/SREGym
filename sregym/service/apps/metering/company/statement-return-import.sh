@@ -1,6 +1,6 @@
 #!/bin/bash
 # Apply each delivery to finance before marking it imported in the support inbox.
-# imported_at is internal bookkeeping. The customer receives no acknowledgement.
+# Delivery acknowledgement is recorded separately in support.
 set -euo pipefail
 deliveries=$(psql -XAtq -v ON_ERROR_STOP=1 --dbname=support <<'SQL'
 select delivery_id from statement_return_inbox where imported_at is null order by delivery_id;

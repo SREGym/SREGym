@@ -482,6 +482,28 @@ def repair_statement_return(app, returned, wrong):
         app.finance(f"select revoke_statement_waiver('pell', {ref}, {event}, {review});")
 
 
+def repair_allocation_returns(app, allocation, wrong):
+    if not allocation or "allocation_leave" in wrong:
+        return
+    erroneous = allocation["erroneous"]
+    if "allocation_clear_only" in wrong:
+        app.finance(
+            "update ledger_lines set waived_by_return = null, waiver_reason = null "
+            f"where line_id in ({ids(row['line'] for row in erroneous)});"
+        )
+        return
+    revocations = list(erroneous)
+    if "allocation_revoke_all" in wrong:
+        revocations += allocation["genuine"]
+    if "allocation_revoke_moved" in wrong:
+        revocations += [row for row in allocation["genuine"] if row["moved"]]
+    app.finance("\n".join(
+        f"select revoke_statement_waiver({sql_literal(row['account'])}, {sql_literal(row['ref'])}, "
+        f"{row['line']}, {sql_literal(row['ticket'])});"
+        for row in revocations
+    ))
+
+
 def repair(problem, wrong=()):
     """The reference repair; `wrong` names deliberate mistakes for testing the grader."""
     app = problem.app
@@ -510,4 +532,6 @@ def repair(problem, wrong=()):
             raise
     app.wait_caught_up(app.billing, timeout=300)
     repair_finance(problem, linked="linked_offset" in wrong, wrong=wrong)
-    repair_statement_return(app, state["statement_return"], wrong)
+    pell_wrong = (*wrong, "return_revoke_both") if "allocation_revoke_all" in wrong else wrong
+    repair_statement_return(app, state["statement_return"], pell_wrong)
+    repair_allocation_returns(app, state.get("allocation_returns"), wrong)

@@ -63,7 +63,7 @@ CREATE TABLE statement_returns (
 
 CREATE FUNCTION save_statement_return(p_ref text, p_start timestamptz, p_end timestamptz, p_disputed bigint[])
 RETURNS void LANGUAGE sql SET search_path = public AS $$
-    INSERT INTO statement_returns
+    INSERT INTO statement_returns (return_ref, period_start, period_end, accepted_rows)
     SELECT p_ref, p_start, p_end,
            coalesce(jsonb_agg(jsonb_build_object('event_id', u.event_id, 'metric', u.metric, 'quantity', u.quantity)
                               ORDER BY u.event_id), '[]'::jsonb)
@@ -120,3 +120,68 @@ BEGIN
     END LOOP;
     RETURN n;
 END $$;
+
+CREATE TABLE allocation_receipts (
+    close_ref   text NOT NULL,
+    revision    integer NOT NULL,
+    tenant_id   text NOT NULL,
+    PRIMARY KEY (close_ref, revision, tenant_id)
+);
+
+ALTER TABLE statement_returns
+    ADD COLUMN close_ref text,
+    ADD COLUMN batch_revision integer,
+    ADD COLUMN statement_read_at timestamptz,
+    ADD COLUMN signed_at timestamptz,
+    ADD COLUMN statement_digest text;
+
+CREATE EXTENSION pgcrypto;
+CREATE EXTENSION dblink;
+CREATE TABLE return_sender (account text PRIMARY KEY, signing_key text NOT NULL);
+
+-- Build the file against the same transaction snapshot as its batch header.
+CREATE FUNCTION file_allocation_return(p_ref text, p_close text, p_start timestamptz, p_end timestamptz,
+                                       p_disputed bigint[], p_read_at timestamptz)
+RETURNS void LANGUAGE plpgsql SET search_path = public AS $$
+DECLARE
+    revision integer;
+    accepted jsonb;
+    sender return_sender;
+BEGIN
+    IF current_setting('transaction_isolation') <> 'repeatable read' THEN
+        RAISE EXCEPTION 'statement returns require repeatable read';
+    END IF;
+    SELECT max(r.revision) INTO revision FROM allocation_receipts r WHERE r.close_ref = p_close;
+    IF revision IS NULL THEN
+        RAISE EXCEPTION 'no batch receipt for %', p_close;
+    END IF;
+    SELECT coalesce(jsonb_agg(jsonb_build_object('event_id', event_id, 'metric', metric, 'quantity', quantity)
+                             ORDER BY event_id), '[]'::jsonb)
+    INTO accepted
+    FROM usage_events
+    WHERE occurred_at >= p_start AND occurred_at < p_end AND NOT (event_id = ANY (p_disputed));
+    SELECT * INTO STRICT sender FROM return_sender;
+    INSERT INTO statement_returns (return_ref, period_start, period_end, accepted_rows, close_ref, batch_revision,
+                                   statement_read_at, signed_at, statement_digest)
+    VALUES (p_ref, p_start, p_end, accepted, p_close, revision, p_read_at, clock_timestamp(),
+            encode(hmac(jsonb_build_array(sender.account, p_ref, p_close, revision, extract(epoch from p_start),
+                                         extract(epoch from p_end), accepted)::text, sender.signing_key, 'sha256'), 'hex'));
+END $$;
+
+CREATE TABLE allocation_settlements (
+    close_ref   text NOT NULL,
+    revision    integer NOT NULL,
+    line_count  integer NOT NULL,
+    cents       bigint NOT NULL,
+    settled_at  timestamptz NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (close_ref, revision)
+);
+
+CREATE FUNCTION send_allocation_returns() RETURNS SETOF bigint LANGUAGE sql SET search_path = public AS $$
+    SELECT d.delivery_id
+    FROM dblink('statement_support', format('select * from receive_statement_returns(%L, %L::jsonb, %L::jsonb)',
+                 (SELECT account FROM return_sender),
+                 (SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM statement_returns r WHERE close_ref IS NOT NULL),
+                 (SELECT coalesce(jsonb_agg(s), '[]'::jsonb) FROM allocation_settlements s)))
+         AS d(delivery_id bigint);
+$$;

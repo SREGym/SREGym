@@ -27,7 +27,9 @@ an omission on Pell's statement return recorded as a waiver in finance,
 two Quill statement discrepancies when re-dates crossed the open-period filter,
 and two readers paused with a backlog (Larkspur's month-end copy, which stops on
 its first error, during its close; Vale during its site maintenance). Every
-server has since been patched to 17.6; only the damage and the patches remain.
+server has since been patched to 17.6. Finance later combined returns from
+different revisions of a four-account allocation, waiving earned usage that
+was present in the correct customer copies at settlement.
 """
 
 import contextlib
@@ -48,6 +50,7 @@ from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     rate_band,
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.problems.apps.metering.allocation_close import AllocationReplay, seal_allocations
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.metering.application import (
     COMMITTED_DISCOUNTS,
@@ -106,63 +109,31 @@ class MeteringCorrectionsHandoff(Problem):
         self.state = {}
         self.root_cause = self.build_structured_root_cause(
             component=(
-                "logical decoding in the walsenders of the core and billing PostgreSQL servers (statefulset/core, "
-                "statefulset/billing) while they ran PostgreSQL 17.4: pubsync's corrections handoffs (stale "
-                "publication actions) and billing's r5 rate_info release (stale composite type encoding of ledger "
-                "lines sent to finance); plus Quill's UPDATE-only, open-period publication corr_open_quill on core "
-                "and its application to Quill's period-partitioned usage copy."
+                "Finance's period-close reconciliation of Pell, Quill, Larkspur live and Ostrava statement returns, specifically "
+                'the per-tenant omission waiver import that treated four independently timed PostgreSQL 17.6 statement snapshots '
+                'as one approved allocation.'
             ),
             namespace=self.namespace,
             description=(
-                "PostgreSQL 17.4 logical decoding did not pass catalog invalidations to transactions already in "
-                "progress (data loss bug fixed in 17.5, commit 4909b38af034). A walsender that decoded such a "
-                "transaction rebuilt its caches under the older catalog snapshot and kept them until its own restart. "
-                "It hit this platform twice, in two different ways, and the records already affected still needed repair "
-                "after the 17.6 rollout."
+                "The customers' REPEATABLE READ transactions fixed their views at revisions 5 (Pell), 3 (Quill), 1 (Larkspur "
+                'live) and 4 (Ostrava). Each return correctly represented its local rows at that revision. Their combined '
+                "ownership A, B, C, D never existed on core. Revision 6 was the last approval eligible at support's cutoff and "
+                "assigned A, B, D, C. The customers' revision-6 settlement acknowledgements confirm that the actual feeds "
+                'delivered that allocation before the files were signed. The later amendment belonged to the next close. Finance '
+                'matched on tenant, period and event ID without checking that the statement snapshots agreed with the approved '
+                "allocation. Its MERGE WHEN NOT MATCHED BY SOURCE waived Larkspur's earned lot D ($60,000) and Ostrava's earned "
+                'lot C ($40,000) because those events were absent from the respective returns. Pell and Quill filed the correct '
+                'lots for the eligible allocation. The customers resend the same files until acknowledged, so clearing the '
+                'waivers without recording their revocation lets the next import waive them again.'
                 "\n\n"
-                "(1) Publication actions. pubsync moved corrections (UPDATE and DELETE) with a make-before-break "
-                "handoff: first ALTER PUBLICATION corr_<tenant> (and, a week earlier on billing, ledger_corr) SET "
-                "(publish = 'update, delete'), then, after every active slot confirmed past it, a quiet ALTER "
-                "PUBLICATION usage_<tenant> (ledger_all) SET (publish = 'insert'). Each make step committed while an "
-                "ingest batch (or billing apply transaction) that had already written was in flight. Every walsender "
-                "that decoded that transaction first cached the corrections publication's pre-change definition "
-                "(publishing nothing), then loaded the later step fresh, so it published only inserts through the "
-                "ordinary usage and ledger publications, a configuration never committed, until its own next restart. A walsender that restarted between the "
-                "steps was cured only if its slot had already confirmed past the in-flight batch. Affected: "
-                "finance_ledger (billing to finance, week one, until finance's maintenance restart), pell_usage, "
-                "quill_usage and larkspur_live (from the later step until each one's own restart), and ostrava_usage "
-                "(it reconnected between the steps before its slot passed the in-flight batch, so it stayed stale "
-                "until the 17.6 restart). larkspur_monthend and vale_usage were not stale; they are paused with a "
-                "backlog. Billing's own feed was not affected."
-                "\n\n"
-                "(2) Composite type encoding. Billing's release r5 added the band attribute to the composite type "
-                "rate_info (ALTER TYPE rate_info ADD ATTRIBUTE band) while a billing re-rate transaction that had "
-                "already written ledger_lines was in flight. Billing's walsender to finance kept encoding rate_info "
-                "with its pre-release shape, so every ledger line it sent from then until the 17.6 restart reached "
-                "finance without its band. Finance stores the rate as received and invoices lines without a band at "
-                "list price, so committed-use customers were over-charged on those lines. Every row arrived; only the "
-                "content was wrong."
-                "\n\n"
-                "(3) Period crossings. While Quill's walsender held the stale corrections publication definition, "
-                "corr_open_quill was still publishing UPDATEs for Quill's open billing period. When support re-dated "
-                "a usage row into the period, PostgreSQL sent an INSERT. Quill kept the prior-period copy and booked "
-                "the open-period copy as a second charge because its local key is (event_id, billing_period). A "
-                "re-date out of the open period became a DELETE. Quill reversed the old charge and had no row to "
-                "re-issue in the prior period. On 17.6, the full-period corrections publication supplies the wider "
-                "filter and these changes are sent as UPDATEs. Restarting on 17.6 did not repair rows already "
-                "delivered or lost."
-                "\n\n"
-                "(4) Damage written back. Pell's statement return, built from a copy that never received usage moved "
-                "to Pell during its stale window, was imported into finance with MERGE ... WHEN NOT MATCHED BY "
-                "SOURCE, so the company recorded that missing charge as a customer waiver, next to a genuine agreed "
-                "waiver of a similar charge."
-                "\n\n"
-                "Not the cause: support's correction files, the re-keyed usage row, the refund, the nightly "
-                "correction files, on-call's direct UPDATE of a Quill quantity on core (no correction record), "
-                "on-call's pg_replication_slot_advance of Pell's slot (which also skipped every Pell change in "
-                "between), finance's closed-period rule and legacy-rate rule (by design), billing's price book, the "
-                "collation version warnings, the add-table race (pubsync locks the table), subscriber lag, the paused "
-                "feeds, or a need to reconnect after publication changes."
+                'Separately, PostgreSQL 17.4 logical decoding missed catalog invalidations for already-running transactions '
+                "(fixed in 17.5 by 4909b38af034). During pubsync's corrections handoff, stale publication actions caused the "
+                'Pell, Quill, Larkspur live, Ostrava and billing-to-finance senders to omit updates and deletes until their own '
+                "restarts. Quill's UPDATE-only open-period publication still transformed re-dates across its filter into an "
+                'INSERT or DELETE. The period-partitioned copy booked the incoming usage twice and lost the outgoing usage. '
+                "Billing's stale composite rate_info encoding omitted the r5 band on a separate cohort, leading finance to apply "
+                "list prices to committed usage. Pell's earlier return also turned an actual missing transfer into a false "
+                'waiver. The four allocation lots were created after the 17.6 patch and were independent of that earlier damage.'
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -426,6 +397,8 @@ class MeteringCorrectionsHandoff(Problem):
         with self.phase("statement_return"):
             self.app.replay_job("statement-return-import.sh", "finance")
             statement_return["retry"] = self.app.deliver_statement_return("pell", "pell_usage", statement_return["ref"])
+        with self.phase("allocation_closes"):
+            facts["allocation_returns"] = AllocationReplay(self).replay()
         return {"credits": len(credits), "target": target, "rates_patched_at": patched_at, **facts}
 
     def seed_usage(self, batches, *, starting_at=None):
@@ -463,6 +436,7 @@ class MeteringCorrectionsHandoff(Problem):
         # subscriptions together makes each slot wait for the other's transaction.
         app.subscribe_billing(copy_data=False)
         app.subscribe_finance(copy_data=False)
+        app.publish_allocation_receipts()
         app.subscribe_customers(copy_data=False)
         lark = self.customer_name("larkspur")
         self.ticket(
@@ -1144,6 +1118,8 @@ class MeteringCorrectionsHandoff(Problem):
         problems += self.seal_readers(facts, diffs, slots)
         problems += self.seal_statement_return(facts["statement_return"], diffs["pell_usage"])
         problems += self.seal_quill_period(facts["quill_period"])
+        allocation_problems, allocation_values = seal_allocations(app, facts["allocation_returns"], facts["statement_return"])
+        problems += allocation_problems
         held = {
             int(e)
             for e in app.customer(
@@ -1218,6 +1194,7 @@ class MeteringCorrectionsHandoff(Problem):
             "handoff_at": handoff,
             "finance_gaps": finance_gaps,
             "rates": rate_counts,
+            "allocation_seal": allocation_values,
             "documents": documents(app),
             "diffs": {db: {k: len(v) for k, v in d.items()} for db, d in diffs.items()},
         }
@@ -1324,7 +1301,7 @@ class MeteringCorrectionsHandoff(Problem):
             app.finance,
             "select json_build_object('line', line_id, 'source', waived_by_return, 'reason', waiver_reason, "
             "'account', account, 'open', invoice_id is null) from ledger_lines "
-            "where waived_by_return is not null order by line_id;",
+            f"where waived_by_return = {ref} order by line_id;",
         )
         expected = [
             {"line": event, "source": returned["ref"], "reason": "omitted from statement return", "account": "pell", "open": True}

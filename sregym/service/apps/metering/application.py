@@ -14,6 +14,7 @@ import base64
 import contextlib
 import json
 import secrets
+import select
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -61,6 +62,9 @@ CUSTOMER_DATABASES = {
     "vale_usage": "vale",
 }
 STREAMED = sorted(set(CUSTOMER_DATABASES.values()))
+ALLOCATION_CUSTOMERS = {
+    db: CUSTOMER_DATABASES[db] for db in ("pell_usage", "quill_usage", "larkspur_live", "ostrava_usage")
+}
 #: Customer subscriptions created to stop (disable themselves) on the first error.
 STOP_ON_ERROR = ("larkspur_monthend",)
 SUBSCRIBERS = "subscribers"
@@ -141,7 +145,11 @@ class MeteringApplication(KubernetesCommands, Application):
 
     def psql(self, pod, database, script, hidden=False, timeout=300):
         run = self.hidden if hidden else self.command
-        args = [
+        return run(*self.psql_args(pod, database), input_text=script, timeout=timeout)
+
+    @staticmethod
+    def psql_args(pod, database):
+        return [
             "exec",
             "-i",
             pod,
@@ -159,7 +167,6 @@ class MeteringApplication(KubernetesCommands, Application):
             "-f",
             "-",
         ]
-        return run(*args, input_text=script, timeout=timeout)
 
     def core(self, script, database="usage", timeout=300):
         return self.psql("core-0", database, script, timeout=timeout)
@@ -172,6 +179,33 @@ class MeteringApplication(KubernetesCommands, Application):
 
     def customer(self, database, script, timeout=300):
         return self.psql(f"{SUBSCRIBERS}-0", database, script, hidden=True, timeout=timeout)
+
+    @contextlib.contextmanager
+    def customer_session(self, database):
+        # A statement can stay open while subsequent batches apply to this reader.
+        args = self.psql_args(f"{SUBSCRIBERS}-0", database)
+        with subprocess.Popen(
+            ["kubectl", "-n", HIDDEN, *args],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        ) as proc:
+            def execute(script):
+                proc.stdin.write(script + "\n\\echo ready\n")
+                proc.stdin.flush()
+                if not select.select([proc.stdout], [], [], 30)[0]:
+                    raise TimeoutError(f"{database} statement session did not respond")
+                if proc.stdout.readline().strip() != "ready":
+                    proc.wait(timeout=5)
+                    raise RuntimeError(f"{database} statement session: {proc.stderr.read().strip()}")
+
+            try:
+                yield execute
+            finally:
+                proc.stdin.close()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
 
     def rows(self, run, script):
         """Run a query that returns one JSON document per row."""
@@ -505,6 +539,8 @@ class MeteringApplication(KubernetesCommands, Application):
                 "finance_feed",
                 "subscribers",
                 "feed_files_pell",
+                "return_delivery",
+                *(f"sign_{db}" for db in ALLOCATION_CUSTOMERS),
                 *(f"feed_{db}" for db in CUSTOMER_DATABASES),
             )
         }
@@ -544,6 +580,11 @@ class MeteringApplication(KubernetesCommands, Application):
                 self.secret_document("gateway", {"password": p["gateway"]}),
                 self.hidden_policy(),
                 self.subscribers_statefulset(),
+                self.service(SUBSCRIBERS),
+                self.config_map(
+                    "statement-returns",
+                    {"statement-return-resend.sh": (COMPANY / "statement-return-resend.sh").read_text()},
+                ),
             ],
             hidden=True,
         )
@@ -590,7 +631,22 @@ class MeteringApplication(KubernetesCommands, Application):
                 ),
             ]
         )
-        self.apply_documents(self.gateway_deployment(), hidden=True)
+        self.apply_documents(
+            [
+                *self.gateway_deployment(),
+                self.cronjob(
+                    "statement-return-resend",
+                    daily_schedule(start, 12 * 60 + 10),
+                    "statement-return-resend.sh",
+                    SUBSCRIBERS,
+                    "postgres",
+                    "subscribers",
+                    "statement-returns",
+                    "/opt/returns",
+                ),
+            ],
+            hidden=True,
+        )
         self.wait_rollout("statefulset", "ingest")
         self.wait_rollout("deployment", GATEWAY, hidden=True)
 
@@ -603,6 +659,16 @@ class MeteringApplication(KubernetesCommands, Application):
         )
         self.core((COMPANY / "payments.sql").read_text(), database="payments")
         self.core((COMPANY / "support.sql").read_text(), database="support")
+        keys = ", ".join(
+            f"({sql_literal(account)}, {sql_literal(p[f'sign_{db}'])})"
+            for db, account in ALLOCATION_CUSTOMERS.items()
+        )
+        self.core(
+            f"create role return_delivery login password {sql_literal(p['return_delivery'])};"
+            "grant execute on function receive_statement_returns(text, jsonb, jsonb) to return_delivery;"
+            f"insert into return_signing_keys values {keys};",
+            database="support",
+        )
         self.core((COMPANY / "meter.sql").read_text(), database="meter")
         self.core((COMPANY / "usage.sql").read_text())
         tenants = ",\n".join(
@@ -658,6 +724,27 @@ class MeteringApplication(KubernetesCommands, Application):
         self.wait_pod_ready(f"{SUBSCRIBERS}-0", hidden=True)
         for db in CUSTOMER_DATABASES:
             self.create_customer_database(db)
+            if db in ALLOCATION_CUSTOMERS:
+                account = sql_literal(ALLOCATION_CUSTOMERS[db])
+                key = sql_literal(self.passwords[f"sign_{db}"])
+                host = sql_literal(f"core.{self.namespace}.svc.cluster.local")
+                password = sql_literal(self.passwords["return_delivery"])
+                self.customer(
+                    db,
+                    f"insert into return_sender values ({account}, {key});"
+                    "create server statement_support foreign data wrapper dblink_fdw "
+                    f"options (host {host}, dbname 'support');"
+                    "create user mapping for postgres server statement_support "
+                    f"options (user 'return_delivery', password {password});",
+                )
+
+    def publish_allocation_receipts(self):
+        self.core("\n".join(
+            f"alter publication usage_{account} add table allocation_receipts where (tenant_id = '{account}');"
+            f"grant select on allocation_receipts to feed_{db};"
+            + ("grant select on allocation_receipts to feed_larkspur_monthend;" if account == "larkspur" else "")
+            for db, account in ALLOCATION_CUSTOMERS.items()
+        ))
 
     def create_customer_database(self, db):
         self.psql(f"{SUBSCRIBERS}-0", "postgres", f"create database {db};\n", hidden=True)
@@ -758,20 +845,22 @@ class MeteringApplication(KubernetesCommands, Application):
         database = "billing" if target == "billing" else "usage"
         return self.replay_job("pubsync.sh", database, pod=f"{target}-0", config=conf)
 
-    def wait_job(self, name, timeout=1200):
+    def wait_job(self, name, timeout=1200, *, customer_side=False):
+        command = self.hidden if customer_side else self.command
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            status = json.loads(self.command("get", "job", name, "-o", "json"))["status"]
+            status = json.loads(command("get", "job", name, "-o", "json"))["status"]
             if status.get("succeeded"):
-                return self.command("logs", f"job/{name}")
+                return command("logs", f"job/{name}")
             if status.get("failed"):
-                raise RuntimeError(f"job {name} failed: {self.command('logs', f'job/{name}')}")
+                raise RuntimeError(f"job {name} failed: {command('logs', f'job/{name}')}")
             time.sleep(0.5)
         raise TimeoutError(f"job {name} did not finish")
 
-    def run_cronjob(self, cronjob, name, args=None):
+    def run_cronjob(self, cronjob, name, args=None, *, customer_side=False):
         """Run a CronJob's own job now (as `kubectl create job --from` does) and wait for it."""
-        template = json.loads(self.command("get", "cronjob", cronjob, "-o", "json"))["spec"]["jobTemplate"]
+        command = self.hidden if customer_side else self.command
+        template = json.loads(command("get", "cronjob", cronjob, "-o", "json"))["spec"]["jobTemplate"]
         job = {
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -780,8 +869,8 @@ class MeteringApplication(KubernetesCommands, Application):
         }
         if args is not None:
             job["spec"]["template"]["spec"]["containers"][0]["args"] = list(args)
-        self.apply_documents([job])
-        return self.wait_job(name)
+        self.apply_documents([job], hidden=customer_side)
+        return self.wait_job(name, customer_side=customer_side)
 
     def invoice_run(self, accounts, name):
         # The CronJob's own job, with the accounts to close passed explicitly.
@@ -1186,6 +1275,8 @@ select pg_current_wal_lsn();
                 f"deployment/{GATEWAY}",
                 "configmap/gateway",
                 "configmap/metering-state",
+                "configmap/statement-returns",
+                "cronjob/statement-return-resend",
                 "secret/subscribers",
                 "secret/gateway",
                 "networkpolicy/customer-sites",
