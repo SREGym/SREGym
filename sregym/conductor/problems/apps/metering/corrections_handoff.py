@@ -339,10 +339,11 @@ class MeteringCorrectionsHandoff(Problem):
                 "core", publications_conf("r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED}), "r1"
             )
             billing.result()
-            finance = pool.submit(app.subscribe_finance)
-            app.subscribe_billing()
-            app.subscribe_customers()
-            finance.result()
+        # Finance and core share a server. Each slot creation can wait for
+        # the other subscription's transaction if both start together.
+        app.subscribe_billing()
+        app.subscribe_finance()
+        app.subscribe_customers()
         lark = self.customer_name("larkspur")
         self.ticket(
             "larkspur",
