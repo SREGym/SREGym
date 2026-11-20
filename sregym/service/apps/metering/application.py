@@ -16,6 +16,7 @@ import json
 import secrets
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -425,7 +426,8 @@ class MeteringApplication(KubernetesCommands, Application):
                                     "image": CUSTOMER_IMAGE,
                                     "imagePullPolicy": "IfNotPresent",
                                     "command": ["bash", "/opt/gateway/gateway.sh"],
-                                    "env": self.client_env(f"core.{self.namespace}.svc", "meter", "gateway", "gateway"),
+                                    "env": self.client_env(f"core.{self.namespace}.svc", "meter", "gateway", "gateway")
+                                    + [{"name": "GATEWAY_INITIAL_RATE", "value": "0"}],
                                     "resources": {"requests": {"cpu": "20m", "memory": "32Mi"}},
                                     "volumeMounts": [
                                         {"name": "code", "mountPath": "/opt/gateway"},
@@ -506,7 +508,9 @@ class MeteringApplication(KubernetesCommands, Application):
                 self.config_map("ingest", {"ingest.sh": (COMPANY / "ingest.sh").read_text()}),
                 self.config_map("pubsync", {"pubsync.sh": (COMPANY / "pubsync.sh").read_text()}),
                 self.config_map("finance-jobs", {"invoice-run.sh": (COMPANY / "invoice-run.sh").read_text()}),
-                self.config_map("billing-jobs", {"rerate.sh": (COMPANY / "rerate.sh").read_text()}),
+                self.config_map(
+                    "billing-jobs", {name: (COMPANY / name).read_text() for name in ("rerate.sh", "rerate.sql")}
+                ),
                 self.config_map(
                     "support-jobs", {"correction-extracts.sh": (COMPANY / "correction-extracts.sh").read_text()}
                 ),
@@ -525,10 +529,13 @@ class MeteringApplication(KubernetesCommands, Application):
             ],
             hidden=True,
         )
-        self.wait_pod_ready("core-0")
-        self.wait_pod_ready("billing-0")
-        self.wait_pod_ready(f"{SUBSCRIBERS}-0", hidden=True)
-        self.initialize_databases()
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            billing = pool.submit(self.initialize_billing)
+            customers = pool.submit(self.initialize_customers)
+            self.wait_pod_ready("core-0")
+            self.initialize_databases()
+            billing.result()
+            customers.result()
         start = datetime.now(UTC)
         self.apply_documents(
             [
@@ -555,8 +562,8 @@ class MeteringApplication(KubernetesCommands, Application):
                 ),
             ]
         )
-        self.wait_rollout("statefulset", "ingest")
         self.apply_documents(self.gateway_deployment(), hidden=True)
+        self.wait_rollout("statefulset", "ingest")
         self.wait_rollout("deployment", GATEWAY, hidden=True)
 
     def initialize_databases(self):
@@ -596,6 +603,15 @@ class MeteringApplication(KubernetesCommands, Application):
             "grant insert on meter_inbox to gateway;\ngrant usage on sequence meter_inbox_id_seq to gateway;\n",
             database="meter",
         )
+        accounts = ",\n".join(
+            f"({sql_literal(t)}, {sql_literal(spec[0])}, {spec[3]}, {sql_literal('billing@' + t + '.example')})"
+            for t, spec in TENANTS.items()
+        )
+        self.finance((COMPANY / "finance.sql").read_text() + f"insert into accounts values\n{accounts};\n")
+
+    def initialize_billing(self):
+        self.wait_pod_ready("billing-0")
+        p = self.passwords
         self.psql("billing-0", "postgres", "create database billing;\n")
         self.billing(
             (COMPANY / "billing.sql").read_text()
@@ -604,11 +620,9 @@ class MeteringApplication(KubernetesCommands, Application):
                 "grant select on ledger_lines to finance_feed;\n"
             )
         )
-        accounts = ",\n".join(
-            f"({sql_literal(t)}, {sql_literal(spec[0])}, {spec[3]}, {sql_literal('billing@' + t + '.example')})"
-            for t, spec in TENANTS.items()
-        )
-        self.finance((COMPANY / "finance.sql").read_text() + f"insert into accounts values\n{accounts};\n")
+
+    def initialize_customers(self):
+        self.wait_pod_ready(f"{SUBSCRIBERS}-0", hidden=True)
         for db in CUSTOMER_DATABASES:
             self.create_customer_database(db)
 
@@ -671,16 +685,23 @@ class MeteringApplication(KubernetesCommands, Application):
 
     # ------------------------------------------------------------- operations
     def set_rate(self, records_per_second):
-        self.hidden(
-            "exec", f"deployment/{GATEWAY}", "--", "bash", "-c", f"echo {int(records_per_second)} > /run/load/rate"
-        )
+        rate = int(records_per_second)
+        request = str(rate)
+        if rate == 0:
+            request = f"0 {secrets.token_hex(8)}"
+        script = f"echo '{request}' > /run/load/next-rate && mv /run/load/next-rate /run/load/rate"
+        if rate == 0:
+            # Wait for the gateway loop to finish its last flush before draining the inbox.
+            script += (
+                f' && until [ "$(cat /run/load/observed-rate 2>/dev/null)" = \'{request}\' ]; '
+                "do sleep 0.1; done"
+            )
+        self.hidden("exec", f"deployment/{GATEWAY}", "--", "timeout", "30", "bash", "-c", script)
 
     def pubsync(self, target, conf, revision):
         name = f"pubsync-{target}"
-        self.apply_documents([self.config_map(name, {"publications.conf": conf})])
-        # A mounted ConfigMap reaches a new pod immediately; the Job starts one.
         job = self.pubsync_job(target, revision)
-        self.apply_documents([job])
+        self.apply_documents([self.config_map(name, {"publications.conf": conf}), job])
         return self.wait_job(job["metadata"]["name"])
 
     def wait_job(self, name, timeout=1200):
@@ -691,7 +712,7 @@ class MeteringApplication(KubernetesCommands, Application):
                 return self.command("logs", f"job/{name}")
             if status.get("failed"):
                 raise RuntimeError(f"job {name} failed: {self.command('logs', f'job/{name}')}")
-            time.sleep(2)
+            time.sleep(0.5)
         raise TimeoutError(f"job {name} did not finish")
 
     def run_cronjob(self, cronjob, name, args=None):
@@ -786,22 +807,78 @@ class MeteringApplication(KubernetesCommands, Application):
                 "find /var/lib/postgresql/data/pgdata/log -type f -exec truncate -s 0 {} +",
             )
 
-    def start_rerate(self, name):
-        """Run billing's re-rating job now and return once its update is running."""
-        job = json.loads(self.command("get", "cronjob", "billing-rerate", "-o", "json"))["spec"]["jobTemplate"]
-        self.apply_documents(
-            [{"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": name}, "spec": job["spec"]}]
+    @staticmethod
+    def usage_batch_sql(batches, records):
+        """Seed normal usage in complete batches and let the existing feeds build their copies."""
+        tenants = [t for t, spec in TENANTS.items() for _ in range(spec[2])]
+        return f"""
+with batches as (
+    insert into ingest_batches (source, records)
+    select 'ingest-' || ((i - 1) % 4 / 2) || '/' || ((i - 1) % 4), {records}
+    from generate_series(1, {batches}) i
+    returning batch_id, records
+)
+insert into usage_events (record_id, tenant_id, metric, quantity, occurred_at, batch_id)
+select gen_random_uuid()::text, tenant, metric,
+       case metric when 'api_calls' then 1 + floor(random() * 5000)
+                   when 'tokens_k' then round((1 + random() * 800)::numeric, 3)
+                   else round((0.5 + random() * 40)::numeric, 3) end,
+       clock_timestamp() - random() * interval '20 seconds', batch_id
+from (
+    select (string_to_array('{','.join(tenants)}', ','))[1 + floor(random() * {len(tenants)})::int] as tenant,
+           (array['api_calls', 'tokens_k', 'storage_gb_h'])[1 + floor(random() * 3)::int] as metric,
+           batch_id
+    from batches cross join lateral generate_series(1, records)
+) records;
+"""
+
+    def publication_handoff(self, target, conf):
+        """Commit the make while a transaction that wrote on this publisher is still open."""
+        revision = conf.splitlines()[0].removeprefix("# revision: ")
+        run, write = (
+            (self.billing, (COMPANY / "rerate.sql").read_text())
+            if target == "billing"
+            else (self.core, self.usage_batch_sql(1, 60))
         )
-        deadline = time.monotonic() + 180
-        while (
-            self.billing(
-                "select count(*) from pg_stat_activity where state = 'active' and query like 'with rerated%';"
-            ).strip()
-            == "0"
-        ):
-            if time.monotonic() > deadline:
-                raise TimeoutError("re-rating did not start")
-            time.sleep(0.2)
+        # The audit row commits with the publication change. Wait for it inside the writer
+        # transaction so that the first usage/ledger changes decoded after the make are its own.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            writer = pool.submit(
+                run,
+                f"""
+begin;
+set local application_name = 'metering handoff';
+{write}
+do $$
+declare deadline timestamptz := clock_timestamp() + interval '90 seconds';
+begin
+    while not exists (select 1 from ops.pubsync_log where revision = {sql_literal(revision)}) loop
+        if clock_timestamp() > deadline then
+            raise exception 'publication make did not commit';
+        end if;
+        perform pg_sleep(0.05);
+    end loop;
+end $$;
+commit;
+select pg_current_wal_lsn();
+""",
+            )
+            # This statement starts only after the writer's INSERT or UPDATE has finished.
+            deadline = time.monotonic() + 90
+            while True:
+                if writer.done():
+                    writer.result()
+                    raise RuntimeError(f"{target} writer committed before the publication make")
+                if run(
+                    "select exists (select 1 from pg_stat_activity where application_name = 'metering handoff' "
+                    "and backend_xid is not null and query like 'do $$%');"
+                ).strip() == "t":
+                    break
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"{target} writer did not reach the publication make")
+                time.sleep(0.2)
+            self.pubsync(target, conf, "r2")
+            return writer.result().splitlines()[-1]
 
     def slot_lsns(self, run=None):
         run = run or self.core
@@ -817,10 +894,10 @@ class MeteringApplication(KubernetesCommands, Application):
             )
         }
 
-    def wait_caught_up(self, run=None, slots=None, timeout=600, skip=()):
-        """Wait until the given (or every) logical slot has confirmed the current WAL position."""
+    def wait_caught_up(self, run=None, slots=None, timeout=600, skip=(), target=None):
+        """Wait until the given (or every) logical slot confirms the target WAL position."""
         run = run or self.core
-        target = run("select pg_current_wal_lsn();").strip()
+        target = target or run("select pg_current_wal_lsn();").strip()
         deadline = time.monotonic() + timeout
         while True:
             pending = [
@@ -840,14 +917,19 @@ class MeteringApplication(KubernetesCommands, Application):
                 return
             if time.monotonic() > deadline:
                 raise TimeoutError(f"slots not caught up to {target}: {pending}")
-            time.sleep(2)
+            time.sleep(0.5)
 
     def wait_inbox_empty(self, timeout=600):
         deadline = time.monotonic() + timeout
-        while self.core("select exists (select 1 from meter_inbox);", database="meter").strip() == "t":
+        while (
+            self.core("select exists (select 1 from meter_inbox);", database="meter").strip() == "t"
+            or self.core(
+                "select exists (select 1 from pg_stat_activity where usename = 'ingest' and backend_xid is not null);"
+            ).strip() == "t"
+        ):
             if time.monotonic() > deadline:
                 raise TimeoutError("meter inbox did not drain")
-            time.sleep(2)
+            time.sleep(0.5)
 
     def slot_active(self, slot, run=None):
         return (run or self.core)(
@@ -866,7 +948,6 @@ class MeteringApplication(KubernetesCommands, Application):
         subscriber = subscriber or (lambda q: self.customer(database, q))
         subscriber(f"alter subscription {database} disable;\n")
         self.wait_slot(database, False, publisher)
-        time.sleep(3)
         subscriber(f"alter subscription {database} enable;\n")
         self.wait_slot(database, True, publisher)
 
@@ -874,13 +955,24 @@ class MeteringApplication(KubernetesCommands, Application):
         """Finance's DBA maintenance: its subscription to billing is disabled and enabled again."""
         self.restart_subscription("finance_ledger", subscriber=self.finance, publisher=self.billing)
 
-    def pause_reader(self, database):
-        """On-call pauses one customer feed: its login is refused and its walsender ended."""
-        self.core(
-            f"alter role feed_{database} nologin;\n"
-            f"select pg_terminate_backend(active_pid) from pg_replication_slots where slot_name = {sql_literal(database)} "
-            "and active_pid is not null;\n"
-        )
+    def pause_reader(self, database, *, applied_ahead=False):
+        """Refuse new connections and end the walsender, optionally before it confirms an applied batch."""
+        self.core(f"alter role feed_{database} nologin;")
+        condition = ""
+        deadline = time.monotonic() + 30
+        while True:
+            if applied_ahead:
+                origin = self.subscription_origin(database)
+                condition = f"and confirmed_flush_lsn < {sql_literal(origin)}::pg_lsn"
+            terminated = self.core(
+                "select pg_terminate_backend(active_pid) from pg_replication_slots "
+                f"where slot_name = {sql_literal(database)} and active_pid is not null {condition};"
+            ).strip()
+            if not applied_ahead or terminated == "t":
+                break
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"{database} did not apply a batch ahead of its slot")
+            time.sleep(0.1)
         self.wait_slot(database, False)
 
     def set_server(self, name, image):

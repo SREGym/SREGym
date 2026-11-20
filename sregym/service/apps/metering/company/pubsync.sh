@@ -32,13 +32,13 @@ from pg_publication where pubname = :'name';
 SQL
 }
 
-# Changes of one phase are applied together, in one transaction, with every
-# affected table locked against writers first.
+# Apply each phase in one transaction. Additions only widen the operation set;
+# withdrawals and changes to table membership still take the table lock.
 pending=""
 locked=""
 stage() {
-  local name=$1 table=$2 publish=$3 change=$4
-  [[ " $locked " == *" $table "* ]] || { pending+="lock table \"$table\" in share row exclusive mode;"$'\n'; locked+=" $table"; }
+  local name=$1 table=$2 publish=$3 change=$4 lock=$5
+  [[ "$lock" == no || " $locked " == *" $table "* ]] || { pending+="lock table \"$table\" in share row exclusive mode;"$'\n'; locked+=" $table"; }
   pending+="alter publication \"$name\" set (publish = '${publish//,/, }');"$'\n'
   pending+="insert into ops.pubsync_log (revision, publication, change) values ('$revision', '$name', '$change');"$'\n'
   log "$name: $change"
@@ -83,7 +83,7 @@ for i in "${!names[@]}"; do
   fi
   more=$(union "$have" "${wants[$i]}")
   if [ "$more" != "$have" ]; then
-    stage "${names[$i]}" "${tables[$i]}" "$more" "publish ${have:-none} -> ${more}"
+    stage "${names[$i]}" "${tables[$i]}" "$more" "publish ${have:-none} -> ${more}" no
     added=1
   fi
 done
@@ -108,7 +108,7 @@ fi
 for i in "${!names[@]}"; do
   have=$(current "${names[$i]}")
   if [ "$have" != "${wants[$i]}" ]; then
-    stage "${names[$i]}" "${tables[$i]}" "${wants[$i]}" "publish ${have:-none} -> ${wants[$i]:-none}"
+    stage "${names[$i]}" "${tables[$i]}" "${wants[$i]}" "publish ${have:-none} -> ${wants[$i]:-none}" yes
   fi
 done
 apply_staged

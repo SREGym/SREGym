@@ -29,6 +29,7 @@ import json
 import random
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     MeteringOracle,
@@ -175,12 +176,8 @@ class MeteringCorrectionsHandoff(Problem):
         )
         return event
 
-    def corrections(self, plan, pause=(0.5, 2)):
-        events = []
-        for spec in plan:
-            events.append(self.correct(*spec))
-            time.sleep(self.rng.uniform(*pause))
-        return events
+    def corrections(self, plan):
+        return [self.correct(*spec) for spec in plan]
 
     def random_plan(self, count, invoiced=None):
         tenants = list(TENANTS)
@@ -226,7 +223,6 @@ class MeteringCorrectionsHandoff(Problem):
             f"{sql_literal(author)}, {sql_literal(body)});",
             database="support",
         )
-        time.sleep(0.3)
 
     @staticmethod
     def customer_name(tenant):
@@ -297,26 +293,39 @@ class MeteringCorrectionsHandoff(Problem):
             target = self.week_two()
         with self.phase("support_story"):
             facts = self.support_story()
-        app = self.app
-        app.invoice_run(["quill", "garnet", "hollis"], "invoice-run-close-4")
-        app.capture_invoices()
-        # Routine patching moves both servers to the current minor release.
+            self.app.invoice_run(["quill", "garnet", "hollis"], "invoice-run-close-4")
+            self.app.capture_invoices()
         with self.phase("patch"):
-            app.set_server("billing", NEW_IMAGE)
-            app.set_server("core", NEW_IMAGE)
-            time.sleep(20)
+            # Routine patching moves both publishers to the current minor release.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                billing = pool.submit(self.app.set_server, "billing", NEW_IMAGE)
+                self.app.set_server("core", NEW_IMAGE)
+                billing.result()
         return {"credits": len(credits), "target": target, **facts}
+
+    def seed_usage(self, batches):
+        self.app.core(self.app.usage_batch_sql(batches, 60))
+
+    def wait_for_finance(self):
+        # The ledger on billing is written by the core subscription before finance can copy it.
+        self.app.wait_caught_up(slots=["billing_usage"])
+        self.app.wait_caught_up(self.app.billing)
 
     def ordinary(self):
         app = self.app
         app.truncate_server_logs()
-        app.pubsync(
-            "core", publications_conf("r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED}), "r1"
-        )
-        app.pubsync("billing", ledger_conf("r1", "ledger feed for finance", "insert,update,delete", ""), "r1")
-        app.subscribe_billing()
-        app.subscribe_finance()
-        app.subscribe_customers()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            billing = pool.submit(
+                app.pubsync, "billing", ledger_conf("r1", "ledger feed for finance", "insert,update,delete", ""), "r1"
+            )
+            app.pubsync(
+                "core", publications_conf("r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED}), "r1"
+            )
+            billing.result()
+            finance = pool.submit(app.subscribe_finance)
+            app.subscribe_billing()
+            app.subscribe_customers()
+            finance.result()
         lark = self.customer_name("larkspur")
         self.ticket(
             "larkspur",
@@ -332,25 +341,22 @@ class MeteringCorrectionsHandoff(Problem):
             ],
             status="closed",
         )
-        app.set_rate(60)
-        time.sleep(75)
-
         # Months of ordinary operation, compressed: corrections flow to every reader; first invoices.
+        self.seed_usage(105)
         self.corrections(self.random_plan(10))
-        time.sleep(30)
+        self.wait_for_finance()
         app.invoice_run(list(TENANTS), "invoice-run-close-1")
         app.capture_invoices()
-        time.sleep(60)
+        self.seed_usage(80)
         self.corrections(self.random_plan(8, invoiced=True))
-        time.sleep(20)
+        app.wait_caught_up()
 
     def week_one(self):
         app = self.app
         # Week one: billing's ledger corrections move to ledger_corr during billing's busy hour.
-        app.set_rate(1500)
-        time.sleep(25)
-        app.start_rerate(f"billing-rerate-{int(time.time() // 60)}")
-        app.pubsync(
+        self.seed_usage(875)
+        self.wait_for_finance()
+        target = app.publication_handoff(
             "billing",
             ledger_conf(
                 "r2",
@@ -358,15 +364,10 @@ class MeteringCorrectionsHandoff(Problem):
                 "insert,update,delete",
                 "update,delete",
             ),
-            "r2",
         )
-        time.sleep(10)
+        app.wait_caught_up(app.billing, target=target)
         self.corrections(self.random_plan(4))
-        app.set_rate(0)
-        app.wait_inbox_empty()
-        app.wait_caught_up()
-        app.wait_caught_up(app.billing)
-        time.sleep(10)
+        self.wait_for_finance()
         app.pubsync(
             "billing",
             ledger_conf(
@@ -377,8 +378,8 @@ class MeteringCorrectionsHandoff(Problem):
             ),
             "r3",
         )
-        app.set_rate(60)
-        time.sleep(20)
+        self.seed_usage(20)
+        self.wait_for_finance()
         week1 = self.corrections(
             [(t, "void", None, True) for t in ("pell", "arden", "cinder", "garnet")]
             + [(t, "void", None, False) for t in ("pell", "larkspur", "arden", "quill", "hollis")]
@@ -387,7 +388,7 @@ class MeteringCorrectionsHandoff(Problem):
             + [("cinder", "move", "ember", True), ("arden", "move", "pell", False), ("ionic", "move", "fallow", False)]
             + self.random_plan(5)
         )
-        time.sleep(20)
+        self.wait_for_finance()
         missed = {line for line, _account in finance_differences(app)} & set(week1)
         if not missed:
             raise WorldDidNotTake("finance received every week-one ledger change")
@@ -395,53 +396,42 @@ class MeteringCorrectionsHandoff(Problem):
         app.invoice_run(first_half, "invoice-run-close-2")
         app.capture_invoices()
         credits = self.issue_credits(week1)
-        time.sleep(20)
         # Finance's DBA maintenance: its subscription to billing is disabled and enabled again.
         app.bounce_finance()
-        time.sleep(30)
+        self.seed_usage(65)
         self.corrections(self.random_plan(6))
-        time.sleep(20)
+        self.wait_for_finance()
         app.invoice_run([t for t in TENANTS if t not in first_half], "invoice-run-close-3")
         app.capture_invoices()
-        time.sleep(20)
         return credits
 
     def week_two(self):
         app = self.app
         # Week two: the same handoff for every opted-in customer on core, during ingest's busy hour.
-        app.set_rate(1500)
-        time.sleep(25)
+        self.seed_usage(675)
+        app.wait_caught_up()
         # Ostrava's link drops just before the first step and is back right after it, before its slot has
         # confirmed past the ingest batch in flight at the step.
         app.customer("ostrava_usage", "alter subscription ostrava_usage disable;")
         app.wait_slot("ostrava_usage", False)
-        app.pubsync(
+        target = app.publication_handoff(
             "core",
             publications_conf(
                 "r2",
                 "customer corrections: enable updates and deletes on corr_* (1/2)",
                 {t: ("insert,update,delete", "update,delete") for t in STREAMED},
             ),
-            "r2",
         )
         app.customer("ostrava_usage", "alter subscription ostrava_usage enable;")
         app.wait_slot("ostrava_usage", True)
-        app.set_rate(150)
-        target = app.core("select pg_current_wal_lsn();").strip()
-        time.sleep(15)
         # Month-end's and Vale's links drop and reconnect after their slots confirmed past that batch.
         survivors = ("larkspur_monthend", "vale_usage")
-        app.wait_caught_up(slots=list(survivors))
-        for db in survivors:
-            app.restart_subscription(db)
-            time.sleep(self.rng.uniform(5, 15))
+        app.wait_caught_up(slots=survivors, target=target)
+        with ThreadPoolExecutor(max_workers=len(survivors)) as pool:
+            list(pool.map(app.restart_subscription, survivors))
+        app.wait_caught_up(slots=["ostrava_usage"], target=target)
         self.corrections(self.random_plan(5))
-        time.sleep(15)
-        app.set_rate(0)
-        app.wait_inbox_empty()
         app.wait_caught_up()
-        app.wait_caught_up(app.billing)
-        time.sleep(10)
         app.pubsync(
             "core",
             publications_conf(
@@ -449,8 +439,7 @@ class MeteringCorrectionsHandoff(Problem):
             ),
             "r3",
         )
-        app.set_rate(60)
-        time.sleep(30)
+        self.seed_usage(30)
         week2 = self.corrections(
             [
                 ("pell", "void", None, None),
@@ -473,7 +462,7 @@ class MeteringCorrectionsHandoff(Problem):
             ]
             + self.random_plan(4)
         )
-        time.sleep(20)
+        app.wait_caught_up()
         for db in VICTIMS:
             digest = copy_digest(app, db, CUSTOMER_DATABASES[db])
             if not set(week2) & {e for kind in digest.values() for e in kind}:
@@ -486,8 +475,8 @@ class MeteringCorrectionsHandoff(Problem):
         lark, pell = self.customer_name("larkspur"), self.customer_name("pell")
 
         # Every customer closes its statement once.
-        for db in CUSTOMER_DATABASES:
-            app.close_statement(db)
+        with ThreadPoolExecutor(max_workers=len(CUSTOMER_DATABASES)) as pool:
+            list(pool.map(app.close_statement, CUSTOMER_DATABASES))
 
         # Vale's planned site maintenance: Vale takes its own database offline, in a quiet minute.
         self.ticket(
@@ -502,9 +491,6 @@ class MeteringCorrectionsHandoff(Problem):
                 (self.staff(), "Thanks, noted on our side."),
             ],
         )
-        app.set_rate(0)
-        app.wait_inbox_empty()
-        app.wait_caught_up(slots=["vale_usage"])
         app.customer("vale_usage", "alter subscription vale_usage disable;")
         app.wait_slot("vale_usage", False)
 
@@ -522,11 +508,9 @@ class MeteringCorrectionsHandoff(Problem):
             ],
         )
         app.set_rate(1500)
-        time.sleep(12)
-        app.pause_reader("larkspur_monthend")
+        app.pause_reader("larkspur_monthend", applied_ahead=True)
         app.set_rate(60)
         self.note(month_end, f"on-call: {self.staff()}", "Paused the month-end feed for Larkspur.")
-        time.sleep(5)
 
         # CF-31: the account review's corrections, one batch, under ingest load.
         larkspur = self.events_of("larkspur")
@@ -573,7 +557,6 @@ class MeteringCorrectionsHandoff(Problem):
             [(self.staff(), "Applied the CF-31 corrections from the account review as one batch.")],
             status="closed",
         )
-        time.sleep(5)
 
         # The corrections do not show in Pell's and Larkspur's copies: support sends them as files.
         pell_ticket = self.ticket(
@@ -657,7 +640,6 @@ class MeteringCorrectionsHandoff(Problem):
         # Nightly correction files until the feeds are fixed; Pell receives its files by subscription and
         # loads them automatically.
         self.correct("pell", "void")
-        time.sleep(5)
         app.setup_extracts({"pell": pell_ticket, "larkspur": lark_ticket})
         app.subscribe_files("pell", "pell_usage")
         for ticket in (pell_ticket, lark_ticket):
@@ -673,7 +655,6 @@ class MeteringCorrectionsHandoff(Problem):
         # An ordinary correction later reduces one of the rows moved into Pell.
         reduced = self.rng.choice(moved_in)
         self.correct("pell", "reduce", event=reduced)
-        time.sleep(5)
 
         # Larkspur's live copy lacks the moved-in row: support keys it in again by hand.
         row = app.rows(
@@ -739,7 +720,6 @@ class MeteringCorrectionsHandoff(Problem):
             f"Reverted two CF-31 moves after the account owners objected: event {x} back to "
             f"Larkspur, event {v1} back to Vale.",
         )
-        time.sleep(5)
         app.wait_caught_up(slots=["ostrava_usage"])
         app.close_statement("ostrava_usage")
         self.note(
@@ -750,22 +730,24 @@ class MeteringCorrectionsHandoff(Problem):
         )
         app.customer("larkspur_monthend", "alter subscription larkspur_monthend enable;")
 
-        # The customers' links drop and reconnect, one by one.
+        # Pell reconnects before its next correction. The other links recover after the skip.
+        app.wait_caught_up(slots=["pell_usage"])
         app.restart_subscription("pell_usage")
-        time.sleep(5)
         gap = self.pell_gap(review, y)
-        time.sleep(10)
-        app.restart_subscription("quill_usage")
-        time.sleep(5)
-        app.restart_subscription("larkspur_live")
-        time.sleep(10)
+        reconnecting = ("quill_usage", "larkspur_live")
+        app.wait_caught_up(slots=reconnecting)
+        with ThreadPoolExecutor(max_workers=len(reconnecting)) as pool:
+            list(pool.map(app.restart_subscription, reconnecting))
         self.corrections([("pell", "reduce", None, None)] + self.random_plan(5))
-        time.sleep(10)
+        app.set_rate(0)
+        app.wait_inbox_empty()
         app.wait_caught_up(skip=PAUSED)
+        self.wait_for_finance()
         app.run_cronjob("correction-extracts", "correction-extracts-manual-2")
+        app.wait_caught_up(slots=["files_pell"])
         # The customers that are online close their statements as every day.
-        for db in ("pell_usage", "quill_usage", "larkspur_live", "ostrava_usage"):
-            app.close_statement(db)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(app.close_statement, VICTIMS))
         return {
             "x": x,
             "z": z,
@@ -807,7 +789,9 @@ class MeteringCorrectionsHandoff(Problem):
             if time.monotonic() > deadline:
                 raise WorldDidNotTake("Pell's feed did not stop on the reverted move")
             time.sleep(1)
-        stopped = time.monotonic()
+        app.pause_reader("pell_usage")
+        app.set_rate(0)
+        app.wait_inbox_empty()
         first = int(app.core("select max(event_id) from usage_events;").strip())
         failing = self.ticket(
             "pell",
@@ -821,6 +805,7 @@ class MeteringCorrectionsHandoff(Problem):
             ],
         )
         # Ordinary work goes on meanwhile, including one reduction of a row Pell holds.
+        self.seed_usage(85)
         self.corrections(
             [
                 ("quill", "void", None, None),
@@ -833,8 +818,6 @@ class MeteringCorrectionsHandoff(Problem):
         )
         reduced = self.choose(self.events_of("pell") & self.issued("pell_usage"), "Pell reduction in the gap")
         self.correct("pell", "reduce", event=reduced)
-        time.sleep(max(0.0, self.rng.uniform(60, 90) - (time.monotonic() - stopped)))
-        app.pause_reader("pell_usage")
         skipped_to = app.core(
             "select end_lsn from pg_replication_slot_advance('pell_usage', pg_current_wal_lsn());"
         ).strip()
@@ -842,6 +825,7 @@ class MeteringCorrectionsHandoff(Problem):
         last = int(app.core("select max(event_id) from usage_events;").strip())
         self.note(failing, f"on-call: {self.staff()}", "Skipped the failing change on our side; feed resumed.")
         app.wait_slot("pell_usage", True)
+        app.set_rate(60)
         return {"pell_gap": [first, last], "pell_gap_reduced": reduced, "pell_skipped_to": skipped_to}
 
     def issue_credits(self, week1_events):
@@ -898,7 +882,6 @@ class MeteringCorrectionsHandoff(Problem):
         app.wait_inbox_empty()
         app.wait_caught_up(skip=PAUSED)
         app.wait_caught_up(app.billing)
-        time.sleep(5)
         problems = []
         diffs = {db: copy_digest(app, db, tenant) for db, tenant in CUSTOMER_DATABASES.items()}
         for db in VICTIMS:
@@ -923,6 +906,7 @@ class MeteringCorrectionsHandoff(Problem):
                 != "t"
             ):
                 problems.append(f"{db} is not paused before CF-31: {slot}")
+        facts["paused_slots"] = {db: slots[db]["confirmed"] for db in PAUSED if db in slots}
         problems += self.seal_readers(facts, diffs, slots)
         held = {
             int(e)
@@ -1069,13 +1053,14 @@ class MeteringCorrectionsHandoff(Problem):
                 self.corrected.clear()
                 self.tickets.clear()
             try:
-                facts = self.build()
+                with self.phase("history"):
+                    facts = self.build()
+                    with self.phase("seal"):
+                        problems, sealed = self.seal(facts)
             except WorldDidNotTake as exc:
                 failures.append([str(exc)])
                 print(f"Build did not take: {exc}")
                 continue
-            with self.phase("seal"):
-                problems, sealed = self.seal(facts)
             if not problems:
                 self.state = {**facts, **sealed}
                 self.save_state()
