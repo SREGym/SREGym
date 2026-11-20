@@ -2,10 +2,12 @@
 
 Core holds usage events. Billing subscribes to all of them and rates every change
 into its ledger; finance (a database on core) subscribes to the ledger and
-invoices from it. Each enterprise customer's own database subscribes to a
-row-filtered usage publication and a corrections publication. The customer
-databases, the API gateways that send meter records, and the checks live in the
-hidden namespace.
+invoices from it; payments (on core) holds card captures and refunds; support
+(on core) holds tickets and the correction files sent to customers. Each
+enterprise customer's own database subscribes to a row-filtered usage
+publication and a corrections publication and books every row it receives on
+its usage statement. The customer databases, the API gateways that send meter
+records, and the checks live in the hidden namespace.
 """
 
 import base64
@@ -14,6 +16,7 @@ import json
 import secrets
 import subprocess
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sregym.service.apps.base import Application
@@ -55,7 +58,6 @@ CUSTOMER_DATABASES = {
     "ostrava_usage": "ostrava",
     "vale_usage": "vale",
 }
-RECEIPT_DATABASE = "larkspur_monthend"
 STREAMED = sorted(set(CUSTOMER_DATABASES.values()))
 SUBSCRIBERS = "subscribers"
 GATEWAY = "gateway"
@@ -63,6 +65,27 @@ GATEWAY = "gateway"
 
 def sql_literal(value):
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def daily_schedule(start, offset_minutes):
+    """A daily cron schedule at start + offset (UTC): routine jobs never fire while the incident is worked."""
+    at = start.astimezone(UTC) + timedelta(minutes=offset_minutes)
+    return f"{at.minute} {at.hour} * * *"
+
+
+def extracts_conf(accounts):
+    """The correction-extracts configuration: account -> ticket."""
+    lines = ["# account | ticket"] + [f"{account} | {ticket}" for account, ticket in accounts.items()]
+    return "\n".join(lines) + "\n"
+
+
+def parse_extracts_conf(text):
+    accounts = {}
+    for line in text.splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            account, _, ticket = line.partition("|")
+            accounts[account.strip()] = ticket.strip()
+    return accounts
 
 
 def publications_conf(revision, comment, operations):
@@ -148,8 +171,11 @@ class MeteringApplication(KubernetesCommands, Application):
         return base64.b64decode(data[key]).decode()
 
     def apply_documents(self, documents, hidden=False):
+        # Server-side apply keeps no last-applied copy of the object on it.
         body = json.dumps({"apiVersion": "v1", "kind": "List", "items": documents})
-        (self.hidden if hidden else self.command)("apply", "-f", "-", input_text=body, timeout=180)
+        (self.hidden if hidden else self.command)(
+            "apply", "--server-side", "--force-conflicts", "-f", "-", input_text=body, timeout=180
+        )
 
     # ---------------------------------------------------------------- manifests
     @staticmethod
@@ -181,10 +207,19 @@ class MeteringApplication(KubernetesCommands, Application):
             "-c",
             "log_directory=log",
             "-c",
-            "log_filename=postgresql-%Y-%m-%d_%H%M%S.log",
+            "log_filename=postgresql-%a.log",
             "-c",
-            "log_rotation_size=64MB",
+            "log_truncate_on_rotation=on",
+            "-c",
+            "log_rotation_age=1d",
+            "-c",
+            "log_rotation_size=0",
         ]
+
+    def server_statefulset(self, name, image):
+        if name == "core":
+            return self.postgres_statefulset("core", image, self.server_args(), "core-postgres", memory="1536Mi")
+        return self.postgres_statefulset("billing", image, self.server_args(), "billing-postgres", cpu="200m")
 
     @staticmethod
     def postgres_statefulset(name, image, args, secret, memory="1Gi", storage="6Gi", extra_containers=(), cpu=None):
@@ -300,7 +335,7 @@ class MeteringApplication(KubernetesCommands, Application):
             "volumes": [{"name": n, "configMap": {"name": n}} for n in config_maps],
         }
 
-    def cronjob(self, name, schedule, script, host, database, secret, config_map, mount):
+    def cronjob(self, name, schedule, script, host, database, secret, config_map, mount, extra_mounts=None):
         return {
             "apiVersion": "batch/v1",
             "kind": "CronJob",
@@ -319,7 +354,7 @@ class MeteringApplication(KubernetesCommands, Application):
                                 name,
                                 ["bash", f"{mount}/{script}"],
                                 self.client_env(host, database, "postgres", secret),
-                                {config_map: mount},
+                                {config_map: mount, **(extra_mounts or {})},
                             )
                         },
                     }
@@ -343,29 +378,12 @@ class MeteringApplication(KubernetesCommands, Application):
             "metadata": {"name": f"pubsync-{target}-{revision}", "labels": {"app": "pubsync", "target": target}},
             "spec": {
                 "backoffLimit": 0,
-                "ttlSecondsAfterFinished": 600,
                 "template": {"metadata": {"labels": {"app": "pubsync", "target": target}}, "spec": pod},
             },
         }
 
     def subscribers_statefulset(self):
-        exporter = {
-            "name": "exporter",
-            "image": CUSTOMER_IMAGE,
-            "imagePullPolicy": "IfNotPresent",
-            "command": [
-                "bash",
-                "-c",
-                (
-                    "while true; do psql -XAtq -h 127.0.0.1 -U postgres -d " + RECEIPT_DATABASE + " -c "
-                    "\"update usage_events set export_receipt = 'EXP-' || upper(substr(md5(random()::text), 1, 10)), "
-                    'exported_at = now() where export_receipt is null" >/dev/null 2>&1; sleep 15; done'
-                ),
-            ],
-            "env": [{"name": "PGPASSWORD", "valueFrom": {"secretKeyRef": {"name": "subscribers", "key": "password"}}}],
-            "resources": {"requests": {"cpu": "10m", "memory": "16Mi"}},
-        }
-        document = self.postgres_statefulset(
+        return self.postgres_statefulset(
             SUBSCRIBERS,
             CUSTOMER_IMAGE,
             [
@@ -382,9 +400,7 @@ class MeteringApplication(KubernetesCommands, Application):
             "subscribers",
             memory="1Gi",
             storage="4Gi",
-            extra_containers=[exporter],
         )
-        return document
 
     def gateway_deployment(self):
         tenants = [t for t, spec in TENANTS.items() for _ in range(spec[2])]
@@ -488,9 +504,12 @@ class MeteringApplication(KubernetesCommands, Application):
                 self.config_map("pubsync", {"pubsync.sh": (COMPANY / "pubsync.sh").read_text()}),
                 self.config_map("finance-jobs", {"invoice-run.sh": (COMPANY / "invoice-run.sh").read_text()}),
                 self.config_map("billing-jobs", {"rerate.sh": (COMPANY / "rerate.sh").read_text()}),
-                self.postgres_statefulset("core", OLD_IMAGE, self.server_args(), "core-postgres", memory="1536Mi"),
+                self.config_map(
+                    "support-jobs", {"correction-extracts.sh": (COMPANY / "correction-extracts.sh").read_text()}
+                ),
+                self.server_statefulset("core", OLD_IMAGE),
                 self.service("core"),
-                self.postgres_statefulset("billing", OLD_IMAGE, self.server_args(), "billing-postgres", cpu="200m"),
+                self.server_statefulset("billing", OLD_IMAGE),
                 self.service("billing"),
             ]
         )
@@ -507,12 +526,13 @@ class MeteringApplication(KubernetesCommands, Application):
         self.wait_pod_ready("billing-0")
         self.wait_pod_ready(f"{SUBSCRIBERS}-0", hidden=True)
         self.initialize_databases()
+        start = datetime.now(UTC)
         self.apply_documents(
             [
                 self.ingest_deployment(),
                 self.cronjob(
                     "invoice-run",
-                    "30 1 * * *",
+                    daily_schedule(start, 12 * 60 + 20),
                     "invoice-run.sh",
                     "core",
                     "finance",
@@ -522,7 +542,7 @@ class MeteringApplication(KubernetesCommands, Application):
                 ),
                 self.cronjob(
                     "billing-rerate",
-                    "5 * * * *",
+                    daily_schedule(start, 12 * 60 + 5),
                     "rerate.sh",
                     "billing",
                     "billing",
@@ -538,7 +558,13 @@ class MeteringApplication(KubernetesCommands, Application):
 
     def initialize_databases(self):
         p = self.passwords
-        self.core("create database usage;\ncreate database finance;\ncreate database meter;\n", database="postgres")
+        self.core(
+            "create database usage;\ncreate database finance;\ncreate database meter;\n"
+            "create database payments;\ncreate database support;\n",
+            database="postgres",
+        )
+        self.core((COMPANY / "payments.sql").read_text(), database="payments")
+        self.core((COMPANY / "support.sql").read_text(), database="support")
         self.core((COMPANY / "meter.sql").read_text(), database="meter")
         self.core((COMPANY / "usage.sql").read_text())
         tenants = ",\n".join(
@@ -581,21 +607,11 @@ class MeteringApplication(KubernetesCommands, Application):
         )
         self.finance((COMPANY / "finance.sql").read_text() + f"insert into accounts values\n{accounts};\n")
         for db in CUSTOMER_DATABASES:
-            receipt = ",\n    export_receipt text,\n    exported_at timestamptz" if db == RECEIPT_DATABASE else ""
-            self.psql(f"{SUBSCRIBERS}-0", "postgres", f"create database {db};\n", hidden=True)
-            self.customer(
-                db,
-                f"""create table usage_events (
-    event_id bigint primary key,
-    record_id text not null,
-    tenant_id text not null,
-    metric text not null,
-    quantity numeric(12,3) not null,
-    occurred_at timestamptz not null,
-    batch_id bigint not null{receipt}
-);
-""",
-            )
+            self.create_customer_database(db)
+
+    def create_customer_database(self, db):
+        self.psql(f"{SUBSCRIBERS}-0", "postgres", f"create database {db};\n", hidden=True)
+        self.customer(db, (COMPANY / "customer.sql").read_text())
 
     def subscribe_customers(self, databases=None):
         for db in databases or CUSTOMER_DATABASES:
@@ -648,18 +664,97 @@ class MeteringApplication(KubernetesCommands, Application):
             time.sleep(2)
         raise TimeoutError(f"job {name} did not finish")
 
-    def invoice_run(self, accounts, name):
-        # The CronJob's own job, with the accounts to close passed explicitly.
-        job = json.loads(self.command("get", "cronjob", "invoice-run", "-o", "json"))["spec"]["jobTemplate"]
+    def run_cronjob(self, cronjob, name, args=None):
+        """Run a CronJob's own job now (as `kubectl create job --from` does) and wait for it."""
+        template = json.loads(self.command("get", "cronjob", cronjob, "-o", "json"))["spec"]["jobTemplate"]
         job = {
             "apiVersion": "batch/v1",
             "kind": "Job",
-            "metadata": {"name": name, "labels": {"app": "invoice-run"}},
-            "spec": job["spec"],
+            "metadata": {"name": name, "labels": {"app": cronjob}},
+            "spec": template["spec"],
         }
-        job["spec"]["template"]["spec"]["containers"][0]["args"] = list(accounts)
+        if args is not None:
+            job["spec"]["template"]["spec"]["containers"][0]["args"] = list(args)
         self.apply_documents([job])
         return self.wait_job(name)
+
+    def invoice_run(self, accounts, name):
+        # The CronJob's own job, with the accounts to close passed explicitly.
+        return self.run_cronjob("invoice-run", name, accounts)
+
+    def capture_invoices(self):
+        """The card processor's settlement import: capture every sent invoice not yet captured."""
+        captured = set(self.core("select invoice_id from captures;", database="payments").split())
+        values = [
+            f"({sql_literal(r['account'])}, {r['invoice_id']}, {r['total']})"
+            for r in self.rows(
+                self.finance,
+                "select json_build_object('account', account, 'invoice_id', invoice_id, 'total', total) "
+                "from invoices where status = 'sent' and total > 0 order by invoice_id;",
+            )
+            if str(r["invoice_id"]) not in captured
+        ]
+        if values:
+            self.core(
+                "insert into captures (account, invoice_id, amount) values " + ", ".join(values) + ";",
+                database="payments",
+            )
+        return len(values)
+
+    def setup_extracts(self, accounts):
+        """Support's nightly correction files for the listed accounts."""
+        invoice_schedule = json.loads(self.command("get", "cronjob", "invoice-run", "-o", "json"))["spec"]["schedule"]
+        minute, hour = (int(x) for x in invoice_schedule.split()[:2])
+        at = datetime(2000, 1, 1, hour, minute, tzinfo=UTC)
+        self.apply_documents(
+            [
+                self.config_map("correction-extracts", {"extracts.conf": extracts_conf(accounts)}),
+                self.cronjob(
+                    "correction-extracts",
+                    daily_schedule(at, -15),
+                    "correction-extracts.sh",
+                    "core",
+                    "usage",
+                    "core-postgres",
+                    "support-jobs",
+                    "/opt/support",
+                    extra_mounts={"correction-extracts": "/etc/extracts"},
+                ),
+            ]
+        )
+
+    def close_statement(self, database):
+        """The customer's statement close (customer code)."""
+        return int(self.customer(database, "select close_statement();").strip())
+
+    def load_extract_files(self, account, database):
+        """The customer's loader (customer code): pick up every ready file and apply it."""
+        files = self.rows(
+            lambda q: self.core(q, database="support"),
+            "with taken as (update extract_files set status = 'loaded' "
+            f"where account = {sql_literal(account)} and status = 'ready' returning file_id, rows) "
+            "select json_build_object('file', file_id, 'rows', rows) from taken order by file_id;",
+        )
+        for f in files:
+            self.customer(
+                database,
+                f"select load_correction_file({sql_literal(json.dumps(f['rows']))}::jsonb, {sql_literal(account)});",
+            )
+        return [f["file"] for f in files]
+
+    def truncate_server_logs(self):
+        """Construction cleanup: the servers' log files start with the story."""
+        for pod in ("core-0", "billing-0"):
+            self.command(
+                "exec",
+                pod,
+                "-c",
+                "postgres",
+                "--",
+                "bash",
+                "-c",
+                "find /var/lib/postgresql/data/pgdata/log -type f -exec truncate -s 0 {} +",
+            )
 
     def start_rerate(self, name):
         """Run billing's re-rating job now and return once its update is running."""
@@ -692,7 +787,7 @@ class MeteringApplication(KubernetesCommands, Application):
             )
         }
 
-    def wait_caught_up(self, run=None, slots=None, timeout=600):
+    def wait_caught_up(self, run=None, slots=None, timeout=600, skip=()):
         """Wait until the given (or every) logical slot has confirmed the current WAL position."""
         run = run or self.core
         target = run("select pg_current_wal_lsn();").strip()
@@ -706,6 +801,7 @@ class MeteringApplication(KubernetesCommands, Application):
                         "select json_build_object('slot_name', slot_name) from pg_replication_slots "
                         f"where slot_type = 'logical' and (confirmed_flush_lsn is null or confirmed_flush_lsn < {sql_literal(target)}::pg_lsn)"
                         + (f" and slot_name in ({','.join(sql_literal(s) for s in slots)})" if slots else "")
+                        + (f" and slot_name not in ({','.join(sql_literal(s) for s in skip)})" if skip else "")
                         + ";"
                     ),
                 )
@@ -723,36 +819,42 @@ class MeteringApplication(KubernetesCommands, Application):
                 raise TimeoutError("meter inbox did not drain")
             time.sleep(2)
 
-    def restart_subscription(self, database):
-        """The customer's link drops and its worker reconnects."""
-        self.customer(database, f"alter subscription {database} disable;\n")
-        deadline = time.monotonic() + 120
-        while (
-            self.core(f"select active from pg_replication_slots where slot_name = {sql_literal(database)};").strip()
-            == "t"
-        ):
+    def slot_active(self, slot, run=None):
+        return (run or self.core)(
+            f"select active from pg_replication_slots where slot_name = {sql_literal(slot)};"
+        ).strip() == "t"
+
+    def wait_slot(self, slot, active, run=None, timeout=120):
+        deadline = time.monotonic() + timeout
+        while self.slot_active(slot, run) != active:
             if time.monotonic() > deadline:
-                raise TimeoutError(f"{database} walsender did not stop")
-            time.sleep(1)
-        time.sleep(3)
-        self.customer(database, f"alter subscription {database} enable;\n")
-        deadline = time.monotonic() + 120
-        while (
-            self.core(f"select active from pg_replication_slots where slot_name = {sql_literal(database)};").strip()
-            != "t"
-        ):
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"{database} walsender did not start")
+                raise TimeoutError(f"slot {slot} did not become {'active' if active else 'inactive'}")
             time.sleep(1)
 
-    def set_server(self, name, image=None, senders=None):
-        patch = {"spec": {"template": {"spec": {"containers": [{"name": "postgres"}]}}}}
-        container = patch["spec"]["template"]["spec"]["containers"][0]
-        if image:
-            container["image"] = image
-        if senders:
-            container["args"] = self.server_args(senders)
-        self.command("patch", "statefulset", name, "--type=strategic", "-p", json.dumps(patch))
+    def restart_subscription(self, database, subscriber=None, publisher=None):
+        """The subscription's link drops and its worker reconnects (customer side by default)."""
+        subscriber = subscriber or (lambda q: self.customer(database, q))
+        subscriber(f"alter subscription {database} disable;\n")
+        self.wait_slot(database, False, publisher)
+        time.sleep(3)
+        subscriber(f"alter subscription {database} enable;\n")
+        self.wait_slot(database, True, publisher)
+
+    def bounce_finance(self):
+        """Finance's DBA maintenance: its subscription to billing is disabled and enabled again."""
+        self.restart_subscription("finance_ledger", subscriber=self.finance, publisher=self.billing)
+
+    def pause_reader(self, database):
+        """On-call pauses one customer feed: its login is refused and its walsender ended."""
+        self.core(
+            f"alter role feed_{database} nologin;\n"
+            f"select pg_terminate_backend(active_pid) from pg_replication_slots where slot_name = {sql_literal(database)} "
+            "and active_pid is not null;\n"
+        )
+        self.wait_slot(database, False)
+
+    def set_server(self, name, image):
+        self.apply_documents([self.server_statefulset(name, image)])
         self.wait_rollout("statefulset", name)
         self.wait_pod_ready(f"{name}-0")
 

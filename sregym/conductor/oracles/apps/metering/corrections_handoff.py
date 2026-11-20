@@ -1,11 +1,17 @@
 """End-state grading for the usage corrections handoff.
 
-After the agent finishes, the company's routine work runs as it would tonight:
-pubsync onboards a new customer from the declared configuration, support makes
-fresh corrections of every kind, traffic settles, and finance's invoice run
-closes every account. Then every reader is compared with the truth on core:
-each customer copy, billing's ledger, finance's ledger under its own
-closed-period rule, and what each customer was charged in total.
+After the agent finishes, the company's and its customers' routine work runs as
+it would tonight: Vale's site comes back, pubsync onboards a new customer from
+the declared configuration, support makes fresh corrections, the nightly
+correction files go out if they still do and Pell loads whatever files wait for
+it, traffic settles, finance's invoice run closes every account and every
+customer closes its statement. Then every reader is compared with the truth on
+core: each customer copy and statement, billing's ledger, finance's ledger
+under its own closed-period rule, the documents already issued, and what each
+customer was charged in total.
+
+Checks that tonight's routine cannot change are read first; when one of them
+fails the routine is not run, so an unrepaired world stays repairable.
 """
 
 import contextlib
@@ -20,15 +26,27 @@ from sregym.conductor.oracles.base import Oracle
 from sregym.service.apps.metering.application import (
     CUSTOMER_DATABASES,
     PRICES,
-    RECEIPT_DATABASE,
     SUBSCRIBERS,
     TENANTS,
+    parse_extracts_conf,
     sql_literal,
 )
 
 COLUMNS = "record_id, tenant_id, metric, quantity::text, occurred_at::text, batch_id"
 NEW_CUSTOMER = ("wren", "Wren Studios", "wren_usage")
 CENT = Decimal("0.01")
+#: Finance's own closed-period rule books only these reasons (finance.sql, hold_invoiced_line).
+RULE_SQL = (
+    "(reason in ('usage voided after invoice', 'usage re-rated after invoice') "
+    "or reason like 'usage moved to %' or reason like 'usage moved from %')"
+)
+VALE = "vale_usage"
+
+
+def is_rule_reason(reason):
+    return reason in ("usage voided after invoice", "usage re-rated after invoice") or reason.startswith(
+        ("usage moved to ", "usage moved from ")
+    )
 
 
 def digest_rows(text):
@@ -60,12 +78,12 @@ def ledger(run, table="ledger_lines"):
 
 
 def finance_effective(app):
-    """(line, account) -> what finance will bill for it under its own rule: the line plus its adjustments."""
+    """(line, account) -> what finance will bill for it under its own rule: the line plus the rule's adjustments."""
     effective = defaultdict(Decimal)
     for line, (account, amount) in ledger(app.finance).items():
         effective[(line, account)] += amount
     rows = app.finance(
-        "select line_id || '|' || account || '|' || amount from ledger_adjustments where line_id is not null;"
+        f"select line_id || '|' || account || '|' || amount from ledger_adjustments where line_id is not null and {RULE_SQL};"
     )
     for e, a, x in (line.split("|") for line in rows.split()):
         effective[(int(e), a)] += Decimal(x)
@@ -82,11 +100,53 @@ def finance_differences(app):
     return differences(target, finance_effective(app))
 
 
+def documents(app):
+    """A digest of every document issued so far: invoices with their items, credit notes, captures, refunds."""
+    finance = app.finance(
+        "select 'invoice:' || v.invoice_id || '|' || md5(row(v.*)::text || coalesce((select string_agg(row(i.*)::text, ',' "
+        "order by i.kind, i.ref, i.line_id) from invoice_items i where i.invoice_id = v.invoice_id), '')) from invoices v "
+        "union all select 'credit:' || c.credit_id || '|' || md5(row(c.*)::text) from credit_notes c;"
+    )
+    payments = app.core(
+        "select 'capture:' || c.capture_id || '|' || md5(row(c.*)::text) from captures c "
+        "union all select 'refund:' || r.refund_id || '|' || md5(row(r.*)::text) from refunds r;",
+        database="payments",
+    )
+    return digest_rows(finance + "\n" + payments)
+
+
+def changed_documents(before, after):
+    return sorted(k for k, v in before.items() if after.get(k) != v)
+
+
+def notice_noise(booked):
+    """(line, account) pairs whose rule adjustments since the handoff cancel out or point both ways."""
+    return sorted(
+        k
+        for k, amounts in booked.items()
+        if sum(amounts) == 0 or (any(a > 0 for a in amounts) and any(a < 0 for a in amounts))
+    )
+
+
+def charges_off(owed, charged, accounts):
+    return {
+        a: str(charged.get(a, Decimal(0)) - owed.get(a, Decimal(0)))
+        for a in sorted(accounts)
+        if abs(charged.get(a, Decimal(0)) - owed.get(a, Decimal(0))) > CENT
+    }
+
+
 class MeteringOracle(Oracle):
     evaluation_timeout_seconds = 2400
+    #: Read the checks tonight's routine cannot change first, and stop there if one fails.
+    precheck = True
     FAILURE_CLASSES = {
+        "usage_entered_twice": "agent",
+        "documents_changed": "agent",
         "customer_copy_wrong": "agent",
-        "receipts_lost": "agent",
+        "statement_reversed": "agent",
+        "statement_rebooked": "agent",
+        "statement_lines_wrong": "agent",
         "subscription_not_streaming": "agent",
         "billing_ledger_wrong": "agent",
         "finance_ledger_wrong": "agent",
@@ -101,6 +161,9 @@ class MeteringOracle(Oracle):
     @property
     def app(self):
         return self.problem.app
+
+    def state(self):
+        return self.problem.load_state()
 
     # ------------------------------------------------------------- routine
     def onboard_new_customer(self):
@@ -133,13 +196,7 @@ class MeteringOracle(Oracle):
             )
         app.pubsync("core", conf, f"r4-{int(time.time())}")
         if database not in app.customer("postgres", "select datname from pg_database;").split():
-            app.psql(f"{SUBSCRIBERS}-0", "postgres", f"create database {database};\n", hidden=True)
-            app.customer(
-                database,
-                "create table usage_events (event_id bigint primary key, record_id text not null, "
-                "tenant_id text not null, metric text not null, quantity numeric(12,3) not null, "
-                "occurred_at timestamptz not null, batch_id bigint not null);\n",
-            )
+            app.create_customer_database(database)
             conninfo = (
                 f"host=core.{app.namespace}.svc.cluster.local port=5432 dbname=usage "
                 f"user=feed_{database} password={app.passwords[f'feed_{database}']}"
@@ -154,6 +211,8 @@ class MeteringOracle(Oracle):
         problem = self.problem
         plan = [
             ("pell", "void", None, None),
+            ("pell", "reduce", None, None),
+            ("cinder", "move", "pell", None),
             ("quill", "reduce", None, None),
             ("larkspur", "move", "ostrava", None),
             ("arden", "move", "larkspur", None),
@@ -162,6 +221,19 @@ class MeteringOracle(Oracle):
             ("garnet", "void", None, True),
         ]
         return problem.corrections(plan, pause=(0.5, 1.5))
+
+    def nightly_files(self):
+        """Tonight's correction-extracts run, if the job is still on and still lists Pell."""
+        app = self.app
+        try:
+            job = json.loads(app.command("get", "cronjob", "correction-extracts", "-o", "json"))
+            conf = json.loads(app.command("get", "configmap", "correction-extracts", "-o", "json"))["data"]
+        except (subprocess.CalledProcessError, KeyError, json.JSONDecodeError):
+            return False
+        if job["spec"].get("suspend") or "pell" not in parse_extracts_conf(conf.get("extracts.conf", "")):
+            return False
+        app.run_cronjob("correction-extracts", f"correction-extracts-{int(time.time())}")
+        return True
 
     def wait_ledgers_delivered(self, timeout=900):
         """Billing has every usage change from core, and finance has every billing line, before invoicing."""
@@ -187,6 +259,47 @@ class MeteringOracle(Oracle):
         )
         return {name: int(n) for name, n in (line.split("|") for line in rows.split())}
 
+    def lagging_feeds(self, databases, timeout=90):
+        """Customer feeds whose slot on core is not streaming up to the current position."""
+        app = self.app
+        target = app.core("select pg_current_wal_lsn();").strip()
+        names = ",".join(sql_literal(db) for db in databases)
+        deadline = time.monotonic() + timeout
+        while True:
+            behind = app.core(
+                f"select string_agg(n.name, ' ') from unnest(array[{names}]) n(name) left join pg_replication_slots s "
+                f"on s.slot_name = n.name where s.slot_name is null or not s.active "
+                f"or s.confirmed_flush_lsn < {sql_literal(target)}::pg_lsn;"
+            ).strip()
+            if not behind or time.monotonic() > deadline:
+                return behind.split()
+            time.sleep(3)
+
+    def check_both_entries(self):
+        state = self.state()
+        if "w" not in state:
+            return []
+        both = self.app.core(
+            f"select count(*) from usage_events where event_id in ({state['w']}, {state['w2']});"
+        ).strip()
+        if both == "2":
+            return [self.fail("usage_entered_twice", events=[state["w"], state["w2"]])]
+        return []
+
+    def check_documents(self):
+        before = self.state().get("documents") or {}
+        changed = changed_documents(before, documents(self.app))
+        if changed:
+            return [self.fail("documents_changed", documents=changed[:20], count=len(changed))]
+        return []
+
+    def prechecks(self):
+        failures = self.check_both_entries() + self.check_documents()
+        lagging = self.lagging_feeds([db for db in CUSTOMER_DATABASES if db != VALE])
+        if lagging:
+            failures.append(self.fail("subscription_not_streaming", feeds=lagging))
+        return failures
+
     def check_readers(self, errors_before):
         app = self.app
         failures = []
@@ -202,16 +315,12 @@ class MeteringOracle(Oracle):
                         counts={k: len(v) for k, v in digest.items()},
                     )
                 )
-        streaming = app.customer(
-            "postgres",
-            "select s.subname || '|' || s.subenabled || '|' || coalesce(w.pid::text, '') "
-            "from pg_subscription s left join pg_stat_subscription w "
-            "on w.subid = s.oid and w.relid is null;",
+        disabled = app.customer(
+            "postgres", "select string_agg(subname, ' ') from pg_subscription where not subenabled;"
         )
-        for line in streaming.split():
-            name, enabled, pid = line.split("|")
-            if enabled not in ("t", "true") or not pid:
-                failures.append(self.fail("subscription_not_streaming", subscription=name))
+        lagging = sorted(set(self.lagging_feeds(list(databases))) | set(disabled.split()))
+        if lagging:
+            failures.append(self.fail("subscription_not_streaming", feeds=lagging))
         errors_after = self.subscription_errors()
         grown = {
             n: errors_after[n] - errors_before.get(n, 0)
@@ -220,17 +329,59 @@ class MeteringOracle(Oracle):
         }
         if grown:
             failures.append(self.fail("subscription_not_streaming", apply_errors=grown))
-        changed = set(
-            app.customer(
-                RECEIPT_DATABASE,
-                "select r.event_id from handoff.receipts r left join usage_events u using (event_id) "
-                "where u.export_receipt is distinct from r.export_receipt;",
-            ).split()
-        )
-        larkspur = set(app.core("select event_id from usage_events where tenant_id = 'larkspur';").split())
-        lost = sorted(changed & larkspur)
-        if lost:
-            failures.append(self.fail("receipts_lost", events=lost[:20], count=len(lost)))
+        return failures
+
+    def check_statements(self, closes, touched):
+        """Tonight's statement close books every row once, reverses nothing still true, keeps what was right."""
+        app = self.app
+        failures = []
+        for database, close in closes.items():
+            tenant = CUSTOMER_DATABASES.get(database, NEW_CUSTOMER[0])
+            truth = {
+                int(e)
+                for e in app.core(f"select event_id from usage_events where tenant_id = {sql_literal(tenant)};").split()
+            }
+            reversed_ = {
+                int(e)
+                for e in app.customer(
+                    database, f"select event_id from statement_lines where kind = 'reversal' and close_id = {close};"
+                ).split()
+            }
+            wrong = sorted(reversed_ & truth)
+            if wrong:
+                failures.append(self.fail("statement_reversed", database=database, events=wrong[:20], count=len(wrong)))
+            unbooked = app.customer(
+                database,
+                "select count(*) from usage_events u where not exists (select 1 from statement_lines s "
+                "where s.line_id = u.line_id and s.kind = 'line') or exists (select 1 from statement_lines r "
+                "where r.line_id = u.line_id and r.kind = 'reversal');",
+            ).strip()
+            twice = app.customer(
+                database,
+                "select count(*) from (select event_id from statement_lines l where kind = 'line' and not exists "
+                "(select 1 from statement_lines r where r.line_id = l.line_id and r.kind = 'reversal') "
+                "group by event_id having count(*) > 1) t;",
+            ).strip()
+            if unbooked != "0" or twice != "0":
+                failures.append(
+                    self.fail("statement_lines_wrong", database=database, unbooked=unbooked, booked_twice=twice)
+                )
+            if database not in CUSTOMER_DATABASES:
+                continue
+            rows = app.customer(
+                database,
+                "select s.event_id || '|' || s.line_id || '|' || coalesce(u.line_id::text, '') from handoff.sealed s "
+                "left join usage_events u using (event_id) where s.correct;",
+            )
+            rebooked = sorted(
+                int(e)
+                for e, old, new in (r.split("|") for r in rows.split())
+                if int(e) in truth and int(e) not in touched and old != new
+            )
+            if rebooked:
+                failures.append(
+                    self.fail("statement_rebooked", database=database, events=rebooked[:20], count=len(rebooked))
+                )
         return failures
 
     def check_ledgers(self):
@@ -238,21 +389,22 @@ class MeteringOracle(Oracle):
         failures = []
         truth = truth_lines(app)
         billing = ledger(app.billing)
-        wrong = differences({k: v for k, v in truth.items()}, billing)
+        wrong = differences(dict(truth), billing)
         if wrong:
             failures.append(self.fail("billing_ledger_wrong", lines=wrong[:20], count=len(wrong)))
         target = {(line, account): amount for line, (account, amount) in truth.items()}
         billed = defaultdict(Decimal)
         usage_items = defaultdict(int)
         rows = app.finance(
-            "select coalesce(i.line_id::text, '') || '|' || v.account || '|' || i.kind || '|' || i.amount "
-            "from invoice_items i join invoices v using (invoice_id);"
+            "select i.line_id || '|' || v.account || '|' || i.kind || '|' || i.amount "
+            "from invoice_items i join invoices v using (invoice_id) "
+            "left join ledger_adjustments a on i.kind = 'adjustment' and a.adjustment_id = i.ref "
+            f"where i.line_id is not null and (i.kind = 'usage' or {RULE_SQL.replace('reason', 'a.reason')});"
         )
         for line, account, kind, amount in (r.split("|") for r in rows.split()):
-            if line:
-                billed[(int(line), account)] += Decimal(amount)
-                if kind == "usage":
-                    usage_items[int(line)] += 1
+            billed[(int(line), account)] += Decimal(amount)
+            if kind == "usage":
+                usage_items[int(line)] += 1
         wrong = differences(target, billed)
         if wrong:
             failures.append(self.fail("finance_ledger_wrong", lines=[list(k) for k in wrong[:20]], count=len(wrong)))
@@ -262,34 +414,38 @@ class MeteringOracle(Oracle):
             failures.append(
                 self.fail("usage_invoiced_twice", lines=twice[:20], count=len(twice), uninvoiced=uninvoiced)
             )
-        handoff = self.problem.load_state().get("handoff_at")
+        handoff = self.state().get("handoff_at")
         if handoff:
             rows = app.finance(
                 "select line_id || '|' || account || '|' || amount from ledger_adjustments "
-                f"where line_id is not null and booked_at > {sql_literal(handoff)}::timestamptz;"
+                f"where line_id is not null and {RULE_SQL} and booked_at > {sql_literal(handoff)}::timestamptz;"
             )
             booked = defaultdict(list)
             for line, account, amount in (r.split("|") for r in rows.split()):
                 booked[(int(line), account)].append(Decimal(amount))
-            noise = [
-                list(k)
-                for k, amounts in booked.items()
-                if sum(amounts) == 0 or (any(a > 0 for a in amounts) and any(a < 0 for a in amounts))
-            ]
+            noise = notice_noise(booked)
             if noise:
-                failures.append(self.fail("notices_without_change", lines=noise[:20], count=len(noise)))
+                failures.append(
+                    self.fail("notices_without_change", lines=[list(k) for k in noise[:20]], count=len(noise))
+                )
         owed = defaultdict(Decimal)
         for account, amount in truth.values():
             owed[account] += amount
         charged = defaultdict(Decimal)
-        rows = app.finance(
-            "select v.account || '|' || sum(i.amount) from invoice_items i join invoices v using (invoice_id) "
-            "group by v.account union all select account || '|' || -sum(amount) from credit_notes group by account;"
+        rows = (
+            app.finance(
+                "select v.account || '|' || sum(i.amount) from invoice_items i join invoices v using (invoice_id) "
+                "group by v.account union all select account || '|' || -sum(amount) from credit_notes group by account;"
+            )
+            + "\n"
+            + app.core(
+                "select c.account || '|' || -sum(r.amount) from refunds r join captures c using (capture_id) group by c.account;",
+                database="payments",
+            )
         )
         for account, amount in (r.split("|") for r in rows.split()):
             charged[account] += Decimal(amount)
-        accounts = set(TENANTS) | {NEW_CUSTOMER[0]} | set(charged)
-        off = {a: str(charged[a] - owed[a]) for a in sorted(accounts) if abs(charged[a] - owed[a]) > CENT}
+        off = charges_off(owed, charged, set(TENANTS) | {NEW_CUSTOMER[0]} | set(charged))
         if off:
             failures.append(self.fail("charges_wrong", accounts=off))
         return failures
@@ -309,6 +465,12 @@ class MeteringOracle(Oracle):
         return []
 
     # ------------------------------------------------------------ evaluate
+    def report(self, failures):
+        for failure in failures:
+            print(f"❌ {failure['reason']}: {failure.get('detail')}")
+        first = failures[0]
+        return {**first, "detail": {"failures": [{"reason": f["reason"], **f.get("detail", {})} for f in failures]}}
+
     def evaluate(self, solution=None, trace=None, duration=None):
         app = self.app
         try:
@@ -318,16 +480,29 @@ class MeteringOracle(Oracle):
         except Exception as exc:  # noqa: BLE001
             return self.fail("routine_jobs_failed", error=f"database unavailable: {exc}")
         try:
+            self.state()
+            errors_before = self.subscription_errors()
+            if self.precheck:
+                failures = self.prechecks()
+                if failures:
+                    print("tonight's routine not run: the end state already fails checks it cannot change")
+                    return self.report(failures)
+        except Exception as exc:  # noqa: BLE001
+            print(f"❌ grading raised: {exc}")
+            return self.fail_from_exception(exc)
+        try:
+            app.customer(VALE, f"alter subscription {VALE} enable;")
             self.onboard_new_customer()
-            self.fresh_corrections()
+            touched = set(self.fresh_corrections())
+            with contextlib.suppress(TimeoutError):
+                app.wait_caught_up(timeout=240)
+            self.nightly_files()
+            app.load_extract_files("pell", "pell_usage")
         except Exception as exc:  # noqa: BLE001
             print(f"❌ tonight's routine jobs failed: {exc}")
             return self.fail("routine_jobs_failed", error=str(exc)[:2000])
         failures = []
         try:
-            with contextlib.suppress(TimeoutError):
-                app.wait_caught_up(timeout=240)
-            errors_before = self.subscription_errors()
             app.set_rate(0)
             try:
                 app.wait_inbox_empty(timeout=300)
@@ -341,7 +516,10 @@ class MeteringOracle(Oracle):
                 app.invoice_run([*TENANTS, NEW_CUSTOMER[0]], f"invoice-run-{int(time.time())}")
             except Exception as exc:  # noqa: BLE001
                 failures.append(self.fail("routine_jobs_failed", error=f"invoice run: {exc}"[:2000]))
+            closes = {db: app.close_statement(db) for db in [*CUSTOMER_DATABASES, NEW_CUSTOMER[2]]}
+            failures = self.check_both_entries() + self.check_documents() + failures
             failures += self.check_readers(errors_before)
+            failures += self.check_statements(closes, touched)
             failures += self.check_ledgers()
             failures += self.check_ingest()
         except Exception as exc:  # noqa: BLE001
@@ -350,10 +528,7 @@ class MeteringOracle(Oracle):
         finally:
             with contextlib.suppress(Exception):
                 app.set_rate(60)
-        for failure in failures:
-            print(f"❌ {failure['reason']}: {failure.get('detail')}")
         if failures:
-            first = failures[0]
-            return {**first, "detail": {"failures": [{"reason": f["reason"], **f.get("detail", {})} for f in failures]}}
-        print("✅ every reader, ledger and charge matches the truth")
+            return self.report(failures)
+        print("✅ every reader, statement, ledger and charge matches the truth")
         return {"success": True}

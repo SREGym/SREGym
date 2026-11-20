@@ -47,12 +47,14 @@ CREATE TABLE usage_corrections (
     after        jsonb,
     reason       text NOT NULL,
     requested_by text NOT NULL,
-    created_at   timestamptz NOT NULL DEFAULT now()
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    batch        text
 );
 
 -- Used by the support console. Voids delete the event, reductions lower its
 -- quantity, moves give it to the account that really used it.
-CREATE FUNCTION correct_usage(p_event bigint, p_kind text, p_value text, p_reason text, p_by text)
+CREATE FUNCTION correct_usage(p_event bigint, p_kind text, p_value text, p_reason text, p_by text,
+                              p_batch text DEFAULT NULL)
 RETURNS bigint LANGUAGE plpgsql AS $$
 DECLARE
     old_row usage_events;
@@ -75,10 +77,41 @@ BEGIN
     ELSE
         RAISE EXCEPTION 'unknown correction %', p_kind;
     END IF;
-    INSERT INTO usage_corrections (event_id, kind, before, after, reason, requested_by)
-    VALUES (p_event, p_kind, to_jsonb(old_row), to_jsonb(new_row), p_reason, p_by)
+    INSERT INTO usage_corrections (event_id, kind, before, after, reason, requested_by, batch)
+    VALUES (p_event, p_kind, to_jsonb(old_row), to_jsonb(new_row), p_reason, p_by, p_batch)
     RETURNING correction_id INTO id;
     RETURN id;
+END $$;
+
+-- Several corrections from one review, applied together or not at all.
+-- p_items: [{"event": 123, "kind": "move", "value": "garnet", "reason": "..."}, ...]
+CREATE FUNCTION correct_usage_batch(p_batch text, p_items jsonb, p_by text)
+RETURNS integer LANGUAGE plpgsql AS $$
+DECLARE
+    item jsonb;
+    n integer := 0;
+BEGIN
+    FOR item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
+        PERFORM correct_usage((item->>'event')::bigint, item->>'kind', item->>'value', item->>'reason', p_by, p_batch);
+        n := n + 1;
+    END LOOP;
+    RETURN n;
+END $$;
+
+-- Usage keyed in by support when a meter record never arrived.
+CREATE FUNCTION enter_usage(p_tenant text, p_metric text, p_quantity numeric, p_occurred_at timestamptz,
+                            p_ticket text, p_by text)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE
+    batch bigint;
+    event bigint;
+BEGIN
+    INSERT INTO ingest_batches (source, records) VALUES ('support-console', 1) RETURNING batch_id INTO batch;
+    INSERT INTO usage_events (record_id, tenant_id, metric, quantity, occurred_at, batch_id)
+    VALUES ('manual-' || p_ticket, p_tenant, p_metric, p_quantity, p_occurred_at, batch)
+    RETURNING event_id INTO event;
+    RAISE NOTICE 'usage event % entered by % for ticket %', event, p_by, p_ticket;
+    RETURN event;
 END $$;
 
 CREATE SCHEMA ops;
