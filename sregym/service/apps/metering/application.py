@@ -59,6 +59,8 @@ CUSTOMER_DATABASES = {
     "vale_usage": "vale",
 }
 STREAMED = sorted(set(CUSTOMER_DATABASES.values()))
+#: Customer subscriptions created to stop (disable themselves) on the first error.
+STOP_ON_ERROR = ("larkspur_monthend",)
 SUBSCRIBERS = "subscribers"
 GATEWAY = "gateway"
 
@@ -491,6 +493,7 @@ class MeteringApplication(KubernetesCommands, Application):
                 "billing_feed",
                 "finance_feed",
                 "subscribers",
+                "feed_files_pell",
                 *(f"feed_{db}" for db in CUSTOMER_DATABASES),
             )
         }
@@ -620,11 +623,38 @@ class MeteringApplication(KubernetesCommands, Application):
                 f"host=core.{self.namespace}.svc.cluster.local port=5432 dbname=usage "
                 f"user=feed_{db} password={self.passwords['feed_' + db]}"
             )
+            # Larkspur's month-end copy must never take a partial close: it stops on the first error.
+            options = " with (disable_on_error = true)" if db in STOP_ON_ERROR else ""
             self.customer(
                 db,
                 f"create subscription {db} connection {sql_literal(conninfo)} "
-                f"publication usage_{tenant}, corr_{tenant};\n",
+                f"publication usage_{tenant}, corr_{tenant}{options};\n",
             )
+
+    def subscribe_files(self, account="pell", database="pell_usage"):
+        """Correction files reach the customer by logical replication: new files only, filtered to its account."""
+        name = f"files_{account}"
+        password = self.passwords[f"feed_{name}"]
+        self.core(
+            f"create role feed_{name} login replication password {sql_literal(password)};\n"
+            f"grant select on extract_files to feed_{name};\n"
+            f"create publication {name} for table extract_files where (account = {sql_literal(account)}) "
+            "with (publish = 'insert');\n",
+            database="support",
+        )
+        conninfo = (
+            f"host=core.{self.namespace}.svc.cluster.local port=5432 dbname=support "
+            f"user=feed_{name} password={password}"
+        )
+        self.customer(database, f"create subscription {name} connection {sql_literal(conninfo)} publication {name};\n")
+
+    def subscription_origin(self, database, subscription=None):
+        """Where the customer's subscription has applied up to (its replication origin), as a pg_lsn text."""
+        return self.customer(
+            database,
+            "select coalesce(o.remote_lsn, '0/0') from pg_subscription s left join pg_replication_origin_status o "
+            f"on o.external_id = 'pg_' || s.oid where s.subname = {sql_literal(subscription or database)};",
+        ).strip()
 
     def subscribe_billing(self):
         conninfo = f"host=core port=5432 dbname=usage user=billing_feed password={self.passwords['billing_feed']}"
@@ -727,20 +757,20 @@ class MeteringApplication(KubernetesCommands, Application):
         """The customer's statement close (customer code)."""
         return int(self.customer(database, "select close_statement();").strip())
 
-    def load_extract_files(self, account, database):
-        """The customer's loader (customer code): pick up every ready file and apply it."""
-        files = self.rows(
-            lambda q: self.core(q, database="support"),
-            "with taken as (update extract_files set status = 'loaded' "
-            f"where account = {sql_literal(account)} and status = 'ready' returning file_id, rows) "
-            "select json_build_object('file', file_id, 'rows', rows) from taken order by file_id;",
+    def load_extract_files(self, account, database, timeout=180):
+        """The customer's loader (customer code): once its copy of the files has every file sent so far, it
+        applies each ready file it has not loaded yet."""
+        sent = set(
+            self.core(
+                f"select file_id from extract_files where account = {sql_literal(account)};", database="support"
+            ).split()
         )
-        for f in files:
-            self.customer(
-                database,
-                f"select load_correction_file({sql_literal(json.dumps(f['rows']))}::jsonb, {sql_literal(account)});",
-            )
-        return [f["file"] for f in files]
+        deadline = time.monotonic() + timeout
+        while sent - set(self.customer(database, "select file_id from extract_files;").split()):
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"{database} did not receive files {sorted(sent)}")
+            time.sleep(2)
+        return int(self.customer(database, "select load_ready_files();").strip())
 
     def truncate_server_logs(self):
         """Construction cleanup: the servers' log files start with the story."""

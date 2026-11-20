@@ -2,9 +2,14 @@
 
 Everything happens on core with the company's own levers: the correction tool,
 the publications, the feed logins and slots, the nightly-files job and its
-configuration, and finance and payments SQL. Customer copies are read here only
-to save time; the hidden choices (what the customers loaded by hand) are not
-read but found by offering the row alone.
+configuration, the files publication, and finance and payments SQL. Customer
+copies are read here only to save time: an operator derives the same sets from
+core (each correction's before and after image, the rows themselves) and from
+the WAL the paused slots still hold (Pell's skipped stretch, between the
+position Pell asked for and the one core forwarded it to; Quill's direct
+update). The hidden choices (what the customers loaded by hand) are not read:
+Pell's moved-in rows are offered alone, and month-end gets a delete of the
+voided original W whether it holds W or not.
 
 A reader's net change is sent in one transaction: every publication muted, the
 rows rewound silently, only the tenant's corrections publication unmuted, the
@@ -14,7 +19,11 @@ other reader (billing included) hears it. A sibling on the same publications is
 held off (login refused, walsender ended) and its slot advanced past what it
 must not hear, with ingest paused at its batch header. A paused reader's slot is
 advanced to a fence and only its net is sent, so a row that went out and came
-back during the pause is not deleted and booked again. A row a customer may
+back during the pause is not deleted and booked again. Month-end stops for good
+on its first error, and ending its walsender is such an error, so it is let in
+once at the fence (core's log then names the position it applied up to: "<its
+position> has been already streamed, forwarding to <fence>"), stays connected,
+and its net is computed from that position. A row a customer may
 have loaded by hand is offered alone: if the reader refuses it, its slot is
 advanced past exactly that transaction and the row is updated in place.
 """
@@ -150,10 +159,21 @@ def ingest_paused(app):
 
 
 # ---------------------------------------------------------------- re-sends
-def net_transaction(app, declared, tenant, database, digest, skip=()):
-    """One transaction that gives one reader of the tenant's feeds exactly what its copy lacks."""
-    missing = [e for e in digest["missing"] if e not in skip]
-    extra = [e for e in digest["extra"] if e not in skip]
+def voided_row(app, event):
+    """A voided usage row as it was, from its correction record on core."""
+    return app.core(
+        f"select before from usage_corrections where event_id = {event} and kind = 'void' "
+        "order by correction_id desc limit 1;"
+    ).strip()
+
+
+def net_transaction(app, declared, tenant, database, digest, skip=(), deletes=(), inserts=()):
+    """One transaction that gives one reader of the tenant's feeds exactly what its copy lacks.
+
+    `deletes` are voided rows sent as deletes whether the reader holds them or not; `inserts` are rows on core
+    sent as inserts whatever the reader holds (only a deliberate mistake does that)."""
+    missing = sorted({e for e in digest["missing"] if e not in skip} | set(inserts))
+    extra = sorted({e for e in digest["extra"] if e not in skip} | set(deletes))
     changed = [e for e in digest["changed"] if e not in skip]
     if not (missing or extra or changed):
         return None
@@ -176,17 +196,12 @@ def net_transaction(app, declared, tenant, database, digest, skip=()):
                 rewind.append(f"update usage_events set tenant_id = {sql_literal(tenant)} where event_id = {event};")
                 replay.append(f"update usage_events set tenant_id = {sql_literal(owner)} where event_id = {event};")
             else:
-                row = json.loads(
-                    app.customer(
-                        database,
-                        "select row_to_json(u) from (select event_id, record_id, tenant_id, metric, quantity, "
-                        f"occurred_at, batch_id from usage_events where event_id = {event}) u;",
-                    )
-                )
+                # Put the voided row back silently under this reader's filter, then delete it audibly.
+                row = voided_row(app, event)
                 rewind.append(
                     "insert into usage_events (event_id, record_id, tenant_id, metric, quantity, occurred_at, batch_id) "
-                    "select event_id, record_id, tenant_id, metric, quantity, occurred_at, batch_id "
-                    f"from json_populate_record(null::usage_events, {sql_literal(json.dumps(row))});"
+                    f"select event_id, record_id, {sql_literal(tenant)}, metric, quantity, occurred_at, batch_id "
+                    f"from jsonb_populate_record(null::usage_events, {sql_literal(row)}::jsonb);"
                 )
                 replay.append(f"delete from usage_events where event_id = {event};")
     if changed:
@@ -228,30 +243,80 @@ def offer_alone(app, declared, tenant, database, event, siblings=()):
 
 
 # ----------------------------------------------------------------- readers
-def repair_pell(app, declared, state):
-    send_net(app, declared, "pell", PELL, skip=set(state["moved_in"]))
+def forwarded_from(app, slot, fence, timeout=60):
+    """The position a reader asked to start from, as core logs it when its slot is already past it."""
+    deadline = time.monotonic() + timeout
+    while True:
+        out = app.command(
+            "exec",
+            "core-0",
+            "-c",
+            "postgres",
+            "--",
+            "bash",
+            "-c",
+            f"grep -h -A1 'has been already streamed, forwarding to {fence}$' "
+            "/var/lib/postgresql/data/pgdata/log/*.log || true",
+        )
+        lines = out.splitlines()
+        for line, after in zip(lines, lines[1:], strict=False):
+            if f'starting logical decoding for slot "{slot}"' in after:
+                return line.split("LOG:", 1)[1].split()[0]
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"no forwarding line for {slot} at {fence}")
+        time.sleep(2)
+
+
+def repair_pell(app, declared, state, wrong=()):
+    skip = set(state["moved_in"])
+    if "pell_gap_ignored" in wrong:
+        first, last = state["pell_gap"]
+        digest = copy_digest(app, PELL, "pell")
+        skip |= {e for e in digest["missing"] if first < e <= last} | {state["pell_gap_reduced"]}
+    send_net(app, declared, "pell", PELL, skip=skip)
     return {event: offer_alone(app, declared, "pell", PELL, event) for event in state["moved_in"]}
 
 
-def repair_larkspur(app, declared, state, month_end_as_is=False):
+def hidden_head(app):
+    """Larkspur rows month-end applied past its slot's position (read from a copy of its slot; for a mistake)."""
+    origin = app.subscription_origin(MONTH_END)
+    rows = app.core(
+        "select pg_copy_logical_replication_slot('larkspur_monthend', 'monthend_review', true, 'test_decoding');\n"
+        "select substring(data from 'event_id\\[bigint\\]:([0-9]+)') from "
+        f"pg_logical_slot_peek_changes('monthend_review', {sql_literal(origin)}::pg_lsn, null) "
+        "where data like 'table public.usage_events: INSERT:%tenant_id[text]:''larkspur''%';"
+    ).split()[1:]
+    return [int(e) for e in rows]
+
+
+def repair_larkspur(app, declared, state, wrong=()):
     w = state["w"]
     send_net(app, declared, "larkspur", LIVE)
-    if month_end_as_is:
+    if "month_end_as_is" in wrong:
         release(app, MONTH_END)
         return {}
-    # Live already has everything; hold it off while month-end gets only its net.
+    head = hidden_head(app) if "month_end_head" in wrong else []
+    # Live already has everything; hold it off while month-end gets only its net. Month-end is let in once,
+    # at an empty fence, and stays connected: ending its walsender again would stop it for good.
     hold(app, LIVE)
     try:
-        advance(app, MONTH_END, lsn(app))
-        end = net_transaction(app, declared, "larkspur", MONTH_END, copy_digest(app, MONTH_END, "larkspur"), skip={w})
+        fence = lsn(app)
+        advance(app, MONTH_END, fence)
         release(app, MONTH_END)
-        if end and not wait_confirmed(app, MONTH_END, end, 300):
+        app.wait_slot(MONTH_END, True, timeout=60)
+        origin = forwarded_from(app, MONTH_END, fence)
+        print(f"month-end asked to start from {origin} (its origin: {app.subscription_origin(MONTH_END)})")
+        digest = copy_digest(app, MONTH_END, "larkspur")
+        if "keep_w" in wrong:
+            end = net_transaction(app, declared, "larkspur", MONTH_END, digest, inserts=[w, *head])
+        else:
+            end = net_transaction(app, declared, "larkspur", MONTH_END, digest, skip={w}, deletes=[w], inserts=head)
+        if end and not wait_confirmed(app, MONTH_END, end, 60 if wrong else 300) and not wrong:
             raise RuntimeError("month-end did not accept its re-send")
-        outcome = offer_alone(app, declared, "larkspur", MONTH_END, w)
         advance(app, LIVE, lsn(app))
     finally:
         release(app, LIVE)
-    return {w: outcome}
+    return {}
 
 
 def repair_vale(app, declared):
@@ -260,17 +325,30 @@ def repair_vale(app, declared):
     send_net(app, declared, "vale", VALE, wait=False)
 
 
-def retire_nightly_files(app, account="pell"):
+def recall_files(app, account, through_feed=True):
+    """Withdraw the account's ready files. Its copy of the files only hears inserts, filtered on the account, so
+    the withdrawal goes through the same publication with the whole row as identity, both restored after."""
+    update = (
+        f"update extract_files set status = 'withdrawn' where account = {sql_literal(account)} and status = 'ready';\n"
+    )
+    if through_feed:
+        update = (
+            "begin;\nalter table extract_files replica identity full;\n"
+            f"alter publication files_{account} set (publish = 'insert, update');\n{update}"
+            f"alter publication files_{account} set (publish = 'insert');\n"
+            "alter table extract_files replica identity default;\ncommit;\n"
+        )
+    app.core(update, database="support")
+
+
+def retire_nightly_files(app, account="pell", through_feed=True):
     conf = json.loads(app.command("get", "configmap", "correction-extracts", "-o", "json"))["data"]["extracts.conf"]
     accounts = {a: t for a, t in parse_extracts_conf(conf).items() if a != account}
     app.apply_documents([app.config_map("correction-extracts", {"extracts.conf": extracts_conf(accounts)})])
-    app.core(
-        f"update extract_files set status = 'withdrawn' where account = {sql_literal(account)} and status = 'ready';",
-        database="support",
-    )
+    recall_files(app, account, through_feed)
 
 
-def repair_finance(problem):
+def repair_finance(problem, linked=False):
     """Send finance each ledger change it missed, through its own rule; offset what was already given back."""
     app = problem.app
     present = set(ledger(app.finance))
@@ -294,17 +372,21 @@ def repair_finance(problem):
             f"where issued_at <= {sql_literal(handoff)}::timestamptz and memo like 'Disputed usage%';",
         )
     ] + [
-        (r["account"], Decimal(str(r["amount"])), f"refund {r['refund_id']} already returned this usage")
+        (r["account"], Decimal(str(r["amount"])), f"refund {r['refund_id']} already returned this usage", r["line"])
         for r in app.rows(
             lambda q: app.core(q, database="payments"),
-            "select json_build_object('refund_id', r.refund_id, 'account', c.account, 'amount', r.amount) "
+            "select json_build_object('refund_id', r.refund_id, 'account', c.account, 'amount', r.amount, "
+            "'line', substring(r.memo from 'usage event ([0-9]+)')::bigint) "
             f"from refunds r join captures c using (capture_id) where r.refunded_at <= {sql_literal(handoff)}::timestamptz;",
         )
     ]
-    for account, amount, reason in offsets:
+    for account, amount, reason, *line in offsets:
+        # Offsets are booked on the account: a line-linked one would be counted again by finance's own rule
+        # the next time that line changes (billing's daily re-rate updates every line).
+        target = line[0] if linked and line and line[0] else None
         app.finance(
             "insert into ledger_adjustments (account, line_id, amount, reason) values "
-            f"({sql_literal(account)}, null, {amount}, {sql_literal(reason)});"
+            f"({sql_literal(account)}, {'null' if target is None else target}, {amount}, {sql_literal(reason)});"
         )
 
 
@@ -313,18 +395,19 @@ def repair(problem, wrong=()):
     app = problem.app
     state = problem.load_state()
     if "keep_nightly_files" not in wrong:
-        retire_nightly_files(app)
-    app.core(
-        f"select correct_usage({state['w2']}, 'void', null, 'entered by hand while the moved-in usage was missing', "
-        "'reference');"
-    )
+        retire_nightly_files(app, through_feed="files_core_only" not in wrong)
+    # W' (keyed in by support) stays; the original W is voided. Month-end then needs a delete of W whether its
+    # DBA loaded W or not, and live (which never had W) needs nothing.
+    keep, drop = (state["w"], state["w2"]) if "keep_w" in wrong else (state["w2"], state["w"])
+    app.core(f"select correct_usage({drop}, 'void', null, 'duplicate of usage event {keep}', 'reference');")
     app.wait_caught_up(skip=(MONTH_END, VALE), timeout=300)
     declared = declared_publications(app)
     with ingest_paused(app):
-        outcomes = repair_pell(app, declared, state)
-        send_net(app, declared, "quill", QUILL)
-        send_net(app, declared, "ostrava", OSTRAVA)
-        outcomes.update(repair_larkspur(app, declared, state, month_end_as_is="month_end_as_is" in wrong))
+        outcomes = repair_pell(app, declared, state, wrong)
+        send_net(app, declared, "quill", QUILL, skip={state["q"]} if "quill_from_corrections" in wrong else ())
+        if "ostrava_alone" not in wrong:
+            send_net(app, declared, "ostrava", OSTRAVA)
+        outcomes.update(repair_larkspur(app, declared, state, wrong))
         if "vale_as_is" not in wrong:
             repair_vale(app, declared)
     print(f"offered alone: {outcomes} (hand-loaded: Pell {state['pell_loaded']}, month-end W {state['w_loaded']})")
@@ -334,4 +417,4 @@ def repair(problem, wrong=()):
         if not wrong:  # only a deliberate mistake may leave a reader stopped on a row it already holds
             raise
     app.wait_caught_up(app.billing, timeout=300)
-    repair_finance(problem)
+    repair_finance(problem, linked="linked_offset" in wrong)

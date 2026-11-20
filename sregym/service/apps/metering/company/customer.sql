@@ -63,3 +63,33 @@ BEGIN
     END LOOP;
     RETURN n;
 END $$;
+
+-- Correction files from the provider, received by subscription (customers that load them automatically).
+CREATE TABLE extract_files (
+    file_id     bigint PRIMARY KEY,
+    ticket_id   text,
+    account     text NOT NULL,
+    sent_at     timestamptz NOT NULL,
+    status      text NOT NULL,
+    rows        jsonb NOT NULL
+);
+CREATE TABLE loaded_files (
+    file_id     bigint PRIMARY KEY,
+    loaded_at   timestamptz NOT NULL DEFAULT now()
+);
+
+-- Nightly loader: applies every ready file not loaded yet, oldest first, and records it.
+CREATE FUNCTION load_ready_files() RETURNS integer LANGUAGE plpgsql SET search_path = public AS $$
+DECLARE
+    f extract_files;
+    n integer := 0;
+BEGIN
+    FOR f IN SELECT * FROM extract_files e
+             WHERE e.status = 'ready' AND NOT EXISTS (SELECT 1 FROM loaded_files l WHERE l.file_id = e.file_id)
+             ORDER BY e.file_id LOOP
+        PERFORM load_correction_file(f.rows, f.account);
+        INSERT INTO loaded_files (file_id) VALUES (f.file_id);
+        n := n + 1;
+    END LOOP;
+    RETURN n;
+END $$;

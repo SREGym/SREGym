@@ -13,13 +13,15 @@ only until their own next restart. The same handoff a week earlier cost
 finance's copy of billing's ledger its updates and deletes, and invoices went
 out from it.
 
-While three customer feeds dropped corrections, support's bulk correction
+While four customer feeds dropped corrections, support's bulk correction
 CF-31 and the patches it caused piled up: files of corrections for customers to
-apply by hand, a usage row keyed in again, a refund, a partial revert, nightly
-correction files that one customer loads automatically, and two readers paused
-with a backlog (Larkspur's month-end copy during its close, Vale during its site
-maintenance). Every server has since been patched to 17.6; only the damage and
-the patches remain.
+apply by hand, a usage row keyed in again, a refund, partial reverts (one of
+which stopped Pell's feed on a duplicate key; on-call moved its slot forward
+past everything sent meanwhile), a quantity fixed directly on core, nightly
+correction files that Pell receives by subscription and loads automatically,
+and two readers paused with a backlog (Larkspur's month-end copy, which stops on
+its first error, during its close; Vale during its site maintenance). Every
+server has since been patched to 17.6; only the damage and the patches remain.
 """
 
 import contextlib
@@ -33,6 +35,7 @@ from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     copy_digest,
     documents,
     finance_differences,
+    ledger,
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -48,7 +51,7 @@ from sregym.service.apps.metering.application import (
 )
 from sregym.utils.decorators import mark_fault_injected
 
-VICTIMS = ("pell_usage", "quill_usage", "larkspur_live")
+VICTIMS = ("pell_usage", "quill_usage", "larkspur_live", "ostrava_usage")
 PAUSED = ("larkspur_monthend", "vale_usage")
 STAFF = ("j.okafor", "m.tanaka", "r.lindqvist", "s.haddad", "a.moreau")
 REASONS = {
@@ -97,25 +100,32 @@ class MeteringCorrectionsHandoff(Problem):
                 "PostgreSQL 17.4 logical decoding did not pass catalog invalidations to transactions already in "
                 "progress (data loss bug fixed in 17.5, commit 4909b38af034). pubsync moved corrections (UPDATE and "
                 "DELETE) with a make-before-break handoff: first ALTER PUBLICATION corr_<tenant> (and, a week "
-                "earlier on billing, ledger_corr) SET (publish = 'update, delete'), then after every slot confirmed "
-                "past it, a quiet ALTER PUBLICATION usage_<tenant> (ledger_all) SET (publish = 'insert'). Each make "
-                "step committed while an ingest batch (or billing apply transaction) that had already written was "
-                "in flight; every walsender then running decoded that transaction first and cached the corrections "
+                "earlier on billing, ledger_corr) SET (publish = 'update, delete'), then after every active slot "
+                "confirmed past it, a quiet ALTER PUBLICATION usage_<tenant> (ledger_all) SET (publish = 'insert'). "
+                "Each make step committed while an ingest batch (or billing apply transaction) that had already "
+                "written was in flight; every walsender that decoded that transaction first cached the corrections "
                 "publication's pre-change definition (publishing nothing) under its older snapshot. The later break "
                 "was loaded fresh, so those walsenders published inserts only, a configuration never committed, "
-                "until their own next restart; readers whose walsender restarted between the steps were fine. "
-                "Affected: finance's subscription finance_ledger to billing (week one, until finance's subscription "
-                "was disabled and enabled during maintenance; it missed ledger re-ratings, voids and moves, and "
-                "invoices and support credit notes were issued from that ledger), and the customer subscriptions "
-                "pell_usage, quill_usage and larkspur_live (from the break until each one's own restart), which "
-                "kept voided and moved-out rows, stale quantities, and lacked moved-in rows, including support's "
-                "bulk correction CF-31; larkspur_monthend, ostrava_usage, vale_usage and billing were not affected "
-                "(month-end and Vale are paused with a backlog, by the customers' own requests). Gone since both "
-                "servers were patched to 17.6, so only the damage remains, along with support's workarounds for "
-                "it (correction files, a re-keyed usage row, a refund, nightly correction files). Not the cause: the "
-                "collation version warnings (they started with the 17.6 image), the customers' databases, billing's "
-                "rating, finance's closed-period rule (by design), the add-table race (pubsync locks the table), "
-                "subscriber lag, the paused feeds, or a need to reconnect after publication changes."
+                "until their own next restart. A walsender that restarted between the steps was cured only if its "
+                "slot had already confirmed past the in-flight batch; one that started before that position decoded "
+                "the batch again and cached the same stale definition. Affected: finance's subscription "
+                "finance_ledger to billing (week one, until finance's subscription was disabled and enabled during "
+                "maintenance; it missed ledger re-ratings, voids and moves, and invoices and support credit notes "
+                "were issued from that ledger), and the customer subscriptions pell_usage, quill_usage and "
+                "larkspur_live (from the break until each one's own restart) and ostrava_usage (its link dropped "
+                "across the make and it reconnected before its slot passed the in-flight batch, so it stayed stale "
+                "until the 17.6 restart). They kept voided and moved-out rows and stale quantities, and lacked "
+                "moved-in rows, including support's bulk correction CF-31. larkspur_monthend and vale_usage were "
+                "not stale (their walsenders restarted after their slots passed the batch); they are paused with a "
+                "backlog at the customers' requests (month-end's subscription stops on its first error). billing "
+                "was not affected. Gone since both servers were patched to 17.6, so only the damage remains, along "
+                "with workarounds that are not the cause: support's correction files, the re-keyed usage row, the "
+                "refund, the nightly correction files, on-call's direct UPDATE of a Quill quantity on core (no "
+                "correction record), and on-call's pg_replication_slot_advance of Pell's slot after its feed "
+                "stopped on a duplicate key (which also skipped every Pell change committed in between). Also not "
+                "the cause: the collation version warnings (they started with the 17.6 image), the customers' "
+                "databases, billing's rating, finance's closed-period rule (by design), the add-table race (pubsync "
+                "locks the table), subscriber lag, the paused feeds, or a need to reconnect after publication changes."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -165,7 +175,7 @@ class MeteringCorrectionsHandoff(Problem):
         )
         return event
 
-    def corrections(self, plan, pause=(1, 4)):
+    def corrections(self, plan, pause=(0.5, 2)):
         events = []
         for spec in plan:
             events.append(self.correct(*spec))
@@ -216,7 +226,7 @@ class MeteringCorrectionsHandoff(Problem):
             f"{sql_literal(author)}, {sql_literal(body)});",
             database="support",
         )
-        time.sleep(1)
+        time.sleep(0.3)
 
     @staticmethod
     def customer_name(tenant):
@@ -270,7 +280,34 @@ class MeteringCorrectionsHandoff(Problem):
         )
 
     # ---------------------------------------------------------------- history
+    @contextlib.contextmanager
+    def phase(self, name):
+        start = time.monotonic()
+        try:
+            yield
+        finally:
+            print(f"phase.{name}.duration_s={time.monotonic() - start:.0f}", flush=True)
+
     def build(self):
+        with self.phase("ordinary"):
+            self.ordinary()
+        with self.phase("week_one"):
+            credits = self.week_one()
+        with self.phase("week_two"):
+            target = self.week_two()
+        with self.phase("support_story"):
+            facts = self.support_story()
+        app = self.app
+        app.invoice_run(["quill", "garnet", "hollis"], "invoice-run-close-4")
+        app.capture_invoices()
+        # Routine patching moves both servers to the current minor release.
+        with self.phase("patch"):
+            app.set_server("billing", NEW_IMAGE)
+            app.set_server("core", NEW_IMAGE)
+            time.sleep(20)
+        return {"credits": len(credits), "target": target, **facts}
+
+    def ordinary(self):
         app = self.app
         app.truncate_server_logs()
         app.pubsync(
@@ -280,8 +317,23 @@ class MeteringCorrectionsHandoff(Problem):
         app.subscribe_billing()
         app.subscribe_finance()
         app.subscribe_customers()
+        lark = self.customer_name("larkspur")
+        self.ticket(
+            "larkspur",
+            "Month-end database onboarding",
+            [
+                (
+                    lark,
+                    "Our month-end database must never take a partial close. We created its subscription to stop "
+                    "on the first error; if it stops, our DBA reviews the close before re-enabling it, which "
+                    "takes days.",
+                ),
+                (self.staff(), "Noted."),
+            ],
+            status="closed",
+        )
         app.set_rate(60)
-        time.sleep(90)
+        time.sleep(75)
 
         # Months of ordinary operation, compressed: corrections flow to every reader; first invoices.
         self.corrections(self.random_plan(10))
@@ -290,8 +342,10 @@ class MeteringCorrectionsHandoff(Problem):
         app.capture_invoices()
         time.sleep(60)
         self.corrections(self.random_plan(8, invoiced=True))
-        time.sleep(30)
+        time.sleep(20)
 
+    def week_one(self):
+        app = self.app
         # Week one: billing's ledger corrections move to ledger_corr during billing's busy hour.
         app.set_rate(1500)
         time.sleep(25)
@@ -349,11 +403,18 @@ class MeteringCorrectionsHandoff(Problem):
         time.sleep(20)
         app.invoice_run([t for t in TENANTS if t not in first_half], "invoice-run-close-3")
         app.capture_invoices()
-        time.sleep(30)
+        time.sleep(20)
+        return credits
 
+    def week_two(self):
+        app = self.app
         # Week two: the same handoff for every opted-in customer on core, during ingest's busy hour.
         app.set_rate(1500)
         time.sleep(25)
+        # Ostrava's link drops just before the first step and is back right after it, before its slot has
+        # confirmed past the ingest batch in flight at the step.
+        app.customer("ostrava_usage", "alter subscription ostrava_usage disable;")
+        app.wait_slot("ostrava_usage", False)
         app.pubsync(
             "core",
             publications_conf(
@@ -363,10 +424,13 @@ class MeteringCorrectionsHandoff(Problem):
             ),
             "r2",
         )
+        app.customer("ostrava_usage", "alter subscription ostrava_usage enable;")
+        app.wait_slot("ostrava_usage", True)
         app.set_rate(150)
         target = app.core("select pg_current_wal_lsn();").strip()
         time.sleep(15)
-        survivors = ("larkspur_monthend", "ostrava_usage", "vale_usage")
+        # Month-end's and Vale's links drop and reconnect after their slots confirmed past that batch.
+        survivors = ("larkspur_monthend", "vale_usage")
         app.wait_caught_up(slots=list(survivors))
         for db in survivors:
             app.restart_subscription(db)
@@ -399,6 +463,7 @@ class MeteringCorrectionsHandoff(Problem):
                 ("pell", "reduce", None, None),
                 ("cinder", "move", "quill", None),
                 ("ostrava", "void", None, None),
+                ("ostrava", "reduce", None, None),
                 ("vale", "move", "pell", None),
                 ("larkspur", "reduce", None, None),
                 ("pell", "void", None, True),
@@ -408,33 +473,23 @@ class MeteringCorrectionsHandoff(Problem):
             ]
             + self.random_plan(4)
         )
-        time.sleep(30)
+        time.sleep(20)
         for db in VICTIMS:
             digest = copy_digest(app, db, CUSTOMER_DATABASES[db])
             if not set(week2) & {e for kind in digest.values() for e in kind}:
                 raise WorldDidNotTake(f"{db} received every week-two correction")
-        facts = self.support_story()
-        app.invoice_run(["quill", "garnet", "hollis"], "invoice-run-close-4")
-        app.capture_invoices()
-        time.sleep(20)
-
-        # Routine patching moves both servers to the current minor release.
-        app.set_server("billing", NEW_IMAGE)
-        app.set_server("core", NEW_IMAGE)
-        time.sleep(45)
-        return {"credits": len(credits), "target": target, **facts}
+        return target
 
     def support_story(self):
-        """Support's bulk correction CF-31 and the patches it caused, while three feeds still drop corrections."""
+        """Support's bulk correction CF-31 and the patches it caused, while four feeds still drop corrections."""
         app = self.app
         lark, pell = self.customer_name("larkspur"), self.customer_name("pell")
 
         # Every customer closes its statement once.
         for db in CUSTOMER_DATABASES:
             app.close_statement(db)
-        time.sleep(5)
 
-        # Vale's planned site maintenance: Vale takes its own database offline.
+        # Vale's planned site maintenance: Vale takes its own database offline, in a quiet minute.
         self.ticket(
             "vale",
             "Planned site maintenance",
@@ -447,11 +502,13 @@ class MeteringCorrectionsHandoff(Problem):
                 (self.staff(), "Thanks, noted on our side."),
             ],
         )
+        app.set_rate(0)
+        app.wait_inbox_empty()
+        app.wait_caught_up(slots=["vale_usage"])
         app.customer("vale_usage", "alter subscription vale_usage disable;")
         app.wait_slot("vale_usage", False)
-        time.sleep(5)
 
-        # Larkspur's month-end close: on-call pauses the month-end feed at Larkspur's request.
+        # Larkspur's month-end close: on-call pauses the month-end feed at Larkspur's request, during a busy minute.
         app.close_statement("larkspur_monthend")
         month_end = self.ticket(
             "larkspur",
@@ -464,9 +521,12 @@ class MeteringCorrectionsHandoff(Problem):
                 )
             ],
         )
+        app.set_rate(1500)
+        time.sleep(12)
         app.pause_reader("larkspur_monthend")
+        app.set_rate(60)
         self.note(month_end, f"on-call: {self.staff()}", "Paused the month-end feed for Larkspur.")
-        time.sleep(10)
+        time.sleep(5)
 
         # CF-31: the account review's corrections, one batch, under ingest load.
         larkspur = self.events_of("larkspur")
@@ -486,6 +546,7 @@ class MeteringCorrectionsHandoff(Problem):
         }
         p = self.choose(pell_rows & invoiced, "P")
         pell_voids = [self.choose(pell_rows, "Pell void") for _ in range(2)]
+        y = self.choose(pell_rows - invoiced, "Y")
         moved_in = [
             self.choose(self.events_of("arden"), "move into Pell"),
             self.choose(self.events_of("cinder"), "move into Pell"),
@@ -500,6 +561,7 @@ class MeteringCorrectionsHandoff(Problem):
                 (w, "move", "larkspur"),
                 (v1, "move", "ostrava"),
                 (p, "move", "garnet"),
+                (y, "move", "garnet"),
                 *[(e, "void", None) for e in pell_voids],
                 *[(e, "move", "pell") for e in moved_in],
                 (quill, "reduce", None),
@@ -511,9 +573,7 @@ class MeteringCorrectionsHandoff(Problem):
             [(self.staff(), "Applied the CF-31 corrections from the account review as one batch.")],
             status="closed",
         )
-        time.sleep(10)
-        app.wait_caught_up(slots=["ostrava_usage"])
-        app.close_statement("ostrava_usage")
+        time.sleep(5)
 
         # The corrections do not show in Pell's and Larkspur's copies: support sends them as files.
         pell_ticket = self.ticket(
@@ -555,7 +615,6 @@ class MeteringCorrectionsHandoff(Problem):
             "batch = 'CF-31' and (before->>'tenant_id' = 'larkspur' or after->>'tenant_id' = 'larkspur')"
         )
         self.send_file(lark_ticket, "larkspur", lark_rows, "sent")
-        time.sleep(5)
 
         # Customer side: Pell's DBA applies the voids and some of the moves by hand, then closes its statement.
         pell_file = self.corrections_rows(
@@ -578,10 +637,29 @@ class MeteringCorrectionsHandoff(Problem):
         app.close_statement("larkspur_monthend")
         self.note(lark_ticket, lark, "Thanks, our DBA will go through it.")
 
-        # Nightly correction files until the feeds are fixed; Pell loads its file automatically.
+        # Quill reports a record counted twice; on-call halves it directly in the usage table.
+        q_row = app.rows(
+            app.core,
+            "select json_build_object('event', event_id, 'record', record_id, 'quantity', quantity) from usage_events "
+            f"where tenant_id = 'quill' and metric = 'api_calls' and quantity >= 2 "
+            f"and event_id not in ({','.join(map(str, self.corrected))}) and event_id in "
+            f"({','.join(map(str, self.issued('quill_usage')))}) order by random() limit 1;",
+        )[0]
+        q = self.choose([q_row["event"]], "Q")
+        q_ticket = self.ticket(
+            "quill",
+            "Record counted twice",
+            [(self.customer_name("quill"), f"Record {q_row['record']} counts our calls twice.")],
+        )
+        app.core(f"update usage_events set quantity = {round(float(q_row['quantity']) / 2, 3)} where event_id = {q};")
+        self.note(q_ticket, self.staff(), "Fixed the quantity on our side.")
+
+        # Nightly correction files until the feeds are fixed; Pell receives its files by subscription and
+        # loads them automatically.
         self.correct("pell", "void")
-        time.sleep(10)
+        time.sleep(5)
         app.setup_extracts({"pell": pell_ticket, "larkspur": lark_ticket})
+        app.subscribe_files("pell", "pell_usage")
         for ticket in (pell_ticket, lark_ticket):
             self.note(
                 ticket,
@@ -592,11 +670,10 @@ class MeteringCorrectionsHandoff(Problem):
         app.load_extract_files("pell", "pell_usage")
         self.note(pell_ticket, pell, "Thanks, we load your nightly file automatically.")
 
-        # Ordinary corrections later reduce the moved-in Larkspur row and one of the rows moved into Pell.
+        # An ordinary correction later reduces one of the rows moved into Pell.
         reduced = self.rng.choice(moved_in)
-        self.correct("larkspur", "reduce", event=w)
         self.correct("pell", "reduce", event=reduced)
-        time.sleep(10)
+        time.sleep(5)
 
         # Larkspur's live copy lacks the moved-in row: support keys it in again by hand.
         row = app.rows(
@@ -623,7 +700,6 @@ class MeteringCorrectionsHandoff(Problem):
         )
         self.corrected.add(w2)
         self.note(missing_ticket, self.staff(), f"Entered the missing usage by hand as manual-{missing_ticket}.")
-        time.sleep(10)
 
         # Pell disputes P: its copy still shows it, the file says it moved, and an invoice charged it.
         charge = app.rows(
@@ -663,31 +739,28 @@ class MeteringCorrectionsHandoff(Problem):
             f"Reverted two CF-31 moves after the account owners objected: event {x} back to "
             f"Larkspur, event {v1} back to Vale.",
         )
-        time.sleep(10)
+        time.sleep(5)
         app.wait_caught_up(slots=["ostrava_usage"])
         app.close_statement("ostrava_usage")
-        self.note(month_end, lark, "Close is confirmed on our side. Please resume the month-end feed.")
+        self.note(
+            month_end,
+            lark,
+            "Close is confirmed on our side and our DBA has re-enabled the month-end subscription. "
+            "Please resume the month-end feed.",
+        )
+        app.customer("larkspur_monthend", "alter subscription larkspur_monthend enable;")
 
         # The customers' links drop and reconnect, one by one.
         app.restart_subscription("pell_usage")
-        time.sleep(20)
-        self.corrections(
-            [
-                ("quill", "void", None, None),
-                ("larkspur", "void", None, None),
-                ("brisk", "move", "larkspur", None),
-                ("quill", "move", "vale", None),
-                ("larkspur", "reduce", None, True),
-            ]
-            + self.random_plan(4)
-        )
-        time.sleep(30)
+        time.sleep(5)
+        gap = self.pell_gap(review, y)
+        time.sleep(10)
         app.restart_subscription("quill_usage")
-        time.sleep(8)
+        time.sleep(5)
         app.restart_subscription("larkspur_live")
-        time.sleep(20)
+        time.sleep(10)
         self.corrections([("pell", "reduce", None, None)] + self.random_plan(5))
-        time.sleep(20)
+        time.sleep(10)
         app.wait_caught_up(skip=PAUSED)
         app.run_cronjob("correction-extracts", "correction-extracts-manual-2")
         # The customers that are online close their statements as every day.
@@ -701,6 +774,9 @@ class MeteringCorrectionsHandoff(Problem):
             "duplicate_usage": {"tenant_id": "larkspur", **row},
             "v1": v1,
             "p": p,
+            "y": y,
+            "q": q,
+            "q_quantity": str(q_row["quantity"]),
             "pell_voids": pell_voids,
             "moved_in": moved_in,
             "pell_loaded": loaded,
@@ -708,7 +784,65 @@ class MeteringCorrectionsHandoff(Problem):
             "w_loaded": w_loaded,
             "lsn_before_cf31": lsn_before,
             "refund_capture": int(capture),
+            **gap,
         }
+
+    def pell_gap(self, review, y):
+        """Support reverts Y to Pell; Pell never heard it leave, so its feed stops on Y. On-call skips the
+        failing change by moving Pell's slot to the current position, which also skips everything sent since."""
+        app = self.app
+        pell = self.customer_name("pell")
+        errors = app.customer(
+            "pell_usage", "select apply_error_count from pg_stat_subscription_stats where subname = 'pell_usage';"
+        ).strip()
+        self.correct_batch("CF-31", [(y, "move", "pell")])
+        self.note(review, self.staff(), f"Reverted event {y} back to Pell after the account owner objected.")
+        deadline = time.monotonic() + 120
+        while (
+            app.customer(
+                "pell_usage", "select apply_error_count from pg_stat_subscription_stats where subname = 'pell_usage';"
+            ).strip()
+            == errors
+        ):
+            if time.monotonic() > deadline:
+                raise WorldDidNotTake("Pell's feed did not stop on the reverted move")
+            time.sleep(1)
+        stopped = time.monotonic()
+        first = int(app.core("select max(event_id) from usage_events;").strip())
+        failing = self.ticket(
+            "pell",
+            "Usage feed failing",
+            [
+                (
+                    pell,
+                    'Our feed is failing: duplicate key value violates unique constraint "usage_events_pkey", '
+                    f"Key (event_id)=({y}) already exists.",
+                )
+            ],
+        )
+        # Ordinary work goes on meanwhile, including one reduction of a row Pell holds.
+        self.corrections(
+            [
+                ("quill", "void", None, None),
+                ("larkspur", "void", None, None),
+                ("brisk", "move", "larkspur", None),
+                ("quill", "move", "vale", None),
+                ("larkspur", "reduce", None, True),
+            ]
+            + self.random_plan(3)
+        )
+        reduced = self.choose(self.events_of("pell") & self.issued("pell_usage"), "Pell reduction in the gap")
+        self.correct("pell", "reduce", event=reduced)
+        time.sleep(max(0.0, self.rng.uniform(60, 90) - (time.monotonic() - stopped)))
+        app.pause_reader("pell_usage")
+        skipped_to = app.core(
+            "select end_lsn from pg_replication_slot_advance('pell_usage', pg_current_wal_lsn());"
+        ).strip()
+        app.core("alter role feed_pell_usage login;")
+        last = int(app.core("select max(event_id) from usage_events;").strip())
+        self.note(failing, f"on-call: {self.staff()}", "Skipped the failing change on our side; feed resumed.")
+        app.wait_slot("pell_usage", True)
+        return {"pell_gap": [first, last], "pell_gap_reduced": reduced, "pell_skipped_to": skipped_to}
 
     def issue_credits(self, week1_events):
         """Support credits the customers who complained about a voided line on an invoice."""
@@ -770,8 +904,6 @@ class MeteringCorrectionsHandoff(Problem):
         for db in VICTIMS:
             if not any(diffs[db].values()):
                 problems.append(f"{db} received every correction")
-        if any(diffs["ostrava_usage"].values()):
-            problems.append(f"ostrava_usage missed corrections: {diffs['ostrava_usage']}")
         if facts["p"] not in diffs["pell_usage"]["extra"]:
             problems.append("pell_usage does not hold P")
         if facts["w"] not in diffs["larkspur_live"]["missing"]:
@@ -791,6 +923,7 @@ class MeteringCorrectionsHandoff(Problem):
                 != "t"
             ):
                 problems.append(f"{db} is not paused before CF-31: {slot}")
+        problems += self.seal_readers(facts, diffs, slots)
         held = {
             int(e)
             for e in app.customer(
@@ -829,12 +962,14 @@ class MeteringCorrectionsHandoff(Problem):
         ):
             problems.append("core does not hold both W and W'")
         if (
-            app.core(
-                "select count(*) from extract_files where account = 'pell' and status = 'ready';", database="support"
+            app.customer(
+                "pell_usage",
+                "select count(*) from extract_files e where status = 'ready' "
+                "and not exists (select 1 from loaded_files l where l.file_id = e.file_id);",
             ).strip()
             == "0"
         ):
-            problems.append("no ready correction file for Pell")
+            problems.append("no ready correction file waits for Pell's loader")
         # What each customer copy holds now, beside it, for the statement checks.
         for db in CUSTOMER_DATABASES:
             wrong = diffs[db]["extra"] + diffs[db]["changed"]
@@ -858,6 +993,50 @@ class MeteringCorrectionsHandoff(Problem):
             "documents": documents(app),
             "diffs": {db: {k: len(v) for k, v in d.items()} for db, d in diffs.items()},
         }
+
+    def seal_readers(self, facts, diffs, slots):
+        """Month-end ahead of its slot, Vale not, Pell resumed past a gap, Quill without the direct fix."""
+        app = self.app
+        problems = []
+        position = {db: app.subscription_origin(db) for db in PAUSED}
+        facts["origins"] = position
+        ahead = app.core(
+            f"select {sql_literal(position['larkspur_monthend'])}::pg_lsn > "
+            f"{sql_literal(slots['larkspur_monthend']['confirmed'])}::pg_lsn;"
+        ).strip()
+        # The origin moves only with an applied transaction that carried month-end changes; during the pause
+        # only ingest wrote, so origin > slot means Larkspur inserts are applied beyond the slot's position.
+        if ahead != "t":
+            problems.append(
+                f"larkspur_monthend origin is not ahead of its slot: {position} {slots['larkspur_monthend']}"
+            )
+        if (
+            app.customer(
+                "postgres", "select subenabled from pg_subscription where subname = 'larkspur_monthend';"
+            ).strip()
+            != "t"
+        ):
+            problems.append("larkspur_monthend subscription is not enabled")
+        behind = app.core(
+            f"select {sql_literal(position['vale_usage'])}::pg_lsn <= {sql_literal(slots['vale_usage']['confirmed'])}::pg_lsn;"
+        ).strip()
+        if behind != "t":
+            problems.append(f"vale_usage origin is ahead of its slot: {position} {slots['vale_usage']}")
+        first, last = facts["pell_gap"]
+        lacked = [e for e in diffs["pell_usage"]["missing"] if first < e <= last]
+        facts["pell_gap_lacked"] = len(lacked)
+        if not lacked:
+            problems.append("pell_usage lacks no row inserted while its feed was stopped")
+        if facts["pell_gap_reduced"] not in diffs["pell_usage"]["changed"]:
+            problems.append("pell_usage does not hold the gap-reduced row's old quantity")
+        if not set(ledger(app.finance)) - set(ledger(app.billing)):
+            problems.append("finance holds no line that billing deleted")
+        if not slots.get("pell_usage", {}).get("active"):
+            problems.append("pell_usage is not streaming")
+        held = app.customer("quill_usage", f"select quantity from usage_events where event_id = {facts['q']};").strip()
+        if not held or float(held) != float(facts["q_quantity"]):
+            problems.append(f"quill_usage holds {held!r} for Q, expected the old quantity {facts['q_quantity']}")
+        return problems
 
     def save_state(self):
         body = json.dumps(
@@ -895,7 +1074,8 @@ class MeteringCorrectionsHandoff(Problem):
                 failures.append([str(exc)])
                 print(f"Build did not take: {exc}")
                 continue
-            problems, sealed = self.seal(facts)
+            with self.phase("seal"):
+                problems, sealed = self.seal(facts)
             if not problems:
                 self.state = {**facts, **sealed}
                 self.save_state()

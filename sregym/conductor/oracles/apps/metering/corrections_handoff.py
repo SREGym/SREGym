@@ -3,9 +3,10 @@
 After the agent finishes, the company's and its customers' routine work runs as
 it would tonight: Vale's site comes back, pubsync onboards a new customer from
 the declared configuration, support makes fresh corrections, the nightly
-correction files go out if they still do and Pell loads whatever files wait for
-it, traffic settles, finance's invoice run closes every account and every
-customer closes its statement. Then every reader is compared with the truth on
+correction files go out if they still do and Pell's loader applies every ready
+file in its own copy of the files, traffic settles, billing's daily re-rate
+runs, finance's invoice run closes every account and every customer closes its
+statement. Then every reader is compared with the truth on
 core: each customer copy and statement, billing's ledger, finance's ledger
 under its own closed-period rule, the documents already issued, and what each
 customer was charged in total.
@@ -238,13 +239,15 @@ class MeteringOracle(Oracle):
         return True
 
     def wait_ledgers_delivered(self, timeout=900):
-        """Billing has every usage change from core, and finance has every billing line, before invoicing."""
+        """Billing has every usage change from core, and finance every billing change, before invoicing."""
         app = self.app
         deadline = time.monotonic() + timeout
         try:
             app.wait_caught_up(slots=["billing_usage"], timeout=timeout)
         except TimeoutError as exc:
             return [self.fail("billing_ledger_wrong", error=str(exc)[:500])]
+        with contextlib.suppress(TimeoutError):
+            app.wait_caught_up(app.billing, slots=["finance_ledger"], timeout=timeout)
         while True:
             missing = set(ledger(app.billing)) - set(ledger(app.finance))
             if not missing:
@@ -482,7 +485,8 @@ class MeteringOracle(Oracle):
         notes = {}
         with contextlib.suppress(Exception):
             notes["copies"] = {
-                db: {k: len(v) for k, v in copy_digest(app, db, tenant).items()} for db, tenant in CUSTOMER_DATABASES.items()
+                db: {k: len(v) for k, v in copy_digest(app, db, tenant).items()}
+                for db, tenant in CUSTOMER_DATABASES.items()
             }
         with contextlib.suppress(Exception):
             notes["finance_gaps"] = len(finance_differences(app))
@@ -494,8 +498,10 @@ class MeteringOracle(Oracle):
                 ).split()
             )
         with contextlib.suppress(Exception):
-            notes["pell_ready_files"] = app.core(
-                "select count(*) from extract_files where account = 'pell' and status = 'ready';", database="support"
+            notes["pell_ready_files"] = app.customer(
+                "pell_usage",
+                "select count(*) from extract_files e where status = 'ready' "
+                "and not exists (select 1 from loaded_files l where l.file_id = e.file_id);",
             ).strip()
         with contextlib.suppress(Exception):
             job = json.loads(app.command("get", "cronjob", "correction-extracts", "-o", "json"))
@@ -557,6 +563,11 @@ class MeteringOracle(Oracle):
                 failures.append(self.fail("ingest_unavailable", error=str(exc)[:500]))
             with contextlib.suppress(TimeoutError):
                 app.wait_caught_up(timeout=240)
+            failures += self.wait_ledgers_delivered()
+            try:
+                app.run_cronjob("billing-rerate", f"billing-rerate-{int(time.time())}")
+            except Exception as exc:  # noqa: BLE001
+                failures.append(self.fail("routine_jobs_failed", error=f"re-rate: {exc}"[:2000]))
             failures += self.wait_ledgers_delivered()
             try:
                 app.invoice_run([*TENANTS, NEW_CUSTOMER[0]], f"invoice-run-{int(time.time())}")

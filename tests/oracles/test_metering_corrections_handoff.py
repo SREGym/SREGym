@@ -106,3 +106,69 @@ def test_duplicate_check_preserves_one_unchanged_usage_event(quantities, reason)
     failures = oracle.check_duplicate_usage()
 
     assert [failure["reason"] for failure in failures] == ([reason] if reason else [])
+
+
+def test_forwarded_from_reads_the_position_core_logged_for_that_slot():
+    from sregym.conductor.problems.apps.metering.reference_repair import forwarded_from
+
+    log = (
+        "2026-11-20 10:32:03.846 UTC [69] LOG:  0/15A0000 has been already streamed, forwarding to 0/1DAA5C0\n"
+        '2026-11-20 10:32:03.846 UTC [69] LOG:  starting logical decoding for slot "vale_usage"\n'
+        "2026-11-20 10:32:09.100 UTC [71] LOG:  0/15A32E8 has been already streamed, forwarding to 0/1DAA5C0\n"
+        '2026-11-20 10:32:09.100 UTC [71] LOG:  starting logical decoding for slot "larkspur_monthend"\n'
+    )
+    app = SimpleNamespace(command=Mock(return_value=log))
+    assert forwarded_from(app, "larkspur_monthend", "0/1DAA5C0") == "0/15A32E8"
+
+
+def test_files_are_recalled_through_their_publication_and_both_settings_restored():
+    from sregym.conductor.problems.apps.metering.reference_repair import recall_files
+
+    app = SimpleNamespace(core=Mock())
+    recall_files(app, "pell")
+    script = app.core.call_args.args[0]
+    steps = [line for line in script.splitlines() if line]
+    assert steps[0] == "begin;" and steps[-1] == "commit;"
+    assert steps.index("alter table extract_files replica identity full;") < steps.index(
+        "update extract_files set status = 'withdrawn' where account = 'pell' and status = 'ready';"
+    )
+    assert "alter publication files_pell set (publish = 'insert, update');" in steps
+    assert steps[-3:-1] == [
+        "alter publication files_pell set (publish = 'insert');",
+        "alter table extract_files replica identity default;",
+    ]
+    recall_files(app, "pell", through_feed=False)
+    assert "publication" not in app.core.call_args.args[0]
+
+
+def test_a_voided_row_is_deleted_from_its_correction_image_whether_the_reader_holds_it_or_not():
+    from sregym.conductor.problems.apps.metering.reference_repair import net_transaction
+
+    calls = []
+
+    def core(script):
+        calls.append(script)
+        if script.startswith("select before from usage_corrections"):
+            return '{"event_id": 7, "tenant_id": "larkspur"}\n'
+        if script.startswith("select event_id || '|' || tenant_id"):
+            return ""  # the voided row is no longer on core
+        return "0/1\n"
+
+    app = SimpleNamespace(core=core)
+    net_transaction(
+        app,
+        {"corr_larkspur": "update, delete"},
+        "larkspur",
+        "larkspur_monthend",
+        {"missing": [], "extra": [], "changed": []},
+        skip={7},
+        deletes=[7],
+    )
+    emitted = next(c for c in calls if c.startswith("begin;"))
+    assert "jsonb_populate_record(null::usage_events" in emitted
+    assert emitted.index("insert into usage_events") < emitted.index(
+        "alter publication corr_larkspur set (publish = 'update, delete');"
+    )
+    assert emitted.index("alter publication corr_larkspur set (publish = 'update, delete');") < emitted.index(
+        "delete from usage_events where event_id = 7;"
+    )
