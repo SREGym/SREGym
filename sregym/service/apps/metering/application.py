@@ -117,6 +117,7 @@ class MeteringApplication(KubernetesCommands, Application):
         self.app_name = self.name
         self.description = self.get_app_json()["Desc"]
         self.kubectl = KubeCtl()
+        self.passwords = {}
         self.helm_deploy = False
         self.frontend_service = None
 
