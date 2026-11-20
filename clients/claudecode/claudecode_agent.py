@@ -279,7 +279,12 @@ class ClaudeCodeAgent:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
 
-        if not api_key and not oauth_token:
+        # bedrock/<inference-profile> runs Claude Code on Bedrock with the forwarded AWS credentials.
+        if self.model_name.startswith("bedrock/"):
+            env["CLAUDE_CODE_USE_BEDROCK"] = "1"
+            env.pop("ANTHROPIC_API_KEY", None)
+            env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        elif not api_key and not oauth_token:
             logger.error("=" * 80)
             logger.error("ERROR: No Anthropic API authentication found")
             logger.error("Please set one of the following environment variables:")
@@ -293,7 +298,9 @@ class ClaudeCodeAgent:
         # while the conductor / judge separately uses an API key from
         # ANTHROPIC_API_KEY). Drop ANTHROPIC_API_KEY from the agent's env so
         # the Claude Code CLI authenticates via the OAuth path.
-        if oauth_token:
+        if env.get("CLAUDE_CODE_USE_BEDROCK"):
+            pass
+        elif oauth_token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
             env.pop("ANTHROPIC_API_KEY", None)
         elif api_key:

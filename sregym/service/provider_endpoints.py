@@ -57,6 +57,9 @@ def provider_endpoint_rules(
 
     if agent in {"autosubmit", "debug"}:
         return ()
+    # bedrock/<inference-profile> runs Claude Code and Codex on Bedrock, not the vendor API.
+    if agent in {"codex", "claudecode", "claudecode_radar"} and model.casefold().startswith("bedrock/"):
+        return _provider_rules("bedrock", environment)
     if agent == "codex":
         custom_base = _configured_url(environment, "AGENT_API_BASE")
         if custom_base:
