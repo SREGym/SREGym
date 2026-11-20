@@ -172,3 +172,31 @@ def test_a_voided_row_is_deleted_from_its_correction_image_whether_the_reader_ho
     assert emitted.index("alter publication corr_larkspur set (publish = 'update, delete');") < emitted.index(
         "delete from usage_events where event_id = 7;"
     )
+
+
+@pytest.mark.parametrize(
+    ("genuine", "missing", "retry", "history", "reasons"),
+    [
+        ((True, False), (False, True), "t", "line", []),
+        ((False, True), (False, True), "t", "line", ["statement_return_waiver_wrong"]),
+        ((True, False), (True, False), "t", "line", ["statement_return_waiver_wrong"]),
+        ((True, False), (False, True), "f", "line", ["statement_return_not_imported"]),
+        ((True, False), (False, True), "t", "line\nreversal\nline", ["statement_lines_wrong"]),
+    ],
+)
+def test_statement_return_requires_the_retry_and_both_charge_decisions(genuine, missing, retry, history, reasons):
+    app = SimpleNamespace(
+        core=Mock(return_value=retry),
+        finance=Mock(),
+        customer=Mock(return_value=history),
+        rows=Mock(
+            return_value=[
+                {"event": event, "waived": waived, "charged": charged}
+                for event, (waived, charged) in ((1, genuine), (2, missing))
+            ]
+        ),
+    )
+    state = {"statement_return": {"genuine": 1, "missing": 2, "retry": 9}}
+    oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: state))
+
+    assert [failure["reason"] for failure in oracle.check_statement_return()] == reasons

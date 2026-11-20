@@ -21,6 +21,7 @@ CREATE TABLE ledger_lines (
     metric      text NOT NULL,
     quantity    numeric(12,3) NOT NULL,
     amount      numeric(14,4) NOT NULL,
+    occurred_at timestamptz NOT NULL,
     rated_at    timestamptz NOT NULL
 );
 
@@ -30,12 +31,13 @@ BEGIN
         DELETE FROM ledger_lines WHERE line_id = OLD.event_id;
         RETURN OLD;
     END IF;
-    INSERT INTO ledger_lines (line_id, account, metric, quantity, amount, rated_at)
-    SELECT NEW.event_id, NEW.tenant_id, NEW.metric, NEW.quantity, round(NEW.quantity * p.unit_price, 4), now()
+    INSERT INTO ledger_lines (line_id, account, metric, quantity, amount, occurred_at, rated_at)
+    SELECT NEW.event_id, NEW.tenant_id, NEW.metric, NEW.quantity, round(NEW.quantity * p.unit_price, 4),
+           NEW.occurred_at, now()
     FROM price_book p WHERE p.metric = NEW.metric
     ON CONFLICT (line_id) DO UPDATE
         SET account = EXCLUDED.account, metric = EXCLUDED.metric, quantity = EXCLUDED.quantity,
-            amount = EXCLUDED.amount, rated_at = EXCLUDED.rated_at;
+            amount = EXCLUDED.amount, occurred_at = EXCLUDED.occurred_at, rated_at = EXCLUDED.rated_at;
     RETURN NEW;
 END $$;
 

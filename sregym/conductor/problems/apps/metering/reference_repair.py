@@ -391,6 +391,24 @@ def repair_finance(problem, linked=False):
         )
 
 
+def repair_statement_return(app, returned, wrong):
+    if "return_leave_waiver" in wrong:
+        return
+    missing = returned["missing"]
+    if "return_clear_only" in wrong:
+        app.finance(
+            "update ledger_lines set waived_by_return = null, waiver_reason = null "
+            f"where account = 'pell' and line_id = {missing};"
+        )
+        return
+    events = [missing]
+    if "return_revoke_both" in wrong:
+        events.append(returned["genuine"])
+    ref, review = map(sql_literal, (returned["ref"], returned["review"]))
+    for event in events:
+        app.finance(f"select revoke_statement_waiver('pell', {ref}, {event}, {review});")
+
+
 def repair(problem, wrong=()):
     """The reference repair; `wrong` names deliberate mistakes for testing the grader."""
     app = problem.app
@@ -419,3 +437,4 @@ def repair(problem, wrong=()):
             raise
     app.wait_caught_up(app.billing, timeout=300)
     repair_finance(problem, linked="linked_offset" in wrong)
+    repair_statement_return(app, state["statement_return"], wrong)

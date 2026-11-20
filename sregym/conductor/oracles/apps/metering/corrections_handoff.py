@@ -5,7 +5,7 @@ it would tonight: Vale's site comes back, pubsync onboards a new customer from
 the declared configuration, support makes fresh corrections, the nightly
 correction files go out if they still do and Pell's loader applies every ready
 file in its own copy of the files, traffic settles, billing's daily re-rate
-runs, finance's invoice run closes every account and every customer closes its
+runs, finance imports pending statement returns and invoices each account, and every customer closes its
 statement. Then every reader is compared with the truth on
 core: each customer copy and statement, billing's ledger, finance's ledger
 under its own closed-period rule, the documents already issued, and what each
@@ -150,6 +150,8 @@ class MeteringOracle(Oracle):
         "statement_reversed": "agent",
         "statement_rebooked": "agent",
         "statement_lines_wrong": "agent",
+        "statement_return_not_imported": "agent",
+        "statement_return_waiver_wrong": "agent",
         "subscription_not_streaming": "agent",
         "billing_ledger_wrong": "agent",
         "finance_ledger_wrong": "agent",
@@ -405,7 +407,8 @@ class MeteringOracle(Oracle):
         wrong = differences(dict(truth), billing)
         if wrong:
             failures.append(self.fail("billing_ledger_wrong", lines=wrong[:20], count=len(wrong)))
-        target = {(line, account): amount for line, (account, amount) in truth.items()}
+        waived = self.state()["statement_return"]["genuine"]
+        target = {(line, account): amount for line, (account, amount) in truth.items() if line != waived}
         billed = defaultdict(Decimal)
         usage_items = defaultdict(int)
         rows = app.finance(
@@ -422,7 +425,9 @@ class MeteringOracle(Oracle):
         if wrong:
             failures.append(self.fail("finance_ledger_wrong", lines=[list(k) for k in wrong[:20]], count=len(wrong)))
         twice = sorted(line for line, n in usage_items.items() if n > 1)
-        uninvoiced = app.finance("select count(*) from ledger_lines where invoice_id is null;").strip()
+        uninvoiced = app.finance(
+            f"select count(*) from ledger_lines where invoice_id is null and line_id <> {waived};"
+        ).strip()
         if twice or uninvoiced != "0":
             failures.append(
                 self.fail("usage_invoiced_twice", lines=twice[:20], count=len(twice), uninvoiced=uninvoiced)
@@ -442,7 +447,7 @@ class MeteringOracle(Oracle):
                     self.fail("notices_without_change", lines=[list(k) for k in noise[:20]], count=len(noise))
                 )
         owed = defaultdict(Decimal)
-        for account, amount in truth.values():
+        for (_line, account), amount in target.items():
             owed[account] += amount
         charged = defaultdict(Decimal)
         rows = (
@@ -461,6 +466,37 @@ class MeteringOracle(Oracle):
         off = charges_off(owed, charged, set(TENANTS) | {NEW_CUSTOMER[0]} | set(charged))
         if off:
             failures.append(self.fail("charges_wrong", accounts=off))
+        return failures
+
+    def check_statement_return(self):
+        app = self.app
+        returned = self.state()["statement_return"]
+        genuine, missing = returned["genuine"], returned["missing"]
+        failures = []
+        imported = app.core(
+            f"select imported_at is not null from statement_return_inbox where delivery_id = {returned['retry']};",
+            database="support",
+        ).strip()
+        if imported != "t":
+            failures.append(self.fail("statement_return_not_imported", delivery=returned["retry"]))
+        decisions = {
+            r["event"]: (r["waived"], r["charged"])
+            for r in app.rows(
+                app.finance,
+                "select json_build_object('event', l.line_id, 'waived', l.waived_by_return is not null, "
+                "'charged', exists (select 1 from invoice_items i join invoices v using (invoice_id) "
+                "where i.line_id = l.line_id and i.kind = 'usage' and v.account = 'pell')) "
+                f"from ledger_lines l where l.account = 'pell' and l.line_id in ({genuine}, {missing});",
+            )
+        }
+        for event, expected in ((genuine, (True, False)), (missing, (False, True))):
+            if decisions.get(event) != expected:
+                failures.append(self.fail("statement_return_waiver_wrong", event=event, decision=decisions.get(event)))
+        history = app.customer(
+            "pell_usage", f"select kind from statement_lines where event_id = {missing};"
+        ).split()
+        if history != ["line"]:
+            failures.append(self.fail("statement_lines_wrong", database="pell_usage", event=missing, history=history))
         return failures
 
     def check_ingest(self):
@@ -570,6 +606,10 @@ class MeteringOracle(Oracle):
                 failures.append(self.fail("routine_jobs_failed", error=f"re-rate: {exc}"[:2000]))
             failures += self.wait_ledgers_delivered()
             try:
+                app.run_cronjob("statement-return-import", f"statement-return-import-{int(time.time())}")
+            except Exception as exc:  # noqa: BLE001
+                failures.append(self.fail("routine_jobs_failed", error=f"statement return import: {exc}"[:2000]))
+            try:
                 app.invoice_run([*TENANTS, NEW_CUSTOMER[0]], f"invoice-run-{int(time.time())}")
             except Exception as exc:  # noqa: BLE001
                 failures.append(self.fail("routine_jobs_failed", error=f"invoice run: {exc}"[:2000]))
@@ -577,6 +617,7 @@ class MeteringOracle(Oracle):
             failures = self.check_duplicate_usage() + self.check_documents() + failures
             failures += self.check_readers(errors_before)
             failures += self.check_statements(closes, touched)
+            failures += self.check_statement_return()
             failures += self.check_ledgers()
             failures += self.check_ingest()
         except Exception as exc:  # noqa: BLE001

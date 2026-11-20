@@ -44,6 +44,24 @@ BEGIN
     RETURN c;
 END $$;
 
+-- Save the accepted usage at close so a resend carries the same return.
+CREATE TABLE statement_returns (
+    return_ref    text PRIMARY KEY,
+    period_start  timestamptz NOT NULL,
+    period_end    timestamptz NOT NULL,
+    accepted_rows jsonb NOT NULL
+);
+
+CREATE FUNCTION save_statement_return(p_ref text, p_start timestamptz, p_end timestamptz, p_disputed bigint[])
+RETURNS void LANGUAGE sql SET search_path = public AS $$
+    INSERT INTO statement_returns
+    SELECT p_ref, p_start, p_end,
+           coalesce(jsonb_agg(jsonb_build_object('event_id', u.event_id, 'metric', u.metric, 'quantity', u.quantity)
+                              ORDER BY u.event_id), '[]'::jsonb)
+    FROM usage_events u JOIN statement_lines s ON s.line_id = u.line_id AND s.kind = 'line'
+    WHERE u.occurred_at >= p_start AND u.occurred_at < p_end AND NOT (u.event_id = ANY (p_disputed));
+$$;
+
 -- Applies a corrections file from the provider: each row is deleted, and put
 -- back as it is after the correction when it still belongs to us.
 CREATE FUNCTION load_correction_file(p_rows jsonb, p_tenant text) RETURNS integer

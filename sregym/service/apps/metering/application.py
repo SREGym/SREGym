@@ -505,7 +505,13 @@ class MeteringApplication(KubernetesCommands, Application):
                 self.secret_document("ingest-db", {"password": p["ingest"]}),
                 self.config_map("ingest", {"ingest.sh": (COMPANY / "ingest.sh").read_text()}),
                 self.config_map("pubsync", {"pubsync.sh": (COMPANY / "pubsync.sh").read_text()}),
-                self.config_map("finance-jobs", {"invoice-run.sh": (COMPANY / "invoice-run.sh").read_text()}),
+                self.config_map(
+                    "finance-jobs",
+                    {
+                        name: (COMPANY / name).read_text()
+                        for name in ("invoice-run.sh", "statement-return-import.sh", "statement-returns.sql")
+                    },
+                ),
                 self.config_map("billing-jobs", {"rerate.sh": (COMPANY / "rerate.sh").read_text()}),
                 self.config_map(
                     "support-jobs", {"correction-extracts.sh": (COMPANY / "correction-extracts.sh").read_text()}
@@ -537,6 +543,16 @@ class MeteringApplication(KubernetesCommands, Application):
                     "invoice-run",
                     daily_schedule(start, 12 * 60 + 20),
                     "invoice-run.sh",
+                    "core",
+                    "finance",
+                    "core-postgres",
+                    "finance-jobs",
+                    "/opt/finance",
+                ),
+                self.cronjob(
+                    "statement-return-import",
+                    daily_schedule(start, 12 * 60 + 15),
+                    "statement-return-import.sh",
                     "core",
                     "finance",
                     "core-postgres",
@@ -608,7 +624,11 @@ class MeteringApplication(KubernetesCommands, Application):
             f"({sql_literal(t)}, {sql_literal(spec[0])}, {spec[3]}, {sql_literal('billing@' + t + '.example')})"
             for t, spec in TENANTS.items()
         )
-        self.finance((COMPANY / "finance.sql").read_text() + f"insert into accounts values\n{accounts};\n")
+        self.finance(
+            (COMPANY / "finance.sql").read_text()
+            + (COMPANY / "statement-returns.sql").read_text()
+            + f"insert into accounts values\n{accounts};\n"
+        )
         for db in CUSTOMER_DATABASES:
             self.create_customer_database(db)
 
@@ -756,6 +776,23 @@ class MeteringApplication(KubernetesCommands, Application):
     def close_statement(self, database):
         """The customer's statement close (customer code)."""
         return int(self.customer(database, "select close_statement();").strip())
+
+    def deliver_statement_return(self, account, database, return_ref):
+        """Receive the customer's saved return as a new delivery in the support inbox."""
+        saved = self.customer(
+            database,
+            "select row_to_json(r) from statement_returns r "
+            f"where return_ref = {sql_literal(return_ref)};",
+        ).strip()
+        return int(
+            self.core(
+                "insert into statement_return_inbox (account, return_ref, period_start, period_end, accepted_rows) "
+                f"select {sql_literal(account)}, return_ref, period_start, period_end, accepted_rows "
+                f"from jsonb_populate_record(null::statement_return_inbox, {sql_literal(saved)}::jsonb) "
+                "returning delivery_id;",
+                database="support",
+            ).strip()
+        )
 
     def load_extract_files(self, account, database, timeout=180):
         """The customer's loader (customer code): once its copy of the files has every file sent so far, it

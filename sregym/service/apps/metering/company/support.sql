@@ -27,3 +27,15 @@ CREATE TABLE extract_files (
     rows        jsonb NOT NULL
 );
 CREATE INDEX extract_files_account ON extract_files (account, status);
+
+-- Each delivery is queued, including retries of the same customer return.
+CREATE TABLE statement_return_inbox (
+    delivery_id   bigserial PRIMARY KEY,
+    account       text NOT NULL,
+    return_ref    text NOT NULL,
+    period_start  timestamptz NOT NULL,
+    period_end    timestamptz NOT NULL CHECK (period_end > period_start),
+    accepted_rows jsonb NOT NULL CHECK (jsonb_typeof(accepted_rows) = 'array'),
+    received_at   timestamptz NOT NULL DEFAULT now(),
+    imported_at   timestamptz
+);
