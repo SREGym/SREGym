@@ -231,7 +231,13 @@ class MeteringCorrectionsHandoff(Problem):
         self.app.core(self.correction_sql(event, kind, to))
         return event
 
-    def corrections(self, plan):
+    def corrections(self, plan, pause=None):
+        if pause is not None:
+            events = []
+            for spec in plan:
+                events.append(self.correct(*spec))
+                time.sleep(self.rng.uniform(*pause))
+            return events
         if not plan:
             return []
         events = self.pick_events(plan)
