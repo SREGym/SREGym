@@ -138,11 +138,13 @@ class AstronomyShop(Application):
 
     def delete(self):
         """Delete the Helm configurations."""
+        self._stop_image_client()
         Helm.uninstall(**self.helm_configs)
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
         self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def cleanup(self):
+        self._stop_image_client()
         Helm.uninstall(**self.helm_configs)
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
 
@@ -165,8 +167,12 @@ class AstronomyShop(Application):
     def stop_workload(self):
         if hasattr(self, "wrk"):
             self.wrk.stop()
+        self._stop_image_client()
+
+    def _stop_image_client(self):
+        # The client runs outside the app namespace, so deleting that namespace does not remove it.
         if self.image_client_enabled:
-            stop_image_client(self.namespace)
+            stop_image_client()
 
 
 # Run this code to test installation/deletion
