@@ -62,6 +62,7 @@ def test_failed_precheck_still_runs_jobs_and_reports_later_failures(monkeypatch)
     monkeypatch.setattr(oracle, "check_statements", lambda closes, touched: [])
     monkeypatch.setattr(oracle, "check_ledgers", lambda boundary: [oracle.fail("charges_wrong")])
     monkeypatch.setattr(oracle, "check_rates", list)
+    monkeypatch.setattr(oracle, "check_statement_return", lambda: [oracle.fail("statement_return_waiver_wrong")])
     monkeypatch.setattr(oracle, "check_ingest", lambda: [oracle.fail("ingest_wrong")])
 
     result = oracle.evaluate()
@@ -72,6 +73,7 @@ def test_failed_precheck_still_runs_jobs_and_reports_later_failures(monkeypatch)
         "routine_jobs_failed",
         "customer_copy_wrong",
         "charges_wrong",
+        "statement_return_waiver_wrong",
         "ingest_wrong",
     ]
     app.invoice_run.assert_called_once()
