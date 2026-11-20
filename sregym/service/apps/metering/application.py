@@ -509,10 +509,17 @@ class MeteringApplication(KubernetesCommands, Application):
                 self.secret_document("ingest-db", {"password": p["ingest"]}),
                 self.config_map("ingest", {"ingest.sh": (COMPANY / "ingest.sh").read_text()}),
                 self.config_map("pubsync", {"pubsync.sh": (COMPANY / "pubsync.sh").read_text()}),
-                self.config_map("finance-jobs", {"invoice-run.sh": (COMPANY / "invoice-run.sh").read_text()}),
                 self.config_map(
                     "billing-jobs",
                     {name: (COMPANY / name).read_text() for name in ("rerate.sh", "rerate.sql", "r5-rate-bands.sql")},
+                ),
+
+                self.config_map(
+                    "finance-jobs",
+                    {
+                        name: (COMPANY / name).read_text()
+                        for name in ("invoice-run.sh", "statement-return-import.sh", "statement-returns.sql")
+                    },
                 ),
                 self.config_map(
                     "support-jobs", {"correction-extracts.sh": (COMPANY / "correction-extracts.sh").read_text()}
@@ -548,6 +555,16 @@ class MeteringApplication(KubernetesCommands, Application):
                     "invoice-run",
                     daily_schedule(start, 12 * 60 + 20),
                     "invoice-run.sh",
+                    "core",
+                    "finance",
+                    "core-postgres",
+                    "finance-jobs",
+                    "/opt/finance",
+                ),
+                self.cronjob(
+                    "statement-return-import",
+                    daily_schedule(start, 12 * 60 + 15),
+                    "statement-return-import.sh",
                     "core",
                     "finance",
                     "core-postgres",
@@ -612,7 +629,11 @@ class MeteringApplication(KubernetesCommands, Application):
             f"{COMMITTED_DISCOUNTS.get(t, 0)})"
             for t, spec in TENANTS.items()
         )
-        self.finance((COMPANY / "finance.sql").read_text() + f"insert into accounts values\n{accounts};\n")
+        self.finance(
+            (COMPANY / "finance.sql").read_text()
+            + (COMPANY / "statement-returns.sql").read_text()
+            + f"insert into accounts values\n{accounts};\n"
+        )
 
     def initialize_billing(self):
         self.wait_pod_ready("billing-0")
@@ -821,6 +842,23 @@ bash -c "$1" "$0" "$config_file"
         """The customer's statement close (customer code)."""
         return int(self.customer(database, "select close_statement();").strip())
 
+    def deliver_statement_return(self, account, database, return_ref):
+        """Receive the customer's saved return as a new delivery in the support inbox."""
+        saved = self.customer(
+            database,
+            "select row_to_json(r) from statement_returns r "
+            f"where return_ref = {sql_literal(return_ref)};",
+        ).strip()
+        return int(
+            self.core(
+                "insert into statement_return_inbox (account, return_ref, period_start, period_end, accepted_rows) "
+                f"select {sql_literal(account)}, return_ref, period_start, period_end, accepted_rows "
+                f"from jsonb_populate_record(null::statement_return_inbox, {sql_literal(saved)}::jsonb) "
+                "returning delivery_id;",
+                database="support",
+            ).strip()
+        )
+
     def load_extract_files(self, account, database, timeout=180):
         """The customer's loader (customer code): once its copy of the files has every file sent so far, it
         applies each ready file it has not loaded yet."""
@@ -851,9 +889,10 @@ bash -c "$1" "$0" "$config_file"
             )
 
     @staticmethod
-    def usage_batch_sql(batches, records):
+    def usage_batch_sql(batches, records, *, starting_at=None):
         """Seed normal usage in complete batches and let the existing feeds build their copies."""
         tenants = [t for t, spec in TENANTS.items() for _ in range(spec[2])]
+        start = starting_at or "clock_timestamp() - interval '20 seconds'"
         return f"""
 with batches as (
     insert into ingest_batches (source, records)
@@ -866,7 +905,7 @@ select gen_random_uuid()::text, tenant, metric,
        case metric when 'api_calls' then 1 + floor(random() * 5000)
                    when 'tokens_k' then round((1 + random() * 800)::numeric, 3)
                    else round((0.5 + random() * 40)::numeric, 3) end,
-       clock_timestamp() - random() * interval '20 seconds', batch_id
+       ({start}) + random() * interval '20 seconds', batch_id
 from (
     select (string_to_array('{','.join(tenants)}', ','))[1 + floor(random() * {len(tenants)})::int] as tenant,
            (array['api_calls', 'tokens_k', 'storage_gb_h'])[1 + floor(random() * 3)::int] as metric,

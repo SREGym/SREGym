@@ -23,6 +23,7 @@ apply by hand, a usage row keyed in again, a refund, partial reverts (one of
 which stopped Pell's feed on a duplicate key; on-call moved its slot forward
 past everything sent meanwhile), a quantity fixed directly on core, nightly
 correction files that Pell receives by subscription and loads automatically,
+an omission on Pell's statement return recorded as a waiver in finance,
 and two readers paused with a backlog (Larkspur's month-end copy, which stops on
 its first error, during its close; Vale during its site maintenance). Every
 server has since been patched to 17.6; only the damage and the patches remain.
@@ -131,7 +132,10 @@ class MeteringCorrectionsHandoff(Problem):
                 "larkspur_live (from the break until each one's own restart) and ostrava_usage (its link dropped "
                 "across the make and it reconnected before its slot passed the in-flight batch, so it stayed stale "
                 "until the 17.6 restart). They kept voided and moved-out rows and stale quantities, and lacked "
-                "moved-in rows, including support's bulk correction CF-31. larkspur_monthend and vale_usage were "
+                "moved-in rows, including support's bulk correction CF-31. Pell's statement return was built "
+                "from the copy that never received one of these moves, so the importer recorded that omission "
+                "as a customer waiver in core's finance database alongside a genuine dispute. The same return is queued to be "
+                "imported again. larkspur_monthend and vale_usage were "
                 "not stale (their walsenders restarted after their slots passed the batch); they are paused with a "
                 "backlog at the customers' requests (month-end's subscription stops on its first error). Billing's "
                 "incoming feed from core stayed intact. Both servers were patched to 17.6, so only the damage remains, "
@@ -284,13 +288,12 @@ class MeteringCorrectionsHandoff(Problem):
         return self.rng.choice(STAFF)
 
     # ---------------------------------------------------------------- picking
-    def events_of(self, tenant):
-        return {
-            int(e)
-            for e in self.app.core(
-                f"select event_id from usage_events where tenant_id = {sql_literal(tenant)};"
-            ).split()
-        }
+    def events_of(self, tenant, outside_period=None):
+        where = f"tenant_id = {sql_literal(tenant)}"
+        if outside_period:
+            start, end = map(sql_literal, outside_period)
+            where += f" and (occurred_at < {start} or occurred_at >= {end})"
+        return {int(e) for e in self.app.core(f"select event_id from usage_events where {where};").split()}
 
     def issued(self, database):
         """Events present in a customer copy whose row is booked on its statement."""
@@ -327,6 +330,51 @@ class MeteringCorrectionsHandoff(Problem):
             database="support",
         )
 
+    def statement_dispute(self, period):
+        """Pell and support agree to leave an existing charge off the upcoming return."""
+        start, end = map(sql_literal, period)
+        used = ",".join(map(str, sorted(self.corrected)))
+        pair = self.app.rows(
+            self.app.core,
+            f"""
+            with period_usage as materialized (
+                select event_id, tenant_id, occurred_at, metric, quantity from usage_events
+                where occurred_at >= {start} and occurred_at < {end}
+                  and tenant_id in ('pell', 'arden') and event_id not in ({used})
+            )
+            select json_build_object('genuine', g.event_id, 'missing', m.event_id, 'metric', g.metric,
+                                     'quantity', g.quantity, 'at', g.occurred_at)
+            from period_usage g
+            cross join lateral (
+                select event_id from period_usage
+                where tenant_id = 'arden' and metric = g.metric and quantity <> g.quantity
+                  and quantity between g.quantity * 0.99 and g.quantity * 1.01
+                order by abs(quantity - g.quantity), event_id limit 1
+            ) m
+            where g.tenant_id = 'pell' and g.quantity >= 20
+            order by g.occurred_at, g.event_id limit 1;
+            """,
+        )
+        if not pair:
+            raise WorldDidNotTake("no comparable charges in Pell's statement period")
+        pair = pair[0]
+        self.corrected.update((pair["genuine"], pair["missing"]))
+        at = pair["at"][:19].replace("T", " ")
+        self.ticket(
+            "pell",
+            "Disputed usage on upcoming statement",
+            [
+                (
+                    self.customer_name("pell"),
+                    f"We dispute the {pair['metric']} charge of {pair['quantity']} units "
+                    f"from {at} UTC. That usage was part of our acceptance tests.",
+                ),
+                (self.staff(), "We agreed to waive that charge. Please leave it off your statement return."),
+            ],
+            status="closed",
+        )
+        return {"genuine": pair["genuine"], "missing": pair["missing"]}
+
     # ---------------------------------------------------------------- history
     @contextlib.contextmanager
     def phase(self, name):
@@ -337,14 +385,16 @@ class MeteringCorrectionsHandoff(Problem):
             print(f"phase.{name}.duration_s={time.monotonic() - start:.0f}", flush=True)
 
     def build(self):
+        app = self.app
         with self.phase("ordinary"):
             self.ordinary()
         with self.phase("week_one"):
-            credits = self.week_one()
+            credits, period = self.week_one()
+            statement_return = self.statement_dispute(period)
         with self.phase("week_two"):
             target = self.week_two()
         with self.phase("support_story"):
-            facts = self.support_story()
+            facts = self.support_story(period, statement_return)
             self.close_invoices(["quill", "garnet", "hollis"])
         with self.phase("patch"):
             # Routine patching moves both publishers to the current minor release.
@@ -355,12 +405,16 @@ class MeteringCorrectionsHandoff(Problem):
             patched_at = self.app.billing("select clock_timestamp();").strip()
             self.seed_usage(5)
             self.wait_for_finance()
+        with self.phase("statement_return"):
+            self.app.replay_job("statement-return-import.sh", "finance")
+            statement_return["retry"] = self.app.deliver_statement_return("pell", "pell_usage", statement_return["ref"])
         return {"credits": len(credits), "target": target, "rates_patched_at": patched_at, **facts}
 
-    def seed_usage(self, batches):
+    def seed_usage(self, batches, *, starting_at=None):
         # Commit in chunks so billing and finance can apply while core writes the next chunk.
         self.app.core(
-            "\n".join(self.app.usage_batch_sql(min(100, batches - start), 60) for start in range(0, batches, 100))
+            "\n".join(self.app.usage_batch_sql(min(100, batches - start), 60, starting_at=starting_at)
+                for start in range(0, batches, 100))
         )
 
     def wait_for_finance(self):
@@ -459,12 +513,18 @@ class MeteringCorrectionsHandoff(Problem):
         app.bounce_finance()
         target = app.release_rate_bands()
         app.wait_caught_up(app.billing, target=target)
-        self.seed_usage(65)
+        # This closed statement covers only this earlier set of readings.
+        # Live ingest and later history must fall outside its return window.
+        period = tuple(app.core(
+            "select start_at || '|' || (start_at + interval '20 seconds') "
+            "from (select now() - interval '1 day' as start_at) t;"
+        ).strip().split("|"))
+        self.seed_usage(65, starting_at=f"{sql_literal(period[0])}::timestamptz")
         self.corrections(self.random_plan(6))
         self.wait_for_finance()
         self.close_invoices(t for t in TENANTS if t not in first_half)
         self.rate_ticket()
-        return credits
+        return credits, period
 
     def rate_ticket(self):
         app = self.app
@@ -552,7 +612,7 @@ class MeteringCorrectionsHandoff(Problem):
                 raise WorldDidNotTake(f"{db} received every week-two correction")
         return target
 
-    def support_story(self):
+    def support_story(self, return_period, statement_return):
         """Support's bulk correction CF-31 and the patches it caused, while four feeds still drop corrections."""
         app = self.app
         lark, pell = self.customer_name("larkspur"), self.customer_name("pell")
@@ -615,8 +675,8 @@ class MeteringCorrectionsHandoff(Problem):
         pell_voids = [self.choose(pell_rows, "Pell void") for _ in range(2)]
         y = self.choose(pell_rows - invoiced, "Y")
         moved_in = [
-            self.choose(self.events_of("arden"), "move into Pell"),
-            self.choose(self.events_of("cinder"), "move into Pell"),
+            self.choose(self.events_of("arden", outside_period=return_period), "move into Pell"),
+            self.choose(self.events_of("cinder", outside_period=return_period), "move into Pell"),
         ]
         quill = self.choose(self.events_of("quill"), "Quill reduction")
         lsn_before = app.core("select pg_current_wal_lsn();").strip()
@@ -631,6 +691,7 @@ class MeteringCorrectionsHandoff(Problem):
                 (y, "move", "garnet"),
                 *[(e, "void", None) for e in pell_voids],
                 *[(e, "move", "pell") for e in moved_in],
+                (statement_return["missing"], "move", "pell"),
                 (quill, "reduce", None),
             ],
         )
@@ -691,7 +752,17 @@ class MeteringCorrectionsHandoff(Problem):
             "pell_usage",
             f"select load_correction_file({sql_literal(json.dumps([r for r in pell_file if r['event_id'] in pell_voids + loaded]))}::jsonb, 'pell');",
         )
-        app.close_statement("pell_usage")
+        close = app.close_statement("pell_usage")
+        return_ref = f"PELL-{close}"
+        start, end = map(sql_literal, return_period)
+        app.customer(
+            "pell_usage",
+            f"select save_statement_return({sql_literal(return_ref)}, {start}, {end}, "
+            f"array[{statement_return['genuine']}]::bigint[]);",
+        )
+        statement_return.update(
+            ref=return_ref, review=review, first=app.deliver_statement_return("pell", "pell_usage", return_ref)
+        )
         self.note(pell_ticket, pell, "Our DBA worked through the file by hand.")
         # Larkspur's DBA may load the moved-in row into the paused month-end copy, then closes it.
         w_loaded = self.rng.random() < 0.5
@@ -850,6 +921,7 @@ class MeteringCorrectionsHandoff(Problem):
             "w_loaded": w_loaded,
             "lsn_before_cf31": lsn_before,
             "refund_capture": int(capture),
+            "statement_return": statement_return,
             **gap,
         }
 
@@ -996,6 +1068,7 @@ class MeteringCorrectionsHandoff(Problem):
                 problems.append(f"{db} is not paused before CF-31: {slot}")
         facts["paused_slots"] = {db: slots[db]["confirmed"] for db in PAUSED if db in slots}
         problems += self.seal_readers(facts, diffs, slots)
+        problems += self.seal_statement_return(facts["statement_return"], diffs["pell_usage"])
         held = {
             int(e)
             for e in app.customer(
@@ -1113,6 +1186,47 @@ class MeteringCorrectionsHandoff(Problem):
             if account not in counts["sent_at_list"] or account not in counts["legacy_sent"]:
                 problems.append(f"{account} has no sent invoice with both the expected rate cases")
         return problems, counts
+
+    def seal_statement_return(self, returned, pell):
+        app = self.app
+        genuine, missing = returned["genuine"], returned["missing"]
+        ref = sql_literal(returned["ref"])
+        problems = []
+        if missing not in pell["missing"] or genuine in pell["missing"]:
+            problems.append("Pell did not keep the disputed charge and miss the moved charge")
+        booked = app.customer(
+            "pell_usage", f"select distinct event_id from statement_lines where event_id in ({genuine}, {missing});"
+        ).strip()
+        if booked != str(genuine):
+            problems.append("Pell did not book only the disputed charge before its return")
+        waivers = app.rows(
+            app.finance,
+            "select json_build_object('line', line_id, 'source', waived_by_return, 'reason', waiver_reason, "
+            "'account', account, 'open', invoice_id is null) from ledger_lines "
+            "where waived_by_return is not null order by line_id;",
+        )
+        expected = [
+            {"line": event, "source": returned["ref"], "reason": "omitted from statement return", "account": "pell", "open": True}
+            for event in sorted((genuine, missing))
+        ]
+        if waivers != expected:
+            problems.append(f"finance did not record the two identical open waivers: {waivers}")
+        duplicate = app.core(
+            "select sent.account = 'pell' and sent.return_ref = " + ref + " and sent.imported_at is not null "
+            "and retry.imported_at is null and (sent.account, sent.return_ref, sent.period_start, sent.period_end, "
+            "sent.accepted_rows) = (retry.account, retry.return_ref, retry.period_start, retry.period_end, "
+            "retry.accepted_rows) and jsonb_array_length(sent.accepted_rows) > 0 "
+            "and not exists (select 1 from jsonb_to_recordset(sent.accepted_rows) as a(event_id bigint) "
+            f"where a.event_id in ({genuine}, {missing})) "
+            "from statement_return_inbox sent cross join statement_return_inbox retry "
+            f"where sent.delivery_id = {returned['first']} and retry.delivery_id = {returned['retry']};",
+            database="support",
+        ).strip()
+        if duplicate != "t":
+            problems.append("the first statement return was not imported with an identical retry still queued")
+        if not problems:
+            print("Statement return sealed: disputed charge booked at Pell, moved charge missing, both waived, retry queued.")
+        return problems
 
     def seal_readers(self, facts, diffs, slots):
         """Month-end ahead of its slot, Vale not, Pell resumed past a gap, Quill without the direct fix."""

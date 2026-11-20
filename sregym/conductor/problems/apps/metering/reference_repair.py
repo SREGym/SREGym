@@ -361,7 +361,7 @@ def repair_finance(problem, linked=False, wrong=()):
     changed = {line for line, _account in finance_differences(app)}
     if "keep_rates" not in wrong:
         changed.update(line for line, rate in billing.items() if finance.get(line) != rate)
-    columns = "line_id, account, metric, quantity, amount, rated_at, rate"
+    columns = "line_id, account, metric, quantity, amount, occurred_at, rated_at, rate"
     if updates := changed & billing.keys():
         rows = app.billing(
             f"copy (select {columns}::text from ledger_lines where line_id in ({ids(updates)})) to stdout;"
@@ -375,7 +375,8 @@ def repair_finance(problem, linked=False, wrong=()):
             f"begin;\ncreate temp table rated as select {columns} from ledger_lines with no data;\n"
             f"copy rated from stdin;\n{rows}\\.\n"
             "update ledger_lines f set account = r.account, metric = r.metric, quantity = r.quantity, "
-            f"amount = r.amount, rated_at = r.rated_at, rate = {rate} from rated r where f.line_id = r.line_id;\n"
+            f"amount = r.amount, occurred_at = r.occurred_at, rated_at = r.rated_at, rate = {rate} "
+            "from rated r where f.line_id = r.line_id;\n"
             f"insert into ledger_lines ({columns}) select {columns} from rated r "
             "where not exists (select 1 from ledger_lines f where f.line_id = r.line_id);\ncommit;"
         )
@@ -411,6 +412,24 @@ def repair_finance(problem, linked=False, wrong=()):
         )
 
 
+def repair_statement_return(app, returned, wrong):
+    if "return_leave_waiver" in wrong:
+        return
+    missing = returned["missing"]
+    if "return_clear_only" in wrong:
+        app.finance(
+            "update ledger_lines set waived_by_return = null, waiver_reason = null "
+            f"where account = 'pell' and line_id = {missing};"
+        )
+        return
+    events = [missing]
+    if "return_revoke_both" in wrong:
+        events.append(returned["genuine"])
+    ref, review = map(sql_literal, (returned["ref"], returned["review"]))
+    for event in events:
+        app.finance(f"select revoke_statement_waiver('pell', {ref}, {event}, {review});")
+
+
 def repair(problem, wrong=()):
     """The reference repair; `wrong` names deliberate mistakes for testing the grader."""
     app = problem.app
@@ -439,3 +458,4 @@ def repair(problem, wrong=()):
             raise
     app.wait_caught_up(app.billing, timeout=300)
     repair_finance(problem, linked="linked_offset" in wrong, wrong=wrong)
+    repair_statement_return(app, state["statement_return"], wrong)

@@ -13,9 +13,12 @@ CREATE TABLE ledger_lines (
     metric      text NOT NULL,
     quantity    numeric(12,3) NOT NULL,
     amount      numeric(14,4) NOT NULL,
+    occurred_at timestamptz NOT NULL,
     rated_at    timestamptz NOT NULL,
     invoice_id  bigint,
-    rate        text NOT NULL
+    rate        text NOT NULL,
+    waived_by_return text,
+    waiver_reason    text
 );
 CREATE INDEX ledger_lines_open ON ledger_lines (account) WHERE invoice_id IS NULL;
 
@@ -132,14 +135,14 @@ DECLARE
 BEGIN
     FOREACH acct IN ARRAY p_accounts LOOP
         SELECT committed_discount INTO discount FROM accounts WHERE account = acct FOR UPDATE;
-        IF NOT EXISTS (SELECT 1 FROM ledger_lines WHERE account = acct AND invoice_id IS NULL)
+        IF NOT EXISTS (SELECT 1 FROM ledger_lines WHERE account = acct AND invoice_id IS NULL AND waived_by_return IS NULL)
            AND NOT EXISTS (SELECT 1 FROM ledger_adjustments WHERE account = acct AND invoice_id IS NULL) THEN
             CONTINUE;
         END IF;
         INSERT INTO invoices (account, total) VALUES (acct, 0) RETURNING invoice_id INTO inv;
         WITH lines AS (
             UPDATE ledger_lines SET invoice_id = inv
-            WHERE account = acct AND invoice_id IS NULL
+            WHERE account = acct AND invoice_id IS NULL AND waived_by_return IS NULL
             RETURNING line_id, amount, rate)
         INSERT INTO invoice_items (invoice_id, kind, ref, line_id, amount, rate)
         SELECT inv, 'usage', line_id, line_id, usage_charge(amount, rate, discount), rate FROM lines;
