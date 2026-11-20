@@ -378,9 +378,10 @@ class MeteringCorrectionsHandoff(Problem):
             self.wait_for_finance()
         with self.phase("statement_return"):
             self.app.replay_job("statement-return-import.sh", "finance")
-            statement_return["retry"] = self.app.deliver_statement_return("pell", "pell_usage", statement_return["ref"])
         with self.phase("allocation_closes"):
             facts["allocation_returns"] = AllocationReplay(self).replay()
+            # Pell's client retries its first return after the last close import, so it is still queued.
+            statement_return["retry"] = self.app.deliver_statement_return("pell", "pell_usage", statement_return["ref"])
         return {"credits": len(credits), "target": target, "rates_patched_at": patched_at, **facts}
 
     def seed_usage(self, batches, *, starting_at=None):
