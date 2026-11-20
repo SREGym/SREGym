@@ -52,7 +52,6 @@ from sregym.conductor.problems.base import Problem
 from sregym.service.apps.metering.application import (
     COMMITTED_DISCOUNTS,
     CUSTOMER_DATABASES,
-    NEW_IMAGE,
     STREAMED,
     TENANTS,
     MeteringApplication,
@@ -420,11 +419,7 @@ class MeteringCorrectionsHandoff(Problem):
             facts = self.support_story(period, statement_return)
             self.close_invoices(["quill", "garnet", "hollis"])
         with self.phase("patch"):
-            # Routine patching moves both publishers to the current minor release.
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                billing = pool.submit(self.app.set_server, "billing", NEW_IMAGE)
-                self.app.set_server("core", NEW_IMAGE)
-                billing.result()
+            app.patch_publishers()
             patched_at = self.app.billing("select clock_timestamp();").strip()
             self.seed_usage(5)
             self.wait_for_finance()
