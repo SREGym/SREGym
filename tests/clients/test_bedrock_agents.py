@@ -77,6 +77,7 @@ def test_codex_preflight_uses_bedrock_responses_endpoint(monkeypatch, aws, tmp_p
     from clients.codex import driver
 
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.delenv("AWS_PROFILE", raising=False)  # an ambient profile would be looked up in the fake config
 
     command, env = _run_preflight(monkeypatch, driver, f"bedrock/{PROFILE}")
 
