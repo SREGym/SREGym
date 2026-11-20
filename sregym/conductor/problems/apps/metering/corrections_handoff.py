@@ -29,6 +29,7 @@ import json
 import random
 import subprocess
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from sregym.conductor.oracles.apps.metering.corrections_handoff import (
@@ -46,6 +47,7 @@ from sregym.service.apps.metering.application import (
     STREAMED,
     TENANTS,
     MeteringApplication,
+    extracts_conf,
     ledger_conf,
     publications_conf,
     sql_literal,
@@ -133,51 +135,84 @@ class MeteringCorrectionsHandoff(Problem):
         self.mitigation_oracle = MeteringOracle(problem=self)
 
     # ------------------------------------------------------------ corrections
-    def pick_event(self, tenant, invoiced=None):
+    def pick_events(self, plan):
         app = self.app
-        exclude = ",".join(str(e) for e in self.corrected) or "0"
-        if invoiced is None:
-            event = app.core(
-                f"select event_id from usage_events where tenant_id = {sql_literal(tenant)} "
-                f"and event_id not in ({exclude}) and event_id > (select max(event_id) - 3000 from usage_events) "
-                "order by random() limit 1;"
-            ).strip()
-        else:
-            event = app.finance(
-                f"select line_id from ledger_lines where account = {sql_literal(tenant)} "
-                f"and invoice_id is {'not ' if invoiced else ''}null and line_id not in ({exclude}) "
-                "and not exists (select 1 from ledger_adjustments a where a.line_id = ledger_lines.line_id) "
-                "order by random() limit 1;"
-            ).strip()
-            if event and app.core(f"select count(*) from usage_events where event_id = {event};").strip() != "1":
-                event = ""
-        if not event:
-            raise RuntimeError(f"no event to correct for {tenant} (invoiced={invoiced})")
-        self.corrected.add(int(event))
-        return int(event)
+        picked = {}
+        for invoiced in (True, False, None):
+            counts = Counter(tenant for tenant, _, _, status in plan if status is invoiced)
+            if not counts:
+                continue
+            exclude = ",".join(str(e) for e in self.corrected) or "0"
+            queries = []
+            for tenant, count in counts.items():
+                if invoiced is None:
+                    source = (
+                        f"event_id from usage_events where tenant_id = {sql_literal(tenant)} "
+                        f"and event_id not in ({exclude}) "
+                        "and event_id > (select max(event_id) - 3000 from usage_events)"
+                    )
+                else:
+                    source = (
+                        f"line_id from ledger_lines where account = {sql_literal(tenant)} "
+                        f"and invoice_id is {'not ' if invoiced else ''}null and line_id not in ({exclude}) "
+                        "and not exists (select 1 from ledger_adjustments a where a.line_id = ledger_lines.line_id)"
+                    )
+                queries.append(
+                    f"select {sql_literal(tenant)} || '|' || coalesce(array_to_string(array(select {source} "
+                    f"order by random() limit {count}), ','), '');"
+                )
+            run = app.core if invoiced is None else app.finance
+            for line in run("\n".join(queries)).splitlines():
+                tenant, _, events = line.partition("|")
+                picked[tenant, invoiced] = list(map(int, events.split(","))) if events else []
+            for tenant, count in counts.items():
+                events = picked[tenant, invoiced]
+                if len(events) != count:
+                    raise RuntimeError(f"not enough events to correct for {tenant} (invoiced={invoiced})")
+                self.corrected.update(events)
+        return [picked[tenant, invoiced].pop() for tenant, _, _, invoiced in plan]
 
-    def correction_value(self, event, kind, to=None):
+    def correction_value(self, event, kind, to=None, *, quantity=None):
         if kind == "reduce":
-            quantity = float(self.app.core(f"select quantity from usage_events where event_id = {event};").strip())
-            return f"{round(quantity * self.rng.choice((0.25, 0.4, 0.5, 0.6)), 3):.3f}"
+            if quantity is None:
+                quantity = self.app.core(f"select quantity from usage_events where event_id = {event};").strip()
+            return f"{round(float(quantity) * self.rng.choice((0.25, 0.4, 0.5, 0.6)), 3):.3f}"
         return to if kind == "move" else None
 
     def reason(self, kind, to=None):
         return self.rng.choice(REASONS[kind]).format(to=TENANTS.get(to, ("",))[0])
 
-    def correct(self, tenant, kind, to=None, invoiced=None, event=None):
-        if event is None:
-            event = self.pick_event(tenant, invoiced)
-        self.corrected.add(event)
-        value = self.correction_value(event, kind, to)
-        self.app.core(
+    def correction_sql(self, event, kind, to, *, quantity=None):
+        value = self.correction_value(event, kind, to, quantity=quantity)
+        return (
             f"select correct_usage({event}, {sql_literal(kind)}, {'null' if value is None else sql_literal(value)}, "
             f"{sql_literal(self.reason(kind, to))}, {sql_literal(self.rng.choice(STAFF))});"
         )
+
+    def correct(self, tenant, kind, to=None, invoiced=None, event=None):
+        if event is None:
+            return self.corrections([(tenant, kind, to, invoiced)])[0]
+        self.corrected.add(event)
+        self.app.core(self.correction_sql(event, kind, to))
         return event
 
     def corrections(self, plan):
-        return [self.correct(*spec) for spec in plan]
+        if not plan:
+            return []
+        events = self.pick_events(plan)
+        quantities = self.app.core(
+            "select event_id || '|' || quantity from usage_events "
+            f"where event_id in ({','.join(map(str, events))});"
+        )
+        by_event = dict(line.split("|") for line in quantities.splitlines())
+        # One session, with each ordinary correction still committed independently.
+        self.app.core(
+            "\n".join(
+                self.correction_sql(event, kind, to, quantity=by_event[str(event)])
+                for event, (_, kind, to, _) in zip(events, plan, strict=True)
+            )
+        )
+        return events
 
     def random_plan(self, count, invoiced=None):
         tenants = list(TENANTS)
@@ -208,21 +243,24 @@ class MeteringCorrectionsHandoff(Problem):
             if ticket not in self.tickets:
                 break
         self.tickets.add(ticket)
-        self.app.core(
+        create = (
             f"insert into tickets (ticket_id, account, subject, status) values ({sql_literal(ticket)}, "
-            f"{'null' if account is None else sql_literal(account)}, {sql_literal(subject)}, {sql_literal(status)});",
-            database="support",
+            f"{'null' if account is None else sql_literal(account)}, {sql_literal(subject)}, {sql_literal(status)});"
         )
-        for author, body in notes:
-            self.note(ticket, author, body)
+        self.app.core(
+            "\n".join([create, *(self.note_sql(ticket, author, body) for author, body in notes)]), database="support"
+        )
         return ticket
 
-    def note(self, ticket, author, body):
-        self.app.core(
+    @staticmethod
+    def note_sql(ticket, author, body):
+        return (
             f"insert into ticket_notes (ticket_id, author, body) values ({sql_literal(ticket)}, "
-            f"{sql_literal(author)}, {sql_literal(body)});",
-            database="support",
+            f"{sql_literal(author)}, {sql_literal(body)});"
         )
+
+    def note(self, ticket, author, body):
+        self.app.core(self.note_sql(ticket, author, body), database="support")
 
     @staticmethod
     def customer_name(tenant):
@@ -293,8 +331,7 @@ class MeteringCorrectionsHandoff(Problem):
             target = self.week_two()
         with self.phase("support_story"):
             facts = self.support_story()
-            self.app.invoice_run(["quill", "garnet", "hollis"], "invoice-run-close-4")
-            self.app.capture_invoices()
+            self.close_invoices(["quill", "garnet", "hollis"])
         with self.phase("patch"):
             # Routine patching moves both publishers to the current minor release.
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -304,12 +341,19 @@ class MeteringCorrectionsHandoff(Problem):
         return {"credits": len(credits), "target": target, **facts}
 
     def seed_usage(self, batches):
-        self.app.core(self.app.usage_batch_sql(batches, 60))
+        # Commit in chunks so billing and finance can apply while core writes the next chunk.
+        self.app.core(
+            "\n".join(self.app.usage_batch_sql(min(100, batches - start), 60) for start in range(0, batches, 100))
+        )
 
     def wait_for_finance(self):
         # The ledger on billing is written by the core subscription before finance can copy it.
         self.app.wait_caught_up(slots=["billing_usage"])
         self.app.wait_caught_up(self.app.billing)
+
+    def close_invoices(self, accounts):
+        self.app.replay_job("invoice-run.sh", "finance", *accounts)
+        self.app.capture_invoices()
 
     def ordinary(self):
         app = self.app
@@ -324,9 +368,9 @@ class MeteringCorrectionsHandoff(Problem):
             billing.result()
         # Finance shares core's PostgreSQL instance. Creating both reciprocal
         # subscriptions together makes each slot wait for the other's transaction.
-        app.subscribe_billing()
-        app.subscribe_finance()
-        app.subscribe_customers()
+        app.subscribe_billing(copy_data=False)
+        app.subscribe_finance(copy_data=False)
+        app.subscribe_customers(copy_data=False)
         lark = self.customer_name("larkspur")
         self.ticket(
             "larkspur",
@@ -346,8 +390,7 @@ class MeteringCorrectionsHandoff(Problem):
         self.seed_usage(105)
         self.corrections(self.random_plan(10))
         self.wait_for_finance()
-        app.invoice_run(list(TENANTS), "invoice-run-close-1")
-        app.capture_invoices()
+        self.close_invoices(TENANTS)
         self.seed_usage(80)
         self.corrections(self.random_plan(8, invoiced=True))
         app.wait_caught_up()
@@ -394,16 +437,14 @@ class MeteringCorrectionsHandoff(Problem):
         if not missed:
             raise WorldDidNotTake("finance received every week-one ledger change")
         first_half = ["pell", "arden", "cinder", "garnet", "brisk", "larkspur", "ionic"]
-        app.invoice_run(first_half, "invoice-run-close-2")
-        app.capture_invoices()
+        self.close_invoices(first_half)
         credits = self.issue_credits(week1)
         # Finance's DBA maintenance: its subscription to billing is disabled and enabled again.
         app.bounce_finance()
         self.seed_usage(65)
         self.corrections(self.random_plan(6))
         self.wait_for_finance()
-        app.invoice_run([t for t in TENANTS if t not in first_half], "invoice-run-close-3")
-        app.capture_invoices()
+        self.close_invoices(t for t in TENANTS if t not in first_half)
         return credits
 
     def week_two(self):
@@ -641,7 +682,8 @@ class MeteringCorrectionsHandoff(Problem):
         # Nightly correction files until the feeds are fixed; Pell receives its files by subscription and
         # loads them automatically.
         self.correct("pell", "void")
-        app.setup_extracts({"pell": pell_ticket, "larkspur": lark_ticket})
+        extract_accounts = {"pell": pell_ticket, "larkspur": lark_ticket}
+        app.setup_extracts(extract_accounts)
         app.subscribe_files("pell", "pell_usage")
         for ticket in (pell_ticket, lark_ticket):
             self.note(
@@ -649,7 +691,7 @@ class MeteringCorrectionsHandoff(Problem):
                 self.staff(),
                 "Until the feed is fixed we will send you a file of corrections for your account every night.",
             )
-        app.run_cronjob("correction-extracts", "correction-extracts-manual-1")
+        app.replay_job("correction-extracts.sh", "usage", "/dev/stdin", input_text=extracts_conf(extract_accounts))
         app.load_extract_files("pell", "pell_usage")
         self.note(pell_ticket, pell, "Thanks, we load your nightly file automatically.")
 
@@ -744,7 +786,7 @@ class MeteringCorrectionsHandoff(Problem):
         app.wait_inbox_empty()
         app.wait_caught_up(skip=PAUSED)
         self.wait_for_finance()
-        app.run_cronjob("correction-extracts", "correction-extracts-manual-2")
+        app.replay_job("correction-extracts.sh", "usage", "/dev/stdin", input_text=extracts_conf(extract_accounts))
         app.wait_caught_up(slots=["files_pell"])
         # The customers that are online close their statements as every day.
         with ThreadPoolExecutor(max_workers=4) as pool:

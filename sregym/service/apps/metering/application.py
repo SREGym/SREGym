@@ -219,10 +219,10 @@ class MeteringApplication(KubernetesCommands, Application):
             "log_rotation_size=0",
         ]
 
-    def server_statefulset(self, name, image):
+    def server_statefulset(self, name, image, *, billing_cpu="200m"):
         if name == "core":
             return self.postgres_statefulset("core", image, self.server_args(), "core-postgres", memory="1536Mi")
-        return self.postgres_statefulset("billing", image, self.server_args(), "billing-postgres", cpu="200m")
+        return self.postgres_statefulset("billing", image, self.server_args(), "billing-postgres", cpu=billing_cpu)
 
     @staticmethod
     def postgres_statefulset(name, image, args, secret, memory="1Gi", storage="6Gi", extra_containers=(), cpu=None):
@@ -516,7 +516,8 @@ class MeteringApplication(KubernetesCommands, Application):
                 ),
                 self.server_statefulset("core", OLD_IMAGE),
                 self.service("core"),
-                self.server_statefulset("billing", OLD_IMAGE),
+                # Replay the bulk history at full speed. The patch rollout restores the operating limit.
+                self.server_statefulset("billing", OLD_IMAGE, billing_cpu="1"),
                 self.service("billing"),
             ]
         )
@@ -630,7 +631,7 @@ class MeteringApplication(KubernetesCommands, Application):
         self.psql(f"{SUBSCRIBERS}-0", "postgres", f"create database {db};\n", hidden=True)
         self.customer(db, (COMPANY / "customer.sql").read_text())
 
-    def subscribe_customers(self, databases=None):
+    def subscribe_customers(self, databases=None, *, copy_data=True):
         for db in databases or CUSTOMER_DATABASES:
             tenant = CUSTOMER_DATABASES.get(db) or db.split("_")[0]
             conninfo = (
@@ -638,11 +639,13 @@ class MeteringApplication(KubernetesCommands, Application):
                 f"user=feed_{db} password={self.passwords['feed_' + db]}"
             )
             # Larkspur's month-end copy must never take a partial close: it stops on the first error.
-            options = " with (disable_on_error = true)" if db in STOP_ON_ERROR else ""
+            options = f"copy_data = {str(copy_data).lower()}"
+            if db in STOP_ON_ERROR:
+                options += ", disable_on_error = true"
             self.customer(
                 db,
                 f"create subscription {db} connection {sql_literal(conninfo)} "
-                f"publication usage_{tenant}, corr_{tenant}{options};\n",
+                f"publication usage_{tenant}, corr_{tenant} with ({options});\n",
             )
 
     def subscribe_files(self, account="pell", database="pell_usage"):
@@ -670,17 +673,18 @@ class MeteringApplication(KubernetesCommands, Application):
             f"on o.external_id = 'pg_' || s.oid where s.subname = {sql_literal(subscription or database)};",
         ).strip()
 
-    def subscribe_billing(self):
+    def subscribe_billing(self, *, copy_data=True):
         conninfo = f"host=core port=5432 dbname=usage user=billing_feed password={self.passwords['billing_feed']}"
         self.billing(
-            f"create subscription billing_usage connection {sql_literal(conninfo)} publication billing_usage;\n"
+            f"create subscription billing_usage connection {sql_literal(conninfo)} publication billing_usage "
+            f"with (copy_data = {str(copy_data).lower()});\n"
         )
 
-    def subscribe_finance(self):
+    def subscribe_finance(self, *, copy_data=True):
         conninfo = f"host=billing port=5432 dbname=billing user=finance_feed password={self.passwords['finance_feed']}"
         self.finance(
             f"create subscription finance_ledger connection {sql_literal(conninfo)} "
-            "publication ledger_all, ledger_corr;\n"
+            f"publication ledger_all, ledger_corr with (copy_data = {str(copy_data).lower()});\n"
         )
 
     # ------------------------------------------------------------- operations
@@ -732,6 +736,26 @@ class MeteringApplication(KubernetesCommands, Application):
     def invoice_run(self, accounts, name):
         # The CronJob's own job, with the accounts to close passed explicitly.
         return self.run_cronjob("invoice-run", name, accounts)
+
+    def replay_job(self, script, database, *args, input_text=None):
+        """Run a company job's script against core while replaying its past runs."""
+        return self.command(
+            "exec",
+            "-i",
+            "core-0",
+            "-c",
+            "postgres",
+            "--",
+            "env",
+            "PGUSER=postgres",
+            f"PGDATABASE={database}",
+            "bash",
+            "-c",
+            (COMPANY / script).read_text(),
+            script,
+            *args,
+            input_text=input_text,
+        )
 
     def capture_invoices(self):
         """The card processor's settlement import: capture every sent invoice not yet captured."""
