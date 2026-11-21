@@ -82,12 +82,16 @@ class ComplaintReplay:
         problem, app = self.problem, self.app
         prior = f"billing_period < DATE {sql_literal(app.quill_period)}"
         planted = {}
+        # Rows rated before the r5 bands only: a re-send must not refresh finance's rate on a window line.
+        legacy = {int(e) for e in app.billing(
+            "select line_id from ledger_lines where rated_at < "
+            "(select released_at from ops.billing_releases where revision = 'r5 rate bands');").split()}
         for database, tenant in COMPLAINERS.items():
             held = {int(e) for e in app.customer(database, "select event_id from usage_events;").split()}
             period = prior if tenant == "quill" else "true"
             def pool(owner):
                 return {int(e) for e in app.core(
-                    f"select event_id from usage_events where tenant_id = {sql_literal(owner)} and {period};").split()}
+                    f"select event_id from usage_events where tenant_id = {sql_literal(owner)} and {period};").split()} & legacy
             rights = [problem.choose(pool(problem.rng.choice(DONORS)), f"move into {tenant}") for _ in range(2)]
             for event in rights:
                 problem.correct(None, "move", tenant, event=event)
@@ -110,7 +114,7 @@ class ComplaintReplay:
         quill_held = {int(e) for e in app.customer("quill_usage", "select event_id from usage_events;").split()}
         planted["quill_usage"]["redate"] = problem.choose(
             {int(e) for e in app.core(f"select event_id from usage_events where tenant_id = 'quill' and {prior};").split()}
-            & quill_held, "Quill timestamp fix")
+            & quill_held & legacy, "Quill timestamp fix")
         return planted
 
     # --------------------------------------------------------- after 17.6
