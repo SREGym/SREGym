@@ -593,7 +593,10 @@ def repair(problem, wrong=()):
     app = problem.app
     state = problem.load_state()
     if "keep_nightly_files" not in wrong:
-        retire_nightly_files(app, through_feed="files_core_only" not in wrong)
+        through_feed = "files_core_only" not in wrong
+        retire_nightly_files(app, through_feed=through_feed)
+        if through_feed:
+            app.wait_extract_files("pell", PELL)
     # W' (keyed in by support) stays; the original W is voided. Month-end then needs a delete of W whether its
     # DBA loaded W or not, and live (which never had W) needs nothing.
     keep, drop = (state["w"], state["w2"]) if "keep_w" in wrong else (state["w2"], state["w"])

@@ -41,6 +41,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from sregym.conductor.oracles.apps.metering.corrections_handoff import (
+    BOOKING,
     MeteringOracle,
     copy_digest,
     documents,
@@ -48,6 +49,7 @@ from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     ledger,
     ledger_rates,
     rate_band,
+    statement_truth,
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.apps.metering import complaints
@@ -114,7 +116,7 @@ class MeteringCorrectionsHandoff(Problem):
         self.root_cause = self.build_structured_root_cause(
             component="Finance's acceptance of a never-committed allocation at the point where it reconciled four individually correct customer snapshots from different approved revisions against one eligible close allocation.",
             namespace=self.namespace,
-            description="For the four-return close, each PostgreSQL 17.6 REPEATABLE READ transaction fixed its view at a different approved revision. Pell read revision 5 and returned A, Quill read revision 3 and returned B, Larkspur live read revision 1 and returned C, and Ostrava read revision 4 and returned D. Every return was correct in its own view. Together the returns assigned A, B, C, D to those customers, an allocation core never committed. Revision 6 was the last approval eligible at support's cutoff and assigned A, B, D, C. The revision-6 settlement acknowledgements show the feeds delivered that allocation before the files were signed. The later amendment belonged to the next close.\n\nFinance imported the returns one tenant at a time against the eligible allocation, matching by tenant and event ID within the close's period. It treated the returns as if their ownership agreed on one allocation. Its MERGE WHEN NOT MATCHED BY SOURCE treated the missing eligible charges as waivers. Larkspur live returned C instead of its earned D ($60,000), and Ostrava returned D instead of its earned C ($40,000). Pell and Quill returned their eligible lots. Customers resend the same signed files until acknowledged, so clearing the waivers without recording revocations lets the next import waive the charges again.\n\nFor this close, locating the fault means identifying Finance's reconciliation of locally correct returns pinned to different approved revisions as one allocation. The scope is the joint four-return allocation that core never committed and the two false waivers that followed even though both customers had received their eligible lots. An account of origin or scope must tie the component or impact it names to that incompatible combination. Naming where the waivers were written, who received them, or what was missing describes the outcome. Exact revision numbers, amounts, lot labels and SQL syntax are supporting details.\n\nSeparately, PostgreSQL 17.4 logical decoding missed catalog invalidations for already-running transactions (fixed in 17.5 by 4909b38af034). During pubsync's corrections handoff, stale publication actions caused the Pell, Quill, Larkspur live, Ostrava and billing-to-finance senders to omit updates and deletes until their own restarts. Quill's UPDATE-only open-period publication still transformed re-dates across its filter into an INSERT or DELETE. The period-partitioned copy booked the incoming usage twice and lost the outgoing usage. Billing's stale composite rate_info encoding omitted the r5 band on a separate cohort, leading finance to apply list prices to committed usage. Pell's earlier return also turned an actual missing transfer into a false waiver. The four allocation lots were created after the 17.6 patch and were independent of that earlier damage.",
+            description="For the four-return close, each PostgreSQL 17.6 REPEATABLE READ transaction fixed its view at a different approved revision. Pell read revision 5 and returned A, Quill read revision 3 and returned B, Larkspur live read revision 1 and returned C, and Ostrava read revision 4 and returned D. Every return was correct in its own view. Together the returns assigned A, B, C, D to those customers, an allocation core never committed. Revision 6 was the last approval eligible at support's cutoff and assigned A, B, D, C. The revision-6 settlement acknowledgements show the feeds delivered that allocation before the files were signed. The later amendment belonged to the next close.\n\nFinance imported the returns one tenant at a time against the eligible allocation, matching by tenant and event ID within the close's period. It treated the returns as if their ownership agreed on one allocation. Its MERGE WHEN NOT MATCHED BY SOURCE treated the missing eligible charges as waivers. Larkspur live returned C instead of its earned D ($60,000), and Ostrava returned D instead of its earned C ($40,000). Pell and Quill returned their eligible lots. Customers resend the same signed files until acknowledged, so clearing the waivers without recording revocations lets the next import waive the charges again.\n\nFor this close, locating the fault means identifying Finance's reconciliation of locally correct returns pinned to different approved revisions as one allocation. The scope is the joint four-return allocation that core never committed and the two false waivers that followed even though both customers had received their eligible lots. An account of origin or scope must tie the component or impact it names to that incompatible combination. Naming where the waivers were written, who received them, or what was missing describes the outcome. Exact revision numbers, amounts, lot labels and SQL syntax are supporting details.\n\nSeparately, PostgreSQL 17.4 logical decoding missed catalog invalidations for already-running transactions (fixed in 17.5 by 4909b38af034). During pubsync's corrections handoff, stale publication actions caused the Pell, Quill, Larkspur live, Ostrava and billing-to-finance senders to omit updates and deletes until their own restarts. Quill's UPDATE-only open-period publication still transformed re-dates across its filter into an INSERT or DELETE. The period-partitioned copy booked the incoming usage twice and lost the outgoing usage. Billing's stale composite rate_info encoding omitted the r5 band on a separate cohort, leading finance to apply list prices to committed usage. Pell's earlier return also turned an actual missing transfer into a false waiver. Support's re-corrections built from those stale copies, and the customers' own clearing of the resulting apply errors by whole-transaction SKIP or a local delete, are consequences of that window, not causes, and were independent of the four-return close fault. The four allocation lots were created after the 17.6 patch and were independent of that earlier damage.",
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = MeteringOracle(problem=self)
@@ -381,11 +383,11 @@ class MeteringCorrectionsHandoff(Problem):
             self.seed_usage(5)
             self.wait_for_finance()
         with self.phase("statement_return"):
-            self.app.replay_job("statement-return-import.sh", "finance")
+            self.app.replay_job("statement-return-import.sh", "finance", "--no-ack")
         with self.phase("allocation_closes"):
             facts["allocation_returns"] = AllocationReplay(self).replay()
             # Pell's client retries its first return after the last close import, so it is still queued.
-            statement_return["retry"] = self.app.deliver_statement_return("pell", "pell_usage", statement_return["ref"])
+            statement_return["retry"] = self.app.deliver_statement_return("pell_usage", statement_return["ref"])
         with self.phase("complaints"):
             facts["complaints"] = complaints.ComplaintReplay(self).run(self.planted)
         return {"credits": len(credits), "target": target, "rates_patched_at": patched_at, **facts}
@@ -755,7 +757,7 @@ class MeteringCorrectionsHandoff(Problem):
             f"array[{statement_return['genuine']}]::bigint[]);",
         )
         statement_return.update(
-            ref=return_ref, review=review, first=app.deliver_statement_return("pell", "pell_usage", return_ref)
+            ref=return_ref, review=review, first=app.deliver_statement_return("pell_usage", return_ref)
         )
         self.note(pell_ticket, pell, "Our DBA worked through the file by hand.")
         # Larkspur's DBA may load the moved-in row into the paused month-end copy, then closes it.
@@ -1173,34 +1175,41 @@ class MeteringCorrectionsHandoff(Problem):
         ):
             problems.append("no ready correction file waits for Pell's loader")
         problems += self.seal_pell_classes(facts, diffs["pell_usage"])
-        # What each customer copy holds now, beside it, for the statement checks.
+        # Compare actual bookings against intended usage, including contract ownership.
+        owners = {event: row["tenant_id"] for event, row in facts["complaints"]["truth"].items()}
+
         def save_reader_snapshot(db):
-            wrong = diffs[db]["extra"] + diffs[db]["changed"]
-            stray = ""
-            if db == "quill_usage":
-                entering = facts["quill_period"]["entering"]
-                wrong = [event for event in wrong if event != entering["event"]]
-                stray = (
-                    f"update handoff.sealed set correct = false where event_id = {entering['event']} "
-                    f"and billing_period = DATE {sql_literal(entering['from_period'])};\n"
-                )
-            app.customer(
-                db,
-                "create schema if not exists handoff;\ndrop table if exists handoff.sealed;\n"
-                "create table handoff.sealed as select event_id, billing_period, line_id, true as correct from usage_events;\n"
-                + stray
-                + (
-                    f"update handoff.sealed set correct = false where event_id in ({','.join(map(str, wrong))});\n"
-                    if wrong
-                    else ""
-                ),
-            )
+            truth = statement_truth(app, CUSTOMER_DATABASES[db], owners)
+            rows = app.customer(db, f"""
+                create schema if not exists handoff;
+                drop table if exists handoff.sealed;
+                create table handoff.sealed as
+                select event_id, line_id, concat_ws('|', {BOOKING}) as booking from statement_lines s
+                where kind = 'line' and not exists (select 1 from statement_lines r
+                                                   where r.line_id = s.line_id and r.kind = 'reversal');
+                select event_id || '|' || line_id || '|' || booking from handoff.sealed;
+            """)
+            wrong = [
+                line for event, line, booking in (row.split("|", 2) for row in rows.splitlines())
+                if truth.get(int(event)) != booking
+            ]
+            if wrong:
+                app.customer(db, "delete from handoff.sealed where line_id in (" + ",".join(wrong) + ");")
+
         with ThreadPoolExecutor(max_workers=len(CUSTOMER_DATABASES)) as pool:
             list(pool.map(save_reader_snapshot, CUSTOMER_DATABASES))
+        signed = app.rows(lambda q: app.core(q, database="support"), """
+            select distinct jsonb_build_object('account', account, 'ref', return_ref, 'digest', statement_digest)
+            from statement_return_inbox;
+        """)
         handoff = app.core("select now();").strip()
         app.set_rate(60)
         return problems, {
             "handoff_at": handoff,
+            "signed_returns": signed,
+            "rate_band_release": app.billing(
+                "select released_at from ops.billing_releases where revision = 'r5 rate bands';"
+            ).strip(),
             "finance_gaps": finance_gaps,
             "rates": rate_counts,
             "allocation_seal": allocation_values,

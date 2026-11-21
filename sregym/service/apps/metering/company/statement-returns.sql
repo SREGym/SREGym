@@ -43,3 +43,28 @@ BEGIN
     GET DIAGNOSTICS waived = ROW_COUNT;
     RETURN waived;
 END $$;
+
+-- Finance records the disposition of the signed return independently of its deliveries.
+CREATE TABLE statement_return_reconciliations (
+    account          text NOT NULL REFERENCES accounts,
+    return_ref       text NOT NULL,
+    statement_digest text NOT NULL,
+    waived_lines     bigint[] NOT NULL,
+    reconciled_at    timestamptz NOT NULL,
+    PRIMARY KEY (account, return_ref)
+);
+
+CREATE FUNCTION reconcile_statement_return(p_account text, p_ref text, p_digest text,
+                                           p_start timestamptz, p_end timestamptz, p_rows jsonb)
+RETURNS void LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+    PERFORM import_statement_return(p_account, p_ref, p_start, p_end, p_rows);
+    INSERT INTO statement_return_reconciliations
+    SELECT p_account, p_ref, p_digest, ARRAY(
+        SELECT line_id FROM ledger_lines WHERE account = p_account AND waived_by_return = p_ref ORDER BY line_id
+    ), clock_timestamp()
+    ON CONFLICT (account, return_ref) DO UPDATE SET
+        statement_digest = EXCLUDED.statement_digest,
+        waived_lines = EXCLUDED.waived_lines,
+        reconciled_at = EXCLUDED.reconciled_at;
+END $$;

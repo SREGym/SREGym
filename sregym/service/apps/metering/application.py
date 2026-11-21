@@ -122,6 +122,14 @@ def ledger_conf(revision, comment, ledger_all, ledger_corr):
     )
 
 
+class MeteringJobFailed(RuntimeError):
+    """A configured company job finished unsuccessfully or is missing."""
+
+
+class ExtractDeliveryTimeout(TimeoutError):
+    """The customer file copy still differs from the files sent by support."""
+
+
 class MeteringApplication(KubernetesCommands, Application):
     def __init__(self):
         self.quill_period = datetime.now(UTC).date().replace(day=1)
@@ -854,15 +862,31 @@ class MeteringApplication(KubernetesCommands, Application):
             status = json.loads(command("get", "job", name, "-o", "json"))["status"]
             if status.get("succeeded"):
                 return command("logs", f"job/{name}")
-            if status.get("failed"):
-                raise RuntimeError(f"job {name} failed: {command('logs', f'job/{name}')}")
+            if any(c["type"] == "Failed" and c["status"] == "True" for c in status.get("conditions", ())):
+                pods = json.loads(command("get", "pods", "-l", f"job-name={name}", "-o", "json"))["items"]
+                states = [
+                    container.get("state", {}).get("terminated", {})
+                    for pod in pods
+                    for container in pod.get("status", {}).get("containerStatuses", ())
+                ]
+                logs = command("logs", f"job/{name}")
+                error = f"job {name} failed: {logs}"
+                if any(state.get("reason") == "Error" and state.get("exitCode") for state in states):
+                    raise MeteringJobFailed(error)
+                raise RuntimeError(error)
             time.sleep(0.5)
         raise TimeoutError(f"job {name} did not finish")
 
     def run_cronjob(self, cronjob, name, args=None, *, customer_side=False):
         """Run a CronJob's own job now (as `kubectl create job --from` does) and wait for it."""
         command = self.hidden if customer_side else self.command
-        template = json.loads(command("get", "cronjob", cronjob, "-o", "json"))["spec"]["jobTemplate"]
+        data = command("get", "cronjob", cronjob, "--ignore-not-found", "-o", "json")
+        if not data.strip():
+            raise MeteringJobFailed(f"configured job {cronjob} is missing")
+        spec = json.loads(data)["spec"]
+        if spec.get("suspend"):
+            raise MeteringJobFailed(f"configured job {cronjob} is suspended")
+        template = spec["jobTemplate"]
         job = {
             "apiVersion": "batch/v1",
             "kind": "Job",
@@ -953,36 +977,23 @@ bash -c "$1" "$0" "$config_file"
         """The customer's statement close (customer code)."""
         return int(self.customer(database, "select close_statement();").strip())
 
-    def deliver_statement_return(self, account, database, return_ref):
-        """Receive the customer's saved return as a new delivery in the support inbox."""
-        saved = self.customer(
-            database,
-            "select row_to_json(r) from statement_returns r "
-            f"where return_ref = {sql_literal(return_ref)};",
-        ).strip()
-        return int(
-            self.core(
-                "insert into statement_return_inbox (account, return_ref, period_start, period_end, accepted_rows) "
-                f"select {sql_literal(account)}, return_ref, period_start, period_end, accepted_rows "
-                f"from jsonb_populate_record(null::statement_return_inbox, {sql_literal(saved)}::jsonb) "
-                "returning delivery_id;",
-                database="support",
-            ).strip()
-        )
+    def deliver_statement_return(self, database, return_ref):
+        """Send a customer's saved signed return through the normal delivery function."""
+        return int(self.customer(database, f"select send_statement_returns({sql_literal(return_ref)});").strip())
 
-    def load_extract_files(self, account, database, timeout=180):
-        """The customer's loader (customer code): once its copy of the files has every file sent so far, it
-        applies each ready file it has not loaded yet."""
-        sent = set(
-            self.core(
-                f"select file_id from extract_files where account = {sql_literal(account)};", database="support"
-            ).split()
-        )
+    def wait_extract_files(self, account, database, timeout=180):
+        """Wait for every file and its current delivery status."""
+        columns = "select file_id || '|' || status from extract_files"
+        sent = set(self.core(f"{columns} where account = {sql_literal(account)};", database="support").splitlines())
         deadline = time.monotonic() + timeout
-        while sent - set(self.customer(database, "select file_id from extract_files;").split()):
+        while missing := sent - set(self.customer(database, columns + ";").splitlines()):
             if time.monotonic() > deadline:
-                raise TimeoutError(f"{database} did not receive files {sorted(sent)}")
+                raise ExtractDeliveryTimeout(f"{database} did not receive file states {sorted(missing)}")
             time.sleep(2)
+
+    def load_extract_files(self, account, database):
+        """Apply ready files after the file copy has received any withdrawals."""
+        self.wait_extract_files(account, database)
         return int(self.customer(database, "select load_ready_files();").strip())
 
     def truncate_server_logs(self):
@@ -1138,21 +1149,25 @@ select pg_current_wal_lsn();
         """Wait until the given (or every) logical slot confirms the target WAL position."""
         run = run or self.core
         target = target or run("select pg_current_wal_lsn();").strip()
+        lag = f"(s.confirmed_flush_lsn is null or s.confirmed_flush_lsn < {sql_literal(target)}::pg_lsn)"
+        if slots:
+            names = ", ".join(sql_literal(slot) for slot in slots if slot not in skip)
+            if not names:
+                return
+            query = (
+                "select json_build_object('slot_name', wanted.name) "
+                f"from unnest(array[{names}]) wanted(name) left join pg_replication_slots s "
+                f"on s.slot_name = wanted.name and s.slot_type = 'logical' where {lag};"
+            )
+        else:
+            omitted = f" and s.slot_name not in ({','.join(sql_literal(s) for s in skip)})" if skip else ""
+            query = (
+                "select json_build_object('slot_name', s.slot_name) from pg_replication_slots s "
+                f"where s.slot_type = 'logical' and {lag}{omitted};"
+            )
         deadline = time.monotonic() + timeout
         while True:
-            pending = [
-                r["slot_name"]
-                for r in self.rows(
-                    run,
-                    (
-                        "select json_build_object('slot_name', slot_name) from pg_replication_slots "
-                        f"where slot_type = 'logical' and (confirmed_flush_lsn is null or confirmed_flush_lsn < {sql_literal(target)}::pg_lsn)"
-                        + (f" and slot_name in ({','.join(sql_literal(s) for s in slots)})" if slots else "")
-                        + (f" and slot_name not in ({','.join(sql_literal(s) for s in skip)})" if skip else "")
-                        + ";"
-                    ),
-                )
-            ]
+            pending = [r["slot_name"] for r in self.rows(run, query)]
             if not pending:
                 return
             if time.monotonic() > deadline:

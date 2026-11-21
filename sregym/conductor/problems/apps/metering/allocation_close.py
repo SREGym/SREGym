@@ -294,13 +294,13 @@ class AllocationReplay:
         self.problem.wait_for_finance()
 
         with ThreadPoolExecutor(max_workers=len(READERS)) as pool:
-            list(pool.map(lambda db: self.app.customer(db, "select send_allocation_returns();"), READERS))
-        self.app.replay_job("statement-return-import.sh", "finance")
+            list(pool.map(lambda db: self.app.customer(db, "select send_statement_returns();"), READERS))
+        self.app.replay_job("statement-return-import.sh", "finance", "--no-ack")
         pending = [self.noise[i] for i in PENDING]
         self.app.core(
-            "insert into statement_return_acknowledgements (account, return_ref) "
-            "select account, return_ref from statement_return_inbox where imported_at is not null "
-            f"and close_ref not in ({', '.join(map(sql_literal, [*pending, self.incident]))}) on conflict do nothing;",
+            "select acknowledge_statement_return(account, return_ref) from statement_return_inbox "
+            "where imported_at is not null and close_ref not in "
+            f"({', '.join(map(sql_literal, [*pending, self.incident]))});",
             database="support",
         )
         earned = [

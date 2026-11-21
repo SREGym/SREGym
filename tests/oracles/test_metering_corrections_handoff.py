@@ -48,8 +48,16 @@ def test_check_rates_compares_price_and_band(billing_rate, finance_rate, matches
         finance=Mock(return_value=f"10|{finance_rate}\n" if finance_rate is not None else ""),
     )
     oracle = MeteringOracle(SimpleNamespace(app=app))
+    oracle.expected_rates = lambda: {10: billing_rate}
 
     assert oracle.check_rates() == ([] if matches else [oracle.fail("finance_rates_wrong", lines=[10], count=1)])
+
+
+def test_matching_ledgers_with_the_wrong_historical_band_fail():
+    app = SimpleNamespace(billing=Mock(return_value="10|(1.5)"), finance=Mock(return_value="10|(1.5)"))
+    oracle = MeteringOracle(SimpleNamespace(app=app))
+    oracle.expected_rates = lambda: {10: "(1.5,committed)"}
+    assert oracle.check_rates() == [oracle.fail("finance_rates_wrong", lines=[10], count=1)]
 
 
 def test_finance_repair_preserves_equivalent_rate_snapshots(monkeypatch):
@@ -81,41 +89,68 @@ def test_only_committed_rates_get_the_contract_discount(rate, expected):
     assert usage_charge("pell", Decimal("1.0006"), rate) == Decimal("1.0006")
 
 
-def test_failed_precheck_still_runs_jobs_and_reports_later_failures(monkeypatch):
+def test_grader_operations_are_classified_separately_and_jobs_still_run(monkeypatch):
     app = Mock()
     app.finance.return_value = "12"
-    app.customer.return_value = "larkspur_monthend"
+    app.core.return_value = "42"
+    app.customer.return_value = ""
     app.close_statement.return_value = 3
-    app.load_extract_files.side_effect = RuntimeError("loader did not finish")
+    app.load_extract_files.side_effect = RuntimeError("customer loader call failed")
     oracle = MeteringOracle(SimpleNamespace(app=app, load_state=dict))
-    monkeypatch.setattr(oracle, "observe", lambda: {})
-    monkeypatch.setattr(oracle, "subscription_errors", dict)
-    monkeypatch.setattr(oracle, "lagging_feeds", lambda databases: ["larkspur_monthend"])
+    monkeypatch.setattr(oracle, "observe", dict)
+    monkeypatch.setattr(oracle, "subscription_errors", lambda: {"quill_usage": 11})
     monkeypatch.setattr(oracle, "check_documents", list)
     monkeypatch.setattr(oracle, "onboard_new_customer", lambda: None)
     monkeypatch.setattr(oracle, "fresh_corrections", lambda: [22])
     monkeypatch.setattr(oracle, "nightly_files", lambda: None)
     monkeypatch.setattr(oracle, "wait_ledgers_delivered", list)
-    monkeypatch.setattr(oracle, "check_readers", lambda errors: [oracle.fail("customer_copy_wrong")])
-    monkeypatch.setattr(oracle, "check_statements", lambda closes, touched: [])
-    monkeypatch.setattr(oracle, "check_ledgers", lambda boundary: [oracle.fail("charges_wrong")])
+    monkeypatch.setattr(oracle, "check_readers", lambda excluded: [])
+    monkeypatch.setattr(oracle, "check_statements", lambda db, close: [])
+    monkeypatch.setattr(oracle, "check_ledgers", lambda boundary: [])
     monkeypatch.setattr(oracle, "check_rates", list)
-    monkeypatch.setattr(oracle, "check_statement_return", lambda: [oracle.fail("statement_return_waiver_wrong")])
-    monkeypatch.setattr(oracle, "check_ingest", lambda: [oracle.fail("ingest_wrong")])
+    monkeypatch.setattr(oracle, "check_return_reconciliations", lambda cutoff: [])
+    monkeypatch.setattr(oracle, "check_allocation_returns", list)
+    monkeypatch.setattr(oracle, "check_ingest", list)
 
     result = oracle.evaluate()
 
     assert not result["success"]
-    assert [failure["reason"] for failure in result["detail"]["failures"]] == [
-        "subscription_not_streaming",
-        "routine_jobs_failed",
-        "customer_copy_wrong",
-        "charges_wrong",
-        "statement_return_waiver_wrong",
-        "ingest_wrong",
+    assert result["detail"]["failures"] == [
+        {"reason": "oracle_raised", "error": "RuntimeError: customer loader call failed", "step": "Pell file loader"}
     ]
     app.invoice_run.assert_called_once()
     app.set_rate.assert_called_with(60)
+    assert sum(call.args[0] == "statement-return-resend" for call in app.run_cronjob.call_args_list) == 2
+
+
+def test_readers_grade_persistent_progress_without_counting_recovered_errors(monkeypatch):
+    from sregym.conductor.oracles.apps.metering import corrections_handoff
+
+    app = SimpleNamespace(customer=Mock(return_value=""))
+    oracle = MeteringOracle(SimpleNamespace(app=app))
+    monkeypatch.setattr(corrections_handoff, "copy_digest", lambda *args: {})
+    monkeypatch.setattr(oracle, "subscription_errors", Mock(side_effect=AssertionError("counter is observational")))
+    monkeypatch.setattr(oracle, "lagging_feeds", lambda databases: [])
+    assert oracle.check_readers() == []
+    monkeypatch.setattr(oracle, "lagging_feeds", lambda databases: ["larkspur_live"])
+    assert oracle.check_readers() == [oracle.fail("subscription_not_streaming", feeds=["larkspur_live"])]
+
+
+def test_nightly_extracts_runs_with_only_larkspur():
+    app = Mock()
+    app.command.side_effect = ['{"spec": {}}', '{"data":{"extracts.conf":"larkspur | SUP-123"}}']
+    oracle = MeteringOracle(SimpleNamespace(app=app))
+    oracle.nightly_files()
+    assert app.run_cronjob.call_args.args[0] == "correction-extracts"
+
+
+def test_pell_loader_waits_for_withdrawal_status():
+    from sregym.service.apps.metering.application import ExtractDeliveryTimeout, MeteringApplication
+
+    app = SimpleNamespace(core=Mock(return_value="81|withdrawn"), customer=Mock(return_value="81|ready"))
+    with pytest.raises(ExtractDeliveryTimeout, match="81\\|withdrawn"):
+        MeteringApplication.wait_extract_files(app, "pell", "pell_usage", timeout=-1)
+    assert all("load_ready_files" not in call.args[1] for call in app.customer.call_args_list)
 
 
 def test_publications_conf_declares_both_feeds_per_tenant():
@@ -149,35 +184,73 @@ def test_extracts_conf_round_trip():
     assert parse_extracts_conf("# account | ticket\n  larkspur | SUP-1 \n\n") == {"larkspur": "SUP-1"}
 
 
-def test_rule_reasons_are_finance_rules_own():
-    from sregym.conductor.oracles.apps.metering.corrections_handoff import is_rule_reason
+def test_finance_effective_counts_all_line_linked_adjustments():
+    from sregym.conductor.oracles.apps.metering.corrections_handoff import finance_effective
 
-    assert is_rule_reason("usage voided after invoice")
-    assert is_rule_reason("usage moved to garnet")
-    assert is_rule_reason("usage moved from pell")
-    assert is_rule_reason("usage re-rated after invoice")
-    assert not is_rule_reason("refund 3 already returned this usage")
-    assert not is_rule_reason("credit note 1 already refunded this usage")
+    app = SimpleNamespace(finance=Mock(return_value="1|pell|10.0000\n1|pell|-7.5000"))
+    assert finance_effective(app) == {(1, "pell"): Decimal("2.5000")}
+    sql = app.finance.call_args.args[0]
+    assert "where line_id is not null" in sql and "reason" not in sql
 
 
-def test_notice_noise_flags_cancelling_or_mixed_rule_rows_only():
+def test_notice_noise_allows_offsetting_adjustments_with_a_real_net_change():
     from sregym.conductor.oracles.apps.metering.corrections_handoff import notice_noise
 
     booked = {
         (1, "pell"): [Decimal("-2")],
         (2, "pell"): [Decimal("-2"), Decimal("2")],
-        (3, "quill"): [Decimal("-1"), Decimal("0.5")],
+        (3, "quill"): [Decimal("-10"), Decimal("3")],
         (4, "garnet"): [Decimal("3"), Decimal("1")],
     }
-    assert notice_noise(booked) == [(2, "pell"), (3, "quill")]
+    assert notice_noise(booked) == [(2, "pell")]
 
 
-def test_charges_off_allows_a_cent():
+def test_charges_compare_at_invoice_precision():
     from sregym.conductor.oracles.apps.metering.corrections_handoff import charges_off
 
-    owed = {"pell": Decimal("10.0000"), "vale": Decimal("5")}
-    charged = {"pell": Decimal("10.01"), "vale": Decimal("4.98"), "wren": Decimal("0")}
-    assert charges_off(owed, charged, {"pell", "vale", "wren"}) == {"vale": "-0.02"}
+    owed = {"pell": Decimal("10.004"), "vale": Decimal("5.005"), "quill": Decimal("-4.005")}
+    charged = {"pell": Decimal("10.00"), "vale": Decimal("5.00"), "quill": Decimal("-4.01")}
+    assert charges_off(owed, charged, owed) == {"vale": "-0.01"}
+
+
+def test_charges_reconcile_each_invoice_at_its_stored_precision():
+    app = SimpleNamespace(finance=Mock(), core=Mock())
+    app.finance.side_effect = ["1|pell|0.01|0.0050\n2|pell|0.01|0.0050", ""]
+    app.core.side_effect = ["", "1|1|pell|0.01"]
+    oracle = MeteringOracle(SimpleNamespace(app=app))
+    target = {(1, "pell"): Decimal("0.005"), (2, "pell"): Decimal("0.005")}
+    assert oracle.check_charges(target) == []
+
+    app.finance.side_effect = ["1|pell|0.00|0.0050\n2|pell|0.01|0.0050", ""]
+    app.core.side_effect = ["", "1|1|pell|0.02"]
+    assert oracle.check_charges(target) == [
+        oracle.fail("charges_wrong", accounts={"pell": "-0.01"}, invoices=[1], captures=[1])
+    ]
+
+
+def test_active_statement_checks_values_and_preserves_only_correct_bookings():
+    from sregym.conductor.oracles.apps.metering.corrections_handoff import statement_differences
+
+    old = "2026-10-01|quill|api_calls|2.000"
+    corrected = "2026-11-01|quill|api_calls|2.000"
+    vale = "2026-11-01|vale|api_calls|3.000"
+    truth = {1: corrected, 2: vale}
+    kept = [(2, 9, vale)]
+    assert statement_differences(truth, {1: [(8, corrected)], 2: [(9, vale)]}, kept) == ([], [])
+    wrong = {1: [(7, old)], 2: [(10, vale)], 3: [(11, vale)]}
+    assert statement_differences(truth, wrong, kept) == ([1, 3], [2])
+
+
+def test_statement_reversal_protects_a_correct_line_and_allows_a_replacement_for_a_wrong_line():
+    correct = "2026-11-01|quill|api_calls|2.000"
+    app = SimpleNamespace(core=Mock(return_value=f"1|{correct}\n2|{correct}"), customer=Mock())
+    app.customer.side_effect = [f"1|7|{correct}\n2|8|{correct}", f"2|9|{correct}|true"]
+    oracle = MeteringOracle(SimpleNamespace(app=app))
+    # Event 1's wrong-period booking never belonged to the sealed set.
+    assert oracle.check_statements("quill_usage", 23) == [
+        oracle.fail("statement_reversed", database="quill_usage", events=[2], count=1),
+        oracle.fail("statement_rebooked", database="quill_usage", events=[2], count=1),
+    ]
 
 
 def test_changed_documents_reports_edits_and_deletions_not_new_rows():
@@ -269,30 +342,26 @@ def test_a_voided_row_is_deleted_from_its_correction_image_whether_the_reader_ho
 
 
 @pytest.mark.parametrize(
-    ("genuine", "missing", "retry", "history", "reasons"),
+    ("genuine", "missing", "history", "reasons"),
     [
-        ((True, False), (False, True), "t", "line", []),
-        ((False, True), (False, True), "t", "line", ["statement_return_waiver_wrong"]),
-        ((True, False), (True, False), "t", "line", ["statement_return_waiver_wrong"]),
-        ((True, False), (False, True), "f", "line", ["statement_return_not_imported"]),
-        ((True, False), (False, True), "t", "line\nreversal\nline", ["statement_lines_wrong"]),
+        (("PELL-1", False), (None, True), "line", []),
+        (("OTHER", False), (None, True), "line", ["statement_return_waiver_wrong"]),
+        ((None, True), (None, True), "line", ["statement_return_waiver_wrong"]),
+        (("PELL-1", False), ("PELL-1", False), "line", ["statement_return_waiver_wrong"]),
+        (("PELL-1", False), (None, True), "line\nreversal\nline", ["statement_lines_wrong"]),
     ],
 )
-def test_statement_return_requires_the_retry_and_both_charge_decisions(genuine, missing, retry, history, reasons):
+def test_statement_return_checks_both_charge_decisions(genuine, missing, history, reasons):
     app = SimpleNamespace(
-        core=Mock(return_value=retry),
         finance=Mock(),
         customer=Mock(return_value=history),
-        rows=Mock(
-            return_value=[
-                {"event": event, "waived": waived, "charged": charged}
-                for event, (waived, charged) in ((1, genuine), (2, missing))
-            ]
-        ),
+        rows=Mock(return_value=[
+            {"event": event, "waived": ref, "charged": charged}
+            for event, (ref, charged) in ((1, genuine), (2, missing))
+        ]),
     )
-    state = {"statement_return": {"genuine": 1, "missing": 2, "retry": 9}}
+    state = {"statement_return": {"genuine": 1, "missing": 2, "ref": "PELL-1"}}
     oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: state))
-
     assert [failure["reason"] for failure in oracle.check_statement_return()] == reasons
 
 
@@ -442,33 +511,42 @@ def test_ordinary_closes_stagger_filings_and_leave_nineteen_of_twenty_eight_retu
     assert len(pending) == 28 and sum(rev != eligible for rev, eligible in pending) == 19
 
 
-def returns_oracle(deliveries, waived=()):
-    oracle = MeteringOracle.__new__(MeteringOracle)
-    state = {"allocation_returns": {
-        "close": "AR-25", "earned": [{"ref": "AR-25-pell", "line": 1, "account": "pell", "amount": 5}],
-        "genuine": [{"ref": "AR-20-pell", "line": 2, "account": "pell"}],
-        "pending": [{"ref": "AR-20-pell", "close": "AR-20", "account": "pell", "revision": 2}],
-    }}
-    decisions = [{"line": 1, "account": "pell", "waiver": None, "charges": 5, "items": 1, "billed_account": "pell"},
-                 {"line": 2, "account": "pell", "waiver": "AR-20-pell", "charges": 0, "items": 0, "billed_account": None}]
-    finance = Mock(return_value="")
-    app = SimpleNamespace(core=Mock(return_value=""), finance=finance)
-    app.rows = lambda run, q: deliveries if run is not finance else (
-        list(waived) if "waived_by_return in" in q else decisions)
-    oracle.problem = SimpleNamespace(app=app, load_state=lambda: state)
-    oracle.state = lambda: state
-    oracle.fail = lambda reason, **detail: {"reason": reason, "detail": detail}
-    return oracle
+def test_reconciliations_require_matching_signed_decisions_and_survive_resend():
+    signed = [
+        {"account": "pell", "ref": "AR-20", "digest": "pell-file"},
+        {"account": "quill", "ref": "AR-20", "digest": "quill-file"},
+    ]
+    state = {"signed_returns": signed}
+    records = [dict(row) for row in signed]
+    app = SimpleNamespace(finance=Mock(), rows=Mock(return_value=records))
+    oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: state))
+    app.core = Mock(side_effect=["pell|AR-20\nquill|AR-20", ""])
+    assert oracle.check_return_reconciliations(100) == []
+    assert "or delivery_id > 100" in app.core.call_args.args[0]
+
+    app.core = Mock(side_effect=["pell|AR-20\nquill|AR-20", "quill|AR-20"])
+    records[0]["digest"] = "a-different-file"
+    failure, = oracle.check_return_reconciliations(100)
+    assert failure["detail"]["account_returns"] == [("pell", "AR-20"), ("quill", "AR-20")]
 
 
-def test_every_pending_close_must_be_imported_with_its_waivers_unchanged():
-    done = [{"ref": "AR-25-pell", "retried": True, "pending": False, "acknowledged": False},
-            {"ref": "AR-20-pell", "retried": True, "pending": False, "acknowledged": False}]
-    assert returns_oracle(done).check_allocation_returns(10) == []
-    held = [done[0], {**done[1], "pending": True}]
-    assert [f["detail"] for f in returns_oracle(held).check_allocation_returns(10)] == [{"returns": ["AR-20-pell"]}]
-    extra = [{"line": 3, "waiver": "AR-20-pell"}, {"line": 2, "waiver": "AR-20-pell"}]
-    assert [f["detail"]["event"] for f in returns_oracle(done, extra).check_allocation_returns(10)] == [3]
+def test_allocation_checks_recorded_and_actual_waivers_on_all_returns():
+    state = {
+        "statement_return": {"ref": "PELL-1", "genuine": 9, "missing": 8},
+        "allocation_returns": {
+            "earned": [{"ref": "AR-25-pell", "line": 1, "account": "pell", "amount": 5}],
+            "genuine": [{"ref": "AR-20-pell", "line": 2, "account": "pell"}],
+        },
+    }
+    decisions = [
+        {"line": 1, "account": "pell", "waiver": None, "charges": 5, "items": 1, "billed_account": "pell"},
+        {"line": 2, "account": "pell", "waiver": "AR-20-pell", "charges": 0, "items": 0, "billed_account": None},
+    ]
+    good = [{"line": 2, "waiver": "AR-20-pell", "account": "pell"}, {"line": 9, "waiver": "PELL-1", "account": "pell"}]
+    extra = {"line": 3, "waiver": "old-acknowledged", "account": "pell"}
+    app = SimpleNamespace(finance=Mock(), rows=Mock(side_effect=[decisions, [*good, extra], good[1:]]))
+    oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: state))
+    assert {f["detail"]["event"] for f in oracle.check_allocation_returns()} == {2, 3}
 
 
 def test_revision_filter_holds_off_eligible_returns_in_the_import_query():

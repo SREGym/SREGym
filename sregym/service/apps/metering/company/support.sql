@@ -92,22 +92,30 @@ CREATE TABLE statement_return_acknowledgements (
     PRIMARY KEY (account, return_ref)
 );
 
-CREATE FUNCTION acknowledge_statement_return(p_account text, p_ref text)
-RETURNS void LANGUAGE plpgsql SET search_path = public AS $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM statement_return_inbox
-                   WHERE account = p_account AND return_ref = p_ref AND imported_at IS NOT NULL) THEN
-        RAISE EXCEPTION 'no completed import for % / %', p_account, p_ref;
-    END IF;
-    INSERT INTO statement_return_acknowledgements (account, return_ref)
-    VALUES (p_account, p_ref) ON CONFLICT DO NOTHING;
-END $$;
-
 CREATE EXTENSION pgcrypto;
 CREATE TABLE return_signing_keys (
     account text PRIMARY KEY,
     signing_key text NOT NULL
 );
+
+CREATE FUNCTION acknowledge_statement_return(p_account text, p_ref text)
+RETURNS void LANGUAGE plpgsql SET search_path = public AS $$
+DECLARE
+    digest text;
+BEGIN
+    PERFORM 1 FROM return_signing_keys WHERE account = p_account FOR UPDATE;
+    SELECT statement_digest INTO digest FROM statement_return_inbox
+    WHERE account = p_account AND return_ref = p_ref AND imported_at IS NOT NULL
+    ORDER BY imported_at DESC LIMIT 1;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'no completed import for % / %', p_account, p_ref;
+    END IF;
+    -- An identical retry arriving during finance's import has the same decision.
+    UPDATE statement_return_inbox SET imported_at = now()
+    WHERE account = p_account AND return_ref = p_ref AND imported_at IS NULL AND statement_digest = digest;
+    INSERT INTO statement_return_acknowledgements (account, return_ref)
+    VALUES (p_account, p_ref) ON CONFLICT DO NOTHING;
+END $$;
 
 -- One call delivers all outstanding files for the sending account. A lost
 -- acknowledgement can cause a duplicate delivery, which finance can re-import.
@@ -116,7 +124,7 @@ RETURNS SETOF bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public 
 DECLARE
     secret text;
 BEGIN
-    SELECT signing_key INTO STRICT secret FROM return_signing_keys WHERE account = p_account;
+    SELECT signing_key INTO STRICT secret FROM return_signing_keys WHERE account = p_account FOR UPDATE;
     IF EXISTS (
         SELECT FROM jsonb_populate_recordset(null::statement_return_inbox, p_returns) r
         WHERE r.statement_digest IS DISTINCT FROM encode(hmac(
@@ -124,6 +132,13 @@ BEGIN
                               extract(epoch from r.period_end), r.accepted_rows)::text, secret, 'sha256'), 'hex')
     ) THEN
         RAISE EXCEPTION 'invalid statement authentication for %', p_account;
+    END IF;
+    IF EXISTS (
+        SELECT FROM jsonb_populate_recordset(null::statement_return_inbox, p_returns) r
+        JOIN statement_return_inbox i ON i.account = p_account AND i.return_ref = r.return_ref
+        WHERE i.statement_digest IS DISTINCT FROM r.statement_digest
+    ) THEN
+        RAISE EXCEPTION 'changed content for an existing statement return for %', p_account;
     END IF;
     INSERT INTO allocation_settlements (close_ref, account, revision, line_count, cents, settled_at)
     SELECT r.close_ref, p_account, r.revision, r.line_count, r.cents, r.settled_at

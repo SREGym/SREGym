@@ -40,6 +40,15 @@ CREATE FUNCTION close_statement() RETURNS bigint LANGUAGE plpgsql SET search_pat
 DECLARE
     c bigint := nextval('statement_close_seq');
 BEGIN
+    -- Amend a retained booking when its usage changes. A removed booking
+    -- still receives a reversal, including corrections by replacement.
+    UPDATE statement_lines s
+    SET billing_period = u.billing_period, tenant_id = u.tenant_id, metric = u.metric, quantity = u.quantity
+    FROM usage_events u
+    WHERE s.line_id = u.line_id AND s.event_id = u.event_id AND s.kind = 'line'
+      AND (s.billing_period, s.tenant_id, s.metric, s.quantity)
+          IS DISTINCT FROM (u.billing_period, u.tenant_id, u.metric, u.quantity)
+      AND NOT EXISTS (SELECT 1 FROM statement_lines r WHERE r.line_id = s.line_id AND r.kind = 'reversal');
     INSERT INTO statement_lines (line_id, event_id, kind, billing_period, tenant_id, metric, quantity, close_id)
     SELECT u.line_id, u.event_id, 'line', u.billing_period, u.tenant_id, u.metric, u.quantity, c
     FROM usage_events u
@@ -60,16 +69,6 @@ CREATE TABLE statement_returns (
     period_end    timestamptz NOT NULL,
     accepted_rows jsonb NOT NULL
 );
-
-CREATE FUNCTION save_statement_return(p_ref text, p_start timestamptz, p_end timestamptz, p_disputed bigint[])
-RETURNS void LANGUAGE sql SET search_path = public AS $$
-    INSERT INTO statement_returns (return_ref, period_start, period_end, accepted_rows)
-    SELECT p_ref, p_start, p_end,
-           coalesce(jsonb_agg(jsonb_build_object('event_id', u.event_id, 'metric', u.metric, 'quantity', u.quantity)
-                              ORDER BY u.event_id), '[]'::jsonb)
-    FROM usage_events u JOIN statement_lines s ON s.line_id = u.line_id AND s.kind = 'line'
-    WHERE u.occurred_at >= p_start AND u.occurred_at < p_end AND NOT (u.event_id = ANY (p_disputed));
-$$;
 
 -- Applies a corrections file from the provider: each row is deleted, and put
 -- back as it is after the correction when it still belongs to us.
@@ -139,6 +138,21 @@ CREATE EXTENSION pgcrypto;
 CREATE EXTENSION dblink;
 CREATE TABLE return_sender (account text PRIMARY KEY, signing_key text NOT NULL);
 
+-- The earlier dispute uses the same signing and delivery workflow as later closes.
+CREATE FUNCTION save_statement_return(p_ref text, p_start timestamptz, p_end timestamptz, p_disputed bigint[])
+RETURNS void LANGUAGE sql SET search_path = public AS $$
+    INSERT INTO statement_returns (return_ref, period_start, period_end, accepted_rows, signed_at, statement_digest)
+    SELECT p_ref, p_start, p_end, r.accepted, clock_timestamp(),
+           encode(hmac(jsonb_build_array(s.account, p_ref, null::text, null::integer, extract(epoch from p_start),
+                                         extract(epoch from p_end), r.accepted)::text, s.signing_key, 'sha256'), 'hex')
+    FROM return_sender s CROSS JOIN LATERAL (
+        SELECT coalesce(jsonb_agg(jsonb_build_object('event_id', u.event_id, 'metric', u.metric, 'quantity', u.quantity)
+                                 ORDER BY u.event_id), '[]'::jsonb) AS accepted
+        FROM usage_events u JOIN statement_lines l ON l.line_id = u.line_id AND l.kind = 'line'
+        WHERE u.occurred_at >= p_start AND u.occurred_at < p_end AND NOT (u.event_id = ANY (p_disputed))
+    ) r;
+$$;
+
 -- Build the file against the same transaction snapshot as its batch header.
 CREATE FUNCTION file_allocation_return(p_ref text, p_close text, p_start timestamptz, p_end timestamptz,
                                        p_disputed bigint[], p_read_at timestamptz)
@@ -177,11 +191,11 @@ CREATE TABLE allocation_settlements (
     PRIMARY KEY (close_ref, revision)
 );
 
-CREATE FUNCTION send_allocation_returns() RETURNS SETOF bigint LANGUAGE sql SET search_path = public AS $$
+CREATE FUNCTION send_statement_returns(p_ref text DEFAULT NULL) RETURNS SETOF bigint LANGUAGE sql SET search_path = public AS $$
     SELECT d.delivery_id
     FROM dblink('statement_support', format('select * from receive_statement_returns(%L, %L::jsonb, %L::jsonb)',
                  (SELECT account FROM return_sender),
-                 (SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM statement_returns r WHERE close_ref IS NOT NULL),
+                 (SELECT coalesce(jsonb_agg(r), '[]'::jsonb) FROM statement_returns r WHERE p_ref IS NULL OR r.return_ref = p_ref),
                  (SELECT coalesce(jsonb_agg(s), '[]'::jsonb) FROM allocation_settlements s)))
          AS d(delivery_id bigint);
 $$;
