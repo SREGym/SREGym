@@ -573,15 +573,24 @@ class MeteringOracle(Oracle):
         return []
 
     def expected_rates(self):
-        """Use the rate release and original rating time to distinguish legacy snapshots."""
-        price = "case metric " + " ".join(f"when '{m}' then {p}" for m, p in PRICES.items()) + " end"
-        released = sql_literal(self.state()["rate_band_release"])
-        rows = self.app.billing(
-            f"select line_id || '|' || row({price}, case "
-            f"when rated_at < {released}::timestamptz then null "
-            "when metric = 'storage_gb_h' then 'list' else 'committed' end)::text from ledger_lines;"
-        )
-        return {int(line): rate for line, rate in digest_rows(rows).items()}
+        """Rate Core usage by its sealed cohort, with current rates for new events."""
+        sealed = {
+            event: cohort
+            for cohort, ranges in self.state()["rate_cohorts"].items()
+            for first, last in ranges
+            for event in range(first, last + 1)
+        }
+        rows = self.app.core("select event_id || '|' || metric from usage_events;")
+        expected = {}
+        for row in rows.splitlines():
+            line, metric = row.split("|", 1)
+            event = int(line)
+            band = ""
+            if sealed.get(event) != "legacy":
+                # Both r5 cohorts and new usage follow the same band rules.
+                band = "list" if metric == "storage_gb_h" else "committed"
+            expected[event] = f"({PRICES.get(metric, '')},{band})"
+        return expected
 
     def check_rates(self):
         expected = self.expected_rates()

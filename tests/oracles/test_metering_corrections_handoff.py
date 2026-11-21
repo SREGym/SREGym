@@ -11,6 +11,7 @@ from sregym.conductor.oracles.apps.metering.corrections_handoff import (
     usage_charge,
 )
 from sregym.conductor.problems.apps.metering import reference_repair
+from sregym.conductor.problems.apps.metering.corrections_handoff import MeteringCorrectionsHandoff
 from sregym.service.apps.metering.application import ledger_conf, publications_conf
 
 
@@ -60,7 +61,102 @@ def test_matching_ledgers_with_the_wrong_historical_band_fail():
     assert oracle.check_rates() == [oracle.fail("finance_rates_wrong", lines=[10], count=1)]
 
 
-def test_finance_repair_preserves_equivalent_rate_snapshots(monkeypatch):
+@pytest.mark.parametrize(
+    ("rate", "charged", "rejected"),
+    [("(0.002,committed)", "7.5000", True), ("(0.002,)", "10.0000", False)],
+    ids=["repriced", "original-rate"],
+)
+def test_rebuilt_legacy_line_keeps_its_original_rate(rate, charged, rejected):
+    released_at = "2026-11-20 00:00:00+00"
+    rebuilt_rated_at = "2026-11-21 00:00:00+00"
+
+    def core(query, database="usage"):
+        if database == "payments":
+            return ""
+        if "round(quantity" in query:
+            return "10|quill|10.0000"
+        assert "from usage_events" in query
+        return "10|api_calls"
+
+    def billing(query):
+        if "rated_at" in query:
+            assert released_at in query
+            band = "committed" if rebuilt_rated_at >= released_at else ""
+            return f"10|(0.002,{band})"
+        if "rate::text" in query:
+            return f"10|{rate}"
+        assert "account || '|' || amount" in query
+        return "10|quill|10.0000"
+
+    def finance(query):
+        if "rate::text" in query:
+            return f"10|{rate}"
+        if "from invoice_items" in query:
+            return f"10|quill|usage|{charged}|2"
+        if "from invoices" in query:
+            return f"2|quill|{charged}|{charged}"
+        if "from credit_notes" in query:
+            return ""
+        assert "count(*) from ledger_lines" in query
+        return "0"
+
+    state = {
+        "rate_band_release": released_at,
+        "rate_cohorts": {"legacy": [[10, 10]], "release": [], "patched": []},
+        "statement_return": {"genuine": 99},
+    }
+    app = SimpleNamespace(core=core, billing=billing, finance=finance)
+    oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: state))
+    rate_failures = [oracle.fail("finance_rates_wrong", lines=[10], count=1)] if rejected else []
+    ledger_failures = []
+    if rejected:
+        ledger_failures = [
+            oracle.fail("invoice_rates_wrong", lines=[10], count=1),
+            oracle.fail("finance_ledger_wrong", lines=[[10, "quill"]], count=1),
+            oracle.fail("charges_wrong", accounts={"quill": "-2.50"}, invoices=[], captures=[]),
+        ]
+
+    assert (oracle.check_rates(), oracle.check_ledgers(invoice_boundary=1)) == (rate_failures, ledger_failures)
+
+
+def test_sealed_rate_cohorts_keep_gaps_and_exclude_voided_usage():
+    app = SimpleNamespace(
+        billing=Mock(return_value=(
+            "10|(0.002,)|legacy\n11|(0.002,)|legacy\n13|(0.002,)|legacy\n"
+            "14|(0.002,committed)|release\n15|(0.002,committed)|release\n16|(0.0400,list)|patched"
+        )),
+        finance=Mock(side_effect=[
+            "10|(0.002)\n11|(0.002)\n13|(0.002)\n14|(0.002)\n15|(0.002)\n16|(0.0400,list)",
+            "10|quill\n11|hollis\n14|quill\n15|hollis",
+        ]),
+        core=Mock(return_value="11|api_calls\n12|api_calls\n13|api_calls\n14|api_calls\n15|api_calls\n16|storage_gb_h"),
+    )
+    problems, _, cohorts = MeteringCorrectionsHandoff.seal_rates(
+        SimpleNamespace(app=app), patched_at="2026-11-20 00:00:00+00"
+    )
+    assert problems == []
+    assert cohorts == {"legacy": [[10, 11], [13, 13]], "release": [[14, 15]], "patched": [[16, 16]]}
+
+    oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: {"rate_cohorts": cohorts}))
+    assert oracle.expected_rates() == {
+        11: "(0.002,)",
+        12: "(0.002,committed)",
+        13: "(0.002,)",
+        14: "(0.002,committed)",
+        15: "(0.002,committed)",
+        16: "(0.0400,list)",
+    }
+
+
+@pytest.mark.parametrize(
+    ("wrong", "updated_lines", "rate_expression"),
+    [
+        ((), "2,3", "case when r.line_id in (3) then r.rate else f.rate end"),
+        (("keep_rates",), "2", "f.rate"),
+        (("fill_legacy_rates",), "1,2,3", "case when split_part(r.rate, ',', 2) = ')'"),
+    ],
+)
+def test_finance_repair_rate_updates(monkeypatch, wrong, updated_lines, rate_expression):
     app = SimpleNamespace(
         billing=Mock(side_effect=["1|(1.5,)\n2|(1.5,)\n3|(1.5,committed)\n", ""]),
         finance=Mock(return_value="1|(1.5)\n2|(1.5)\n3|(1.5)\n"),
@@ -69,10 +165,10 @@ def test_finance_repair_preserves_equivalent_rate_snapshots(monkeypatch):
     problem = SimpleNamespace(app=app, load_state=lambda: {"handoff_at": "2026-11-20T00:00:00+00:00"})
     monkeypatch.setattr(reference_repair, "finance_differences", lambda app: [(2, "pell")])
 
-    reference_repair.repair_finance(problem)
+    reference_repair.repair_finance(problem, wrong=wrong)
 
-    assert "where line_id in (2,3)" in app.billing.call_args.args[0]
-    assert "rate = case when r.line_id in (3) then r.rate else f.rate end" in app.finance.call_args.args[0]
+    assert f"where line_id in ({updated_lines})" in app.billing.call_args.args[0]
+    assert f"rate = {rate_expression}" in app.finance.call_args.args[0]
 
 
 @pytest.mark.parametrize(

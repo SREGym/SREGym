@@ -1100,7 +1100,7 @@ class MeteringCorrectionsHandoff(Problem):
         finance_gaps = len(finance_differences(app))
         if not finance_gaps:
             problems.append("finance received every ledger change")
-        rate_problems, rate_counts = self.seal_rates(facts["rates_patched_at"])
+        rate_problems, rate_counts, rate_cohorts = self.seal_rates(facts["rates_patched_at"])
         problems += rate_problems
         slots = app.slot_lsns()
         for db in PAUSED:
@@ -1212,6 +1212,7 @@ class MeteringCorrectionsHandoff(Problem):
             ).strip(),
             "finance_gaps": finance_gaps,
             "rates": rate_counts,
+            "rate_cohorts": rate_cohorts,
             "allocation_seal": allocation_values,
             "documents": documents(app),
             "diffs": {db: {k: len(v) for k, v in d.items()} for db, d in diffs.items()},
@@ -1224,23 +1225,30 @@ class MeteringCorrectionsHandoff(Problem):
             "select line_id || '|' || rate::text || '|' || case "
             f"when rated_at >= {sql_literal(patched_at)}::timestamptz then 'patched' "
             "when rated_at >= (select released_at from ops.billing_releases where revision = 'r5 rate bands') "
-            "then 'release' else 'legacy' end from ledger_lines;"
+            "then 'release' else 'legacy' end from ledger_lines order by line_id;"
         )
         problems = []
         wrong = []
         window = set()
         counts = {"window": 0, "patched": 0, "legacy": 0, "sent_at_list": {}, "legacy_sent": {}}
+        cohorts = {"legacy": [], "release": [], "patched": []}
         legacy = set()
-        for line, rate, period in (r.split("|") for r in rows.split()):
+        for line, rate, cohort in (r.split("|") for r in rows.split()):
             line = int(line)
+            # Line IDs are Core event IDs. Store consecutive IDs together without filling gaps.
+            ranges = cohorts[cohort]
+            if ranges and ranges[-1][1] == line - 1:
+                ranges[-1][1] = line
+            else:
+                ranges.append([line, line])
             received = finance.get(line)
             band = rate_band(rate)
-            if period == "release" and band and received and not rate_band(received):
+            if cohort == "release" and band and received and not rate_band(received):
                 window.add(line)
                 counts["window"] += 1
-            elif period == "patched" and band and received == rate:
+            elif cohort == "patched" and band and received == rate:
                 counts["patched"] += 1
-            elif period == "legacy" and not band and received and not rate_band(received):
+            elif cohort == "legacy" and not band and received and not rate_band(received):
                 legacy.add(line)
                 counts["legacy"] += 1
             else:
@@ -1264,7 +1272,7 @@ class MeteringCorrectionsHandoff(Problem):
         for account in COMMITTED_DISCOUNTS:
             if account not in counts["sent_at_list"] or account not in counts["legacy_sent"]:
                 problems.append(f"{account} has no sent invoice with both the expected rate cases")
-        return problems, counts
+        return problems, counts, cohorts
 
     def seal_quill_period(self, cases):
         app = self.app
@@ -1471,7 +1479,7 @@ class MeteringCorrectionsHandoff(Problem):
             if not problems:
                 self.state = {**facts, **sealed}
                 self.save_state()
-                summary = {k: v for k, v in self.state.items() if k != "documents"}
+                summary = {k: v for k, v in self.state.items() if k not in {"documents", "rate_cohorts"}}
                 print(f"Sealed: {json.dumps(summary)}")
                 return True
             failures.append(problems)
