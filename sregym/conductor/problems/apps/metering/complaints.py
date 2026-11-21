@@ -365,7 +365,10 @@ class ComplaintReplay:
                 marks.setdefault(end, set()).add(f"record_of_{xid}")
         # A streaming reader's fed-back position can be the sender's flushed WAL end after a keepalive.
         latest = max(lsn_value(b["finish"]) for b in batches.values())
-        allowed = {"progress": {"commit_end", "own_batch"}, "restart": {"running_xacts"}, "sampled": {"commit_end"}}
+        # A slot's restart point is a decoding restart point: a RUNNING_XACTS record or, when no transaction was
+        # open, the end of the last commit. Both readers' remedies leave the same restart point, so either is fine.
+        allowed = {"progress": {"commit_end", "own_batch"}, "restart": {"running_xacts", "commit_end"},
+                   "sampled": {"commit_end"}}
         for slot, kind, p in sorted(positions):
             found = set(position_class(p, marks, batches[slot]["xid"]).split("+"))
             if not found & allowed[kind] and not (kind == "sampled" and lsn_value(p) > latest):
