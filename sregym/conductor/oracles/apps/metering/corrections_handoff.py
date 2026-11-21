@@ -25,12 +25,12 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from sregym.conductor.oracles.base import Oracle
 from sregym.service.apps.metering.application import (
     COMMITTED_DISCOUNTS,
-    ExtractDeliveryTimeout,
-    MeteringJobFailed,
     CUSTOMER_DATABASES,
     PRICES,
     SUBSCRIBERS,
     TENANTS,
+    ExtractDeliveryTimeout,
+    MeteringJobFailed,
     parse_extracts_conf,
     sql_literal,
 )
@@ -46,23 +46,36 @@ def statement_truth(app, tenant, owners=None):
     """The intended booking values, keyed by event."""
     owner = "tenant_id"
     if owners:
-        owner = "case event_id " + " ".join(
-            f"when {int(event)} then {sql_literal(account)}" for event, account in owners.items()
-        ) + " else tenant_id end"
-    return {int(event): values for event, values in digest_rows(app.core(
-        "select event_id || '|' || concat_ws('|', billing_period, account, metric, quantity) "
-        f"from (select event_id, billing_period, {owner} as account, metric, quantity from usage_events) u "
-        f"where account = {sql_literal(tenant)};"
-    )).items()}
+        owner = (
+            "case event_id "
+            + " ".join(f"when {int(event)} then {sql_literal(account)}" for event, account in owners.items())
+            + " else tenant_id end"
+        )
+    return {
+        int(event): values
+        for event, values in digest_rows(
+            app.core(
+                "select event_id || '|' || concat_ws('|', billing_period, account, metric, quantity) "
+                f"from (select event_id, billing_period, {owner} as account, metric, quantity from usage_events) u "
+                f"where account = {sql_literal(tenant)};"
+            )
+        ).items()
+    }
 
 
 def statement_differences(truth, active, preserved):
     """Find bad active bookings and replacements of bookings that were already correct."""
     wrong = set(truth) ^ set(active)
-    wrong.update(event for event in truth.keys() & active.keys()
-                 if len(active[event]) != 1 or active[event][0][1] != truth[event])
-    replaced = {event for event, line, values in preserved
-                if truth.get(event) == values and (line, values) not in active.get(event, ())}
+    wrong.update(
+        event
+        for event in truth.keys() & active.keys()
+        if len(active[event]) != 1 or active[event][0][1] != truth[event]
+    )
+    replaced = {
+        event
+        for event, line, values in preserved
+        if truth.get(event) == values and (line, values) not in active.get(event, ())
+    }
     return sorted(wrong), sorted(replaced)
 
 
@@ -460,7 +473,8 @@ class MeteringOracle(Oracle):
                 ("statement_reversed", sorted(reversed_lines)),
                 ("statement_lines_wrong", wrong),
                 ("statement_rebooked", rebooked),
-            ) if events
+            )
+            if events
         ]
 
     def check_ledgers(self, invoice_boundary):
@@ -564,12 +578,16 @@ class MeteringOracle(Oracle):
             database="payments",
         )
         bad_captures = [
-            int(capture) for capture, invoice, account, amount in (row.split("|") for row in captures.split())
+            int(capture)
+            for capture, invoice, account, amount in (row.split("|") for row in captures.split())
             if stored_invoices.get(int(invoice)) != (account, Decimal(amount))
         ]
         if off or bad_totals or bad_captures:
-            return [self.fail("charges_wrong", accounts=off, invoices=sorted(bad_totals)[:20],
-                              captures=sorted(bad_captures)[:20])]
+            return [
+                self.fail(
+                    "charges_wrong", accounts=off, invoices=sorted(bad_totals)[:20], captures=sorted(bad_captures)[:20]
+                )
+            ]
         return []
 
     def expected_rates(self):
@@ -606,7 +624,10 @@ class MeteringOracle(Oracle):
         genuine, missing = returned["genuine"], returned["missing"]
         failures = []
         decisions = {
-            r["event"]: ((r["waived"] == returned["ref"] if r["event"] == genuine else r["waived"] is not None), r["charged"])
+            r["event"]: (
+                (r["waived"] == returned["ref"] if r["event"] == genuine else r["waived"] is not None),
+                r["charged"],
+            )
             for r in app.rows(
                 app.finance,
                 "select json_build_object('event', l.line_id, 'waived', l.waived_by_return, "
@@ -618,9 +639,7 @@ class MeteringOracle(Oracle):
         for event, expected in ((genuine, (True, False)), (missing, (False, True))):
             if decisions.get(event) != expected:
                 failures.append(self.fail("statement_return_waiver_wrong", event=event, decision=decisions.get(event)))
-        history = app.customer(
-            "pell_usage", f"select kind from statement_lines where event_id = {missing};"
-        ).split()
+        history = app.customer("pell_usage", f"select kind from statement_lines where event_id = {missing};").split()
         if history != ["line"]:
             failures.append(self.fail("statement_lines_wrong", database="pell_usage", event=missing, history=history))
         return failures
@@ -631,27 +650,44 @@ class MeteringOracle(Oracle):
         returns = {(row["account"], row["ref"]): row for row in state["signed_returns"]}
         records = {
             (r["account"], r["ref"]): r
-            for r in app.rows(app.finance, """
+            for r in app.rows(
+                app.finance,
+                """
                 select json_build_object('account', account, 'ref', return_ref, 'digest', statement_digest)
                 from statement_return_reconciliations;
-            """)
+            """,
+            )
         }
         later = f"or delivery_id > {int(resend_boundary)}" if resend_boundary is not None else ""
-        acknowledgements = set(tuple(row.split("|")) for row in app.core(
-            "select account || '|' || return_ref from statement_return_acknowledgements;", database="support"
-        ).splitlines())
-        pending = set(tuple(row.split("|")) for row in app.core(
-            "select account || '|' || return_ref from statement_return_inbox "
-            f"where imported_at is null {later};", database="support"
-        ).splitlines())
+        acknowledgements = set(
+            tuple(row.split("|"))
+            for row in app.core(
+                "select account || '|' || return_ref from statement_return_acknowledgements;", database="support"
+            ).splitlines()
+        )
+        pending = set(
+            tuple(row.split("|"))
+            for row in app.core(
+                f"select account || '|' || return_ref from statement_return_inbox where imported_at is null {later};",
+                database="support",
+            ).splitlines()
+        )
         missing = []
         for key, signed in returns.items():
             record = records.get(key)
-            if (key not in acknowledgements or key in pending or record is None
-                    or record["digest"] != signed["digest"]):
+            if key not in acknowledgements or key in pending or record is None or record["digest"] != signed["digest"]:
                 missing.append(key)
-        return [self.fail("statement_return_not_imported", returns=sorted({ref for _, ref in missing}),
-                          account_returns=sorted(missing))] if missing else []
+        return (
+            [
+                self.fail(
+                    "statement_return_not_imported",
+                    returns=sorted({ref for _, ref in missing}),
+                    account_returns=sorted(missing),
+                )
+            ]
+            if missing
+            else []
+        )
 
     def check_allocation_returns(self):
         app = self.app
@@ -662,7 +698,9 @@ class MeteringOracle(Oracle):
         earned = allocation["earned"]
         genuine = allocation["genuine"]
         ids = ",".join(str(row["line"]) for row in earned + genuine)
-        decisions = app.rows(app.finance, f"""
+        decisions = app.rows(
+            app.finance,
+            f"""
             select json_build_object('line', l.line_id, 'account', l.account, 'waiver', l.waived_by_return,
                                      'charges', coalesce(sum(i.amount), 0), 'items', count(i.invoice_id),
                                      'billed_account', min(v.account))
@@ -671,41 +709,61 @@ class MeteringOracle(Oracle):
             left join invoices v on v.invoice_id = i.invoice_id
             where l.line_id in ({ids})
             group by l.line_id;
-        """)
+        """,
+        )
         by_line = {row["line"]: row for row in decisions}
         allowed = {(row["line"], row["account"], row["ref"]) for row in genuine}
         pell = self.state()["statement_return"]
         allowed.add((pell["genuine"], "pell", pell["ref"]))
-        waived = app.rows(app.finance, """
+        waived = app.rows(
+            app.finance,
+            """
             select json_build_object('line', line_id, 'account', account, 'waiver', waived_by_return)
             from ledger_lines where waived_by_return is not null;
-        """)
+        """,
+        )
         for row in waived:
             key = (row["line"], row["account"], row["waiver"])
             if key not in allowed and row["line"] not in by_line and row["line"] != pell["missing"]:
                 failures.append(self.fail("statement_return_waiver_wrong", event=row["line"], decision=row))
         for row in earned + genuine:
             actual = by_line.get(row["line"])
-            expected = (row["account"], row.get("amount"), None, row["account"], 1) if "amount" in row else (
-                row["account"], 0, row["ref"], None, 0
+            expected = (
+                (row["account"], row.get("amount"), None, row["account"], 1)
+                if "amount" in row
+                else (row["account"], 0, row["ref"], None, 0)
             )
-            if not actual or tuple(actual[k] for k in ("account", "charges", "waiver", "billed_account", "items")) != expected:
+            if (
+                not actual
+                or tuple(actual[k] for k in ("account", "charges", "waiver", "billed_account", "items")) != expected
+            ):
                 failures.append(self.fail("statement_return_waiver_wrong", event=row["line"], decision=actual))
-        recorded = app.rows(app.finance, """
+        recorded = app.rows(
+            app.finance,
+            """
             select json_build_object('line', line, 'account', r.account, 'waiver', r.return_ref)
             from statement_return_reconciliations r cross join lateral unnest(r.waived_lines) as lines(line)
             where not exists (
                 select 1 from statement_waiver_revocations v
                 where v.account = r.account and v.return_ref = r.return_ref and v.line_id = lines.line
             );
-        """)
+        """,
+        )
         actual_decisions = {(r["line"], r["account"], r["waiver"]) for r in recorded}
         already_failed = {f["detail"]["event"] for f in failures}
         for line, account, ref in sorted(actual_decisions ^ allowed):
             if line not in already_failed:
-                failures.append(self.fail("statement_return_waiver_wrong", event=line,
-                                          decision={"account": account, "return": ref,
-                                                    "recorded_waiver": (line, account, ref) in actual_decisions}))
+                failures.append(
+                    self.fail(
+                        "statement_return_waiver_wrong",
+                        event=line,
+                        decision={
+                            "account": account,
+                            "return": ref,
+                            "recorded_waiver": (line, account, ref) in actual_decisions,
+                        },
+                    )
+                )
         return failures
 
     def check_ingest(self):
@@ -813,10 +871,11 @@ class MeteringOracle(Oracle):
             return app.run_cronjob(name, f"{name}-{int(time.time())}{suffix}", customer_side=customer_side)
 
         def return_boundary():
-            return int(app.core("select coalesce(max(delivery_id), 0) from statement_return_inbox;", database="support"))
+            return int(
+                app.core("select coalesce(max(delivery_id), 0) from statement_return_inbox;", database="support")
+            )
 
         observed = self.observe()
-        print(f"observed before tonight's routine: {json.dumps(observed)}")
         with contextlib.suppress(Exception):
             observed["subscription_errors_before"] = self.subscription_errors()
         check(self.check_duplicate_usage)
@@ -847,24 +906,27 @@ class MeteringOracle(Oracle):
             check(self.wait_ledgers_delivered)
             rerated = completed("re-rate", lambda: cron("billing-rerate"), company_job=True)
             check(self.wait_ledgers_delivered)
-            boundary = run("invoice boundary", lambda: int(app.finance("select coalesce(max(invoice_id), 0) from invoices;")))
+            boundary = run(
+                "invoice boundary", lambda: int(app.finance("select coalesce(max(invoice_id), 0) from invoices;"))
+            )
             resent = completed("customer return resend", lambda: cron("statement-return-resend", customer_side=True))
             imported = completed("statement return import", lambda: cron("statement-return-import"), company_job=True)
             if resent and imported:
                 cutoff = run("return resend boundary", return_boundary)
-                if cutoff is not None and completed("customer return resend after import", lambda: cron(
-                    "statement-return-resend", customer_side=True, suffix="-settled"
-                )):
+                if cutoff is not None and completed(
+                    "customer return resend after import",
+                    lambda: cron("statement-return-resend", customer_side=True, suffix="-settled"),
+                ):
                     check(self.check_return_reconciliations, cutoff)
             accounts = [*TENANTS, *([] if NEW_CUSTOMER[2] in excluded else [NEW_CUSTOMER[0]])]
-            invoiced = completed("invoice run", lambda: app.invoice_run(
-                accounts, f"invoice-run-{int(time.time())}"
-            ), company_job=True)
+            invoiced = completed(
+                "invoice run", lambda: app.invoice_run(accounts, f"invoice-run-{int(time.time())}"), company_job=True
+            )
             closed = set()
             for db in [*CUSTOMER_DATABASES, NEW_CUSTOMER[2]]:
                 if db in excluded or (db == "pell_usage" and not pell_loaded):
                     continue
-                close = run(f"{db} statement close", lambda: app.close_statement(db))
+                close = run(f"{db} statement close", lambda db=db: app.close_statement(db))
                 if close is not None:
                     closed.add(db)
                     check(self.check_statements, db, close)

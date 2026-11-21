@@ -197,8 +197,12 @@ class MeteringApplication(KubernetesCommands, Application):
         args = self.psql_args(f"{SUBSCRIBERS}-0", database)
         with subprocess.Popen(
             ["kubectl", "-n", HIDDEN, *args],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         ) as proc:
+
             def execute(script):
                 proc.stdin.write(script + "\n\\echo ready\n")
                 proc.stdin.flush()
@@ -566,7 +570,6 @@ class MeteringApplication(KubernetesCommands, Application):
                     "billing-jobs",
                     {name: (COMPANY / name).read_text() for name in ("rerate.sh", "rerate.sql", "r5-rate-bands.sql")},
                 ),
-
                 self.config_map(
                     "finance-jobs",
                     {
@@ -670,8 +673,7 @@ class MeteringApplication(KubernetesCommands, Application):
         self.core((COMPANY / "payments.sql").read_text(), database="payments")
         self.core((COMPANY / "support.sql").read_text(), database="support")
         keys = ", ".join(
-            f"({sql_literal(account)}, {sql_literal(p[f'sign_{db}'])})"
-            for db, account in ALLOCATION_CUSTOMERS.items()
+            f"({sql_literal(account)}, {sql_literal(p[f'sign_{db}'])})" for db, account in ALLOCATION_CUSTOMERS.items()
         )
         self.core(
             f"create role return_delivery login password {sql_literal(p['return_delivery'])};"
@@ -681,10 +683,13 @@ class MeteringApplication(KubernetesCommands, Application):
         )
         self.core((COMPANY / "meter.sql").read_text(), database="meter")
         self.core((COMPANY / "usage.sql").read_text())
-        tenants = ",\n".join(
-            f"({sql_literal(t)}, {sql_literal(spec[0])}, {sql_literal(spec[1])}, {str(t in STREAMED).lower()})"
-            for t, spec in TENANTS.items()
-        ) + f",\n({sql_literal(HOLDING[0])}, {sql_literal(HOLDING[1])}, 'internal', false)"
+        tenants = (
+            ",\n".join(
+                f"({sql_literal(t)}, {sql_literal(spec[0])}, {sql_literal(spec[1])}, {str(t in STREAMED).lower()})"
+                for t, spec in TENANTS.items()
+            )
+            + f",\n({sql_literal(HOLDING[0])}, {sql_literal(HOLDING[1])}, 'internal', false)"
+        )
         roles = [
             f"create role ingest login password {sql_literal(p['ingest'])};",
             "grant select, delete on meter_inbox to ingest;",
@@ -707,11 +712,14 @@ class MeteringApplication(KubernetesCommands, Application):
             "grant insert on meter_inbox to gateway;\ngrant usage on sequence meter_inbox_id_seq to gateway;\n",
             database="meter",
         )
-        accounts = ",\n".join(
-            f"({sql_literal(t)}, {sql_literal(spec[0])}, {spec[3]}, {sql_literal('billing@' + t + '.example')}, "
-            f"{COMMITTED_DISCOUNTS.get(t, 0)})"
-            for t, spec in TENANTS.items()
-        ) + f",\n({sql_literal(HOLDING[0])}, {sql_literal(HOLDING[1])}, 1, 'support@metering.example', 0)"
+        accounts = (
+            ",\n".join(
+                f"({sql_literal(t)}, {sql_literal(spec[0])}, {spec[3]}, {sql_literal('billing@' + t + '.example')}, "
+                f"{COMMITTED_DISCOUNTS.get(t, 0)})"
+                for t, spec in TENANTS.items()
+            )
+            + f",\n({sql_literal(HOLDING[0])}, {sql_literal(HOLDING[1])}, 1, 'support@metering.example', 0)"
+        )
         self.finance(
             (COMPANY / "finance.sql").read_text()
             + (COMPANY / "statement-returns.sql").read_text()
@@ -749,12 +757,14 @@ class MeteringApplication(KubernetesCommands, Application):
                 )
 
     def publish_allocation_receipts(self):
-        self.core("\n".join(
-            f"alter publication usage_{account} add table allocation_receipts where (tenant_id = '{account}');"
-            f"grant select on allocation_receipts to feed_{db};"
-            + ("grant select on allocation_receipts to feed_larkspur_monthend;" if account == "larkspur" else "")
-            for db, account in ALLOCATION_CUSTOMERS.items()
-        ))
+        self.core(
+            "\n".join(
+                f"alter publication usage_{account} add table allocation_receipts where (tenant_id = '{account}');"
+                f"grant select on allocation_receipts to feed_{db};"
+                + ("grant select on allocation_receipts to feed_larkspur_monthend;" if account == "larkspur" else "")
+                for db, account in ALLOCATION_CUSTOMERS.items()
+            )
+        )
 
     def create_customer_database(self, db):
         self.psql(f"{SUBSCRIBERS}-0", "postgres", f"create database {db};\n", hidden=True)
@@ -766,8 +776,7 @@ class MeteringApplication(KubernetesCommands, Application):
             f"\\set partition_by_period {str(quill).lower()}\n"
             f"\\set open_period {self.quill_period.isoformat()}\n"
             f"\\set identity_columns '{columns}'\n"
-            f"\\set partition_clause '{partition}'\n"
-            + (COMPANY / "customer.sql").read_text(),
+            f"\\set partition_clause '{partition}'\n" + (COMPANY / "customer.sql").read_text(),
         )
 
     def subscribe_customers(self, databases=None, *, copy_data=True):
@@ -838,10 +847,7 @@ class MeteringApplication(KubernetesCommands, Application):
         script = f"echo '{request}' > /run/load/next-rate && mv /run/load/next-rate /run/load/rate"
         if rate == 0:
             # Wait for the gateway loop to finish its last flush before draining the inbox.
-            script += (
-                f' && until [ "$(cat /run/load/observed-rate 2>/dev/null)" = \'{request}\' ]; '
-                "do sleep 0.1; done"
-            )
+            script += f" && until [ \"$(cat /run/load/observed-rate 2>/dev/null)\" = '{request}' ]; do sleep 0.1; done"
         self.hidden("exec", f"deployment/{GATEWAY}", "--", "timeout", "30", "bash", "-c", script)
 
     def pubsync(self, target, conf, revision):
@@ -1029,7 +1035,7 @@ select gen_random_uuid()::text, tenant, metric,
                    else round((0.5 + random() * 40)::numeric, 3) end,
        ({start}) + random() * interval '20 seconds', batch_id
 from (
-    select (string_to_array('{','.join(tenants)}', ','))[1 + floor(random() * {len(tenants)})::int] as tenant,
+    select (string_to_array('{",".join(tenants)}', ','))[1 + floor(random() * {len(tenants)})::int] as tenant,
            (array['api_calls', 'tokens_k', 'storage_gb_h'])[1 + floor(random() * 3)::int] as metric,
            batch_id
     from batches cross join lateral generate_series(1, records)
@@ -1045,7 +1051,9 @@ from (
             else (self.core, self.usage_batch_sql(1, 60))
         )
         return self.change_while_writing(
-            run, "metering handoff", write,
+            run,
+            "metering handoff",
+            write,
             f"select 1 from ops.pubsync_log where revision = {sql_literal(revision)}",
             lambda: self.replay_pubsync(target, conf),
         )
@@ -1129,11 +1137,14 @@ select pg_current_wal_lsn();
                 if writer.done():
                     writer_result()
                     raise RuntimeError(f"{writer_name} committed before the catalog change")
-                if run(
-                    "select exists (select 1 from pg_stat_activity "
-                    f"where application_name = {sql_literal(writer_name)} "
-                    "and backend_xid is not null and query like 'do $$%');"
-                ).strip() == "t":
+                if (
+                    run(
+                        "select exists (select 1 from pg_stat_activity "
+                        f"where application_name = {sql_literal(writer_name)} "
+                        "and backend_xid is not null and query like 'do $$%');"
+                    ).strip()
+                    == "t"
+                ):
                     break
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"{writer_name} did not finish its first write")
@@ -1190,7 +1201,8 @@ select pg_current_wal_lsn();
             self.core("select exists (select 1 from meter_inbox);", database="meter").strip() == "t"
             or self.core(
                 "select exists (select 1 from pg_stat_activity where usename = 'ingest' and backend_xid is not null);"
-            ).strip() == "t"
+            ).strip()
+            == "t"
         ):
             if time.monotonic() > deadline:
                 raise TimeoutError("meter inbox did not drain")
@@ -1244,17 +1256,23 @@ select pg_current_wal_lsn();
             if not applied_ahead:
                 return
             origin = self.subscription_origin(database)
-            if self.core(
-                f"select confirmed_flush_lsn < {sql_literal(origin)}::pg_lsn "
-                f"from pg_replication_slots where slot_name = {slot};"
-            ).strip() == "t":
+            if (
+                self.core(
+                    f"select confirmed_flush_lsn < {sql_literal(origin)}::pg_lsn "
+                    f"from pg_replication_slots where slot_name = {slot};"
+                ).strip()
+                == "t"
+            ):
                 return
             # An acknowledgement can reach the sender between the query and shutdown.
             # Reconnect only after the original apply worker has handled the disconnect.
-            while self.customer(
-                database,
-                f"select exists (select 1 from pg_stat_subscription where subname = {slot} and pid is not null);",
-            ).strip() == "t":
+            while (
+                self.customer(
+                    database,
+                    f"select exists (select 1 from pg_stat_subscription where subname = {slot} and pid is not null);",
+                ).strip()
+                == "t"
+            ):
                 if time.monotonic() > deadline:
                     raise TimeoutError(f"{database} did not stop after confirming the pause position")
                 time.sleep(0.1)
@@ -1282,7 +1300,19 @@ select pg_current_wal_lsn();
             while True:
                 try:
                     self.command(
-                        "exec", pod, "-c", "postgres", "--", "pg_isready", "-q", "-t", "2", "-U", "postgres", "-h", service,
+                        "exec",
+                        pod,
+                        "-c",
+                        "postgres",
+                        "--",
+                        "pg_isready",
+                        "-q",
+                        "-t",
+                        "2",
+                        "-U",
+                        "postgres",
+                        "-h",
+                        service,
                         timeout=10,
                     )
                     break

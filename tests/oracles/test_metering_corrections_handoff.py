@@ -121,14 +121,18 @@ def test_rebuilt_legacy_line_keeps_its_original_rate(rate, charged, rejected):
 
 def test_sealed_rate_cohorts_keep_gaps_and_exclude_voided_usage():
     app = SimpleNamespace(
-        billing=Mock(return_value=(
-            "10|(0.002,)|legacy\n11|(0.002,)|legacy\n13|(0.002,)|legacy\n"
-            "14|(0.002,committed)|release\n15|(0.002,committed)|release\n16|(0.0400,list)|patched"
-        )),
-        finance=Mock(side_effect=[
-            "10|(0.002)\n11|(0.002)\n13|(0.002)\n14|(0.002)\n15|(0.002)\n16|(0.0400,list)",
-            "10|quill\n11|hollis\n14|quill\n15|hollis",
-        ]),
+        billing=Mock(
+            return_value=(
+                "10|(0.002,)|legacy\n11|(0.002,)|legacy\n13|(0.002,)|legacy\n"
+                "14|(0.002,committed)|release\n15|(0.002,committed)|release\n16|(0.0400,list)|patched"
+            )
+        ),
+        finance=Mock(
+            side_effect=[
+                "10|(0.002)\n11|(0.002)\n13|(0.002)\n14|(0.002)\n15|(0.002)\n16|(0.0400,list)",
+                "10|quill\n11|hollis\n14|quill\n15|hollis",
+            ]
+        ),
         core=Mock(return_value="11|api_calls\n12|api_calls\n13|api_calls\n14|api_calls\n15|api_calls\n16|storage_gb_h"),
     )
     problems, _, cohorts = MeteringCorrectionsHandoff.seal_rates(
@@ -255,9 +259,12 @@ def test_catalog_change_writer_can_outlive_both_setup_waits(monkeypatch):
     writer.result.return_value = "0/5"
     monkeypatch.setattr(application, "ThreadPoolExecutor", executor)
 
-    assert application.MeteringApplication.change_while_writing(
-        SimpleNamespace(), run, "writer", "select 1;", "select 1", change
-    ) == "0/5"
+    assert (
+        application.MeteringApplication.change_while_writing(
+            SimpleNamespace(), run, "writer", "select 1;", "select 1", change
+        )
+        == "0/5"
+    )
     assert pool.submit.call_args.kwargs["timeout"] > 2 * application.CATALOG_CHANGE_TIMEOUT
     change.assert_called_once()
 
@@ -481,10 +488,12 @@ def test_statement_return_checks_both_charge_decisions(genuine, missing, history
     app = SimpleNamespace(
         finance=Mock(),
         customer=Mock(return_value=history),
-        rows=Mock(return_value=[
-            {"event": event, "waived": ref, "charged": charged}
-            for event, (ref, charged) in ((1, genuine), (2, missing))
-        ]),
+        rows=Mock(
+            return_value=[
+                {"event": event, "waived": ref, "charged": charged}
+                for event, (ref, charged) in ((1, genuine), (2, missing))
+            ]
+        ),
     )
     state = {"statement_return": {"genuine": 1, "missing": 2, "ref": "PELL-1"}}
     oracle = MeteringOracle(SimpleNamespace(app=app, load_state=lambda: state))
@@ -526,19 +535,31 @@ CORE_LOG = """2026-11-21 00:59:00.000 UTC [10] LOG:  starting logical decoding f
 2026-11-21 01:00:03.000 UTC [40] LOG:  checkpoint complete: lsn=0/300, redo lsn=0/2F0
 """
 # Quill's failing batch is xid 7 and Larkspur's xid 8; each reconnect forwards to a record end inside its own.
-WAL = "\n".join([
-    "0/F0|0/100|Transaction|COMMIT|5", "0/100|0/110|Transaction|COMMIT|6", "0/80|0/98|Standby|RUNNING_XACTS|0",
-    "0/170|0/180|Heap|LOCK|7", "0/180|0/1A0|Heap|INSERT|7", "0/1A0|0/1C0|Transaction|COMMIT|7",
-    "0/270|0/280|Heap|LOCK|8", "0/280|0/2A0|Heap|INSERT|8", "0/2A0|0/2C0|Transaction|COMMIT|8",
-    "0/400|0/420|Transaction|COMMIT|9",
-])
+WAL = "\n".join(
+    [
+        "0/F0|0/100|Transaction|COMMIT|5",
+        "0/100|0/110|Transaction|COMMIT|6",
+        "0/80|0/98|Standby|RUNNING_XACTS|0",
+        "0/170|0/180|Heap|LOCK|7",
+        "0/180|0/1A0|Heap|INSERT|7",
+        "0/1A0|0/1C0|Transaction|COMMIT|7",
+        "0/270|0/280|Heap|LOCK|8",
+        "0/280|0/2A0|Heap|INSERT|8",
+        "0/2A0|0/2C0|Transaction|COMMIT|8",
+        "0/400|0/420|Transaction|COMMIT|9",
+    ]
+)
 
 
 def evidence_app(log=CORE_LOG, level="warning|default", sampled=None):
-    sampled = sampled or [{"slot": "quill_usage", "restart": "0/80", "confirmed": "0/420"},
-                          {"slot": "larkspur_live", "restart": "0/80", "confirmed": "0/500"}]
+    sampled = sampled or [
+        {"slot": "quill_usage", "restart": "0/80", "confirmed": "0/420"},
+        {"slot": "larkspur_live", "restart": "0/80", "confirmed": "0/500"},
+    ]
     core = Mock(side_effect=lambda q, **_: level if "log_min_messages" in q else WAL)
-    return SimpleNamespace(core=core, command=Mock(return_value=log), rows=Mock(return_value=[dict(r) for r in sampled]))
+    return SimpleNamespace(
+        core=core, command=Mock(return_value=log), rows=Mock(return_value=[dict(r) for r in sampled])
+    )
 
 
 BATCHES = {
@@ -562,8 +583,10 @@ def test_reconnect_positions_in_each_readers_own_batch_leave_the_same_evidence()
 
 
 def test_a_debug_line_from_the_skipped_reader_fails():
-    extra = CORE_LOG + ("2026-11-21 01:00:01.000 UTC [20] DEBUG:  failed to increase restart lsn: "
-                        "proposed 0/80, after 0/80, current candidate 0/80, current after 0/80, flushed up to 0/180\n")
+    extra = CORE_LOG + (
+        "2026-11-21 01:00:01.000 UTC [20] DEBUG:  failed to increase restart lsn: "
+        "proposed 0/80, after 0/80, current candidate 0/80, current after 0/80, flushed up to 0/180\n"
+    )
     assert any("quill_usage lines that name the remedy" in p for p in evidence(evidence_app(log=extra)))
 
 
@@ -573,13 +596,15 @@ def test_generic_restart_lines_on_one_reader_only_still_pass():
 
 
 def test_a_reader_without_reconnect_lines_fails():
-    quiet = "\n".join(l for l in CORE_LOG.splitlines() if "[30]" not in l) + "\n"
+    quiet = "\n".join(line for line in CORE_LOG.splitlines() if "[30]" not in line) + "\n"
     assert any("no reconnect line for larkspur_live" in p for p in evidence(evidence_app(log=quiet)))
 
 
 def test_a_debug_log_level_and_a_mid_transaction_sample_fail():
-    sampled = [{"slot": "quill_usage", "restart": "0/80", "confirmed": "0/180"},
-               {"slot": "larkspur_live", "restart": "0/80", "confirmed": "0/500"}]
+    sampled = [
+        {"slot": "quill_usage", "restart": "0/80", "confirmed": "0/180"},
+        {"slot": "larkspur_live", "restart": "0/80", "confirmed": "0/500"},
+    ]
     problems = evidence(evidence_app(level="debug1|configuration file", sampled=sampled))
     assert any("log_min_messages" in p for p in problems)
     assert any("quill_usage sampled position 0/180" in p for p in problems)
@@ -587,8 +612,7 @@ def test_a_debug_log_level_and_a_mid_transaction_sample_fail():
 
 def test_a_logged_position_inside_another_transaction_fails():
     moved = CORE_LOG.replace("forwarding to 0/180", "forwarding to 0/280")
-    assert any("quill_usage progress position 0/280 is on other_txn" in p
-               for p in evidence(evidence_app(log=moved)))
+    assert any("quill_usage progress position 0/280 is on other_txn" in p for p in evidence(evidence_app(log=moved)))
 
 
 def oracle_with(truth, rows):
@@ -616,10 +640,14 @@ def test_core_usage_wrong_flags_a_restored_row_and_a_voided_row():
 
 
 def test_assume_applied_leaves_out_only_a_skipped_batch():
-    state = {"complaints": {"batches": {
-        "quill_usage": {"remedy": "skip", "rights": [1, 2], "redate": 3},
-        "larkspur_live": {"remedy": "local_delete", "rights": [4]},
-    }}}
+    state = {
+        "complaints": {
+            "batches": {
+                "quill_usage": {"remedy": "skip", "rights": [1, 2], "redate": 3},
+                "larkspur_live": {"remedy": "local_delete", "rights": [4]},
+            }
+        }
+    }
     assert reference_repair.skipped_items(state, "quill_usage", ("assume_applied",)) == {1, 2, 3}
     assert reference_repair.skipped_items(state, "quill_usage", ()) == set()
     assert reference_repair.skipped_items(state, "larkspur_live", ("assume_applied",)) == set()
@@ -652,7 +680,7 @@ def test_reconciliations_require_matching_signed_decisions_and_survive_resend():
 
     app.core = Mock(side_effect=["pell|AR-20\nquill|AR-20", "quill|AR-20"])
     records[0]["digest"] = "a-different-file"
-    failure, = oracle.check_return_reconciliations(100)
+    (failure,) = oracle.check_return_reconciliations(100)
     assert failure["detail"]["account_returns"] == [("pell", "AR-20"), ("quill", "AR-20")]
 
 
@@ -679,8 +707,11 @@ def test_revision_filter_holds_off_eligible_returns_in_the_import_query():
     script = "\\copy (select delivery_id from statement_return_inbox where imported_at is null order by delivery_id) to stdout"
     data = {"statement-return-import.sh": script, "invoice-run.sh": "x"}
     applied = []
-    app = SimpleNamespace(command=Mock(return_value=__import__("json").dumps({"data": data})),
-                          config_map=lambda name, files: (name, files), apply_documents=applied.extend)
+    app = SimpleNamespace(
+        command=Mock(return_value=__import__("json").dumps({"data": data})),
+        config_map=lambda name, files: (name, files),
+        apply_documents=applied.extend,
+    )
     reference_repair.import_eligible_only(app)
     name, files = applied[0]
     assert name == "finance-jobs" and files["invoice-run.sh"] == "x"
@@ -694,8 +725,13 @@ def test_pell_residuals_beyond_the_stale_window_each_have_a_class():
     problem = MeteringCorrectionsHandoff.__new__(MeteringCorrectionsHandoff)
     stale = Mock(return_value="70\n30")  # corrected only while Pell's sender was stale or paused
     problem.app = SimpleNamespace(customer=Mock(return_value=""), core=stale, rows=lambda run, q: files)
-    facts = {"pell_gap": [100, 200], "pell_gap_from": 90, "pell_gap_corrected": [40], "pell_stale_through": 5,
-             "statement_return": {"genuine": 50, "missing": 51}}
+    facts = {
+        "pell_gap": [100, 200],
+        "pell_gap_from": 90,
+        "pell_gap_corrected": [40],
+        "pell_stale_through": 5,
+        "statement_return": {"genuine": 50, "missing": 51},
+    }
     pell = {"extra": [30, 70], "missing": [95, 150, 51], "changed": [40]}
     assert problem.seal_pell_classes(facts, pell) == []
     assert facts["pell_base"] == [70]  # 30 is stale too, but its delivered file keeps it a residual

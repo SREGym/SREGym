@@ -13,7 +13,7 @@ ACCOUNTS = tuple(ALLOCATION_CUSTOMERS.values())
 READERS = tuple(ALLOCATION_CUSTOMERS)
 ALLOCATIONS = ("BACD", "CBAD", "DBCA", "ACBD", "ADCB", "ABDC", "CBAD", "ABDC")
 FILED_REVISIONS = (5, 3, 1, 4)
-LOT_TOTALS = dict(zip("ABCD", (47000, 53000, 40000, 60000)))
+LOT_TOTALS = dict(zip("ABCD", (47000, 53000, 40000, 60000), strict=True))
 #: The last six ordinary closes: imported, still waiting for their acknowledgements at the handoff.
 PENDING = range(18, 24)
 
@@ -73,8 +73,7 @@ class AllocationReplay:
         self.app = problem.app
         self.anchor = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)
         self.windows = {
-            f"AR-{self.anchor:%y%m%d}-{i + 1:02d}": self.anchor + timedelta(minutes=30 * i)
-            for i in range(25)
+            f"AR-{self.anchor:%y%m%d}-{i + 1:02d}": self.anchor + timedelta(minutes=30 * i) for i in range(25)
         }
         self.incident = list(self.windows)[-1]
         self.noise = [ref for ref in self.windows if ref != self.incident]
@@ -86,8 +85,12 @@ class AllocationReplay:
     def seed_rows(self, ref, account, tag, total, count=1):
         price = Decimal("0.04")
         return [
-            {"record": f"{ref}/{tag}/{n}", "account": account, "at": self.windows[ref].isoformat(),
-             "quantity": str(Decimal(total) / count / price)}
+            {
+                "record": f"{ref}/{tag}/{n}",
+                "account": account,
+                "at": self.windows[ref].isoformat(),
+                "quantity": str(Decimal(total) / count / price),
+            }
             for n in range(count)
         ]
 
@@ -157,8 +160,9 @@ class AllocationReplay:
             "insert into statement_waiver_approvals (account, close_ref, line_id, approved_at, reason) values "
             f"('{account}', {sql_literal(ref)}, {line}, {sql_literal(at.isoformat())}, 'acceptance-test usage');"
         )
-        self.genuine.append({"line": line, "account": account, "ref": f"{ref}-{account}", "moved": moved,
-                             "ticket": f"ALLOC-{ref}"})
+        self.genuine.append(
+            {"line": line, "account": account, "ref": f"{ref}-{account}", "moved": moved, "ticket": f"ALLOC-{ref}"}
+        )
 
     def return_sql(self, ref, account):
         excluded = [str(row["line"]) for row in self.genuine if row["ref"] == f"{ref}-{account}"]
@@ -171,15 +175,22 @@ class AllocationReplay:
         # Ordinary closes during the same account review. A buyer temporarily
         # holds a lot before returning it, and some tests are agreed off-bill.
         self.apply(
-            (batch_sql(ref, 1, seed=[
-                *[row for account in ACCOUNTS for row in self.seed_rows(ref, account, account, 500 + 11 * i)],
-                *self.seed_rows(ref, "quill", "test-moved", 14500 + 17 * i),
-                *self.seed_rows(ref, "ostrava", "test-local", 14700 + 13 * i),
-            ]) for i, ref in enumerate(self.noise)),
+            (
+                batch_sql(
+                    ref,
+                    1,
+                    seed=[
+                        *[row for account in ACCOUNTS for row in self.seed_rows(ref, account, account, 500 + 11 * i)],
+                        *self.seed_rows(ref, "quill", "test-moved", 14500 + 17 * i),
+                        *self.seed_rows(ref, "ostrava", "test-local", 14700 + 13 * i),
+                    ],
+                )
+                for i, ref in enumerate(self.noise)
+            ),
             reconnect="pell_usage",
         )
         self.record_ids()
-        plans = {ref: dict(zip(READERS, noise_plan(i))) for i, ref in enumerate(self.noise)}
+        plans = {ref: dict(zip(READERS, noise_plan(i), strict=True)) for i, ref in enumerate(self.noise)}
         with ExitStack() as sessions:
             opened = {}
 
@@ -189,15 +200,19 @@ class AllocationReplay:
                 for db in READERS:
                     if any(plan[db] == revision for plan in plans.values()):
                         execute = sessions.enter_context(self.app.customer_session(db))
-                        execute("begin isolation level repeatable read;\n"
-                                "select clock_timestamp() as read_at from allocation_receipts "
-                                f"where close_ref = '{self.noise[-1]}' and revision = {revision} \\gset")
+                        execute(
+                            "begin isolation level repeatable read;\n"
+                            "select clock_timestamp() as read_at from allocation_receipts "
+                            f"where close_ref = '{self.noise[-1]}' and revision = {revision} \\gset"
+                        )
                         opened[db, revision] = execute
 
             open_snapshots(1)
             self.apply(
-                (batch_sql(ref, 2, self.corrections(ref, 2, {"larkspur": "quill", "test-moved": "pell"}))
-                 for ref in self.noise),
+                (
+                    batch_sql(ref, 2, self.corrections(ref, 2, {"larkspur": "quill", "test-moved": "pell"}))
+                    for ref in self.noise
+                ),
                 reconnect="quill_usage",
             )
             open_snapshots(2)
@@ -215,8 +230,14 @@ class AllocationReplay:
             def file(db):
                 for (reader, revision), execute in opened.items():
                     if reader == db:
-                        execute("\n".join(self.return_sql(ref, ALLOCATION_CUSTOMERS[db])
-                                          for ref in self.noise if plans[ref][db] == revision) + "\ncommit;")
+                        execute(
+                            "\n".join(
+                                self.return_sql(ref, ALLOCATION_CUSTOMERS[db])
+                                for ref in self.noise
+                                if plans[ref][db] == revision
+                            )
+                            + "\ncommit;"
+                        )
 
             with ThreadPoolExecutor(max_workers=len(READERS)) as pool:
                 list(pool.map(file, READERS))
@@ -229,27 +250,40 @@ class AllocationReplay:
             opened = {}
             for revision, allocation in enumerate(ALLOCATIONS[:6], 1):
                 approval_times.append(datetime.now(UTC))
-                owners = dict(zip(allocation, ACCOUNTS))
+                owners = dict(zip(allocation, ACCOUNTS, strict=True))
                 if revision == 1:
-                    self.app.core(batch_sql(ref, revision, seed=[
-                        *[row for tag, total in LOT_TOTALS.items()
-                          for row in self.seed_rows(ref, owners[tag], tag, total, count=4)],
-                        *self.seed_rows(ref, "quill", "test-moved", 14650),
-                        *self.seed_rows(ref, "quill", "test-local", 14850),
-                    ]))
+                    self.app.core(
+                        batch_sql(
+                            ref,
+                            revision,
+                            seed=[
+                                *[
+                                    row
+                                    for tag, total in LOT_TOTALS.items()
+                                    for row in self.seed_rows(ref, owners[tag], tag, total, count=4)
+                                ],
+                                *self.seed_rows(ref, "quill", "test-moved", 14650),
+                                *self.seed_rows(ref, "quill", "test-local", 14850),
+                            ],
+                        )
+                    )
                     self.record_ids()
                 else:
                     if revision == 2:
                         owners["test-moved"] = "pell"
-                    self.apply([batch_sql(ref, revision, self.corrections(ref, revision, owners))],
-                               reconnect="ostrava_usage" if revision == 2 else None)
+                    self.apply(
+                        [batch_sql(ref, revision, self.corrections(ref, revision, owners))],
+                        reconnect="ostrava_usage" if revision == 2 else None,
+                    )
                 self.wait_receipts(ref, revision)
-                for db, want in zip(READERS, FILED_REVISIONS):
+                for db, want in zip(READERS, FILED_REVISIONS, strict=True):
                     if want == revision:
                         execute = sessions.enter_context(self.app.customer_session(db))
-                        execute("begin isolation level repeatable read;\n"
-                                f"select clock_timestamp() as read_at from allocation_receipts "
-                                f"where close_ref = '{ref}' and revision = {revision} \\gset")
+                        execute(
+                            "begin isolation level repeatable read;\n"
+                            f"select clock_timestamp() as read_at from allocation_receipts "
+                            f"where close_ref = '{ref}' and revision = {revision} \\gset"
+                        )
                         opened[db] = execute
 
             cutoff = datetime.now(UTC)
@@ -258,7 +292,7 @@ class AllocationReplay:
             self.settle([ref], 6)
 
             approval_times.append(datetime.now(UTC))
-            self.apply([batch_sql(ref, 7, self.corrections(ref, 7, dict(zip(ALLOCATIONS[6], ACCOUNTS))))])
+            self.apply([batch_sql(ref, 7, self.corrections(ref, 7, dict(zip(ALLOCATIONS[6], ACCOUNTS, strict=True))))])
             self.wait_receipts(ref, 7)
             for db, execute in opened.items():
                 execute(self.return_sql(ref, ALLOCATION_CUSTOMERS[db]) + "\ncommit;")
@@ -266,14 +300,16 @@ class AllocationReplay:
         self.add_close(ref, 6, cutoff, approval_times, amendment=f"{ref}-next")
         # The preview used the same usage IDs. Post the period under the approved
         # allocation before opening the ledger for this close.
-        self.apply([batch_sql(ref, 8, self.corrections(ref, 8, dict(zip(ALLOCATIONS[7], ACCOUNTS))))])
+        self.apply([batch_sql(ref, 8, self.corrections(ref, 8, dict(zip(ALLOCATIONS[7], ACCOUNTS, strict=True))))])
         self.wait_receipts(ref, 8)
 
     def settle(self, refs, revision):
         windows = ", ".join(f"('{ref}', {close_window(self.windows[ref])})" for ref in refs)
 
         def acknowledgement(db):
-            self.app.customer(db, f"""
+            self.app.customer(
+                db,
+                f"""
                 insert into allocation_settlements (close_ref, revision, line_count, cents)
                 select w.ref, {revision}, p.n, p.cents
                 from (values {windows}) as w(ref, start_at, end_at)
@@ -282,7 +318,8 @@ class AllocationReplay:
                     from usage_events where occurred_at >= w.start_at::timestamptz
                                       and occurred_at < w.end_at::timestamptz
                 ) p;
-            """)
+            """,
+            )
 
         with ThreadPoolExecutor(max_workers=len(READERS)) as pool:
             list(pool.map(acknowledgement, READERS))
@@ -304,19 +341,34 @@ class AllocationReplay:
             database="support",
         )
         earned = [
-            {"line": event, "account": account, "ref": f"{self.incident}-{account}",
-             "ticket": f"ALLOC-{self.incident}", "amount": LOT_TOTALS[tag] // 4}
-            for tag, account in zip(ALLOCATIONS[5], ACCOUNTS)
+            {
+                "line": event,
+                "account": account,
+                "ref": f"{self.incident}-{account}",
+                "ticket": f"ALLOC-{self.incident}",
+                "amount": LOT_TOTALS[tag] // 4,
+            }
+            for tag, account in zip(ALLOCATIONS[5], ACCOUNTS, strict=True)
             for record, event in self.events.items()
             if record.startswith(f"{self.incident}/{tag}/")
         ]
         erroneous = [row for row in earned if row["account"] in ("larkspur", "ostrava")]
         return {
-            "close": self.incident, "closes": len(self.windows), "earned": earned, "erroneous": erroneous,
+            "close": self.incident,
+            "closes": len(self.windows),
+            "earned": earned,
+            "erroneous": erroneous,
             "genuine": self.genuine,
-            "pending": [{"ref": f"{ref}-{account}", "close": ref, "account": account,
-                         "revision": noise_plan(self.noise.index(ref))[ACCOUNTS.index(account)]}
-                        for ref in pending for account in ACCOUNTS],
+            "pending": [
+                {
+                    "ref": f"{ref}-{account}",
+                    "close": ref,
+                    "account": account,
+                    "revision": noise_plan(self.noise.index(ref))[ACCOUNTS.index(account)],
+                }
+                for ref in pending
+                for account in ACCOUNTS
+            ],
         }
 
 
@@ -325,66 +377,95 @@ def seal_allocations(app, state, earlier_return):
     ref = sql_literal(state["close"])
     earned = {row["line"]: row for row in state["earned"]}
     expected_waivers = {row["line"]: row["ref"] for row in state["genuine"] + state["erroneous"]}
-    ledger = app.rows(app.finance, """
+    ledger = app.rows(
+        app.finance,
+        """
         select json_build_object('line', line_id, 'account', account, 'amount', amount,
                                  'waiver', waived_by_return, 'open', invoice_id is null)
         from ledger_lines where waived_by_return is not null or line_id in (
-        """ + ",".join(map(str, earned)) + ");")
+        """
+        + ",".join(map(str, earned))
+        + ");",
+    )
     by_line = {row["line"]: row for row in ledger}
-    actual_waivers = {row["line"]: row["waiver"] for row in ledger
-                      if row["waiver"] and row["waiver"] != earlier_return["ref"]}
+    actual_waivers = {
+        row["line"]: row["waiver"] for row in ledger if row["waiver"] and row["waiver"] != earlier_return["ref"]
+    }
     if actual_waivers != expected_waivers:
         problems.append(f"allocation waivers differ: {actual_waivers}")
     if any(
-        not (actual := by_line.get(line)) or not actual["open"]
+        not (actual := by_line.get(line))
+        or not actual["open"]
         or (actual["account"], actual["amount"]) != (row["account"], row["amount"])
         for line, row in earned.items()
     ):
         problems.append("finance does not have the eligible allocation at its original amounts")
-    filed = app.rows(lambda q: app.core(q, database="support"), f"""
+    filed = app.rows(
+        lambda q: app.core(q, database="support"),
+        f"""
         select json_build_object('account', account, 'revision', batch_revision, 'imported', imported_at is not null,
                                  'lines', accepted_rows, 'signed_after_settlement',
                                  signed_at > (select max(settled_at) from allocation_settlements where close_ref = {ref}))
         from statement_return_inbox where close_ref = {ref};
-    """)
+    """,
+    )
     returned = [line["event_id"] for file in filed for line in file["lines"]]
     revisions = {file["account"]: file["revision"] for file in filed}
-    if (len(returned) != len(earned) or set(returned) != earned.keys()
-            or revisions != dict(zip(ACCOUNTS, FILED_REVISIONS))
-            or not all(file["imported"] and file["signed_after_settlement"] for file in filed)):
+    if (
+        len(returned) != len(earned)
+        or set(returned) != earned.keys()
+        or revisions != dict(zip(ACCOUNTS, FILED_REVISIONS, strict=True))
+        or not all(file["imported"] and file["signed_after_settlement"] for file in filed)
+    ):
         problems.append(f"four returns did not file the whole allocation from the marked snapshots: {revisions}")
-    lots = {row["line"]: tag for tag, account in zip(ALLOCATIONS[5], ACCOUNTS)
-            for row in earned.values() if row["account"] == account}
-    for file, tag in zip(sorted(filed, key=lambda file: ACCOUNTS.index(file["account"])), "ABCD"):
+    lots = {
+        row["line"]: tag
+        for tag, account in zip(ALLOCATIONS[5], ACCOUNTS, strict=True)
+        for row in earned.values()
+        if row["account"] == account
+    }
+    for file, tag in zip(sorted(filed, key=lambda file: ACCOUNTS.index(file["account"])), "ABCD", strict=False):
         if {lots.get(line["event_id"]) for line in file["lines"]} != {tag}:
             problems.append(f"{file['account']} did not return lot {tag}")
     genuine_by_account = {
-        row["account"]: by_line[row["line"]]["amount"] for row in state["genuine"]
+        row["account"]: by_line[row["line"]]["amount"]
+        for row in state["genuine"]
         if row["ref"].startswith(state["close"]) and row["line"] in by_line
     }
     expected_cents = {
         account: int((LOT_TOTALS[tag] + genuine_by_account.get(account, 0)) * 100)
-        for tag, account in zip(ALLOCATIONS[5], ACCOUNTS)
+        for tag, account in zip(ALLOCATIONS[5], ACCOUNTS, strict=True)
     }
-    settlements = app.rows(lambda q: app.core(q, database="support"), f"""
+    settlements = app.rows(
+        lambda q: app.core(q, database="support"),
+        f"""
         select row_to_json(s) from allocation_settlements s where close_ref = {ref} and revision = 6;
-    """)
+    """,
+    )
     actual_cents = {row["account"]: row["cents"] for row in settlements}
     if actual_cents != expected_cents:
         problems.append(f"settlement acknowledgements did not reflect the eligible allocation: {actual_cents}")
-    noise = app.rows(lambda q: app.core(q, database="support"), f"""
+    noise = app.rows(
+        lambda q: app.core(q, database="support"),
+        f"""
         select json_build_object('ref', i.return_ref, 'revision', max(i.batch_revision),
                                  'imported', bool_and(i.imported_at is not null), 'acknowledged', bool_or(a.return_ref is not null))
         from statement_return_inbox i left join statement_return_acknowledgements a using (account, return_ref)
         where i.close_ref like 'AR-%' and i.close_ref <> {ref} group by i.return_ref;
-    """)
+    """,
+    )
     pending = {row["ref"]: row["revision"] for row in state["pending"]}
     staggered = {row["ref"] for row in noise if row["revision"] != 3}
-    if (len(noise) != 4 * (state["closes"] - 1) or not all(row["imported"] for row in noise)
-            or {row["ref"] for row in noise if not row["acknowledged"]} != pending.keys()
-            or any(row["revision"] != pending[row["ref"]] for row in noise if row["ref"] in pending)
-            or not staggered):
-        problems.append(f"ordinary closes did not file staggered and leave the last six unacknowledged: {len(noise)} returns")
+    if (
+        len(noise) != 4 * (state["closes"] - 1)
+        or not all(row["imported"] for row in noise)
+        or {row["ref"] for row in noise if not row["acknowledged"]} != pending.keys()
+        or any(row["revision"] != pending[row["ref"]] for row in noise if row["ref"] in pending)
+        or not staggered
+    ):
+        problems.append(
+            f"ordinary closes did not file staggered and leave the last six unacknowledged: {len(noise)} returns"
+        )
     if app.core("select count(*) from ops.allocation_batches where commit_lsn is null;").strip() != "0":
         problems.append("some allocation receipts have no WAL commit position")
     errors = {row["line"] for row in state["erroneous"]}
@@ -394,11 +475,17 @@ def seal_allocations(app, state, earlier_return):
     if mixed != 100_000 or share < 0.8:
         problems.append(f"mixed-cut dollar check: {mixed} of {mixed + prior}")
     result = {
-        "close_count": state["closes"], "filed_revisions": revisions, "eligible_revision": 6,
+        "close_count": state["closes"],
+        "filed_revisions": revisions,
+        "eligible_revision": 6,
         "earned_lot_dollars": sum(row["amount"] for row in earned.values()),
-        "mixed_waiver_dollars": mixed, "earlier_waiver_dollars": prior, "error_share": share,
-        "genuine_waivers": len(state["genuine"]), "settlement_cents": actual_cents,
-        "pending_returns": len(pending), "pending_off_eligible": sum(rev != 3 for rev in pending.values()),
+        "mixed_waiver_dollars": mixed,
+        "earlier_waiver_dollars": prior,
+        "error_share": share,
+        "genuine_waivers": len(state["genuine"]),
+        "settlement_cents": actual_cents,
+        "pending_returns": len(pending),
+        "pending_off_eligible": sum(rev != 3 for rev in pending.values()),
         "staggered_returns": len(staggered),
         "waived_by_account": {
             account: sum(by_line[line]["amount"] for line in errors if by_line.get(line, {}).get("account") == account)

@@ -194,8 +194,7 @@ class MeteringCorrectionsHandoff(Problem):
             return []
         events = self.pick_events(plan)
         quantities = self.app.core(
-            "select event_id || '|' || quantity from usage_events "
-            f"where event_id in ({','.join(map(str, events))});"
+            f"select event_id || '|' || quantity from usage_events where event_id in ({','.join(map(str, events))});"
         )
         by_event = dict(line.split("|") for line in quantities.splitlines())
         # One session, with each ordinary correction still committed independently.
@@ -395,8 +394,10 @@ class MeteringCorrectionsHandoff(Problem):
     def seed_usage(self, batches, *, starting_at=None):
         # Commit in chunks so billing and finance can apply while core writes the next chunk.
         self.app.core(
-            "\n".join(self.app.usage_batch_sql(min(100, batches - start), 60, starting_at=starting_at)
-                for start in range(0, batches, 100))
+            "\n".join(
+                self.app.usage_batch_sql(min(100, batches - start), 60, starting_at=starting_at)
+                for start in range(0, batches, 100)
+            )
         )
 
     def wait_for_finance(self):
@@ -418,7 +419,9 @@ class MeteringCorrectionsHandoff(Problem):
             app.replay_pubsync(
                 "core",
                 publications_conf(
-                    "r1", "initial feeds", {t: ("insert,update,delete", "") for t in STREAMED},
+                    "r1",
+                    "initial feeds",
+                    {t: ("insert,update,delete", "") for t in STREAMED},
                     quill_period=app.quill_period,
                 ),
             )
@@ -505,10 +508,14 @@ class MeteringCorrectionsHandoff(Problem):
         app.wait_caught_up(app.billing, target=target)
         # This closed statement covers only this earlier set of readings.
         # Live ingest and later history must fall outside its return window.
-        period = tuple(app.core(
-            "select start_at || '|' || (start_at + interval '20 seconds') "
-            "from (select now() - interval '1 day' as start_at) t;"
-        ).strip().split("|"))
+        period = tuple(
+            app.core(
+                "select start_at || '|' || (start_at + interval '20 seconds') "
+                "from (select now() - interval '1 day' as start_at) t;"
+            )
+            .strip()
+            .split("|")
+        )
         self.seed_usage(65, starting_at=f"{sql_literal(period[0])}::timestamptz")
         self.corrections(self.random_plan(6))
         self.wait_for_finance()
@@ -570,7 +577,9 @@ class MeteringCorrectionsHandoff(Problem):
         app.replay_pubsync(
             "core",
             publications_conf(
-                "r3", "customer corrections: withdraw updates and deletes from usage_* (2/2)", DECLARED_CORE,
+                "r3",
+                "customer corrections: withdraw updates and deletes from usage_* (2/2)",
+                DECLARED_CORE,
                 quill_period=app.quill_period,
             ),
         )
@@ -959,14 +968,21 @@ class MeteringCorrectionsHandoff(Problem):
         app.close_statement("quill_usage")
         for case, subject, symptom in (
             (entering, "Usage appears on two statements", "It now appears on both statements."),
-            (leaving, "Reversed usage was not re-issued", "The old charge was reversed, but the new statement is missing it."),
+            (
+                leaving,
+                "Reversed usage was not re-issued",
+                "The old charge was reversed, but the new statement is missing it.",
+            ),
         ):
             self.ticket(
                 "quill",
                 subject,
                 [
-                    (self.staff(), f"We corrected the date for record {case['record']} "
-                     f"from {case['before'][:10]} to {case['after'][:10]}."),
+                    (
+                        self.staff(),
+                        f"We corrected the date for record {case['record']} "
+                        f"from {case['before'][:10]} to {case['after'][:10]}.",
+                    ),
                     (self.customer_name("quill"), symptom),
                 ],
             )
@@ -1033,8 +1049,14 @@ class MeteringCorrectionsHandoff(Problem):
         self.note(failing, f"on-call: {self.staff()}", "Skipped the failing change on our side; feed resumed.")
         app.wait_slot("pell_usage", True)
         app.set_rate(60)
-        return {"pell_gap": [first, last], "pell_gap_reduced": reduced, "pell_skipped_to": skipped_to,
-                "pell_gap_from": gap_from, "pell_stale_through": stale_through, "pell_gap_corrected": sorted(set(self.corrected) - corrected_before - {y})}
+        return {
+            "pell_gap": [first, last],
+            "pell_gap_reduced": reduced,
+            "pell_skipped_to": skipped_to,
+            "pell_gap_from": gap_from,
+            "pell_stale_through": stale_through,
+            "pell_gap_corrected": sorted(set(self.corrected) - corrected_before - {y}),
+        }
 
     def issue_credits(self, week1_events):
         """Support credits the customers who complained about a voided line on an invoice."""
@@ -1122,15 +1144,23 @@ class MeteringCorrectionsHandoff(Problem):
         problems += self.seal_readers(facts, diffs, slots)
         problems += self.seal_statement_return(facts["statement_return"], diffs["pell_usage"])
         problems += self.seal_quill_period(facts["quill_period"])
-        allocation_problems, allocation_values = seal_allocations(app, facts["allocation_returns"], facts["statement_return"])
+        allocation_problems, allocation_values = seal_allocations(
+            app, facts["allocation_returns"], facts["statement_return"]
+        )
         problems += allocation_problems
         quill = facts["quill_period"]
-        pitfalls = {
-            facts[k] for k in ("x", "z", "w", "w2", "v1", "p", "y", "q", "pell_gap_reduced")
-        } | set(facts["pell_voids"]) | set(facts["moved_in"]) | {
-            facts["statement_return"]["genuine"], facts["statement_return"]["missing"],
-            quill["entering"]["event"], quill["leaving"]["event"],
-        } | {row["line"] for key in ("earned", "genuine") for row in facts["allocation_returns"].get(key, [])}
+        pitfalls = (
+            {facts[k] for k in ("x", "z", "w", "w2", "v1", "p", "y", "q", "pell_gap_reduced")}
+            | set(facts["pell_voids"])
+            | set(facts["moved_in"])
+            | {
+                facts["statement_return"]["genuine"],
+                facts["statement_return"]["missing"],
+                quill["entering"]["event"],
+                quill["leaving"]["event"],
+            }
+            | {row["line"] for key in ("earned", "genuine") for row in facts["allocation_returns"].get(key, [])}
+        )
         problems += complaints.ComplaintReplay(self).seal(facts["complaints"], pitfalls)
         held = {
             int(e)
@@ -1184,7 +1214,9 @@ class MeteringCorrectionsHandoff(Problem):
 
         def save_reader_snapshot(db):
             truth = statement_truth(app, CUSTOMER_DATABASES[db], owners)
-            rows = app.customer(db, f"""
+            rows = app.customer(
+                db,
+                f"""
                 create schema if not exists handoff;
                 drop table if exists handoff.sealed;
                 create table handoff.sealed as
@@ -1192,9 +1224,11 @@ class MeteringCorrectionsHandoff(Problem):
                 where kind = 'line' and not exists (select 1 from statement_lines r
                                                    where r.line_id = s.line_id and r.kind = 'reversal');
                 select event_id || '|' || line_id || '|' || booking from handoff.sealed;
-            """)
+            """,
+            )
             wrong = [
-                line for event, line, booking in (row.split("|", 2) for row in rows.splitlines())
+                line
+                for event, line, booking in (row.split("|", 2) for row in rows.splitlines())
                 if truth.get(int(event)) != booking
             ]
             if wrong:
@@ -1202,10 +1236,13 @@ class MeteringCorrectionsHandoff(Problem):
 
         with ThreadPoolExecutor(max_workers=len(CUSTOMER_DATABASES)) as pool:
             list(pool.map(save_reader_snapshot, CUSTOMER_DATABASES))
-        signed = app.rows(lambda q: app.core(q, database="support"), """
+        signed = app.rows(
+            lambda q: app.core(q, database="support"),
+            """
             select distinct jsonb_build_object('account', account, 'ref', return_ref, 'digest', statement_digest)
             from statement_return_inbox;
-        """)
+        """,
+        )
         handoff = app.core("select now();").strip()
         app.set_rate(60)
         return problems, {
@@ -1293,7 +1330,8 @@ class MeteringCorrectionsHandoff(Problem):
             f"from usage_events where event_id in ({events}) order by billing_period;",
         )
         if [(r["event"], r["period"]) for r in held] != [
-            (entering["event"], entering["from_period"]), (entering["event"], entering["to_period"])
+            (entering["event"], entering["from_period"]),
+            (entering["event"], entering["to_period"]),
         ]:
             return [f"Quill did not duplicate the incoming row and lose the outgoing row: {held}"]
         booked = app.rows(
@@ -1304,10 +1342,12 @@ class MeteringCorrectionsHandoff(Problem):
         old = [r for r in booked if r["event"] == leaving["event"]]
         active = [r for r in booked if r["event"] == entering["event"]]
         if (
-            len(old) != 2 or {r["kind"] for r in old} != {"line", "reversal"}
+            len(old) != 2
+            or {r["kind"] for r in old} != {"line", "reversal"}
             or {r["period"] for r in old} != {leaving["from_period"]}
             or len({r["line"] for r in old}) != 1
-            or len(active) != 2 or any(r["kind"] != "line" for r in active)
+            or len(active) != 2
+            or any(r["kind"] != "line" for r in active)
             or {r["line"] for r in active} != {r["line"] for r in held}
         ):
             return [f"Quill's statement did not book both copies and reverse only the outgoing row: {booked}"]
@@ -1334,7 +1374,13 @@ class MeteringCorrectionsHandoff(Problem):
             f"where waived_by_return = {ref} order by line_id;",
         )
         expected = [
-            {"line": event, "source": returned["ref"], "reason": "omitted from statement return", "account": "pell", "open": True}
+            {
+                "line": event,
+                "source": returned["ref"],
+                "reason": "omitted from statement return",
+                "account": "pell",
+                "open": True,
+            }
             for event in sorted((genuine, missing))
         ]
         if waivers != expected:
@@ -1353,7 +1399,9 @@ class MeteringCorrectionsHandoff(Problem):
         if duplicate != "t":
             problems.append("the first statement return was not imported with an identical retry still queued")
         if not problems:
-            print("Statement return sealed: disputed charge booked at Pell, moved charge missing, both waived, retry queued.")
+            print(
+                "Statement return sealed: disputed charge booked at Pell, moved charge missing, both waived, retry queued."
+            )
         return problems
 
     def seal_readers(self, facts, diffs, slots):
@@ -1409,9 +1457,11 @@ class MeteringCorrectionsHandoff(Problem):
         app = self.app
         ready = {
             int(row["event_id"])
-            for file in app.rows(lambda q: app.customer("pell_usage", q),
-                                 "select rows from extract_files e where status = 'ready' and not exists "
-                                 "(select 1 from loaded_files l where l.file_id = e.file_id);")
+            for file in app.rows(
+                lambda q: app.customer("pell_usage", q),
+                "select rows from extract_files e where status = 'ready' and not exists "
+                "(select 1 from loaded_files l where l.file_id = e.file_id);",
+            )
             for row in file
         }
         last = facts["pell_gap"][1]
@@ -1419,7 +1469,7 @@ class MeteringCorrectionsHandoff(Problem):
         classes = {
             # The slot advance skipped whole transactions: rows inserted or corrected while the feed was stopped.
             "advance_granularity": {e for e in pell["missing"] if facts["pell_gap_from"] < e <= last}
-                                   | (set(facts["pell_gap_corrected"]) & diffs),
+            | (set(facts["pell_gap_corrected"]) & diffs),
             # A delivered file Pell's loader will delete and reinsert tonight.
             "loader_rebook": ready,
             # Settled only by what Pell's earlier signed return said.
@@ -1428,17 +1478,24 @@ class MeteringCorrectionsHandoff(Problem):
         classed = set().union(*classes.values())
         stale = set()
         if diffs:
-            stale = {int(e) for e in app.core(
-                "select event_id from usage_corrections where event_id in (" + ",".join(map(str, sorted(diffs)))
-                + f") group by event_id having max(correction_id) <= {facts['pell_stale_through']};").split()}
+            stale = {
+                int(e)
+                for e in app.core(
+                    "select event_id from usage_corrections where event_id in ("
+                    + ",".join(map(str, sorted(diffs)))
+                    + f") group by event_id having max(correction_id) <= {facts['pell_stale_through']};"
+                ).split()
+            }
         base = stale - classed
         residual = (diffs | ready) - base
         problems = [f"Pell residual {e} is in no class" for e in sorted(residual - classed)]
         overlap = sorted(e for e in residual if sum(e in events for events in classes.values()) > 1)
         facts["pell_base"] = sorted(base)
         facts["pell_classes"] = {name: sorted(events & residual) for name, events in classes.items()}
-        print(f"Pell residual classes: { {k: len(v) for k, v in facts['pell_classes'].items()} }, "
-              f"in two or more: {overlap}, base re-send population: {len(base)}")
+        print(
+            f"Pell residual classes: { {k: len(v) for k, v in facts['pell_classes'].items()} }, "
+            f"in two or more: {overlap}, base re-send population: {len(base)}"
+        )
         return problems[:8]
 
     def save_state(self):

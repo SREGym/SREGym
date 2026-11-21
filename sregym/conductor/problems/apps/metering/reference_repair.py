@@ -307,7 +307,9 @@ def repair_complaints(app, state, wrong=()):
                 f"select before->>'occurred_at' from usage_corrections where event_id = {batch['redate']} "
                 f"and kind = 'redate' and batch = {sql_literal(batch['ticket'])};"
             ).strip()
-            app.core(f"select correct_usage({batch['redate']}, 'redate', {sql_literal(before)}, 'reverted', 'reference');")
+            app.core(
+                f"select correct_usage({batch['redate']}, 'redate', {sql_literal(before)}, 'reverted', 'reference');"
+            )
 
 
 def skipped_items(state, database, wrong):
@@ -323,10 +325,17 @@ def delete_insert(app, declared, tenant, database, state, wrong):
     batch = complaint(state, database)
     if batch and "delete_insert" in wrong:
         rows = ids(batch["rights"])
-        app.core(transaction(declared, tenant, "", (
-            f"update usage_events set tenant_id = {sql_literal(away_from(tenant))} where event_id in ({rows});"
-            f"update usage_events set tenant_id = {sql_literal(tenant)} where event_id in ({rows});"
-        )))
+        app.core(
+            transaction(
+                declared,
+                tenant,
+                "",
+                (
+                    f"update usage_events set tenant_id = {sql_literal(away_from(tenant))} where event_id in ({rows});"
+                    f"update usage_events set tenant_id = {sql_literal(tenant)} where event_id in ({rows});"
+                ),
+            )
+        )
         wait_confirmed(app, database, lsn(app), 120)
 
 
@@ -355,11 +364,14 @@ def repair_quill(app, declared, state, wrong):
             f"select before->>'occurred_at' from usage_corrections where event_id = {event} and kind = 'redate' "
             f"and batch = {sql_literal(batch['ticket'])};"
         ).strip()
-        app.core(transaction(
-            declared, "quill",
-            f"update usage_events set occurred_at = {sql_literal(before)} where event_id = {event};",
-            f"update usage_events set occurred_at = {sql_literal(batch['redate_to'])} where event_id = {event};",
-        ))
+        app.core(
+            transaction(
+                declared,
+                "quill",
+                f"update usage_events set occurred_at = {sql_literal(before)} where event_id = {event};",
+                f"update usage_events set occurred_at = {sql_literal(batch['redate_to'])} where event_id = {event};",
+            )
+        )
     delete_insert(app, declared, "quill", QUILL, state, wrong)
 
     def redate(case, date):
@@ -569,19 +581,23 @@ def repair_allocation_returns(app, allocation, wrong):
         revocations += allocation["genuine"]
     if "allocation_revoke_moved" in wrong:
         revocations += [row for row in allocation["genuine"] if row["moved"]]
-    app.finance("\n".join(
-        f"select revoke_statement_waiver({sql_literal(row['account'])}, {sql_literal(row['ref'])}, "
-        f"{row['line']}, {sql_literal(row['ticket'])});"
-        for row in revocations
-    ))
+    app.finance(
+        "\n".join(
+            f"select revoke_statement_waiver({sql_literal(row['account'])}, {sql_literal(row['ref'])}, "
+            f"{row['line']}, {sql_literal(row['ticket'])});"
+            for row in revocations
+        )
+    )
 
 
 def import_eligible_only(app):
     """Wrong repair: the import job takes only returns filed at the close's eligible revision and holds the rest."""
     data = json.loads(app.command("get", "configmap", "finance-jobs", "-o", "json"))["data"]
     script = data["statement-return-import.sh"]
-    held = ("from statement_return_inbox i where imported_at is null and (close_ref is null or batch_revision = "
-            "(select eligible_revision from allocation_closes c where c.close_ref = i.close_ref))")
+    held = (
+        "from statement_return_inbox i where imported_at is null and (close_ref is null or batch_revision = "
+        "(select eligible_revision from allocation_closes c where c.close_ref = i.close_ref))"
+    )
     patched = script.replace("from statement_return_inbox where imported_at is null", held)
     if patched == script:
         raise RuntimeError("statement-return-import.sh no longer has the queue query")
