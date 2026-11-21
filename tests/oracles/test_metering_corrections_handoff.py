@@ -1,6 +1,6 @@
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -241,6 +241,25 @@ def test_database_readiness_retries_a_timed_out_probe(monkeypatch):
     monkeypatch.setattr(application.time, "sleep", lambda _: None)
     application.MeteringApplication.wait_pod_ready(app, "core-0")
     assert app.psql.call_count == 2
+
+
+def test_catalog_change_writer_can_outlive_both_setup_waits(monkeypatch):
+    from sregym.service.apps.metering import application
+
+    change = Mock()
+    run = Mock(return_value="t")
+    executor = MagicMock()
+    pool = executor.return_value.__enter__.return_value
+    writer = pool.submit.return_value
+    writer.done.return_value = False
+    writer.result.return_value = "0/5"
+    monkeypatch.setattr(application, "ThreadPoolExecutor", executor)
+
+    assert application.MeteringApplication.change_while_writing(
+        SimpleNamespace(), run, "writer", "select 1;", "select 1", change
+    ) == "0/5"
+    assert pool.submit.call_args.kwargs["timeout"] > 2 * application.CATALOG_CHANGE_TIMEOUT
+    change.assert_called_once()
 
 
 def test_nightly_extracts_runs_with_only_larkspur():

@@ -32,6 +32,7 @@ OLD_IMAGE = "postgres:17.4"
 NEW_IMAGE = "postgres:17.6"
 CUSTOMER_IMAGE = "postgres:17.6-bookworm"
 STORAGE_CLASS = "openebs-hostpath"
+CATALOG_CHANGE_TIMEOUT = 300
 PRICES = {"api_calls": "0.002", "tokens_k": "0.0150", "storage_gb_h": "0.0400"}
 COMMITTED_DISCOUNTS = {"quill": 25, "hollis": 15}
 
@@ -1098,7 +1099,7 @@ begin;
 set local application_name = {sql_literal(writer_name)};
 {write}
 do $$
-declare deadline timestamptz := clock_timestamp() + interval '90 seconds';
+declare deadline timestamptz := clock_timestamp() + make_interval(secs => {CATALOG_CHANGE_TIMEOUT});
 begin
     while not exists ({released}) loop
         if clock_timestamp() > deadline then
@@ -1111,12 +1112,22 @@ end $$;
 commit;
 select pg_current_wal_lsn();
 """,
+                timeout=2 * CATALOG_CHANGE_TIMEOUT + 120,
             )
+
+            def writer_result():
+                try:
+                    return writer.result()
+                except subprocess.CalledProcessError as exc:
+                    if exc.stderr:
+                        exc.add_note(exc.stderr.strip())
+                    raise
+
             # This statement starts only after the writer's INSERT or UPDATE has finished.
-            deadline = time.monotonic() + 90
+            deadline = time.monotonic() + CATALOG_CHANGE_TIMEOUT
             while True:
                 if writer.done():
-                    writer.result()
+                    writer_result()
                     raise RuntimeError(f"{writer_name} committed before the catalog change")
                 if run(
                     "select exists (select 1 from pg_stat_activity "
@@ -1128,7 +1139,7 @@ select pg_current_wal_lsn();
                     raise TimeoutError(f"{writer_name} did not finish its first write")
                 time.sleep(0.2)
             change()
-            return writer.result().splitlines()[-1]
+            return writer_result().splitlines()[-1]
 
     def slot_lsns(self, run=None):
         run = run or self.core
