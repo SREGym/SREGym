@@ -366,10 +366,20 @@ def test_reconnect_positions_in_each_readers_own_batch_leave_the_same_evidence()
     assert evidence(evidence_app()) == []
 
 
-def test_a_line_only_the_skipped_reader_shows_fails_the_comparison():
+def test_a_debug_line_from_the_skipped_reader_fails():
     extra = CORE_LOG + ("2026-11-21 01:00:01.000 UTC [20] DEBUG:  failed to increase restart lsn: "
                         "proposed 0/80, after 0/80, current candidate 0/80, current after 0/80, flushed up to 0/180\n")
-    assert any("never shows" in p for p in evidence(evidence_app(log=extra)))
+    assert any("quill_usage lines that name the remedy" in p for p in evidence(evidence_app(log=extra)))
+
+
+def test_generic_restart_lines_on_one_reader_only_still_pass():
+    extra = CORE_LOG + "2026-11-21 01:00:01.000 UTC [20] DETAIL:  Logical decoding will begin using saved snapshot.\n"
+    assert evidence(evidence_app(log=extra)) == []
+
+
+def test_a_reader_without_reconnect_lines_fails():
+    quiet = "\n".join(l for l in CORE_LOG.splitlines() if "[30]" not in l) + "\n"
+    assert any("no reconnect line for larkspur_live" in p for p in evidence(evidence_app(log=quiet)))
 
 
 def test_a_debug_log_level_and_a_mid_transaction_sample_fail():

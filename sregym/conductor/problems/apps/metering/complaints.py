@@ -319,8 +319,8 @@ class ComplaintReplay:
         While a reader is stuck its walsender reports positions the subscriber fed back, and with live ingest
         those can end a record of the reader's own failing transaction. That holds for both remedies, so the
         rule is a comparison: each kept reader position must be a commit end, a running-transactions restart
-        point or a record end of the reader's own batch, each sampled one a commit end or past every batch, and
-        the reconnect lines must have one form whichever remedy cleared the reader.
+        point or a record end of the reader's own batch, and each sampled one a commit end or past every batch.
+        No reader line may be debug-level or name a skip, and every stuck reader keeps reconnect lines.
         """
         app = self.app
         problems = []
@@ -370,21 +370,21 @@ class ComplaintReplay:
             found = set(position_class(p, marks, batches[slot]["xid"]).split("+"))
             if not found & allowed[kind] and not (kind == "sampled" and lsn_value(p) > latest):
                 problems.append(f"{slot} {kind} position {p} is on {'+'.join(sorted(found))}")
-        # Each connection's lines as a multiset of (form, position class), so one extra line fails the match.
+        # SKIP runs only in the subscriber's apply worker (worker.c maybe_start_skipping_changes), so the
+        # publisher has no code path that differs between the remedies. Which generic walsender restart lines a
+        # connection prints (a saved snapshot or not, a restart point that is also a commit end) depends on
+        # timing, not on the remedy, so connections are not matched line by line. What is checked instead is
+        # that the remedy itself leaves nothing on the publisher: no debug-level reader line, no line naming a
+        # skip, and reconnect lines kept for every stuck reader whichever remedy cleared it.
         forms = {slot: {tuple(sorted(template(body, marks, batch["xid"]) for body in connection))
                         for connection in lines.get(slot, [])}
                  for slot, batch in batches.items()}
-        deleted = set().union(*(forms[s] for s, b in batches.items() if b["remedy"] == "local_delete"))
-        reconnects = {c for c in deleted if any("forwarding to" in f or "committing after" in f for f in c)}
-        for slot, batch in batches.items():
-            if batch["remedy"] != "skip":
-                continue
-            if not forms[slot]:
+        for slot in batches:
+            bodies = [body for connection in lines.get(slot, []) for body in connection]
+            if not any("forwarding to" in b or "committing after" in b for b in bodies):
                 problems.append(f"core kept no reconnect line for {slot}")
-            if only := forms[slot] - deleted:
-                problems.append(f"core shows {slot} connections a local-delete reader never shows: {sorted(only)[:2]}")
-            if missing := reconnects - forms[slot]:
-                problems.append(f"{slot} lacks the local-delete reader's reconnect connections: {sorted(missing)[:2]}")
+            if named := [b for b in bodies if b.startswith("DEBUG") or re.search(r"\bskip", b, re.I)]:
+                problems.append(f"core shows {slot} lines that name the remedy: {named[:2]}")
         self.evidence = {"forms": {s: sorted(map(list, f)) for s, f in forms.items()},
                          "positions": sorted((s, k, p, position_class(p, marks, batches[s]["xid"])) for s, k, p in positions)}
         return problems
