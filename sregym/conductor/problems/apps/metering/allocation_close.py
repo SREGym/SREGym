@@ -125,13 +125,13 @@ class AllocationReplay:
             self.app.wait_slot(reconnect, True)
 
     def wait_receipts(self, ref, revision):
-        deadline = time.monotonic() + 25
+        deadline = time.monotonic() + 90
 
         def wait(db):
             query = f"select max(revision) from allocation_receipts where close_ref = {sql_literal(ref)};"
             while self.app.customer(db, query).strip() != str(revision):
                 if time.monotonic() >= deadline:
-                    raise RuntimeError(f"{db} did not receive {ref}/{revision}")
+                    raise TimeoutError(f"{db} did not receive {ref}/{revision}")
                 time.sleep(0.15)
 
         with ThreadPoolExecutor(max_workers=len(READERS)) as pool:
