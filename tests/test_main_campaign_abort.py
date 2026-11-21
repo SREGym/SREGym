@@ -354,7 +354,8 @@ def test_deployment_retries_only_transient_failures(
     ]
 
 
-def test_timed_out_agent_gets_the_normal_exit_reap_grace(monkeypatch, tmp_path):
+@pytest.mark.parametrize("agent_timeout", [-1, 0])
+def test_agent_deadline_and_reap_grace(monkeypatch, tmp_path, agent_timeout):
     benchmark_main = _load_main_module()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
@@ -388,11 +389,23 @@ def test_timed_out_agent_gets_the_normal_exit_reap_grace(monkeypatch, tmp_path):
         finalize_attempt_status=Mock(return_value="incomplete"),
     )
 
-    # A negative budget puts the deadline in the past before the first poll.
-    benchmark_main.driver_loop(conductor, agent_to_run="agent", agent_timeout=-1)
+    def complete_stage(_delay):
+        if hasattr(conductor, "agent_deadline_monotonic"):
+            conductor.submission_stage = "done"
 
-    assert conductor.results["timed_out"] is True
-    assert cleanup_agent.call_args_list == [
-        call("agent", timeout=benchmark_main.AGENT_REAP_GRACE_SECONDS),
-        call("agent"),
-    ]
+    if agent_timeout == 0:
+        benchmark_main.asyncio.sleep.side_effect = complete_stage
+    benchmark_main.driver_loop(conductor, agent_to_run="agent", agent_timeout=agent_timeout)
+
+    if agent_timeout == 0:
+        assert conductor.agent_deadline_monotonic is None
+        assert conductor.agent_timeout_seconds is None
+        assert "timed_out" not in conductor.results
+        assert conductor.submission_stage == "done"
+        assert cleanup_agent.call_args_list == [call("agent")]
+    else:
+        assert conductor.results["timed_out"] is True
+        assert cleanup_agent.call_args_list == [
+            call("agent", timeout=benchmark_main.AGENT_REAP_GRACE_SECONDS),
+            call("agent"),
+        ]

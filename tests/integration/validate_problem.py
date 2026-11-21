@@ -161,6 +161,19 @@ def validate(
 
         # --- Recover the fault ------------------------------------------------
         logger.info("[STAGE] Recovering fault")
+        if getattr(oracle, "validation_requires_fresh_recovery", False):
+            logger.info("The oracle ran routine jobs. Building a fresh world for the reference repair.")
+            conductor.undeploy_app()
+            conductor.kubectl.wait_for_namespace_deletion(problem.namespace)
+            injection_attempted = False
+            problem = registry.get_problem_instance(problem_id)
+            conductor.problem = problem
+            conductor.app = problem.app
+            oracle = problem.mitigation_oracle
+            conductor.deploy_app()
+            oracle.capture_baseline()
+            injection_attempted = True
+            problem.inject_fault()
         problem.recover_fault()
         stages["recover"].status = PASS
         stages["recover"].detail = "recover_fault() completed without error"

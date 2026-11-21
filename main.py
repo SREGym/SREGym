@@ -638,7 +638,7 @@ def driver_loop(
                     attempt=attempt,
                 )
                 agent_proc = None
-                conductor.agent_timeout_seconds = agent_timeout
+                conductor.agent_timeout_seconds = agent_timeout or None
 
                 if conductor.stage_sequence:
                     with _artifact_environment(run):
@@ -668,10 +668,11 @@ def driver_loop(
 
                 timed_out = False
                 agent_start_time = time.monotonic()
-                conductor.agent_deadline_monotonic = agent_start_time + agent_timeout
+                agent_deadline = agent_start_time + agent_timeout if agent_timeout else None
+                conductor.agent_deadline_monotonic = agent_deadline
                 while not abort_campaign_after_attempt and conductor.submission_stage != "done":
                     check_interrupted()
-                    if time.monotonic() > conductor.agent_deadline_monotonic:
+                    if agent_deadline is not None and time.monotonic() > agent_deadline:
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         submission_work = conductor.close_submissions()
@@ -1366,7 +1367,7 @@ if __name__ == "__main__":
         "--agent-timeout",
         type=int,
         default=1800,
-        help="Agent timeout in seconds after deployment (default: 1800)",
+        help="Agent timeout in seconds after deployment (default: 1800; 0 disables the timeout)",
     )
     parser.add_argument(
         "--resume",
