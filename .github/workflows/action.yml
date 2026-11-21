@@ -22,10 +22,9 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # Keep this CLI and tests/sre-ql/qlpack.yml's Python pack compatible.
-    - name: Download CodeQL CLI v2.26.3
+    - name: Download CodeQL CLI v2.27.5
       run: |
-        curl -L https://github.com/github/codeql-cli-binaries/releases/download/v2.26.3/codeql-linux64.zip -o codeql.zip
+        curl --fail -L --retry 3 https://github.com/github/codeql-cli-binaries/releases/download/v2.27.5/codeql-linux64.zip -o codeql.zip
         unzip codeql.zip
         mv codeql /opt/codeql
         echo "/opt/codeql" >> $GITHUB_PATH
@@ -37,10 +36,8 @@ jobs:
     - name: Install CodeQL Packs
       run: |
         cd tests/sre-ql
-        codeql pack install
+        codeql pack ci
         cd ../..
-        # Dependency updates should be reviewed alongside the CLI version.
-        git diff --exit-code -- tests/sre-ql/codeql-pack.lock.yml
 
     - name: Create CodeQL DB
       run: |
@@ -89,7 +86,7 @@ jobs:
       if: success()
       run: |
         if [ -f results.csv ]; then
-          # Count non-warning issues
+          # Count error-level findings from the CSV severity column.
           ERROR_COUNT=$(python3 -c 'import csv; print(sum(row[2] == "error" for row in csv.reader(open("results.csv")) if len(row) > 2))')
           echo "Found $ERROR_COUNT critical issues"
           if [ "$ERROR_COUNT" -gt 0 ]; then

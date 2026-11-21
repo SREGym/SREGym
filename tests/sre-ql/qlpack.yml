@@ -4,5 +4,4 @@ warnOnImplicitThis: false
 name: sre-ql
 version: 0.0.1
 dependencies:
-  # Compatible with the CodeQL CLI v2.26.3 pinned in .github/workflows/action.yml.
-  codeql/python-all: "7.2.3"
+  codeql/python-all: "7.2.10"
