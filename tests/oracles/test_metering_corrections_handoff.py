@@ -316,10 +316,74 @@ def test_failed_transaction_reads_one_origin_with_its_pasted_lines():
     assert complaints.failed_transaction(SUBSCRIBER_LOG, "pg_1") is None
 
 
-def test_inside_is_strict_and_compares_numerically():
-    ranges = [("0/D1A0000", "0/D1A2B30")]
-    assert complaints.inside(["0/D1A0000", "0/D1A2B30", "0/D1A1000", "1/0", "0/FFFF"], ranges) == ["0/D1A1000"]
+def test_lsn_value_compares_numerically():
     assert complaints.lsn_value("1/A") == (1 << 32) + 10
+    assert complaints.lsn_value("0/FFFF") < complaints.lsn_value("0/D1A0000")
+
+
+CORE_LOG = """2026-11-21 00:59:00.000 UTC [10] LOG:  starting logical decoding for slot "quill_usage"
+2026-11-21 01:00:01.000 UTC [20] LOG:  0/100 has been already streamed, forwarding to 0/180
+2026-11-21 01:00:01.000 UTC [20] STATEMENT:  START_REPLICATION SLOT "quill_usage" LOGICAL 0/100 (proto_version '4', origin 'any', publication_names '"usage_quill","corr_quill","open_quill"')
+2026-11-21 01:00:01.000 UTC [20] DETAIL:  Streaming transactions committing after 0/180, reading WAL from 0/80.
+2026-11-21 01:00:02.000 UTC [30] LOG:  0/100 has been already streamed, forwarding to 0/280
+2026-11-21 01:00:02.000 UTC [30] STATEMENT:  START_REPLICATION SLOT "larkspur_live" LOGICAL 0/100 (proto_version '4', origin 'any', publication_names '"usage_larkspur","corr_larkspur"')
+2026-11-21 01:00:02.000 UTC [30] DETAIL:  Streaming transactions committing after 0/280, reading WAL from 0/80.
+2026-11-21 01:00:03.000 UTC [40] LOG:  checkpoint complete: lsn=0/300, redo lsn=0/2F0
+"""
+# Quill's failing batch is xid 7 and Larkspur's xid 8; each reconnect forwards to a record end inside its own.
+WAL = "\n".join([
+    "0/F0|0/100|Transaction|COMMIT|5", "0/100|0/110|Transaction|COMMIT|6", "0/80|0/98|Standby|RUNNING_XACTS|0",
+    "0/170|0/180|Heap|LOCK|7", "0/180|0/1A0|Heap|INSERT|7", "0/1A0|0/1C0|Transaction|COMMIT|7",
+    "0/270|0/280|Heap|LOCK|8", "0/280|0/2A0|Heap|INSERT|8", "0/2A0|0/2C0|Transaction|COMMIT|8",
+    "0/400|0/420|Transaction|COMMIT|9",
+])
+
+
+def evidence_app(log=CORE_LOG, level="warning|default", sampled=None):
+    sampled = sampled or [{"slot": "quill_usage", "restart": "0/80", "confirmed": "0/420"},
+                          {"slot": "larkspur_live", "restart": "0/80", "confirmed": "0/500"}]
+    core = Mock(side_effect=lambda q, **_: level if "log_min_messages" in q else WAL)
+    return SimpleNamespace(core=core, command=Mock(return_value=log), rows=Mock(return_value=[dict(r) for r in sampled]))
+
+
+BATCHES = {
+    "quill_usage": {"remedy": "skip", "since": "2026-11-21 01:00:00.000", "xid": 7, "finish": "0/1A0"},
+    "larkspur_live": {"remedy": "local_delete", "since": "2026-11-21 01:00:00.000", "xid": 8, "finish": "0/2A0"},
+}
+
+
+def evidence(app):
+    return complaints.ComplaintReplay(SimpleNamespace(app=app)).publisher_evidence(BATCHES)
+
+
+def test_reader_lines_groups_connections_after_the_batch_by_slot():
+    lines = complaints.reader_lines(CORE_LOG, "2026-11-21 01:00:00.000")
+    assert sorted(lines) == ["larkspur_live", "quill_usage"]
+    assert [len(c) for c in lines["quill_usage"]] == [3]
+
+
+def test_reconnect_positions_in_each_readers_own_batch_leave_the_same_evidence():
+    assert evidence(evidence_app()) == []
+
+
+def test_a_line_only_the_skipped_reader_shows_fails_the_comparison():
+    extra = CORE_LOG + ("2026-11-21 01:00:01.000 UTC [20] DEBUG:  failed to increase restart lsn: "
+                        "proposed 0/80, after 0/80, current candidate 0/80, current after 0/80, flushed up to 0/180\n")
+    assert any("never shows" in p for p in evidence(evidence_app(log=extra)))
+
+
+def test_a_debug_log_level_and_a_mid_transaction_sample_fail():
+    sampled = [{"slot": "quill_usage", "restart": "0/80", "confirmed": "0/180"},
+               {"slot": "larkspur_live", "restart": "0/80", "confirmed": "0/500"}]
+    problems = evidence(evidence_app(level="debug1|configuration file", sampled=sampled))
+    assert any("log_min_messages" in p for p in problems)
+    assert any("quill_usage sampled position 0/180" in p for p in problems)
+
+
+def test_a_logged_position_inside_another_transaction_fails():
+    moved = CORE_LOG.replace("forwarding to 0/180", "forwarding to 0/280")
+    assert any("quill_usage progress position 0/280 is on other_txn" in p
+               for p in evidence(evidence_app(log=moved)))
 
 
 def oracle_with(truth, rows):
@@ -354,3 +418,74 @@ def test_assume_applied_leaves_out_only_a_skipped_batch():
     assert reference_repair.skipped_items(state, "quill_usage", ("assume_applied",)) == {1, 2, 3}
     assert reference_repair.skipped_items(state, "quill_usage", ()) == set()
     assert reference_repair.skipped_items(state, "larkspur_live", ("assume_applied",)) == set()
+
+
+# ------------------------------------------------------------ v6 ordinary closes and Pell classes
+from sregym.conductor.problems.apps.metering import allocation_close  # noqa: E402
+
+
+def test_ordinary_closes_stagger_filings_and_leave_nineteen_of_twenty_eight_returns_off_eligible():
+    plans = [allocation_close.noise_plan(i) for i in range(24)]
+    assert all(set(plan) == {3} for plan in plans[::6])
+    pending = [(rev, 3) for i in allocation_close.PENDING for rev in plans[i]]
+    pending += [(rev, 6) for rev in allocation_close.FILED_REVISIONS]
+    assert len(pending) == 28 and sum(rev != eligible for rev, eligible in pending) == 19
+
+
+def returns_oracle(deliveries, waived=()):
+    oracle = MeteringOracle.__new__(MeteringOracle)
+    state = {"allocation_returns": {
+        "close": "AR-25", "earned": [{"ref": "AR-25-pell", "line": 1, "account": "pell", "amount": 5}],
+        "genuine": [{"ref": "AR-20-pell", "line": 2, "account": "pell"}],
+        "pending": [{"ref": "AR-20-pell", "close": "AR-20", "account": "pell", "revision": 2}],
+    }}
+    decisions = [{"line": 1, "account": "pell", "waiver": None, "charges": 5, "items": 1, "billed_account": "pell"},
+                 {"line": 2, "account": "pell", "waiver": "AR-20-pell", "charges": 0, "items": 0, "billed_account": None}]
+    finance = Mock(return_value="")
+    app = SimpleNamespace(core=Mock(return_value=""), finance=finance)
+    app.rows = lambda run, q: deliveries if run is not finance else (
+        list(waived) if "waived_by_return in" in q else decisions)
+    oracle.problem = SimpleNamespace(app=app, load_state=lambda: state)
+    oracle.state = lambda: state
+    oracle.fail = lambda reason, **detail: {"reason": reason, "detail": detail}
+    return oracle
+
+
+def test_every_pending_close_must_be_imported_with_its_waivers_unchanged():
+    done = [{"ref": "AR-25-pell", "retried": True, "pending": False, "acknowledged": False},
+            {"ref": "AR-20-pell", "retried": True, "pending": False, "acknowledged": False}]
+    assert returns_oracle(done).check_allocation_returns(10) == []
+    held = [done[0], {**done[1], "pending": True}]
+    assert [f["detail"] for f in returns_oracle(held).check_allocation_returns(10)] == [{"returns": ["AR-20-pell"]}]
+    extra = [{"line": 3, "waiver": "AR-20-pell"}, {"line": 2, "waiver": "AR-20-pell"}]
+    assert [f["detail"]["event"] for f in returns_oracle(done, extra).check_allocation_returns(10)] == [3]
+
+
+def test_revision_filter_holds_off_eligible_returns_in_the_import_query():
+    script = "\\copy (select delivery_id from statement_return_inbox where imported_at is null order by delivery_id) to stdout"
+    data = {"statement-return-import.sh": script, "invoice-run.sh": "x"}
+    applied = []
+    app = SimpleNamespace(command=Mock(return_value=__import__("json").dumps({"data": data})),
+                          config_map=lambda name, files: (name, files), apply_documents=applied.extend)
+    reference_repair.import_eligible_only(app)
+    name, files = applied[0]
+    assert name == "finance-jobs" and files["invoice-run.sh"] == "x"
+    assert "batch_revision = (select eligible_revision" in files["statement-return-import.sh"]
+
+
+def test_pell_residuals_each_fall_in_exactly_one_class():
+    from sregym.conductor.problems.apps.metering.corrections_handoff import MeteringCorrectionsHandoff
+
+    files = [[{"event_id": 30}, {"event_id": 31}]]
+    problem = MeteringCorrectionsHandoff.__new__(MeteringCorrectionsHandoff)
+    problem.app = SimpleNamespace(customer=Mock(return_value=""), rows=lambda run, q: files)
+    facts = {"pell_gap": [100, 200], "pell_gap_from": 90, "pell_gap_corrected": [40],
+             "statement_return": {"genuine": 50, "missing": 51}}
+    pell = {"extra": [30], "missing": [95, 150, 51], "changed": [40, 50]}
+    assert problem.seal_pell_classes(facts, pell) == []
+    assert facts["pell_classes"]["advance_granularity"] == [40, 95, 150]
+    pell["changed"].append(60)
+    assert problem.seal_pell_classes(facts, pell) == ["Pell residual 60 is in no class"]
+    facts["pell_gap_corrected"].append(30)
+    pell["changed"].append(30)
+    assert "Pell residual 30 is in ['advance_granularity', 'loader_rebook']" in problem.seal_pell_classes(facts, pell)

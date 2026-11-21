@@ -609,7 +609,9 @@ class MeteringOracle(Oracle):
         allocation = self.state().get("allocation_returns")
         if not allocation:
             return []
-        close = sql_literal(allocation["close"])
+        # Every close whose returns were still unacknowledged at the handoff: the incident and the last six.
+        pending = allocation.get("pending", [])
+        closes = ", ".join(map(sql_literal, sorted({allocation["close"], *(row["close"] for row in pending)})))
         later = delivery_boundary if delivery_boundary is not None else 0
         deliveries = app.rows(
             lambda q: app.core(q, database="support"),
@@ -619,11 +621,11 @@ class MeteringOracle(Oracle):
                                      bool_or(a.acknowledged_at is not null))
             from statement_return_inbox i
             left join statement_return_acknowledgements a using (account, return_ref)
-            where i.close_ref = {close} group by i.return_ref;
+            where i.close_ref in ({closes}) group by i.return_ref;
             """,
         )
         sent = {row["ref"] for row in deliveries if not row["pending"] and (row["retried"] or row["acknowledged"])}
-        expected_refs = {row["ref"] for row in allocation["earned"]}
+        expected_refs = {row["ref"] for row in allocation["earned"]} | {row["ref"] for row in pending}
         failures = []
         if missing := expected_refs - sent:
             failures.append(self.fail("statement_return_not_imported", returns=sorted(missing)))
@@ -641,6 +643,14 @@ class MeteringOracle(Oracle):
             group by l.line_id;
         """)
         by_line = {row["line"]: row for row in decisions}
+        if pending:
+            genuine_lines = {row["line"] for row in genuine}
+            waived = app.rows(app.finance, "select json_build_object('line', line_id, 'waiver', waived_by_return) "
+                              "from ledger_lines where waived_by_return in ("
+                              + ", ".join(sql_literal(row["ref"]) for row in pending) + ");")
+            for row in waived:
+                if row["line"] not in genuine_lines:
+                    failures.append(self.fail("statement_return_waiver_wrong", event=row["line"], decision=row))
         for row in earned + genuine:
             actual = by_line.get(row["line"])
             expected = (row["account"], row.get("amount"), None, row["account"], 1) if "amount" in row else (

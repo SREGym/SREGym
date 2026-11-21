@@ -62,9 +62,53 @@ def failed_transaction(log, origin):
     return found
 
 
-def inside(positions, ranges):
-    """Positions strictly inside any (start, finish) range of a skipped transaction."""
-    return sorted({p for p in positions for start, finish in ranges if lsn_value(start) < lsn_value(p) < lsn_value(finish)})
+LOG_LINE = re.compile(r"^(?P<ts>\S+ \S+) \S+ \[(?P<pid>\d+)\] (?P<body>.*)$")
+SLOT_NAME = re.compile(r'(?:START_REPLICATION SLOT|for slot) "(?P<slot>[^"]+)"')
+#: Reader positions that report progress (a commit the reader has applied) and ones that restart decoding.
+PROGRESS = {"confirmed", "write", "flush", "replay"}
+RESTART = {"restart"}
+
+
+def reader_lines(log, since):
+    """Core log lines of every walsender connection first seen at or after `since`: slot -> one list per connection."""
+    by_pid, slot_of, first = {}, {}, {}
+    for line in log.splitlines():
+        match = LOG_LINE.match(line)
+        if not match:
+            continue
+        pid = match["pid"]
+        first.setdefault(pid, match["ts"])
+        by_pid.setdefault(pid, []).append(match["body"])
+        if found := SLOT_NAME.search(match["body"]):
+            slot_of[pid] = found["slot"]
+    lines = {}
+    for pid, slot in slot_of.items():
+        if first[pid] >= since:
+            lines.setdefault(slot, []).append(by_pid[pid])
+    return lines
+
+
+def position_kind(body, index):
+    """Whether the index-th position in a reader line reports progress or a decoding restart point."""
+    if "reading WAL from" in body:
+        return "progress" if index == 0 else "restart"
+    if "consistent point at" in body or "starting point at" in body:
+        return "restart"
+    return "progress"
+
+
+def position_class(position, marks, xid):
+    """What WAL record a reader position sits on, with the reader's own failing transaction named as such."""
+    found = {("own_batch" if mark == f"record_of_{xid}" else "other_txn" if mark.startswith("record_of_") else mark)
+             for mark in marks.get(position, ())}
+    return "+".join(sorted(found)) or "other"
+
+
+def template(body, marks, xid):
+    """A reader line's form: positions replaced by their class, names, publication lists and numbers blanked."""
+    body = re.sub(r"publication_names '[^']*'", "publication_names 'P'", body)
+    body = LSN.sub(lambda m: f"<{position_class(m.group(0), marks, xid)}>", body)
+    return re.sub(r"\d+", "N", re.sub(r'"[^"]*"', '"S"', body))
 
 
 def name(tenant):
@@ -82,16 +126,16 @@ class ComplaintReplay:
         problem, app = self.problem, self.app
         prior = f"billing_period < DATE {sql_literal(app.quill_period)}"
         planted = {}
-        # Rows rated before the r5 bands only: a re-send must not refresh finance's rate on a window line.
-        legacy = {int(e) for e in app.billing(
-            "select line_id from ledger_lines where rated_at < "
-            "(select released_at from ops.billing_releases where revision = 'r5 rate bands');").split()}
+        # Week two's corrections target earlier usage: the complaints are about week-one events that week two
+        # moved while the stale senders dropped the change. Those lines were rated before the r5 release, so
+        # the rates check and the usage-ownership check stay independent.
+        week_one = f"event_id <= {problem.week_one_last_event}"
         for database, tenant in COMPLAINERS.items():
             held = {int(e) for e in app.customer(database, "select event_id from usage_events;").split()}
             period = prior if tenant == "quill" else "true"
             def pool(owner):
                 return {int(e) for e in app.core(
-                    f"select event_id from usage_events where tenant_id = {sql_literal(owner)} and {period};").split()} & legacy
+                    f"select event_id from usage_events where tenant_id = {sql_literal(owner)} and {period} and {week_one};").split()}
             rights = [problem.choose(pool(problem.rng.choice(DONORS)), f"move into {tenant}") for _ in range(2)]
             for event in rights:
                 problem.correct(None, "move", tenant, event=event)
@@ -113,8 +157,9 @@ class ComplaintReplay:
             planted[database] = {"rights": rights, "stale": stale, "owner": owner, "contract": ticket}
         quill_held = {int(e) for e in app.customer("quill_usage", "select event_id from usage_events;").split()}
         planted["quill_usage"]["redate"] = problem.choose(
-            {int(e) for e in app.core(f"select event_id from usage_events where tenant_id = 'quill' and {prior};").split()}
-            & quill_held & legacy, "Quill timestamp fix")
+            {int(e) for e in app.core(
+                f"select event_id from usage_events where tenant_id = 'quill' and {prior} and {week_one};").split()}
+            & quill_held, "Quill timestamp fix")
         return planted
 
     # --------------------------------------------------------- after 17.6
@@ -172,14 +217,17 @@ class ComplaintReplay:
             payload.append({"event": items["redate"], "kind": "redate", "value": redate_to,
                             "reason": "usage timestamp corrected from the customer's gateway export"})
         problem.corrected.update(p["event"] for p in payload)
-        before = app.core("select pg_current_wal_lsn();").strip()
+        before, since = app.core(
+            "select pg_current_wal_lsn() || '|' || "
+            "to_char(clock_timestamp() at time zone current_setting('log_timezone'), 'YYYY-MM-DD HH24:MI:SS.MS');"
+        ).strip().split("|")
         app.core(
             f"select correct_usage_batch({sql_literal(ticket)}, {sql_literal(json.dumps(payload))}::jsonb, "
             f"{sql_literal(problem.staff())});"
         )
         problem.note(ticket, problem.staff(),
                      f"Re-sent the missing records and restored the ones in your copy to your account (batch {ticket}).")
-        return {**items, "ticket": ticket, "redate_to": redate_to, "lsn_before": before}
+        return {**items, "ticket": ticket, "redate_to": redate_to, "lsn_before": before, "since": since}
 
     def remedy(self, database, batch):
         problem, app = self.problem, self.app
@@ -201,11 +249,7 @@ class ComplaintReplay:
         problem.note(batch["ticket"], problem.customer_name(tenant),
                      f"{words}\n\n{failure['pasted']}\n\nWhat we ran: {command}")
         problem.note(batch["ticket"], problem.staff(), "Thanks, glad it is running again.")
-        start = app.core(
-            f"select min(start_lsn) from pg_get_wal_records_info({sql_literal(batch['lsn_before'])}::pg_lsn, "
-            f"{sql_literal(failure['finish'])}::pg_lsn) where xid = {failure['xid']};"
-        ).strip()
-        return {**batch, **failure, "start": start, "remedy": REMEDIES[database], "command": command}
+        return {**batch, **failure, "remedy": REMEDIES[database], "command": command}
 
     def run(self, planted):
         app = self.app
@@ -264,19 +308,83 @@ class ComplaintReplay:
         vale = batches["ostrava_usage"]["stale"]
         if app.customer("vale_usage", f"select count(*) from usage_events where event_id = {vale};").strip() != "1":
             problems.append(f"vale_usage does not hold its contract row {vale}")
-        ranges = [(b["start"], b["finish"]) for b in batches.values() if b["remedy"] == "skip"]
-        if not all(start for start, _ in ranges):
-            problems.append(f"no start position for a skipped transaction: {ranges}")
-        else:
-            logs = app.command("exec", "core-0", "-c", "postgres", "--", "bash", "-c",
-                               "cat /var/lib/postgresql/data/pgdata/log/*.log", timeout=120)
-            sampled = app.core(
-                "select concat_ws(' ', restart_lsn, confirmed_flush_lsn) from pg_replication_slots "
-                "union all select concat_ws(' ', sent_lsn, write_lsn, flush_lsn, replay_lsn) from pg_stat_replication;"
-            )
-            for source, text in (("core log", logs), ("slot or sender positions", sampled)):
-                if hits := inside(LSN.findall(text), ranges):
-                    problems.append(f"{source} records positions inside a skipped transaction: {hits[:5]}")
+        problems += self.publisher_evidence(batches)
         if not problems:
             print(f"Complaints sealed: {[(b['ticket'], b['remedy']) for b in batches.values()]}")
+        return problems
+
+    def publisher_evidence(self, batches):
+        """Nothing core keeps or shows separates a skipped batch from one applied after a local delete.
+
+        While a reader is stuck its walsender reports positions the subscriber fed back, and with live ingest
+        those can end a record of the reader's own failing transaction. That holds for both remedies, so the
+        rule is a comparison: each kept reader position must be a commit end, a running-transactions restart
+        point or a record end of the reader's own batch, each sampled one a commit end or past every batch, and
+        the reconnect lines must have one form whichever remedy cleared the reader.
+        """
+        app = self.app
+        problems = []
+        level = app.core("select setting || '|' || source from pg_settings where name = 'log_min_messages';").strip()
+        if level != "warning|default":
+            problems.append(f"core log_min_messages is {level}, not the default")
+        since = min(b["since"] for b in batches.values())
+        logs = app.command("exec", "core-0", "-c", "postgres", "--", "bash", "-c",
+                           "cat /var/lib/postgresql/data/pgdata/log/*.log", timeout=120)
+        lines = reader_lines(logs, since)
+        sampled = {}
+        for row in app.rows(app.core, (
+            "select json_build_object('slot', s.slot_name, 'restart', s.restart_lsn::text, "
+            "'confirmed', s.confirmed_flush_lsn::text, 'write', r.write_lsn::text, 'flush', r.flush_lsn::text, "
+            "'replay', r.replay_lsn::text) from pg_replication_slots s "
+            "left join pg_stat_replication r on r.pid = s.active_pid where s.slot_type = 'logical';")):
+            slot = row.pop("slot")
+            sampled[slot] = {k: v for k, v in row.items() if v}
+        positions = {(slot, kind, p) for slot in batches for connection in lines.get(slot, []) for body in connection
+                     for index, p in enumerate(LSN.findall(body)) for kind in [position_kind(body, index)]}
+        positions |= {(slot, "sampled" if field in PROGRESS else "restart", p)
+                      for slot in batches for field, p in sampled.get(slot, {}).items()}
+        if not positions:
+            return ["core kept no reader position for the complaint readers"]
+        start = min((p for _, _, p in positions), key=lsn_value)
+        xids = ",".join(str(b["xid"]) for b in batches.values())
+        marks = {}
+        for row in app.core(
+            f"select start_lsn || '|' || end_lsn || '|' || resource_manager || '|' || record_type || '|' || xid "
+            # Start one WAL page early so the record ending at the oldest position is read too.
+            f"from pg_get_wal_records_info({sql_literal(start)}::pg_lsn - 8192, pg_current_wal_lsn()) where "
+            "resource_manager = 'Transaction' and record_type like 'COMMIT%' or "
+            f"resource_manager = 'Standby' and record_type = 'RUNNING_XACTS' or xid in ({xids});"
+        ).split():
+            begin, end, manager, kind, xid = row.split("|")
+            if kind.startswith("COMMIT"):
+                marks.setdefault(begin, set()).add("commit_start")
+                marks.setdefault(end, set()).add("commit_end")
+            elif kind == "RUNNING_XACTS":
+                marks.setdefault(begin, set()).add("running_xacts")
+            if manager != "Transaction" and manager != "Standby":
+                marks.setdefault(end, set()).add(f"record_of_{xid}")
+        # A streaming reader's fed-back position can be the sender's flushed WAL end after a keepalive.
+        latest = max(lsn_value(b["finish"]) for b in batches.values())
+        allowed = {"progress": {"commit_end", "own_batch"}, "restart": {"running_xacts"}, "sampled": {"commit_end"}}
+        for slot, kind, p in sorted(positions):
+            found = set(position_class(p, marks, batches[slot]["xid"]).split("+"))
+            if not found & allowed[kind] and not (kind == "sampled" and lsn_value(p) > latest):
+                problems.append(f"{slot} {kind} position {p} is on {'+'.join(sorted(found))}")
+        # Each connection's lines as a multiset of (form, position class), so one extra line fails the match.
+        forms = {slot: {tuple(sorted(template(body, marks, batch["xid"]) for body in connection))
+                        for connection in lines.get(slot, [])}
+                 for slot, batch in batches.items()}
+        deleted = set().union(*(forms[s] for s, b in batches.items() if b["remedy"] == "local_delete"))
+        reconnects = {c for c in deleted if any("forwarding to" in f or "committing after" in f for f in c)}
+        for slot, batch in batches.items():
+            if batch["remedy"] != "skip":
+                continue
+            if not forms[slot]:
+                problems.append(f"core kept no reconnect line for {slot}")
+            if only := forms[slot] - deleted:
+                problems.append(f"core shows {slot} connections a local-delete reader never shows: {sorted(only)[:2]}")
+            if missing := reconnects - forms[slot]:
+                problems.append(f"{slot} lacks the local-delete reader's reconnect connections: {sorted(missing)[:2]}")
+        self.evidence = {"forms": {s: sorted(map(list, f)) for s, f in forms.items()},
+                         "positions": sorted((s, k, p, position_class(p, marks, batches[s]["xid"])) for s, k, p in positions)}
         return problems

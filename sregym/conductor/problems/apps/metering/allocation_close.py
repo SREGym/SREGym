@@ -14,6 +14,19 @@ READERS = tuple(ALLOCATION_CUSTOMERS)
 ALLOCATIONS = ("BACD", "CBAD", "DBCA", "ACBD", "ADCB", "ABDC", "CBAD", "ABDC")
 FILED_REVISIONS = (5, 3, 1, 4)
 LOT_TOTALS = dict(zip("ABCD", (47000, 53000, 40000, 60000)))
+#: The last six ordinary closes: imported, still waiting for their acknowledgements at the handoff.
+PENDING = range(18, 24)
+
+
+def noise_plan(i):
+    """The revision each reader (Pell, Quill, Larkspur live, Ostrava) files an ordinary close from; eligible is 3.
+
+    Every one of them returns its eligible lots: the lot that moves away at revision 2 belongs to Quill's
+    temporary hold, and the acceptance-test lot is an agreed dispute.
+    """
+    if i % 6 == 0:
+        return (3, 3, 3, 3)
+    return (2, 3, 1, 1 if i % 2 else 2)
 
 
 def sql_json(rows):
@@ -166,33 +179,47 @@ class AllocationReplay:
             reconnect="pell_usage",
         )
         self.record_ids()
-        self.apply(
-            (batch_sql(ref, 2, self.corrections(ref, 2, {"larkspur": "quill", "test-moved": "pell"}))
-             for ref in self.noise),
-            reconnect="quill_usage",
-        )
-        self.apply(
-            (batch_sql(ref, 3, self.corrections(ref, 3, {"larkspur": "larkspur"})) for ref in self.noise),
-            reconnect="larkspur_live",
-        )
-        self.wait_receipts(self.noise[-1], 3)
-        for ref in self.noise:
-            cutoff = self.windows[ref] + timedelta(hours=24)
-            self.add_close(ref, 3, cutoff, [cutoff - timedelta(minutes=n) for n in (5, 3, 1)])
-            self.dispute(ref, "test-moved", "pell", cutoff, crossed=False, moved=True)
-            self.dispute(ref, "test-local", "ostrava", cutoff, crossed=True, moved=False)
+        plans = {ref: dict(zip(READERS, noise_plan(i))) for i, ref in enumerate(self.noise)}
+        with ExitStack() as sessions:
+            opened = {}
 
-        def file(db):
-            account = ALLOCATION_CUSTOMERS[db]
-            self.app.customer(db, "\n".join(
-                "begin isolation level repeatable read;\n"
-                "select clock_timestamp() as read_at \\gset\n"
-                + self.return_sql(ref, account) + "\ncommit;"
-                for ref in self.noise
-            ))
+            def open_snapshots(revision):
+                # Each reader's statement service reads the closes it files at this revision in one snapshot.
+                self.wait_receipts(self.noise[-1], revision)
+                for db in READERS:
+                    if any(plan[db] == revision for plan in plans.values()):
+                        execute = sessions.enter_context(self.app.customer_session(db))
+                        execute("begin isolation level repeatable read;\n"
+                                "select clock_timestamp() as read_at from allocation_receipts "
+                                f"where close_ref = '{self.noise[-1]}' and revision = {revision} \\gset")
+                        opened[db, revision] = execute
 
-        with ThreadPoolExecutor(max_workers=len(READERS)) as pool:
-            list(pool.map(file, READERS))
+            open_snapshots(1)
+            self.apply(
+                (batch_sql(ref, 2, self.corrections(ref, 2, {"larkspur": "quill", "test-moved": "pell"}))
+                 for ref in self.noise),
+                reconnect="quill_usage",
+            )
+            open_snapshots(2)
+            self.apply(
+                (batch_sql(ref, 3, self.corrections(ref, 3, {"larkspur": "larkspur"})) for ref in self.noise),
+                reconnect="larkspur_live",
+            )
+            open_snapshots(3)
+            for ref in self.noise:
+                cutoff = self.windows[ref] + timedelta(hours=24)
+                self.add_close(ref, 3, cutoff, [cutoff - timedelta(minutes=n) for n in (5, 3, 1)])
+                self.dispute(ref, "test-moved", "pell", cutoff, crossed=False, moved=True)
+                self.dispute(ref, "test-local", "ostrava", cutoff, crossed=True, moved=False)
+
+            def file(db):
+                for (reader, revision), execute in opened.items():
+                    if reader == db:
+                        execute("\n".join(self.return_sql(ref, ALLOCATION_CUSTOMERS[db])
+                                          for ref in self.noise if plans[ref][db] == revision) + "\ncommit;")
+
+            with ThreadPoolExecutor(max_workers=len(READERS)) as pool:
+                list(pool.map(file, READERS))
         self.settle(self.noise, 3)
 
     def incident_close(self):
@@ -269,10 +296,11 @@ class AllocationReplay:
         with ThreadPoolExecutor(max_workers=len(READERS)) as pool:
             list(pool.map(lambda db: self.app.customer(db, "select send_allocation_returns();"), READERS))
         self.app.replay_job("statement-return-import.sh", "finance")
+        pending = [self.noise[i] for i in PENDING]
         self.app.core(
             "insert into statement_return_acknowledgements (account, return_ref) "
             "select account, return_ref from statement_return_inbox where imported_at is not null "
-            f"and close_ref <> '{self.incident}' on conflict do nothing;",
+            f"and close_ref not in ({', '.join(map(sql_literal, [*pending, self.incident]))}) on conflict do nothing;",
             database="support",
         )
         earned = [
@@ -286,6 +314,9 @@ class AllocationReplay:
         return {
             "close": self.incident, "closes": len(self.windows), "earned": earned, "erroneous": erroneous,
             "genuine": self.genuine,
+            "pending": [{"ref": f"{ref}-{account}", "close": ref, "account": account,
+                         "revision": noise_plan(self.noise.index(ref))[ACCOUNTS.index(account)]}
+                        for ref in pending for account in ACCOUNTS],
         }
 
 
@@ -341,6 +372,19 @@ def seal_allocations(app, state, earlier_return):
     actual_cents = {row["account"]: row["cents"] for row in settlements}
     if actual_cents != expected_cents:
         problems.append(f"settlement acknowledgements did not reflect the eligible allocation: {actual_cents}")
+    noise = app.rows(lambda q: app.core(q, database="support"), f"""
+        select json_build_object('ref', i.return_ref, 'revision', max(i.batch_revision),
+                                 'imported', bool_and(i.imported_at is not null), 'acknowledged', bool_or(a.return_ref is not null))
+        from statement_return_inbox i left join statement_return_acknowledgements a using (account, return_ref)
+        where i.close_ref like 'AR-%' and i.close_ref <> {ref} group by i.return_ref;
+    """)
+    pending = {row["ref"]: row["revision"] for row in state["pending"]}
+    staggered = {row["ref"] for row in noise if row["revision"] != 3}
+    if (len(noise) != 4 * (state["closes"] - 1) or not all(row["imported"] for row in noise)
+            or {row["ref"] for row in noise if not row["acknowledged"]} != pending.keys()
+            or any(row["revision"] != pending[row["ref"]] for row in noise if row["ref"] in pending)
+            or not staggered):
+        problems.append(f"ordinary closes did not file staggered and leave the last six unacknowledged: {len(noise)} returns")
     if app.core("select count(*) from ops.allocation_batches where commit_lsn is null;").strip() != "0":
         problems.append("some allocation receipts have no WAL commit position")
     errors = {row["line"] for row in state["erroneous"]}
@@ -354,6 +398,8 @@ def seal_allocations(app, state, earlier_return):
         "earned_lot_dollars": sum(row["amount"] for row in earned.values()),
         "mixed_waiver_dollars": mixed, "earlier_waiver_dollars": prior, "error_share": share,
         "genuine_waivers": len(state["genuine"]), "settlement_cents": actual_cents,
+        "pending_returns": len(pending), "pending_off_eligible": sum(rev != 3 for rev in pending.values()),
+        "staggered_returns": len(staggered),
         "waived_by_account": {
             account: sum(by_line[line]["amount"] for line in errors if by_line.get(line, {}).get("account") == account)
             for account in ("larkspur", "ostrava")

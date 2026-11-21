@@ -489,6 +489,8 @@ class MeteringCorrectionsHandoff(Problem):
             + self.random_plan(5)
         )
         self.wait_for_finance()
+        # Week-one usage: every event billing and finance have seen before the r5 release.
+        self.week_one_last_event = int(app.core("select max(event_id) from usage_events;"))
         missed = {line for line, _account in finance_differences(app)} & set(week1)
         if not missed:
             raise WorldDidNotTake("finance received every week-one ledger change")
@@ -972,6 +974,8 @@ class MeteringCorrectionsHandoff(Problem):
         errors = app.customer(
             "pell_usage", "select apply_error_count from pg_stat_subscription_stats where subname = 'pell_usage';"
         ).strip()
+        gap_from = int(app.core("select max(event_id) from usage_events;").strip())
+        corrected_before = set(self.corrected)
         self.correct_batch("CF-31", [(y, "move", "pell")])
         self.note(review, self.staff(), f"Reverted event {y} back to Pell after the account owner objected.")
         deadline = time.monotonic() + 120
@@ -1021,7 +1025,8 @@ class MeteringCorrectionsHandoff(Problem):
         self.note(failing, f"on-call: {self.staff()}", "Skipped the failing change on our side; feed resumed.")
         app.wait_slot("pell_usage", True)
         app.set_rate(60)
-        return {"pell_gap": [first, last], "pell_gap_reduced": reduced, "pell_skipped_to": skipped_to}
+        return {"pell_gap": [first, last], "pell_gap_reduced": reduced, "pell_skipped_to": skipped_to,
+                "pell_gap_from": gap_from, "pell_gap_corrected": sorted(set(self.corrected) - corrected_before - {y})}
 
     def issue_credits(self, week1_events):
         """Support credits the customers who complained about a voided line on an invoice."""
@@ -1165,6 +1170,7 @@ class MeteringCorrectionsHandoff(Problem):
             == "0"
         ):
             problems.append("no ready correction file waits for Pell's loader")
+        problems += self.seal_pell_classes(facts, diffs["pell_usage"])
         # What each customer copy holds now, beside it, for the statement checks.
         def save_reader_snapshot(db):
             wrong = diffs[db]["extra"] + diffs[db]["changed"]
@@ -1370,6 +1376,35 @@ class MeteringCorrectionsHandoff(Problem):
         if not held or float(held) != float(facts["q_quantity"]):
             problems.append(f"quill_usage holds {held!r} for Q, expected the old quantity {facts['q_quantity']}")
         return problems
+
+    def seal_pell_classes(self, facts, pell):
+        """Every event Pell's repair must settle is in exactly one class, each with its own correct handling."""
+        ready = {
+            int(row["event_id"])
+            for file in self.app.rows(lambda q: self.app.customer("pell_usage", q),
+                                      "select rows from extract_files e where status = 'ready' and not exists "
+                                      "(select 1 from loaded_files l where l.file_id = e.file_id);")
+            for row in file
+        }
+        last = facts["pell_gap"][1]
+        residual = set(pell["extra"]) | set(pell["missing"]) | set(pell["changed"])
+        classes = {
+            # The slot advance skipped whole transactions: rows inserted or corrected while the feed was stopped.
+            "advance_granularity": {e for e in pell["missing"] if facts["pell_gap_from"] < e <= last}
+                                   | (set(facts["pell_gap_corrected"]) & residual),
+            # A delivered file Pell's loader will delete and reinsert tonight.
+            "loader_rebook": ready,
+            # Settled only by what Pell's earlier signed return said.
+            "signed_return": {facts["statement_return"]["genuine"], facts["statement_return"]["missing"]},
+        }
+        problems = []
+        for event in sorted(residual | ready):
+            owners = [name for name, events in classes.items() if event in events]
+            if len(owners) != 1:
+                problems.append(f"Pell residual {event} is in {owners or 'no class'}")
+        facts["pell_classes"] = {name: sorted(events & (residual | ready)) for name, events in classes.items()}
+        print(f"Pell residual classes: { {k: len(v) for k, v in facts['pell_classes'].items()} }")
+        return problems[:8]
 
     def save_state(self):
         body = json.dumps(

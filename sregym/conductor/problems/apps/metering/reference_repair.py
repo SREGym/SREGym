@@ -570,6 +570,18 @@ def repair_allocation_returns(app, allocation, wrong):
     ))
 
 
+def import_eligible_only(app):
+    """Wrong repair: the import job takes only returns filed at the close's eligible revision and holds the rest."""
+    data = json.loads(app.command("get", "configmap", "finance-jobs", "-o", "json"))["data"]
+    script = data["statement-return-import.sh"]
+    held = ("from statement_return_inbox i where imported_at is null and (close_ref is null or batch_revision = "
+            "(select eligible_revision from allocation_closes c where c.close_ref = i.close_ref))")
+    patched = script.replace("from statement_return_inbox where imported_at is null", held)
+    if patched == script:
+        raise RuntimeError("statement-return-import.sh no longer has the queue query")
+    app.apply_documents([app.config_map("finance-jobs", {**data, "statement-return-import.sh": patched})])
+
+
 def repair(problem, wrong=()):
     """The reference repair; `wrong` names deliberate mistakes for testing the grader."""
     app = problem.app
@@ -606,3 +618,5 @@ def repair(problem, wrong=()):
     pell_wrong = (*wrong, "return_revoke_both") if "allocation_revoke_all" in wrong else wrong
     repair_statement_return(app, state["statement_return"], pell_wrong)
     repair_allocation_returns(app, state.get("allocation_returns"), wrong)
+    if "revision_filter" in wrong:
+        import_eligible_only(app)
