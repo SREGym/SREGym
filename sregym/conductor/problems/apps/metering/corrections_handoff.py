@@ -975,6 +975,8 @@ class MeteringCorrectionsHandoff(Problem):
             "pell_usage", "select apply_error_count from pg_stat_subscription_stats where subname = 'pell_usage';"
         ).strip()
         gap_from = int(app.core("select max(event_id) from usage_events;").strip())
+        # Every correction up to here reached Pell's stale or paused sender: the base re-send population.
+        stale_through = int(app.core("select coalesce(max(correction_id), 0) from usage_corrections;").strip())
         corrected_before = set(self.corrected)
         self.correct_batch("CF-31", [(y, "move", "pell")])
         self.note(review, self.staff(), f"Reverted event {y} back to Pell after the account owner objected.")
@@ -1026,7 +1028,7 @@ class MeteringCorrectionsHandoff(Problem):
         app.wait_slot("pell_usage", True)
         app.set_rate(60)
         return {"pell_gap": [first, last], "pell_gap_reduced": reduced, "pell_skipped_to": skipped_to,
-                "pell_gap_from": gap_from, "pell_gap_corrected": sorted(set(self.corrected) - corrected_before - {y})}
+                "pell_gap_from": gap_from, "pell_stale_through": stale_through, "pell_gap_corrected": sorted(set(self.corrected) - corrected_before - {y})}
 
     def issue_credits(self, week1_events):
         """Support credits the customers who complained about a voided line on an invoice."""
@@ -1378,32 +1380,44 @@ class MeteringCorrectionsHandoff(Problem):
         return problems
 
     def seal_pell_classes(self, facts, pell):
-        """Every event Pell's repair must settle is in exactly one class, each with its own correct handling."""
+        """Every event Pell's repair must settle beyond the plain re-send is in at least one class.
+
+        The base population is the changes committed while Pell's sender was stale or paused: the net re-send
+        fixes them, and the reference asserts it does. An event in two classes has two independent reasons.
+        """
+        app = self.app
         ready = {
             int(row["event_id"])
-            for file in self.app.rows(lambda q: self.app.customer("pell_usage", q),
-                                      "select rows from extract_files e where status = 'ready' and not exists "
-                                      "(select 1 from loaded_files l where l.file_id = e.file_id);")
+            for file in app.rows(lambda q: app.customer("pell_usage", q),
+                                 "select rows from extract_files e where status = 'ready' and not exists "
+                                 "(select 1 from loaded_files l where l.file_id = e.file_id);")
             for row in file
         }
         last = facts["pell_gap"][1]
-        residual = set(pell["extra"]) | set(pell["missing"]) | set(pell["changed"])
+        diffs = set(pell["extra"]) | set(pell["missing"]) | set(pell["changed"])
         classes = {
             # The slot advance skipped whole transactions: rows inserted or corrected while the feed was stopped.
             "advance_granularity": {e for e in pell["missing"] if facts["pell_gap_from"] < e <= last}
-                                   | (set(facts["pell_gap_corrected"]) & residual),
+                                   | (set(facts["pell_gap_corrected"]) & diffs),
             # A delivered file Pell's loader will delete and reinsert tonight.
             "loader_rebook": ready,
             # Settled only by what Pell's earlier signed return said.
-            "signed_return": {facts["statement_return"]["genuine"], facts["statement_return"]["missing"]},
+            "signed_return": {facts["statement_return"]["genuine"], facts["statement_return"]["missing"]} & diffs,
         }
-        problems = []
-        for event in sorted(residual | ready):
-            owners = [name for name, events in classes.items() if event in events]
-            if len(owners) != 1:
-                problems.append(f"Pell residual {event} is in {owners or 'no class'}")
-        facts["pell_classes"] = {name: sorted(events & (residual | ready)) for name, events in classes.items()}
-        print(f"Pell residual classes: { {k: len(v) for k, v in facts['pell_classes'].items()} }")
+        classed = set().union(*classes.values())
+        stale = set()
+        if diffs:
+            stale = {int(e) for e in app.core(
+                "select event_id from usage_corrections where event_id in (" + ",".join(map(str, sorted(diffs)))
+                + f") group by event_id having max(correction_id) <= {facts['pell_stale_through']};").split()}
+        base = stale - classed
+        residual = (diffs | ready) - base
+        problems = [f"Pell residual {e} is in no class" for e in sorted(residual - classed)]
+        overlap = sorted(e for e in residual if sum(e in events for events in classes.values()) > 1)
+        facts["pell_base"] = sorted(base)
+        facts["pell_classes"] = {name: sorted(events & residual) for name, events in classes.items()}
+        print(f"Pell residual classes: { {k: len(v) for k, v in facts['pell_classes'].items()} }, "
+              f"in two or more: {overlap}, base re-send population: {len(base)}")
         return problems[:8]
 
     def save_state(self):

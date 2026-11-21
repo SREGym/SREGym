@@ -473,19 +473,19 @@ def test_revision_filter_holds_off_eligible_returns_in_the_import_query():
     assert "batch_revision = (select eligible_revision" in files["statement-return-import.sh"]
 
 
-def test_pell_residuals_each_fall_in_exactly_one_class():
+def test_pell_residuals_beyond_the_stale_window_each_have_a_class():
     from sregym.conductor.problems.apps.metering.corrections_handoff import MeteringCorrectionsHandoff
 
-    files = [[{"event_id": 30}, {"event_id": 31}]]
+    files = [[{"event_id": 30}, {"event_id": 31}, {"event_id": 40}]]
     problem = MeteringCorrectionsHandoff.__new__(MeteringCorrectionsHandoff)
-    problem.app = SimpleNamespace(customer=Mock(return_value=""), rows=lambda run, q: files)
-    facts = {"pell_gap": [100, 200], "pell_gap_from": 90, "pell_gap_corrected": [40],
+    stale = Mock(return_value="70\n30")  # corrected only while Pell's sender was stale or paused
+    problem.app = SimpleNamespace(customer=Mock(return_value=""), core=stale, rows=lambda run, q: files)
+    facts = {"pell_gap": [100, 200], "pell_gap_from": 90, "pell_gap_corrected": [40], "pell_stale_through": 5,
              "statement_return": {"genuine": 50, "missing": 51}}
-    pell = {"extra": [30], "missing": [95, 150, 51], "changed": [40, 50]}
+    pell = {"extra": [30, 70], "missing": [95, 150, 51], "changed": [40]}
     assert problem.seal_pell_classes(facts, pell) == []
+    assert facts["pell_base"] == [70]  # 30 is stale too, but its delivered file keeps it a residual
     assert facts["pell_classes"]["advance_granularity"] == [40, 95, 150]
+    assert facts["pell_classes"]["loader_rebook"] == [30, 31, 40]
     pell["changed"].append(60)
     assert problem.seal_pell_classes(facts, pell) == ["Pell residual 60 is in no class"]
-    facts["pell_gap_corrected"].append(30)
-    pell["changed"].append(30)
-    assert "Pell residual 30 is in ['advance_granularity', 'loader_rebook']" in problem.seal_pell_classes(facts, pell)

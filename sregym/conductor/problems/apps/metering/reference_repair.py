@@ -280,7 +280,13 @@ def repair_pell(app, declared, state, wrong=()):
         digest = copy_digest(app, PELL, "pell")
         skip |= {e for e in digest["missing"] if first < e <= last} | {state["pell_gap_reduced"]}
     send_net(app, declared, "pell", PELL, skip=skip)
-    return {event: offer_alone(app, declared, "pell", PELL, event) for event in state["moved_in"]}
+    outcomes = {event: offer_alone(app, declared, "pell", PELL, event) for event in state["moved_in"]}
+    if not wrong:
+        # The seal leaves the stale-window changes out of Pell's residual classes: the re-sends must fix them.
+        digest = copy_digest(app, PELL, "pell")
+        if left := set(state.get("pell_base", ())) & {e for kind in digest.values() for e in kind}:
+            raise RuntimeError(f"the net re-send left Pell's base events {sorted(left)} wrong")
+    return outcomes
 
 
 def complaint(state, database):
