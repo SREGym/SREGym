@@ -24,5 +24,9 @@
   "bespoke.svg": "https://bespokelabs.ai/ (inline header SVG)",
   "asu-color.png": "https://raw.githubusercontent.com/ASU/asu-unity-stack/dev/packages/unity-bootstrap-theme/public/img/asu-logo/asu-university-horiz-maroongold.png",
   "asu-white.png": "https://raw.githubusercontent.com/ASU/asu-unity-stack/dev/packages/unity-bootstrap-theme/public/img/asu-logo/asu-university-horiz-white.png",
-  "komodor.svg": "https://komodor.com/wp-content/uploads/2026/09/komodor-logotype-2.svg"
+  "komodor.svg": "https://komodor.com/wp-content/uploads/2026/09/komodor-logotype-2.svg",
+  "pagerduty-green.svg": "https://cdn.pagerduty.com/wp-content/uploads/2022/11/PagerDuty-Green-logo.svg",
+  "pagerduty-white.svg": "https://www.pagerduty.com/logos/pagerduty-monochrome-white.svg",
+  "snorkel-light.svg": "https://s46486.pcdn.co/wp-content/uploads/2022/01/snorkel-light-logo-1.svg",
+  "snorkel-dark.svg": "https://s46486.pcdn.co/wp-content/uploads/2022/01/snorkel-dark-logo-1.svg"
 }
