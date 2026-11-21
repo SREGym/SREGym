@@ -72,6 +72,7 @@ ALLOCATION_CUSTOMERS = {
 STOP_ON_ERROR = ("larkspur_monthend",)
 SUBSCRIBERS = "subscribers"
 GATEWAY = "gateway"
+RETURN_RESEND = "statement-return-resend"
 
 
 def sql_literal(value):
@@ -648,7 +649,7 @@ class MeteringApplication(KubernetesCommands, Application):
             [
                 *self.gateway_deployment(),
                 self.cronjob(
-                    "statement-return-resend",
+                    RETURN_RESEND,
                     daily_schedule(start, 12 * 60 + 10),
                     "statement-return-resend.sh",
                     SUBSCRIBERS,
@@ -899,6 +900,8 @@ class MeteringApplication(KubernetesCommands, Application):
             "metadata": {"name": name, "labels": {"app": cronjob}},
             "spec": template["spec"],
         }
+        if customer_side and cronjob == RETURN_RESEND:
+            job["spec"]["ttlSecondsAfterFinished"] = 3600
         if args is not None:
             job["spec"]["template"]["spec"]["containers"][0]["args"] = list(args)
         self.apply_documents([job], hidden=customer_side)
@@ -1333,7 +1336,7 @@ select pg_current_wal_lsn();
                 "configmap/gateway",
                 "configmap/metering-state",
                 "configmap/statement-returns",
-                "cronjob/statement-return-resend",
+                f"cronjob/{RETURN_RESEND}",
                 "secret/subscribers",
                 "secret/gateway",
                 "networkpolicy/customer-sites",
@@ -1342,6 +1345,18 @@ select pg_current_wal_lsn();
                 "--wait=true",
                 "--timeout=180s",
                 timeout=240,
+            )
+            # Jobs started directly from the CronJob have no owner reference.
+            self.hidden(
+                "delete",
+                "jobs",
+                "-l",
+                f"app={RETURN_RESEND}",
+                "--ignore-not-found",
+                "--cascade=foreground",
+                "--wait=true",
+                "--timeout=120s",
+                timeout=180,
             )
             self.hidden(
                 "delete",
