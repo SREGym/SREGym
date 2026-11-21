@@ -524,11 +524,10 @@ class MeteringApplication(KubernetesCommands, Application):
         run = self.hidden if hidden else self.command
         deadline = time.monotonic() + timeout
         while True:
-            with contextlib.suppress(subprocess.CalledProcessError):
+            with contextlib.suppress(subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 run("wait", "--for=condition=Ready", f"pod/{pod}", "--timeout=30s", timeout=60)
-                with contextlib.suppress(subprocess.CalledProcessError):
-                    self.psql(pod, "postgres", "select 1;", hidden=hidden, timeout=30)
-                    return
+                self.psql(pod, "postgres", "select 1;", hidden=hidden, timeout=30)
+                return
             if time.monotonic() > deadline:
                 raise TimeoutError(f"{pod} not ready")
             time.sleep(3)

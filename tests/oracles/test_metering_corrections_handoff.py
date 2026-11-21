@@ -232,6 +232,17 @@ def test_readers_grade_persistent_progress_without_counting_recovered_errors(mon
     assert oracle.check_readers() == [oracle.fail("subscription_not_streaming", feeds=["larkspur_live"])]
 
 
+def test_database_readiness_retries_a_timed_out_probe(monkeypatch):
+    import subprocess
+
+    from sregym.service.apps.metering import application
+
+    app = SimpleNamespace(command=Mock(), psql=Mock(side_effect=[subprocess.TimeoutExpired("probe", 30), "1"]))
+    monkeypatch.setattr(application.time, "sleep", lambda _: None)
+    application.MeteringApplication.wait_pod_ready(app, "core-0")
+    assert app.psql.call_count == 2
+
+
 def test_nightly_extracts_runs_with_only_larkspur():
     app = Mock()
     app.command.side_effect = ['{"spec": {}}', '{"data":{"extracts.conf":"larkspur | SUP-123"}}']
