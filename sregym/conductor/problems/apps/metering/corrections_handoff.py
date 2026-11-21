@@ -658,8 +658,6 @@ class MeteringCorrectionsHandoff(Problem):
         app.set_rate(1500)
         try:
             app.pause_reader("larkspur_monthend", applied_ahead=True)
-        except TimeoutError as exc:
-            raise WorldDidNotTake(str(exc)) from exc
         finally:
             app.set_rate(60)
         self.note(month_end, f"on-call: {self.staff()}", "Paused the month-end feed for Larkspur.")
@@ -1533,7 +1531,7 @@ class MeteringCorrectionsHandoff(Problem):
                     facts = self.build()
                     with self.phase("seal"):
                         problems, sealed = self.seal(facts)
-            except WorldDidNotTake as exc:
+            except (WorldDidNotTake, TimeoutError, subprocess.TimeoutExpired) as exc:
                 failures.append([str(exc)])
                 print(f"Build did not take: {exc}")
                 continue

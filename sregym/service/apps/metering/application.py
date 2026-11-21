@@ -207,7 +207,7 @@ class MeteringApplication(KubernetesCommands, Application):
             def execute(script):
                 proc.stdin.write(script + "\n\\echo ready\n")
                 proc.stdin.flush()
-                if not select.select([proc.stdout], [], [], 30)[0]:
+                if not select.select([proc.stdout], [], [], 120)[0]:
                     raise TimeoutError(f"{database} statement session did not respond")
                 if proc.stdout.readline().strip() != "ready":
                     proc.wait(timeout=5)
