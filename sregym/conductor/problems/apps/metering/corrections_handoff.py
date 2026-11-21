@@ -647,8 +647,12 @@ class MeteringCorrectionsHandoff(Problem):
             ],
         )
         app.set_rate(1500)
-        app.pause_reader("larkspur_monthend", applied_ahead=True)
-        app.set_rate(60)
+        try:
+            app.pause_reader("larkspur_monthend", applied_ahead=True)
+        except TimeoutError as exc:
+            raise WorldDidNotTake(str(exc)) from exc
+        finally:
+            app.set_rate(60)
         self.note(month_end, f"on-call: {self.staff()}", "Paused the month-end feed for Larkspur.")
 
         # CF-31: the account review's corrections, one batch, under ingest load.

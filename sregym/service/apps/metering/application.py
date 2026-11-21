@@ -1223,7 +1223,7 @@ select pg_current_wal_lsn();
     def pause_reader(self, database, *, applied_ahead=False):
         """Refuse new connections and end the walsender, optionally before it confirms an applied batch."""
         slot = sql_literal(database)
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + 180
         while True:
             self.core(f"alter role feed_{database} nologin;")
             while True:
