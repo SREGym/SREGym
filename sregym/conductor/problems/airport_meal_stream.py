@@ -49,6 +49,24 @@ _SPLIT = r"\[Partition: allowances-(\d+), StartingOffset: -?\d+, StoppingOffset:
 _SPLIT_LIST = re.compile(rf"\[(?:{_SPLIT}(?:, {_SPLIT})*)?\]")
 
 
+def build_if_missing(script, outputs, env=None):
+    """Run an asset build script once when any of its outputs is missing."""
+    if all(path.is_file() for path in outputs):
+        return
+    _LOG.info("Building %s (first run on this checkout)", script)
+    result = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, **(env or {})},
+        capture_output=True,
+        text=True,
+        timeout=1800,
+        check=False,
+    )
+    missing = [str(path) for path in outputs if not path.is_file()]
+    if result.returncode or missing:
+        raise RuntimeError(f"{script} failed (exit {result.returncode}, missing {missing}): {result.stderr[-2000:]}")
+
+
 class _FlinkHTTPError(RuntimeError):
     def __init__(self, status, method, path, body):
         self.status = status
@@ -217,9 +235,7 @@ class Stream:
                 "kafka-ops.jar",
             )
         ]
-        for path in paths:
-            if not path.is_file():
-                raise FileNotFoundError(f"Missing {path}. Run the stream build and stage its dist directory.")
+        build_if_missing(_ASSETS / "build.sh", paths, {"MEAL_BUILD_DIST": str(self.artifact_dir)})
         self._apply((_ASSETS / "storage.yaml").read_text())
         tools = base64.b64encode(paths[2].read_bytes()).decode()
         self._config_map("stream-kafka-tools", {"kafka-ops.jar": tools}, binary=True)

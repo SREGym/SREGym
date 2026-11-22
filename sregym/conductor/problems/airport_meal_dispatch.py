@@ -63,14 +63,21 @@ def _deployment(name, role, jar_digest):
     }
 
 
+def prepare_artifact():
+    """Return the dispatch JAR, building it on first use from the default location."""
+    from sregym.conductor.problems.airport_meal_stream import build_if_missing
+
+    artifact = Path(os.getenv("AIRPORT_MEAL_DISPATCH_ARTIFACTS", str(ASSETS / "dist"))) / "meal-dispatch.jar"
+    if artifact.parent == ASSETS / "dist":
+        build_if_missing(ASSETS / "build.sh", [artifact])
+    elif not artifact.is_file():
+        raise FileNotFoundError(f"Missing {artifact}. Run dispatch/build.sh and copy its dist directory there.")
+    return artifact
+
+
 def deploy(problem):
     """Install the live bridge after the history has finished and Kafka is ready."""
-    artifact = Path(os.getenv("AIRPORT_MEAL_DISPATCH_ARTIFACTS", str(ASSETS / "dist"))) / "meal-dispatch.jar"
-    if not artifact.is_file():
-        raise FileNotFoundError(
-            f"Missing {artifact}. Run dispatch/build.sh on the build host and set AIRPORT_MEAL_DISPATCH_ARTIFACTS."
-        )
-    jar = artifact.read_bytes()
+    jar = prepare_artifact().read_bytes()
     digest = hashlib.sha256(jar).hexdigest()
     config = {
         "apiVersion": "v1",

@@ -939,7 +939,7 @@ def _capture_expected(problem, authorizations, receipts, unused_pairs):
 def build(problem):
     """Create and verify the production incident before handing off the world."""
     from sregym.conductor.problems import airport_meal_round_two as close_history
-    from sregym.conductor.problems.airport_meal_dispatch import deploy
+    from sregym.conductor.problems.airport_meal_dispatch import deploy, prepare_artifact
 
     if problem.airport_meal_expected is not None:
         return
@@ -966,6 +966,7 @@ def build(problem):
             "name",
         )
         _require(not existing.strip(), "Remove the existing airport meal application before starting setup.")
+        prepare_artifact()
         stream.deploy(offsets_retention_minutes=1, offsets_retention_check_interval_ms=15000)
         evidence.update(offsets_retention_minutes=1, offsets_retention_check_interval_ms=15000)
         health = _partner_many(
