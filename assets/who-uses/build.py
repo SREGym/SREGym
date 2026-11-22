@@ -95,6 +95,17 @@ def microsoft_logo(dark):
     )
 
 
+def brac_logo(dark):
+    content = centered_logo("brac.png", 76, 70)
+    if not dark:
+        return content
+    return (
+        '<defs><filter id="brac-white"><feColorMatrix type="matrix" '
+        'values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0"/>'
+        '</filter></defs><g filter="url(#brac-white)">' + content + "</g>"
+    )
+
+
 def build(theme):
     dark = theme == "dark"
     ink = "#f0f6fc" if dark else "#1f2328"
@@ -196,6 +207,7 @@ def build(theme):
             HEIGHT,
             logo("buet.png", 32, 17, 56, 56) + text("BUET", 100, 56, 30, ink, weight=600),
         ),
+        "brac": (HEIGHT, brac_logo(dark)),
     }
     output = ROOT / theme
     output.mkdir(exist_ok=True)

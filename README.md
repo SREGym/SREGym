@@ -66,7 +66,8 @@ SREGym is used by researchers and engineers at organizations including:
 
 <p align="center">
   <a href="https://www.wisc.edu/#gh-light-mode-only"><img src="assets/who-uses/light/wisconsin.png" alt="University of Wisconsin–Madison" height="40"></a><a href="https://www.wisc.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/wisconsin.png" alt="University of Wisconsin–Madison" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://www.buet.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a><a href="https://www.buet.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a>
+  <a href="https://www.buet.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a><a href="https://www.buet.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.bracu.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/brac.png" alt="BRAC University" height="50"></a><a href="https://www.bracu.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/brac.png" alt="BRAC University" height="50"></a>
 </p>
 
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
