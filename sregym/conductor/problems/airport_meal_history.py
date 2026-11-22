@@ -326,6 +326,13 @@ def partner_request(problem, site, method, path, body=None, *, retry_transient=F
     return _partner_many(problem, [(site, method, path, body)], retry_transient=retry_transient)[0]
 
 
+def _answers(problem, site):
+    try:
+        return partner_request(problem, site, "GET", "/health", retry_transient=True)
+    except RuntimeError:
+        return None
+
+
 def _require(condition, detail):
     if not condition:
         raise RuntimeError(detail)
@@ -1593,6 +1600,8 @@ def _exercise_post_resize(problem, job):
         "Fresh café receipt did not settle to the correct payer",
     )
     _rollout(problem, ["rollout", "restart", f"deployment/{cafe}"], cafe)
+    # A Ready pod can still be missing from Service routing for a few seconds.
+    _wait(f"{cafe} to answer through its Service after the restart", lambda: _answers(problem, cafe))
     _require(
         partner_request(problem, cafe, "POST", "/receipts", sale) == receipt,
         "Café forgot the accepted receipt after restart",
