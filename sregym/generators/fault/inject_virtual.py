@@ -3,6 +3,7 @@
 import contextlib
 import copy
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,7 +12,7 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.generators.fault.base import FaultInjector
-from sregym.paths import CACHE_DIR, TARGET_MICROSERVICES
+from sregym.paths import CACHE_DIR, SOCIAL_NETWORK_IMAGE_VALUES, TARGET_MICROSERVICES
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 from sregym.service.rollout import deployment_rollout_complete
@@ -84,7 +85,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 "release_name": "social-network",
                 "chart_path": TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork/",
                 "namespace": self.namespace,
-                "values_file": TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork/values.yaml",
+                "values_file": SOCIAL_NETWORK_IMAGE_VALUES,
                 "set_values": set_values,
             }
 
@@ -107,7 +108,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 "release_name": "social-network",
                 "chart_path": TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork/",
                 "namespace": self.namespace,
-                "values_file": TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork/values.yaml",
+                "values_file": SOCIAL_NETWORK_IMAGE_VALUES,
                 "set_values": set_values,
             }
 
@@ -357,6 +358,7 @@ class VirtualizationFaultInjector(FaultInjector):
         all_services: bool = False,
         additional_services: list[str] | None = None,
         loose_headroom_factor: float = 2.0,
+        calibration_kwargs: dict | None = None,
     ) -> dict[str, str]:
         if all_services and additional_services:
             raise ValueError("Use either all_services or additional_services, not both")
@@ -367,6 +369,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 services=all_deps,
                 faulty_services=microservices,
                 loose_headroom=loose_headroom_factor,
+                **(calibration_kwargs or {}),
             )
             services_to_patch = all_deps
         elif additional_services:
@@ -375,6 +378,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 services=services_to_patch,
                 faulty_services=microservices,
                 loose_headroom=loose_headroom_factor,
+                **(calibration_kwargs or {}),
             )
         else:
             services_to_patch = microservices
@@ -578,9 +582,12 @@ class VirtualizationFaultInjector(FaultInjector):
     def _get_ready_pods(self, services: list[str]) -> dict[str, str]:
         wanted = set(services)
         ready = {}
+        # Pod label naming the service; apps not built with kompose set
+        # ``service_label_key`` on the injector (e.g. ``app.kubernetes.io/component``).
+        label_key = getattr(self, "service_label_key", None) or "io.kompose.service"
         for pod in self.kubectl.list_pods(self.namespace, timeout=60).items:
             labels = pod.metadata.labels or {}
-            service = labels.get("io.kompose.service")
+            service = labels.get(label_key)
             statuses = pod.status.container_statuses or []
             if (
                 service in wanted
@@ -1377,7 +1384,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from liveness probe too aggressive fault for service: {service}")
 
-    # V.14 - Injects an environment variable leak by deleting a ConfigMap and restarting the associated deployment.
+    # V.14 - Remove a required ConfigMap and restart the associated Deployment.
     def inject_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
             configmap_name = None
@@ -1390,7 +1397,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             get_cmd = f"kubectl get configmap {configmap_name} -n {self.namespace} -o yaml"
             original_yaml = self.kubectl.exec_command(get_cmd)
-            parsed_yaml = yaml.safe_load(original_yaml)
+            parsed_yaml = self._reapplicable_manifest(yaml.safe_load(original_yaml))
 
             self._write_yaml_to_file(microservice, parsed_yaml)
 
@@ -1407,17 +1414,24 @@ class VirtualizationFaultInjector(FaultInjector):
             print("Restarted pods to apply ConfigMap fault")
 
     def recover_missing_configmap(self, microservices: list[str]):
+        """Restore saved ConfigMap content and require a successful rollout."""
         for microservice in microservices:
-            configmap_name = f"{microservice}"
-            backup_path = f"/tmp/{configmap_name}_modified.yaml"
+            backup_path = Path(f"/tmp/{microservice}_modified.yaml")
+            manifest = self._reapplicable_manifest(yaml.safe_load(backup_path.read_text()))
+            configmap_name = manifest["metadata"]["name"]
 
-            apply_cmd = f"kubectl apply -f {backup_path} -n {self.namespace}"
-            self.kubectl.exec_command(apply_cmd)
+            self.kubectl.exec_command_checked(
+                f"kubectl apply -f - -n {self.namespace}", input_data=yaml.safe_dump(manifest), timeout=30
+            )
             print(f"Restored ConfigMap: {configmap_name}")
 
-            self.kubectl.exec_command(f"kubectl rollout restart deployment {microservice} -n {self.namespace}")
-            self.kubectl.exec_command(f"kubectl rollout status deployment {microservice} -n {self.namespace}")
-            print(f"Deployment {microservice} restarted and should now be healthy")
+            self.kubectl.exec_command_checked(
+                f"kubectl rollout restart deployment {microservice} -n {self.namespace}", timeout=30
+            )
+            self.kubectl.exec_command_checked(
+                f"kubectl rollout status deployment {microservice} -n {self.namespace} --timeout=120s", timeout=130
+            )
+            print(f"Deployment {microservice} recovered")
 
     # Inject ConfigMap drift by removing critical keys
     def inject_configmap_drift(self, microservices: list[str]):
@@ -1629,8 +1643,9 @@ class VirtualizationFaultInjector(FaultInjector):
         return Path("/tmp") / f"deployment-state-{self.namespace}-{service}.yaml"
 
     @staticmethod
-    def _reapplicable_deployment_manifest(deployment_yaml: dict) -> dict:
-        manifest = copy.deepcopy(deployment_yaml)
+    def _reapplicable_manifest(resource_yaml: dict) -> dict:
+        """Keep declarative content without metadata from an earlier API object."""
+        manifest = copy.deepcopy(resource_yaml)
         manifest.pop("status", None)
 
         metadata = manifest.setdefault("metadata", {})
@@ -1655,7 +1670,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def _save_storage_baseline(self, service: str, deployment_yaml: dict) -> Path:
         path = self._storage_baseline_path(service)
-        path.write_text(yaml.safe_dump(self._reapplicable_deployment_manifest(deployment_yaml)))
+        path.write_text(yaml.safe_dump(self._reapplicable_manifest(deployment_yaml)))
         return path
 
     def _legacy_statefulset_claims(self, service: str) -> list[str]:
@@ -1903,6 +1918,14 @@ class VirtualizationFaultInjector(FaultInjector):
         import tempfile
 
         for service in microservices:
+            # Drop any baseline manifest left behind by an earlier run. The
+            # recovery step only checks that a file exists at this path. A
+            # stale file would pass that check and get applied against the
+            # wrong cluster state. Removing it first means a rollout timeout
+            # below leaves no file at all.
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(f"/tmp/{service}-orig.yaml")
+
             base_dep = {
                 "apiVersion": "apps/v1",
                 "kind": "Deployment",
@@ -1971,6 +1994,16 @@ class VirtualizationFaultInjector(FaultInjector):
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             delete_result = self.kubectl.exec_command(delete_command)
             print(f"Deleted faulty deployment {service}: {delete_result}")
+
+            if not os.path.exists(original_yaml_path):
+                # Injection writes this file only after the baseline rollout
+                # succeeds. kubectl apply on a missing path only prints an
+                # error, since exec_command returns stderr as a string, so
+                # raise instead.
+                raise FileNotFoundError(
+                    f"No baseline manifest at {original_yaml_path} for '{service}': the baseline "
+                    "rollout never completed, so there is nothing to restore."
+                )
 
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
             apply_result = self.kubectl.exec_command(apply_command)
@@ -3200,6 +3233,7 @@ class VirtualizationFaultInjector(FaultInjector):
         )
         print(f"Rollout status for {service}: {result}")
         return result
+
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
             command = (

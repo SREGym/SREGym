@@ -38,3 +38,11 @@ class JudgmentReport:
     dimensions: list[DimensionResult] = field(default_factory=list)
     checklist_version: str = ""
     evaluator_model: str = ""
+    # Why there is no verdict, when verdict is None; empty on a scored report.
+    # A scored 0.0 and an attempt the judge never scored both reached the
+    # results CSV as a zero, so a judge that never answered was
+    # indistinguishable from an agent that answered wrongly.
+    unscored_reason: str = ""
+    # The judge's last reply, verbatim, kept only when it could not be parsed.
+    # Nothing else in the run retains it.
+    raw_response: str = ""

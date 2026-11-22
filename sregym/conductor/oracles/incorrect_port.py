@@ -1,5 +1,6 @@
 import contextlib
 import time
+from urllib.parse import urlsplit
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
@@ -17,9 +18,10 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
     probe_image = "fullstorydev/grpcurl:v1.9.3"
     probe_rpc = "oteldemo.ProductCatalogService/ListProducts"
 
-    def __init__(self, problem, *, require_source_ready: bool = True):
+    def __init__(self, problem, *, require_source_ready: bool = True, address_is_url: bool = False):
         super().__init__(problem)
         self.require_source_ready = require_source_ready
+        self.address_is_url = address_is_url
 
     @staticmethod
     def _desired_replicas(deployment) -> int:
@@ -48,7 +50,14 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
         for container in deployment.spec.template.spec.containers or []:
             for env_var in container.env or []:
                 if env_var.name == self.problem.env_var:
-                    return env_var.value or None
+                    address = env_var.value or None
+                    if address and self.address_is_url:
+                        parsed = urlsplit(address if "://" in address else "//" + address)
+                        if not parsed.hostname or parsed.port is None:
+                            return None
+                        host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+                        return f"{host}:{parsed.port}"
+                    return address
         return None
 
     def _has_ready_service_endpoint(self) -> bool:
@@ -57,6 +66,21 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
             namespace=self.problem.namespace,
         )
         return any(subset.addresses for subset in endpoints.subsets or [])
+
+    def _probe_command(self, address: str) -> dict:
+        """Image and arguments that call the dependency at ``address``.
+
+        Ports whose dependency is not the original gRPC service set
+        ``tcp_dependency_probe`` on the problem and only require the configured
+        address to accept connections.
+        """
+        if getattr(self.problem, "tcp_dependency_probe", False):
+            host, _, port = address.rpartition(":")
+            return {"image": "busybox:1.36", "command": ["sh", "-c", f"nc -z -w 10 '{host}' {port}"]}
+        return {
+            "image": self.probe_image,
+            "args": ["-plaintext", "-max-time", "10", "-d", "{}", address, self.probe_rpc],
+        }
 
     def _run_dependency_probe(self, deployment, address: str) -> bool:
         namespace = self.problem.namespace
@@ -85,17 +109,8 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
                 containers=[
                     client.V1Container(
                         name="connectivity-check",
-                        image=self.probe_image,
+                        **self._probe_command(address),
                         image_pull_policy="IfNotPresent",
-                        args=[
-                            "-plaintext",
-                            "-max-time",
-                            "10",
-                            "-d",
-                            "{}",
-                            address,
-                            self.probe_rpc,
-                        ],
                         resources=client.V1ResourceRequirements(
                             requests={"cpu": "5m", "memory": "16Mi"},
                             limits={"cpu": "100m", "memory": "64Mi"},

@@ -21,7 +21,10 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class DevShmExhaustionHotelReservation(Problem):
-    """Inject a /dev/shm exhaustion fault that crash-loops a worker deployment."""
+    """Inject a /dev/shm exhaustion fault that crash-loops a worker deployment.
+
+    Deprecated in SREGym 1.1 after reaching 100% overall pass@3.
+    """
 
     worker_name = "media-processor"
     worker_image = "busybox:1.36"

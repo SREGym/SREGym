@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import os
+import socket
 import threading
+import time
 
 import pyfiglet
 from fastapi import FastAPI, HTTPException
@@ -237,7 +239,14 @@ async def get_status():
         raise HTTPException(status_code=400, detail="No problem has been started")
     stage, _, _ = conductor.submission_state()
     logger.debug(f"API returns Current stage: {stage}")
-    return {"stage": stage}
+    result = {"stage": stage}
+    deadline = conductor.agent_deadline_monotonic
+    remaining = conductor.agent_timeout_seconds
+    if deadline is not None:
+        remaining = max(0.0, deadline - time.monotonic())
+    if remaining is not None:
+        result["agent_remaining_seconds"] = remaining
+    return result
 
 
 @app.get("/get_app")
@@ -248,12 +257,38 @@ async def get_app():
     app_inst = _conductor.app
     logger.debug(f"API returns App instance: {app_inst}")
     namespaces = getattr(app_inst, "namespaces", None) or [app_inst.namespace]
-    return {
+    info = {
         "app_name": app_inst.app_name,
         "namespace": app_inst.namespace,
         "namespaces": namespaces,
         "descriptions": str(app_inst.description),
+        # Lets agents tailor their workflow, e.g. to mitigation-only problems.
+        "stages": [stage["name"] for stage in getattr(_conductor, "stage_sequence", None) or []],
     }
+    return info
+
+
+def check_api_port_available():
+    """Raise if the API server could not bind API_BIND_HOST:API_PORT.
+
+    run_api binds only after the driver thread has started deploying. If the port is taken,
+    uvicorn logs the bind error and exits, and the run's own teardown logging buries it. Checking
+    first fails the run before anything is deployed, with the port named.
+    """
+    host = os.getenv("API_BIND_HOST", "0.0.0.0")
+    port = int(os.getenv("API_PORT", "8000"))
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        # uvicorn sets SO_REUSEADDR, so a socket left in TIME_WAIT by an earlier run does not
+        # block it and must not fail this check either.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((host, port))
+        except OSError as e:
+            raise RuntimeError(
+                f"The SREGym API server cannot bind {host}:{port}: {e.strerror or e}. "
+                "Check API_BIND_HOST and API_PORT; a port in use needs API_PORT set to a free one."
+            ) from e
 
 
 def run_api(conductor):

@@ -1,0 +1,125 @@
+{
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@snappymail.zoo",
+      "password": "alice123",
+      "full_name": "Alice Johnson",
+      "is_admin": false
+    },
+    {
+      "username": "bob",
+      "email": "bob@snappymail.zoo",
+      "password": "bob123",
+      "full_name": "Bob Smith",
+      "is_admin": false
+    },
+    {
+      "username": "charlie",
+      "email": "charlie@snappymail.zoo",
+      "password": "charlie123",
+      "full_name": "Charlie Brown",
+      "is_admin": false
+    },
+    {
+      "username": "demo",
+      "email": "demo@snappymail.zoo",
+      "password": "demo123",
+      "full_name": "Demo User",
+      "is_admin": false
+    }
+  ],
+  "organizations": [
+    {
+      "name": "zoo-labs",
+      "full_name": "Zoo Labs",
+      "description": "Official Zoo development organization",
+      "website": "https://home.zoo",
+      "location": "The Zoo",
+      "visibility": "public"
+    },
+    {
+      "name": "community",
+      "full_name": "Zoo Community",
+      "description": "Community-driven projects",
+      "website": "https://mattermost.zoo",
+      "location": "The Zoo",
+      "visibility": "public"
+    }
+  ],
+  "repositories": [
+    {
+      "owner": "alice",
+      "name": "hello-zoo",
+      "description": "A simple Hello World application for the Zoo",
+      "private": false,
+      "readme": "# Hello Zoo\n\nWelcome to the Zoo! This is a simple demonstration repository.\n\n## Getting Started\n\n```bash\nnpm install\nnpm start\n```\n\n## Features\n\n- Simple Express.js server\n- Zoo-themed welcome page\n- Integration examples\n\n## Contributing\n\nFeel free to submit pull requests!",
+      "files": {
+        "package.json": "{\n  \"name\": \"hello-zoo\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Hello World for the Zoo\",\n  \"main\": \"index.js\",\n  \"scripts\": {\n    \"start\": \"node index.js\"\n  },\n  \"dependencies\": {\n    \"express\": \"^4.18.0\"\n  }\n}",
+        "index.js": "const express = require('express');\nconst app = express();\nconst port = 3000;\n\napp.get('/', (req, res) => {\n  res.send('<h1>Hello from the Zoo!</h1>');\n});\n\napp.listen(port, () => {\n  console.log(`Hello Zoo app listening at http://localhost:${port}`);\n});",
+        ".gitignore": "node_modules/\n*.log\n.env"
+      }
+    },
+    {
+      "owner": "bob",
+      "name": "zoo-api-client",
+      "description": "API client library for Zoo services",
+      "private": false,
+      "readme": "# Zoo API Client\n\nA TypeScript client library for interacting with Zoo services.\n\n## Installation\n\n```bash\nnpm install zoo-api-client\n```\n\n## Usage\n\n```typescript\nimport { ZooClient } from 'zoo-api-client';\n\nconst client = new ZooClient({\n  baseURL: 'https://misc.zoo'\n});\n\nconst result = await client.getAnimals();\n```",
+      "files": {
+        "package.json": "{\n  \"name\": \"zoo-api-client\",\n  \"version\": \"0.1.0\",\n  \"description\": \"API client for Zoo services\",\n  \"main\": \"dist/index.js\",\n  \"types\": \"dist/index.d.ts\",\n  \"scripts\": {\n    \"build\": \"tsc\",\n    \"test\": \"jest\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"^18.0.0\",\n    \"typescript\": \"^5.0.0\"\n  }\n}",
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2020\",\n    \"module\": \"commonjs\",\n    \"lib\": [\"ES2020\"],\n    \"outDir\": \"./dist\",\n    \"rootDir\": \"./src\",\n    \"strict\": true,\n    \"esModuleInterop\": true,\n    \"skipLibCheck\": true,\n    \"forceConsistentCasingInFileNames\": true,\n    \"declaration\": true\n  }\n}",
+        "src/index.ts": "export class ZooClient {\n  private baseURL: string;\n\n  constructor(config: { baseURL: string }) {\n    this.baseURL = config.baseURL;\n  }\n\n  async getAnimals() {\n    const response = await fetch(`${this.baseURL}/animals`);\n    return response.json();\n  }\n}"
+      }
+    },
+    {
+      "owner": "zoo-labs",
+      "name": "zoo-utilities",
+      "description": "Common utilities for Zoo applications",
+      "private": false,
+      "readme": "# Zoo Utilities\n\nA collection of utility functions and helpers for Zoo applications.\n\n## Features\n\n- Authentication helpers\n- Database utilities\n- Common middleware\n- Validation functions\n\n## Installation\n\n```bash\nnpm install @zoo-labs/utilities\n```",
+      "files": {
+        "package.json": "{\n  \"name\": \"@zoo-labs/utilities\",\n  \"version\": \"1.2.0\",\n  \"description\": \"Common utilities for Zoo applications\",\n  \"main\": \"index.js\",\n  \"scripts\": {\n    \"test\": \"jest\",\n    \"lint\": \"eslint .\"\n  }\n}",
+        "index.js": "module.exports = {\n  auth: require('./lib/auth'),\n  db: require('./lib/db'),\n  validators: require('./lib/validators')\n};",
+        "lib/auth.js": "// Authentication utilities\nmodule.exports = {\n  generateToken: () => {\n    return Math.random().toString(36).substring(2);\n  },\n  validateToken: (token) => {\n    return token && token.length > 0;\n  }\n};"
+      }
+    },
+    {
+      "owner": "community",
+      "name": "awesome-zoo",
+      "description": "A curated list of awesome Zoo resources",
+      "private": false,
+      "readme": "# Awesome Zoo 🦁\n\nA curated list of awesome Zoo resources, tools, and projects.\n\n## Contents\n\n- [Official Resources](#official-resources)\n- [Community Projects](#community-projects)\n- [Tools](#tools)\n- [Tutorials](#tutorials)\n\n## Official Resources\n\n- [Zoo Home](https://home.zoo)\n- [Gitea Documentation](https://docs.gitea.zoo)\n\n## Community Projects\n\n- [zoo-api-client](https://gitea.zoo/bob/zoo-api-client) - API client library\n- [hello-zoo](https://gitea.zoo/alice/hello-zoo) - Simple starter project\n\n## Contributing\n\nPlease read [CONTRIBUTING.md](CONTRIBUTING.md) for details.",
+      "files": {
+        "CONTRIBUTING.md": "# Contributing to Awesome Zoo\n\nContributions are welcome! Please follow these guidelines:\n\n1. Make sure the resource is actually awesome\n2. Add it to the appropriate section\n3. Keep descriptions concise\n4. Check your spelling and grammar"
+      }
+    },
+    {
+      "owner": "charlie",
+      "name": "zoo-docker-templates",
+      "description": "Docker templates for Zoo services",
+      "private": false,
+      "readme": "# Zoo Docker Templates\n\nReady-to-use Docker configurations for common Zoo services.\n\n## Available Templates\n\n- `webapp/` - Basic web application template\n- `api/` - REST API service template  \n- `worker/` - Background worker template\n- `database/` - Database configuration templates\n\n## Usage\n\nCopy the template you need and customize for your service:\n\n```bash\ncp -r webapp/ my-zoo-app/\ncd my-zoo-app/\ndocker-compose up\n```",
+      "files": {
+        "webapp/docker-compose.yml": "version: '3.8'\nservices:\n  web:\n    build: .\n    ports:\n      - \"3000:3000\"\n    environment:\n      - NODE_ENV=development\n    volumes:\n      - .:/app\n      - /app/node_modules",
+        "webapp/Dockerfile": "FROM node:18-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nCMD [\"npm\", \"start\"]"
+      }
+    }
+  ],
+  "teams": [
+    {
+      "org": "zoo-labs",
+      "name": "developers",
+      "description": "Core development team",
+      "members": ["alice", "bob"],
+      "permission": "write"
+    },
+    {
+      "org": "community",
+      "name": "maintainers",
+      "description": "Community maintainers",
+      "members": ["charlie"],
+      "permission": "admin"
+    }
+  ]
+}

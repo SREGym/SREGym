@@ -1,9 +1,27 @@
 import subprocess
+import tomllib
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from sregym.service.container_runner import DEFAULT_AGENT_IMAGE, LOCAL_AGENT_IMAGE, ContainerConfig, ContainerRunner
+
+
+def test_agent_langgraph_dependencies_match_the_lockfile():
+    root = Path(__file__).resolve().parents[2]
+    locked = {
+        package["name"]: package["version"] for package in tomllib.loads((root / "uv.lock").read_text())["package"]
+    }
+    requirements = dict(
+        line.split("==", 1)
+        for line in (root / "docker/agents/requirements-container.txt").read_text().splitlines()
+        if line and not line.startswith("#")
+    )
+    # Newer prebuilt releases can import runtime APIs absent from an older
+    # LangGraph, even when pip accepts their declared dependency ranges.
+    for name in ("langchain-core", "langgraph", "langgraph-checkpoint", "langgraph-prebuilt", "langgraph-sdk"):
+        assert requirements[name] == locked[name]
 
 
 def test_cached_image_needs_no_pull_or_build(monkeypatch):

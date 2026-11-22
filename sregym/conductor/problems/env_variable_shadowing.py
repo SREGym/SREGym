@@ -4,6 +4,7 @@ from sregym.conductor.oracles.env_variable_shadowing_mitigation import EnvVariab
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -13,10 +14,10 @@ class EnvVariableShadowing(Problem):
     EXPECTED_VALUE = "frontend"
     SHADOW_VALUE = "localhost"
 
-    def __init__(self, faulty_service: str = "frontend-proxy"):
+    def __init__(self, faulty_service: str = "frontend-proxy", *, app: Application | None = None):
         self.faulty_service = faulty_service
 
-        super().__init__(app=AstronomyShop())
+        super().__init__(app=app if app is not None else AstronomyShop())
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",

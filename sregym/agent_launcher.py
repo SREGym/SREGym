@@ -87,6 +87,7 @@ class AgentLauncher:
             if reg is None or reg.container_isolation:
                 self.enable_container_isolation(force_build=force_build)
             if reg is not None and self._container_runner is not None:
+                self._container_runner.config.cluster_access = reg.cluster_access
                 self._container_runner.prepare_agent_tools(reg.install_script, reg.agent_version)
                 self._run_preflight(reg)
         except BaseException:
@@ -98,6 +99,7 @@ class AgentLauncher:
         agent_driver_modules: dict[str, str] = {
             "stratus": "clients.stratus.stratus_agent.driver.driver",
             "claudecode": "clients.claudecode.driver",
+            "claudecode_radar": "clients.claudecode_radar.driver",
             "codex": "clients.codex.driver",
             "copilot": "clients.copilot.driver",
             "opencode": "clients.opencode.driver",
@@ -205,7 +207,8 @@ class AgentLauncher:
             logger.warning("Container runner not initialized — skipping containerized start for '%s'", reg.name)
             return None
 
-        if self._agent_kubeconfig_path:
+        self._container_runner.config.cluster_access = reg.cluster_access
+        if self._agent_kubeconfig_path and reg.cluster_access:
             self._container_runner.config.kubeconfig_path = Path(self._agent_kubeconfig_path)
 
         self._container_runner.config.env_vars.pop(HARNESS_PROBLEM_ID_ENV, None)

@@ -38,7 +38,7 @@ jobs:
       # ── Cluster tooling ───────────────────────────────────────────────
       - name: Install Kind
         run: |
-          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.28.0/kind-linux-amd64
           chmod +x /tmp/kind
           sudo mv /tmp/kind /usr/local/bin/kind
           kind version
@@ -46,11 +46,17 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v4
 
-      - name: Pre-pull kind node image
-        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
-
       - name: Prepare /run/udev for OpenEBS NDM
         run: sudo mkdir -p /run/udev
+
+      # All kind nodes share the runner's inotify limits. The hosted image's
+      # defaults run out once four nodes start, and pods that need an inotify
+      # instance (kube-proxy, Calico install-cni, promtail) then crash-loop
+      # with "too many open files". Values match kind/README.md.
+      - name: Raise inotify limits for kind
+        run: |
+          sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches
+          sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=1048576
 
       - name: Create kind cluster with Calico
         run: bash kind/setup_kind_cluster.sh x86
@@ -74,7 +80,7 @@ jobs:
 
       # ── Run smoke test ────────────────────────────────────────────────
       - name: Run smoke test
-        run: uv run pytest tests/integration/smoke_test.py -v -s -m integration
+        run: uv run pytest tests/integration/smoke_test.py -v -s -m integration --allow-kubernetes
 
       # ── Diagnostics on failure ────────────────────────────────────────
       - name: Dump cluster diagnostics

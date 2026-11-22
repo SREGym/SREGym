@@ -6,14 +6,15 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.scale_pod_zero_mitigation import ScalePodZeroMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.service.apps.base import Application
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
 class ScalePodSocialNet(Problem):
-    def __init__(self):
-        super().__init__(app=SocialNetwork())
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else SocialNetwork())
         self.kubectl = KubeCtl()
         # self.faulty_service = "url-shorten-mongodb"
         self.faulty_service = "user-service"

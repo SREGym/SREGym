@@ -16,6 +16,7 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.hooks import AttemptHookError, FaultContext
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
@@ -42,7 +43,7 @@ from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
-from sregym.service.kubectl import KubeCtl
+from sregym.service.kubectl import WAIT_FOR_POD_READY_TIMEOUT, KubeCtl
 from sregym.service.mcp_server import MCPServer
 from sregym.service.rollout import deployment_rollout_complete
 from sregym.service.telemetry.loki import Loki
@@ -78,8 +79,19 @@ class ConductorConfig:
 
 
 class Conductor:
-    def __init__(self, config: ConductorConfig | None = None):
+    def __init__(
+        self,
+        config: ConductorConfig | None = None,
+        *,
+        judge_preflight: Callable[[], None] | None = None,
+        hooks: object | None = None,
+    ):
         self.config = config or ConductorConfig()
+        self._judge_preflight = judge_preflight
+        self._judge_preflight_done = False
+        # See sregym.conductor.hooks. None, or an object with before_fault_injection
+        # and/or after_fault_injection.
+        self._hooks = hooks
 
         # core services
         self.problems = ProblemRegistry()
@@ -109,6 +121,8 @@ class Conductor:
         self.app = None
         self.detection_oracle = None
         self.execution_start_time: float = 0.0
+        self.agent_timeout_seconds: float | None = None
+        self.agent_deadline_monotonic: float | None = None
 
         # grading flow state
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
@@ -136,6 +150,10 @@ class Conductor:
         self.waiting_for_agent: bool = False
         self._evaluating: bool = False  # True while a submission is being evaluated
         self.fault_injected: bool = False
+        # Ground truth for the injected fault, kept in memory until the attempt
+        # publishes: the problem object is gone by then, and the spec names the
+        # faulty component, so it must not be on disk while the agent runs.
+        self.fault_spec: dict | None = None
 
     @property
     def current_problem(self):
@@ -256,6 +274,7 @@ class Conductor:
         self._evaluating = False
         self._accepting_submissions = False
         self.fault_injected = False
+        self.fault_spec = None
 
         if not self.tasklist:
             self.logger.warning("Empty tasklist; no stages configured for this problem.")
@@ -302,6 +321,17 @@ class Conductor:
                 "No stages left after checking oracles. This problem will complete without agent interaction."
             )
 
+    def _preflight_active_oracles(self) -> None:
+        """Check judge credentials once, only if an effective stage uses them."""
+        if self._judge_preflight_done or self._judge_preflight is None:
+            return
+        if any(
+            getattr(getattr(self.problem, f"{stage['name']}_oracle"), "requires_llm_judge", False)
+            for stage in self.stage_sequence
+        ):
+            self._judge_preflight()
+            self._judge_preflight_done = True
+
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
@@ -317,6 +347,13 @@ class Conductor:
             mitigation_oracle.capture_baseline()
 
         problem.inject_fault()
+        # getattr throughout: tests call this on bare conductors and stand-in problems.
+        self.fault_spec = {
+            "problem_id": getattr(self, "problem_id", None),
+            "namespace": getattr(problem, "namespace", None),
+            "root_cause": getattr(problem, "root_cause", None),
+            "fault_injected_at": time.time(),
+        }
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
 
@@ -402,6 +439,31 @@ class Conductor:
         ledger = getattr(self, "phases", None)
         return ledger is not None and ledger.is_open(name)
 
+    async def _run_hook(self, name: str, *, fault_injected_at: float | None = None) -> None:
+        """Call the registered hook `name`, if any, as its own phase.
+
+        `getattr` on `_hooks` as `_phase` does: a Conductor built without
+        __init__ has no hooks. The hook is usually a wait, so it runs in a
+        thread. Any exception becomes AttemptHookError, which main.py does not
+        answer with a redeploy.
+        """
+        hook = getattr(getattr(self, "_hooks", None), name, None)
+        if hook is None:
+            return
+        ctx = FaultContext(
+            problem_id=self.problem_id,
+            namespace=self.problem.namespace,
+            fault_injected_at=fault_injected_at,
+        )
+        with self._phase(f"hook:{name}"):
+            try:
+                await asyncio.to_thread(hook, ctx)
+            except AttemptHookError:
+                raise
+            except Exception as exc:
+                self.logger.exception(f"[HOOK] {name} failed")
+                raise AttemptHookError(f"{name} failed: {exc}") from exc
+
     async def _advance_to_next_stage(self, start_index: int = 0):
         """
         Advance to the next stage starting from start_index.
@@ -416,11 +478,12 @@ class Conductor:
             self.finish_problem_in_background()
             return
 
-        # Inject fault before the first stage if not already done -- the
-        # interactive visualizer injects itself before calling this.
+        # Inject the fault once before the first stage.
         if start_index == 0 and not self.fault_injected:
+            await self._run_hook("before_fault_injection")
             with self._phase("inject_fault"):
                 self._inject_fault()
+            injected_at = self.fault_spec["fault_injected_at"]
 
             # Let the fault surface in telemetry before the agent sees it.
             propagation = (
@@ -433,6 +496,10 @@ class Conductor:
                 with self._phase("propagation", seconds=propagation):
                     await asyncio.sleep(propagation)
                 self.logger.info("[PROPAGATION] Propagation window complete.")
+
+            # After propagation, so a hook that waits for the fault to show up
+            # on the agent's side overlaps the sleep instead of adding to it.
+            await self._run_hook("after_fault_injection", fault_injected_at=injected_at)
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -675,6 +742,8 @@ class Conductor:
             self.problem = None
             self.app = None
             self.results = {}
+            self.agent_timeout_seconds = None
+            self.agent_deadline_monotonic = None
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
@@ -687,11 +756,12 @@ class Conductor:
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
         self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
-        with self._phase("fix_kubernetes"):
-            self.fix_kubernetes()
-
         self.get_problem_stages()
         self._build_stage_sequence()
+        self._preflight_active_oracles()
+
+        with self._phase("fix_kubernetes"):
+            self.fix_kubernetes()
 
         self.logger.info("Undeploying app leftovers...")
         with self._phase("undeploy_leftovers"):
@@ -1155,12 +1225,65 @@ class Conductor:
         if self.missing_submission_stages():
             self.record_incomplete_attempt("missing_stage_results")
         else:
-            self.results["run_status"] = "complete"
+            unscored = [
+                stage["name"]
+                for stage in self.stage_sequence
+                if isinstance(outcome := self.results[stage["name"].capitalize()], dict)
+                and outcome.get("success") is None
+            ]
+            if unscored:
+                self.record_incomplete_attempt("unscored_stage_results")
+                self.results["incomplete_stage"] = unscored[0]
+                self.results["unscored_stages"] = ",".join(unscored)
+            else:
+                self.results["run_status"] = "complete"
         return self.results["run_status"]
 
     @staticmethod
     def _q(value):
         return shlex.quote(str(value))
+
+    def _delete_evicted_pods(self, skip_namespace: str):
+        """Delete the pods an eviction leaves behind outside skip_namespace.
+
+        Most evicted pods end Failed. A container that exits 0 on SIGTERM ends
+        Succeeded instead (openebs-ndm-operator does), and wait_for_ready only
+        excuses Succeeded pods a Job owns, so the next deploy's openebs wait
+        times out on it. A ReplicaSet, StatefulSet or DaemonSet replaces a
+        terminated pod, so a Succeeded pod one of them owns is stale. Completed
+        Job pods are left alone.
+        """
+        self.kubectl.exec_command(
+            f"kubectl delete pods --all-namespaces "
+            f"--field-selector=status.phase=Failed,metadata.namespace!={skip_namespace} "
+            "--ignore-not-found=true"
+        )
+        output = self.kubectl.exec_command(
+            f"kubectl get pods --all-namespaces "
+            f"--field-selector=status.phase=Succeeded,metadata.namespace!={skip_namespace} -o json"
+        )
+        try:
+            pods = json.loads(output).get("items", [])
+        except (json.JSONDecodeError, AttributeError):
+            self.logger.warning(f"Could not list Succeeded pods to clean up: {output}")
+            return
+        for pod in pods:
+            metadata = pod.get("metadata", {})
+            owners = metadata.get("ownerReferences") or []
+            if not any(owner.get("kind") in ("ReplicaSet", "StatefulSet", "DaemonSet") for owner in owners):
+                continue
+            try:
+                # A StatefulSet can replace a terminal pod under the same name
+                # after the list. Delete only the instance we actually observed.
+                self.kubectl.core_v1_api.delete_namespaced_pod(
+                    name=metadata["name"],
+                    namespace=metadata["namespace"],
+                    body={"preconditions": {"uid": metadata["uid"]}},
+                    _request_timeout=30,
+                )
+            except ApiException as exc:
+                if exc.status not in (404, 409):
+                    raise
 
     def _fix_calico_route_reflector_label_drift(self):
         self.logger.info("[FIX] Calico route-reflector label drift leftovers if any")
@@ -1305,15 +1428,11 @@ class Conductor:
 
         self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
         injector.recover_disk_pressure_all()
-        # Delete Failed pods left by the eviction loop. Skip the app namespace
+        # Delete pods left by the eviction loop. Skip the app namespace
         # because undeploy_app() tears down the application namespace anyway.
         from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 
-        self.kubectl.exec_command(
-            f"kubectl delete pods --all-namespaces "
-            f"--field-selector=status.phase=Failed,metadata.namespace!={KubeletEvictionThresholdMisconfig.NAMESPACE} "
-            "--ignore-not-found=true"
-        )
+        self._delete_evicted_pods(KubeletEvictionThresholdMisconfig.NAMESPACE)
 
         self.logger.info("[FIX] Calico IPPool/strictAffinity leftover if any")
         try:
@@ -1355,6 +1474,14 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not clean up NightlyRebalanceOOM actor: {e}")
 
+        self.logger.info("[FIX] CapacityGraceExpiry controller leftover if any")
+        try:
+            from sregym.conductor.problems.capacity_grace_expiry import CapacityGraceExpiry
+
+            CapacityGraceExpiry.cleanup_leftover_controller()
+        except Exception as e:
+            self.logger.warning(f"Could not clean up CapacityGraceExpiry controller: {e}")
+
         self.logger.info("[FIX] Clock drift leftover if any")
         try:
             injector = RemoteOSFaultInjector()
@@ -1379,6 +1506,9 @@ class Conductor:
                 self.logger.info("[DEPLOY] No persisted baseline state found, capturing and saving...")
                 self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
             self._baseline_captured = True
+
+        self.logger.info("[DEPLOY] Checking Kubernetes pod networking…")
+        self.kubectl.assert_pod_networking()
 
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         # metrics-server lives in kube-system, which is protected from
@@ -1441,8 +1571,17 @@ class Conductor:
         # earlier full-profile run on the same cluster.
         if svelte:
             self._trim_openebs_ndm()
+        # An interrupted preload can leave completed non-Job pods behind.
+        # Remove only our disposable helpers before checking OpenEBS readiness.
+        self.kubectl.exec_command_checked(
+            "kubectl delete pods -n openebs -l app=sregym-image-preload "
+            "--ignore-not-found=true --grace-period=0 --wait=true "
+            f"--timeout={WAIT_FOR_POD_READY_TIMEOUT}s",
+            timeout=WAIT_FOR_POD_READY_TIMEOUT + 10,
+        )
         self.kubectl.wait_for_ready("openebs")
         self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
+        self._preload_openebs_helper_image()
         if not svelte:
             self._ensure_openebs_device_storageclass()
 
@@ -1622,6 +1761,30 @@ class Conductor:
             and status.number_ready == desired
             and status.number_available == desired
             and (status.number_misscheduled or 0) == 0
+        )
+
+    def _preload_openebs_helper_image(self) -> None:
+        """Make LocalPV's helper image available before workload PVC creation."""
+        deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(
+            "openebs-localpv-provisioner", "openebs", _request_timeout=10
+        )
+        containers = deployment.spec.template.spec.containers or []
+        helper_image = next(
+            (
+                env.value
+                for container in containers
+                for env in (container.env or [])
+                if env.name == "OPENEBS_IO_HELPER_IMAGE" and env.value
+            ),
+            None,
+        )
+        if not helper_image:
+            raise RuntimeError("OpenEBS provisioner does not declare OPENEBS_IO_HELPER_IMAGE")
+        self.logger.info("[DEPLOY] Preloading OpenEBS helper image %s on every node…", helper_image)
+        self.kubectl.preload_image_on_nodes(
+            helper_image,
+            namespace="openebs",
+            timeout=WAIT_FOR_POD_READY_TIMEOUT,
         )
 
     # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV

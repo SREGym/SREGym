@@ -129,6 +129,21 @@ def test_stratus_provider_allowlist_is_derived_from_selected_model(model, enviro
     assert {rule.host for rule in rules} == expected_hosts
 
 
+@pytest.mark.parametrize(
+    ("model", "environment", "expected_hosts"),
+    [
+        ("deepseek/deepseek-flash", {}, {"api.deepseek.com"}),
+        ("openai/deepseek-flash", {"AGENT_API_BASE": "https://api.deepseek.com/v1"}, {"api.deepseek.com"}),
+    ],
+)
+def test_mini_sre_allowlist_is_its_model_endpoint(model, environment, expected_hosts):
+    policy = InternetPolicy.from_mode("filtered", agent_name="mini-sre", model_id=model)
+
+    rules = provider_endpoint_rules(policy, environment)
+
+    assert {rule.host for rule in rules} == expected_hosts
+
+
 def test_unrelated_provider_endpoint_does_not_enter_allowlist():
     policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id="anthropic/claude-sonnet-4-6")
 
@@ -190,3 +205,10 @@ def test_provider_definition_keeps_default_and_overrides_together(provider, defi
         assert provider_endpoint_rules(policy, {variable: "https://custom.test/v1"}) == (
             EndpointRule("custom.test", 443),
         )
+
+
+@pytest.mark.parametrize("agent", ["claudecode", "claudecode_radar"])
+def test_claude_code_clients_reach_the_anthropic_api(agent):
+    policy = InternetPolicy.from_mode("filtered", agent_name=agent, model_id="anthropic/claude-opus-5-5")
+
+    assert provider_endpoint_rules(policy, {"ANTHROPIC_API_KEY": "secret"}) == (EndpointRule("api.anthropic.com", 443),)

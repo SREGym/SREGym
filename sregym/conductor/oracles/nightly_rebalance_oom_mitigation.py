@@ -105,7 +105,9 @@ class NightlyRebalanceOOMMitigationOracle(MitigationOracle):
 
     def _target_pods_healthy(self, service: str, namespace: str) -> bool:
         pods = self.problem.kubectl.list_pods(namespace).items
-        target = [p for p in pods if (p.metadata.labels or {}).get("io.kompose.service") == service]
+        # Problems on apps without kompose labels name their pods' labels with ``target_pod_labels``.
+        wanted = getattr(self.problem, "target_pod_labels", None) or {"io.kompose.service": service}
+        target = [p for p in pods if all((p.metadata.labels or {}).get(k) == v for k, v in wanted.items())]
         if not target:
             return False
         for pod in target:

@@ -16,6 +16,7 @@ def test_report_marks_five_complete_passes_as_saturated():
         [_row(attempt) for attempt in range(1, 6)],
         problem_id="example_problem",
         model="glm-4.7",
+        harness="Codex",
         requested_attempts=5,
     )
 
@@ -28,6 +29,7 @@ def test_report_keeps_mixed_result_as_not_saturated():
         [_row(1), _row(2, mitigation=False), _row(3)],
         problem_id="example_problem",
         model="glm-4.7",
+        harness="Codex",
         requested_attempts=3,
     )
 
@@ -43,6 +45,7 @@ def test_report_does_not_count_infrastructure_failure_as_model_failure():
         rows,
         problem_id="example_problem",
         model="glm-4.7",
+        harness="Codex",
         requested_attempts=3,
     )
 
@@ -70,6 +73,7 @@ def test_report_explains_an_explicit_incomplete_attempt():
         rows,
         problem_id="example_problem",
         model="glm-4.7",
+        harness="Codex",
         requested_attempts=1,
     )
 
@@ -94,6 +98,7 @@ def test_report_includes_stage_for_an_explicit_timeout():
         rows,
         problem_id="example_problem",
         model="glm-4.7",
+        harness="Codex",
         requested_attempts=1,
     )
 
@@ -112,6 +117,7 @@ def test_report_does_not_count_explicitly_incomplete_run_with_stage_results():
         [row],
         problem_id="example_problem",
         model="glm-4.7",
+        harness="Codex",
         requested_attempts=1,
     )
 
@@ -120,3 +126,30 @@ def test_report_does_not_count_explicitly_incomplete_run_with_stage_results():
     assert "**Mitigation pass rate:** n/a" in report
     assert "| 1 | ✅ | ✅ | ⚠️ | agent timeout at run |" in report
     assert "⚠️ **Inconclusive**" in report
+
+
+def test_report_names_the_harness_and_fallback_note():
+    report = build_report(
+        [_row(1)],
+        problem_id="example_problem",
+        model="glm-5.3-flash",
+        harness="Codex",
+        requested_attempts=1,
+        note="Claude unavailable (HTTP 400, invalid_request_error: credit balance is too low).",
+    )
+
+    assert "- **Model:** `glm-5.3-flash` via the Codex harness" in report
+    assert "- **Note:** Claude unavailable (HTTP 400" in report
+
+
+def test_report_omits_note_when_none_is_given():
+    report = build_report(
+        [_row(1)],
+        problem_id="example_problem",
+        model="claude-opus-5-5",
+        harness="Claude Code",
+        requested_attempts=1,
+    )
+
+    assert "- **Model:** `claude-opus-5-5` via the Claude Code harness" in report
+    assert "**Note:**" not in report

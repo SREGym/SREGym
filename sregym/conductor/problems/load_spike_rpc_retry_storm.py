@@ -60,12 +60,16 @@ class LoadSpikeRPCRetryStorm(Problem):
             "[Step 2] Done — metastable state established: retry storm is self-sustaining at base traffic without spike\n"
         )
 
-    @mark_fault_injected
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         print("== Fault Recovery ==")
-        injector = VirtualizationFaultInjector(namespace=self.namespace)
-        injector.recover_rpc_timeout_retries_misconfiguration(configmap=self.faulty_service)
-        print(f"[Recovery] rpc ConfigMap restored in namespace {self.namespace}")
+        try:
+            injector = VirtualizationFaultInjector(namespace=self.namespace)
+            injector.recover_rpc_timeout_retries_misconfiguration(configmap=self.faulty_service)
+            print(f"[Recovery] rpc ConfigMap restored in namespace {self.namespace}")
+        finally:
+            if hasattr(self, "wrk"):
+                self.wrk.cleanup_cpu_stress(wait=True)
 
     def create_workload(self, tput: int = None, duration: str = None, multiplier: int = None):
         if tput is None:

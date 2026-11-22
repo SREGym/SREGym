@@ -1,19 +1,38 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# archive.ubuntu.com can be served through stale transparent caches that pair
+# an old Release file with newer package indexes. Keep the mirror overridable,
+# and use Canonical's Azure mirror by default to avoid that failure mode.
+ARG UBUNTU_MIRROR=http://azure.archive.ubuntu.com/ubuntu
 
 # ───────────────────────────────────────────────
 # 1. Install packages
 # ───────────────────────────────────────────────
-RUN apt-get update \
+RUN for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do \
+        if [ -f "$source_file" ]; then \
+            sed -i "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" "$source_file"; \
+        fi; \
+    done \
+    && for attempt in 1 2 3 4 5; do \
+        rm -rf /var/lib/apt/lists/*; \
+        apt-get -o Acquire::Retries=5 update && break; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 10))"; \
+    done \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg software-properties-common \
+        ca-certificates curl gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && add-apt-repository ppa:deadsnakes/ppa
+RUN curl --retry 5 --retry-all-errors --retry-delay 5 -fsSL https://deb.nodesource.com/setup_22.x | bash -
 
-RUN apt-get update \
+RUN for attempt in 1 2 3 4 5; do \
+        rm -rf /var/lib/apt/lists/*; \
+        apt-get -o Acquire::Retries=5 update && break; \
+        if [ "$attempt" = 5 ]; then exit 1; fi; \
+        sleep "$((attempt * 10))"; \
+    done \
     && apt-get install -y --no-install-recommends \
         git wget jq \
         nodejs \
@@ -24,9 +43,11 @@ RUN apt-get update \
 # ───────────────────────────────────────────────
 # 2. Python + pip
 # ───────────────────────────────────────────────
-RUN python3 -m ensurepip --upgrade \
-    && python3 -m pip install --upgrade pip \
-    && ln -sf /usr/bin/python3 /usr/bin/python
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+RUN python3 -m pip install --upgrade 'pip==26.2.1'
+
+ENV PIP_UPLOADED_PRIOR_TO=P7D
 
 # ───────────────────────────────────────────────
 # 3. kubectl
@@ -43,7 +64,7 @@ RUN KUBECTL_ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" \
 # 4. Python dependencies
 # ───────────────────────────────────────────────
 COPY docker/agents/requirements-container.txt /tmp/requirements-container.txt
-RUN python3 -m pip install --break-system-packages -r /tmp/requirements-container.txt
+RUN python3 -m pip install -r /tmp/requirements-container.txt
 
 # ───────────────────────────────────────────────
 # 5. Application code

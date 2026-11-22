@@ -85,6 +85,7 @@ def _is_preserved_infra_resource(kind: str, name: str) -> bool:
 class ClusterBaseline:
     """Snapshot of cluster state to reconcile back to."""
 
+    cluster_uid: str | None = None
     namespaces: set[str] = field(default_factory=set)
     cluster_roles: set[str] = field(default_factory=set)
     cluster_role_bindings: set[str] = field(default_factory=set)
@@ -93,6 +94,8 @@ class ClusterBaseline:
     crds: set[str] = field(default_factory=set)
     validating_webhook_configs: set[str] = field(default_factory=set)
     mutating_webhook_configs: set[str] = field(default_factory=set)
+    validating_admission_policies: set[str] = field(default_factory=set)
+    validating_admission_policy_bindings: set[str] = field(default_factory=set)
     node_labels: dict[str, dict[str, str]] = field(default_factory=dict)
     node_taints: dict[str, list] = field(default_factory=dict)
     coredns_configmap_data: dict[str, str] = field(default_factory=dict)
@@ -100,6 +103,7 @@ class ClusterBaseline:
     def to_dict(self) -> dict:
         """Serialize baseline to a dictionary for logging/debugging."""
         return {
+            "cluster_uid": self.cluster_uid,
             "namespaces": sorted(self.namespaces),
             "cluster_roles": sorted(self.cluster_roles),
             "cluster_role_bindings": sorted(self.cluster_role_bindings),
@@ -108,6 +112,8 @@ class ClusterBaseline:
             "crds": sorted(self.crds),
             "validating_webhook_configs": sorted(self.validating_webhook_configs),
             "mutating_webhook_configs": sorted(self.mutating_webhook_configs),
+            "validating_admission_policies": sorted(self.validating_admission_policies),
+            "validating_admission_policy_bindings": sorted(self.validating_admission_policy_bindings),
             "node_labels": self.node_labels,
             "node_taints": self.node_taints,
             "coredns_configmap_hash": hashlib.md5(
@@ -118,6 +124,7 @@ class ClusterBaseline:
     def to_json(self) -> dict:
         """Lossless serialization to a JSON-compatible dict (for persisting to disk)."""
         return {
+            "cluster_uid": self.cluster_uid,
             "namespaces": sorted(self.namespaces),
             "cluster_roles": sorted(self.cluster_roles),
             "cluster_role_bindings": sorted(self.cluster_role_bindings),
@@ -126,6 +133,8 @@ class ClusterBaseline:
             "crds": sorted(self.crds),
             "validating_webhook_configs": sorted(self.validating_webhook_configs),
             "mutating_webhook_configs": sorted(self.mutating_webhook_configs),
+            "validating_admission_policies": sorted(self.validating_admission_policies),
+            "validating_admission_policy_bindings": sorted(self.validating_admission_policy_bindings),
             "node_labels": self.node_labels,
             "node_taints": self.node_taints,
             "coredns_configmap_data": self.coredns_configmap_data,
@@ -135,6 +144,7 @@ class ClusterBaseline:
     def from_json(cls, data: dict) -> "ClusterBaseline":
         """Deserialize from a JSON-compatible dict (loaded from disk)."""
         return cls(
+            cluster_uid=data.get("cluster_uid"),
             namespaces=set(data.get("namespaces", [])),
             cluster_roles=set(data.get("cluster_roles", [])),
             cluster_role_bindings=set(data.get("cluster_role_bindings", [])),
@@ -143,6 +153,8 @@ class ClusterBaseline:
             crds=set(data.get("crds", [])),
             validating_webhook_configs=set(data.get("validating_webhook_configs", [])),
             mutating_webhook_configs=set(data.get("mutating_webhook_configs", [])),
+            validating_admission_policies=set(data.get("validating_admission_policies", [])),
+            validating_admission_policy_bindings=set(data.get("validating_admission_policy_bindings", [])),
             node_labels=data.get("node_labels", {}),
             node_taints=data.get("node_taints", {}),
             coredns_configmap_data=data.get("coredns_configmap_data", {}),
@@ -171,6 +183,7 @@ class ClusterStateManager:
         logger.info("Capturing cluster baseline state...")
 
         self.baseline = ClusterBaseline(
+            cluster_uid=self._get_cluster_uid(),
             namespaces=self._get_namespaces(raise_on_error=True),
             cluster_roles=self._get_cluster_roles(raise_on_error=True),
             cluster_role_bindings=self._get_cluster_role_bindings(raise_on_error=True),
@@ -179,6 +192,8 @@ class ClusterStateManager:
             crds=self._get_crds(raise_on_error=True),
             validating_webhook_configs=self._get_validating_webhook_configs(raise_on_error=True),
             mutating_webhook_configs=self._get_mutating_webhook_configs(raise_on_error=True),
+            validating_admission_policies=self._get_admission_policy_names("policies"),
+            validating_admission_policy_bindings=self._get_admission_policy_names("bindings"),
             node_labels=self._get_node_labels(raise_on_error=True),
             node_taints=self._get_node_taints(raise_on_error=True),
             coredns_configmap_data=self._get_coredns_configmap_data(raise_on_error=True),
@@ -210,6 +225,27 @@ class ClusterStateManager:
         try:
             with open(path) as f:
                 data = json.load(f)
+            current_cluster_uid = self._get_cluster_uid()
+            saved_cluster_uid = data.get("cluster_uid")
+            if not saved_cluster_uid:
+                logger.warning(f"Ignoring baseline state at {path}: snapshot has no cluster identity")
+                return False
+            if saved_cluster_uid != current_cluster_uid:
+                logger.warning(
+                    "Ignoring baseline state at %s: snapshot belongs to cluster %s, current cluster is %s",
+                    path,
+                    saved_cluster_uid,
+                    current_cluster_uid,
+                )
+                return False
+            # Legacy snapshots did not record these resources. Preserve what
+            # exists before this attempt, rather than treating it as unexpected.
+            for field_name, resource in (
+                ("validating_admission_policies", "policies"),
+                ("validating_admission_policy_bindings", "bindings"),
+            ):
+                if field_name not in data:
+                    data[field_name] = sorted(self._get_admission_policy_names(resource))
             self.baseline = ClusterBaseline.from_json(data)
             logger.info(f"Baseline state loaded from {path}")
             return True
@@ -236,10 +272,30 @@ class ClusterStateManager:
             "crds_deleted": [],
             "validating_webhook_configs_deleted": [],
             "mutating_webhook_configs_deleted": [],
+            "validating_admission_policies_deleted": [],
+            "validating_admission_policy_bindings_deleted": [],
             "nodes_labels_reset": [],
             "nodes_taints_reset": [],
             "coredns_reset": False,
         }
+
+        # Remove bindings before policies or namespaces, since an attempt's
+        # policy can otherwise reject resource deletion during cleanup.
+        for field_name, resource, delete in (
+            (
+                "validating_admission_policy_bindings",
+                "bindings",
+                self.admission_v1.delete_validating_admission_policy_binding,
+            ),
+            ("validating_admission_policies", "policies", self.admission_v1.delete_validating_admission_policy),
+        ):
+            for name in sorted(self._get_admission_policy_names(resource) - getattr(self.baseline, field_name)):
+                try:
+                    delete(name=name)
+                except ApiException as error:
+                    if error.status != 404:
+                        raise
+                changes[f"{field_name}_deleted"].append(name)
 
         # 1. Delete unexpected namespaces
         current_namespaces = self._get_namespaces()
@@ -385,6 +441,14 @@ class ClusterStateManager:
         logger.info(f"Reconciliation complete: {changes}")
         return changes
 
+    def _get_cluster_uid(self) -> str:
+        """Return an identity that changes whenever the Kubernetes cluster is recreated."""
+        namespace = self.core_v1.read_namespace(name="kube-system")
+        uid = getattr(getattr(namespace, "metadata", None), "uid", None)
+        if not uid:
+            raise RuntimeError("kube-system namespace has no UID; refusing to use a cluster baseline")
+        return str(uid)
+
     def _get_namespaces(self, raise_on_error: bool = False) -> set[str]:
         """Get all namespace names in the cluster."""
         try:
@@ -504,6 +568,19 @@ class ClusterStateManager:
             if raise_on_error:
                 raise
             return set()
+
+    def _get_admission_policy_names(self, resource: str) -> set[str]:
+        """List policies or bindings; only an unsupported API counts as empty."""
+        read = {
+            "policies": self.admission_v1.list_validating_admission_policy,
+            "bindings": self.admission_v1.list_validating_admission_policy_binding,
+        }[resource]
+        try:
+            return {item.metadata.name for item in read().items}
+        except ApiException as error:
+            if error.status == 404:
+                return set()
+            raise
 
     def _get_validating_webhook_configs(self, raise_on_error: bool = False) -> set[str]:
         """Get all ValidatingWebhookConfiguration names."""

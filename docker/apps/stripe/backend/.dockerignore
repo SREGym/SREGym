@@ -1,0 +1,4 @@
+**/__pycache__
+**/*.pyc
+vendor/tests
+vendor/solution/requirements.txt

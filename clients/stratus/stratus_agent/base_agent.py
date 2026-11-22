@@ -19,6 +19,26 @@ logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
 
+def message_text(content) -> str:
+    """Return the visible text of an LLM message.
+
+    Reasoning models return ``content`` as a list of blocks such as
+    ``[{"type": "thinking", ...}, {"type": "text", "text": ...}]``. Keep only
+    the text blocks so callers that need a plain string (the submit tool) work.
+    """
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "\n".join(part for part in parts if part).strip()
+    return str(content or "").strip()
+
+
 class BaseAgent:
     def __init__(self, llm, max_step, sync_tools, async_tools, submit_tool):
         self.graph_builder = StateGraph(State)
@@ -69,7 +89,7 @@ class BaseAgent:
         if isinstance(ai_message, AIMessage) and ai_message.tool_calls:
             tool_call = ai_message.tool_calls[0]
             if tool_call.get("name") == self.submit_tool.name:
-                ans = tool_call.get("args", {}).get("ans", "")
+                ans = message_text(tool_call.get("args", {}).get("ans", ""))
             else:
                 self.logger.warning(f"LLM called unexpected tool '{tool_call.get('name')}' during force submit.")
                 ans = None
@@ -81,7 +101,9 @@ class BaseAgent:
             self.logger.warning("LLM did not call the submit tool during force submit. Extracting plain-text answer.")
             plain_prompt = HumanMessage("Please write out your best answer as plain text.")
             plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message, plain_prompt])
-            ans = plain_response.content if isinstance(plain_response, AIMessage) else ""
+            # Reasoning models return a list of thinking/text blocks here; the
+            # submit tool validates ``ans: str`` and a list crashes the agent.
+            ans = message_text(plain_response.content) if isinstance(plain_response, AIMessage) else ""
 
         await manual_submit_tool(ans=ans, stage="diagnosis")
         self.logger.info(f"Force submitted with answer: {ans!r}")

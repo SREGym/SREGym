@@ -1,0 +1,22 @@
+{
+  "problem_id": "rate_service_wrong_consul_address_hotel_reservation",
+  "app": "hotel_reservation",
+  "recurrence_bound_s": 270,
+  "title": "Rate service registration points to MongoDB",
+  "fault_layer": "service-discovery",
+  "fault_primitive": "Detached in-container directory synchronizer repeatedly overwrites existing Consul rate registrations after a four-minute stabilization interval",
+  "root_cause_class": "orphaned_runtime_directory_inventory_address_authority",
+  "diagnosis": {
+    "component": "deployment/mongodb-user",
+    "description": "An unmanaged directory synchronizer in mongodb-user selects RateMongoAddress from its inventory as the address for Consul srv-rate registrations. It publishes the rate MongoDB Service address as a rate RPC endpoint instead of the actual rate service address. Search connects to the wrong endpoint and reports downstream gRPC failures, so frontend hotel searches fail. The real rate service and Kubernetes routing remain healthy. Correcting Consul registrations alone is temporary because the synchronizer overwrites them again."
+  },
+  "incident_class": "An abandoned operational inventory reconciliation process retains write authority after an address-source migration",
+  "affected_components": [
+    "mongodb-user (resident operational process)",
+    "consul (existing srv-rate registrations)",
+    "rate (discovery path)",
+    "search",
+    "frontend"
+  ],
+  "symptoms": "Hotel searches return HTTP 500 with search dependency unavailable; search logs surge with downstream request failed and gRPC Unavailable, while all application pods and Kubernetes Services remain healthy and direct rate connections remain usable."
+}

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import yaml
 
+from sregym.generators.noise.manager import get_noise_manager
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
@@ -55,6 +56,7 @@ class ChaosInjector:
             print(
                 f"[ChaosInjector] Helm release '{chaos_configs['release_name']}' already exists in namespace '{chaos_configs['namespace']}', skipping install."
             )
+        get_noise_manager().wait_for_chaos_mesh_ready()
 
     def _force_remove_chaos_mesh_crds(self):
         """Strip finalizers from all chaos-mesh CRs, then delete the CRDs.

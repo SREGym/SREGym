@@ -9,6 +9,13 @@ import time
 from kubernetes import client
 
 from sregym.generators.fault.base import FaultInjector
+from sregym.generators.fault.source_overlay import (
+    apply_source_file_overlay,
+    overlay_basename,
+    override_configmap_name,
+    override_volume_name,
+    remove_source_file_overlay,
+)
 from sregym.generators.images import HOTEL_GEO_MISCONFIG_IMAGE
 from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
 from sregym.service.kafka_health import KafkaHealthCheck, broker_memory_failure
@@ -178,12 +185,13 @@ class ApplicationFaultInjector(FaultInjector):
     # A.4 valkey_auth_disruption: Invalidate the password in valkey so dependent services cannot work
     def inject_valkey_auth_disruption(self, target_service="cart"):
         pods = self.kubectl.list_pods(self.namespace)
-        valkey_pods = [p.metadata.name for p in pods.items if "valkey-cart" in p.metadata.name]
+        valkey_pods = [p for p in pods.items if "valkey-cart" in p.metadata.name]
         if not valkey_pods:
             print("[❌] No Valkey pod found!")
             return
 
-        valkey_pod = valkey_pods[0]
+        valkey_pod = valkey_pods[0].metadata.name
+        restarts_before = self._container_restart_count(valkey_pods[0])
         print(f"[🔐] Found Valkey pod: {valkey_pod}")
         command = f"kubectl exec -n {self.namespace} {valkey_pod} -- valkey-cli CONFIG SET requirepass 'invalid_pass'"
         result = self.kubectl.exec_command(command)
@@ -192,6 +200,39 @@ class ApplicationFaultInjector(FaultInjector):
         # Restart cartservice to force it to re-authenticate
         self.kubectl.exec_command(f"kubectl delete pod -l app.kubernetes.io/name={target_service} -n {self.namespace}")
         time.sleep(3)
+
+        # `requirepass` set at runtime lives only in server memory. If the pod
+        # restarts (e.g. OOMKilled while running valkey-cli in its cgroup) the
+        # fault silently disappears and the mitigation oracle passes without any
+        # agent action. Fail loudly instead.
+        self._verify_valkey_requirepass(valkey_pod, restarts_before)
+
+    @staticmethod
+    def _container_restart_count(pod) -> int:
+        statuses = (pod.status and pod.status.container_statuses) or []
+        return sum(status.restart_count or 0 for status in statuses)
+
+    def _verify_valkey_requirepass(self, valkey_pod: str, restarts_before: int) -> None:
+        pods = self.kubectl.list_pods(self.namespace)
+        current = [p for p in pods.items if p.metadata.name == valkey_pod]
+        restarts_after = self._container_restart_count(current[0]) if current else None
+        if restarts_after is None or restarts_after != restarts_before:
+            raise RuntimeError(
+                f"valkey_auth_disruption: pod {valkey_pod} restarted during injection "
+                f"(restarts {restarts_before} -> {restarts_after}); the runtime requirepass was lost"
+            )
+
+        command = (
+            f"kubectl exec -n {self.namespace} {valkey_pod} -- "
+            "env VALKEYCLI_AUTH=invalid_pass valkey-cli CONFIG GET requirepass"
+        )
+        output = self.kubectl.exec_command_checked(command, timeout=30)
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if lines != ["requirepass", "invalid_pass"]:
+            raise RuntimeError(
+                f"valkey_auth_disruption: requirepass is not in effect on {valkey_pod}; CONFIG GET returned {lines!r}"
+            )
+        print(f"[✅] Verified requirepass is set on {valkey_pod}")
 
     def recover_valkey_auth_disruption(self, target_service="cart"):
         pods = self.kubectl.list_pods(self.namespace)
@@ -733,6 +774,88 @@ class ApplicationFaultInjector(FaultInjector):
             f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
         )
         time.sleep(5)
+
+    def inject_source_file_override(
+        self,
+        deployment_name: str,
+        source_path: str,
+        replacement_content: str,
+        configmap_name: str | None = None,
+        container_name: str | None = None,
+        rollout_timeout: str = "180s",
+    ) -> str:
+        """
+        Overlay one file in a running container with a ConfigMap subPath mount.
+
+        Returns the ConfigMap name that holds the replacement content.
+        """
+        cm_name = override_configmap_name(deployment_name, configmap_name)
+        basename = overlay_basename(source_path)
+        volume_name = override_volume_name(cm_name)
+
+        self.kubectl.create_or_update_configmap(
+            cm_name,
+            self.namespace,
+            {basename: replacement_content},
+        )
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        apply_source_file_overlay(
+            deployment.spec.template.spec,
+            volume_name=volume_name,
+            configmap_name=cm_name,
+            source_path=source_path,
+            basename=basename,
+            container_name=container_name,
+        )
+        template = deployment.spec.template
+
+        if template.metadata is None:
+            template.metadata = client.V1ObjectMeta()
+
+        annotations = dict(template.metadata.annotations or {})
+        annotations["kubectl.kubernetes.io/restartedAt"] = datetime.datetime.now(datetime.UTC).isoformat()
+        template.metadata.annotations = annotations
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        # The template annotation guarantees one rollout even when an existing
+        # subPath overlay is updated. Patching again with ``rollout restart``
+        # would create a second ReplicaSet and leave extra draining pods.
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout={rollout_timeout}"
+        )
+        print(f"Mounted ConfigMap '{cm_name}' key '{basename}' over '{source_path}' in deployment '{deployment_name}'.")
+        return cm_name
+
+    def recover_source_file_override(
+        self,
+        deployment_name: str,
+        source_path: str,
+        configmap_name: str | None = None,
+        container_name: str | None = None,
+        rollout_timeout: str = "180s",
+    ):
+        """Remove the source-file overlay added by inject_source_file_override"""
+        cm_name = override_configmap_name(deployment_name, configmap_name)
+        volume_name = override_volume_name(cm_name)
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        remove_source_file_overlay(
+            deployment.spec.template.spec,
+            volume_name=volume_name,
+            container_name=container_name,
+        )
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout={rollout_timeout}"
+        )
+
+        try:
+            self.kubectl.exec_command(f"kubectl delete configmap {cm_name} -n {self.namespace}")
+        except Exception as exc:
+            print(f"Warning: failed to delete ConfigMap {cm_name}: {exc}")
+
+        print(f"Removed source override for '{source_path}' from deployment '{deployment_name}'.")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+global:
+  jaeger:
+    # Clients cache this address; the app-local Jaeger Service is replaced after startup.
+    localAgentHostPort: otel-collector.observe.svc.cluster.local:6831
+
+nginx-thrift:
+  container:
+    dockerRegistry: ghcr.io
+    image: sregym/openresty-thrift
+    imageVersion: 20261109-trace-identity@sha256:c030ef7e7b23dd4576c3d956410d5878353e7b5be3258056deed3a3071dd84e4

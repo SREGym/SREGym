@@ -32,6 +32,7 @@ from sregym.conductor.oracles.deployment_readiness import DeploymentReadinessOra
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -53,13 +54,19 @@ class AdmissionWebhookTLSMismatch(Problem):
     BACKEND_SVC_NAMESPACE = "policy-system"
     BACKEND_DEPLOYMENT_NAME = "pod-policy-webhook"
 
-    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "recommendation"):
+    def __init__(
+        self,
+        app_name: str = "hotel_reservation",
+        faulty_service: str = "recommendation",
+        *,
+        app: Application | None = None,
+    ):
         if app_name not in self.APPS:
             raise ValueError(f"Unsupported app name: {app_name}")
 
         self.app_name = app_name
         self.faulty_service = faulty_service
-        app = self.APPS[app_name]()
+        app = app if app is not None else self.APPS[app_name]()
         super().__init__(app=app)
 
         self.kubectl = KubeCtl()

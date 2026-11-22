@@ -1,6 +1,10 @@
 from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
 
 from sregym.conductor.oracles.duplicate_pvc_mounts_mitigation import DuplicatePVCMountsMitigationOracle
+from sregym.conductor.problems import duplicate_pvc_mounts
 
 
 def _deployment(
@@ -264,4 +268,57 @@ def test_rejects_failed_query_and_cleans_up_check_pod():
     core_v1 = _CoreV1(check_phase="Failed", check_logs="wget: connection refused\n")
 
     assert _oracle(_KubeCtl(core_v1=core_v1)).evaluate()["success"] is False
+    assert len(core_v1.deleted_pods) == 1
+
+
+def _problem(monkeypatch, app_name, faulty_service, kubectl):
+    app = SimpleNamespace(
+        namespace=app_name.replace("_", "-"),
+        frontend_port=8080 if app_name == "astronomy_shop" else 5000,
+        create_workload=Mock(),
+    )
+    app_class = {
+        "astronomy_shop": "AstronomyShop",
+        "hotel_reservation": "HotelReservation",
+        "social_network": "SocialNetwork",
+    }[app_name]
+    monkeypatch.setattr(duplicate_pvc_mounts, app_class, lambda: app)
+    monkeypatch.setattr(duplicate_pvc_mounts, "KubeCtl", lambda: kubectl)
+    monkeypatch.setattr(duplicate_pvc_mounts, "LLMAsAJudgeOracle", Mock())
+    problem = duplicate_pvc_mounts.DuplicatePVCMounts(app_name=app_name, faulty_service=faulty_service)
+    problem.mitigation_oracle.rollout_timeout_seconds = 0
+    problem.mitigation_oracle.poll_interval_seconds = 0
+    return problem
+
+
+@pytest.mark.parametrize(
+    "app_name,faulty_service,endpoint,expected_content",
+    [
+        ("astronomy_shop", "frontend", ":8080/", "Otel Demo - Home"),
+        ("hotel_reservation", "frontend", ":5000/", "Go Microservices Example"),
+        ("social_network", "jaeger", ":16686/api/services", '"data"'),
+    ],
+)
+def test_registered_tasks_probe_their_repaired_service(
+    monkeypatch, app_name, faulty_service, endpoint, expected_content
+):
+    core_v1 = _CoreV1()
+    problem = _problem(monkeypatch, app_name, faulty_service, _KubeCtl(core_v1=core_v1))
+
+    assert problem.mitigation_oracle.evaluate()["success"] is True
+    script = core_v1.created_pods[0][1].spec.containers[0].command[-1]
+    assert f"http://10.244.0.10{endpoint}" in script
+    assert expected_content in script
+    assert len(core_v1.deleted_pods) == 1
+
+
+@pytest.mark.parametrize("app_name", ["astronomy_shop", "hotel_reservation"])
+def test_frontend_probe_failure_is_not_accepted(monkeypatch, app_name):
+    core_v1 = _CoreV1(check_phase="Failed", check_logs="wget: connection refused\n")
+    problem = _problem(monkeypatch, app_name, "frontend", _KubeCtl(core_v1=core_v1))
+
+    verdict = problem.mitigation_oracle.evaluate()
+
+    assert verdict["success"] is False
+    assert verdict["reason"] == "query_check_failed"
     assert len(core_v1.deleted_pods) == 1

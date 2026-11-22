@@ -144,6 +144,7 @@ def test_filtered_runner_rewrites_all_local_provider_endpoints(tmp_path):
     )
     runner._egress._network_name = "private-network"
     runner._egress._proxy_name = "filter-proxy"
+    runner._egress._cert_volume = "filter-certs"
     runner._egress._proxy_ca = tmp_path / "proxy-ca.pem"
     runner._egress._ca_bundle = tmp_path / "ca-bundle.pem"
     runner._egress._proxy_ca.touch()
@@ -172,6 +173,7 @@ def test_filtered_runner_uses_private_network_and_proxy(tmp_path):
     )
     runner._egress._network_name = "private-network"
     runner._egress._proxy_name = "filter-proxy"
+    runner._egress._cert_volume = "filter-certs"
     runner._egress._proxy_ca = tmp_path / "proxy-ca.pem"
     runner._egress._ca_bundle = tmp_path / "ca-bundle.pem"
     runner._egress._proxy_ca.touch()
@@ -349,6 +351,7 @@ def test_filtered_runner_does_not_mount_unproxied_kubeconfig(tmp_path, monkeypat
     )
     runner._egress._network_name = "private-network"
     runner._egress._proxy_name = "filter-proxy"
+    runner._egress._cert_volume = "filter-certs"
     runner._egress._proxy_ca = tmp_path / "proxy-ca.pem"
     runner._egress._ca_bundle = tmp_path / "ca-bundle.pem"
     runner._egress._proxy_ca.touch()

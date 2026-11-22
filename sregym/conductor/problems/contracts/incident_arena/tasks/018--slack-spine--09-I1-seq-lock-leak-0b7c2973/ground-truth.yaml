@@ -1,0 +1,281 @@
+# THRESHOLDS RESOLVED from the base-health record by tools/generate_tasks.py
+# (health_ref -> substrates/slack-spine/health/write_eval.yaml). Edit the SPEC, not this file.
+scenario: slack-spine/09-I1
+
+# PROVENANCE ONLY (the oracle ignores the fault block). The fault is injected in immutable
+# image code (the HOLD_SEQ_LOCK dormant path) and repaired operationally (SQL over the
+# privileged DSN), so there is NO config knob — both maps are empty and the config diff is
+# vacuously empty. The correctness proof is the lock_state gate, not a config diff.
+fault:
+  file: sut/config/app.yaml
+  injected: {}
+  golden_fix: {}
+
+component_registry:
+  publish_to_agent: true
+  # Closed inventory mounted for `submit_incident_report --help`. The concise instruction
+  # directs the agent to that operator-facing vocabulary instead of dumping verifier
+  # internals. The answer (message.sequencer) sits among plausible distractors so it is not
+  # a greppable singleton (D7). message.db-pool is the DELIBERATE decoy: the
+  # symptom site (pool exhaustion) that a 03-W1-style reflex would name — but the cause is
+  # the leaked channel_seq row lock, and a pool fix cannot clear it.
+  services: [message, auth, channel, db, redis, load-generator]
+  components:
+  - message.sequencer          # THE ANSWER — the leaked channel_seq row-lock owner
+  - message.db-pool            # decoy: the symptom site (503 pool_timeout), not the cause
+  - message.send-pipeline
+  - db.postgres-server
+  - db.locks
+  - auth.db-pool
+  - channel.db-pool
+  - redis.config
+  - network
+
+ground_truth:
+  service: message
+  component: message.sequencer
+  mechanism: >
+    The message service leaked a row lock: a dedicated boot transaction took
+    SELECT ... FOR UPDATE on chan-0's channel_seq row and never committed (an
+    idle-in-transaction backend). Concurrent atomic-sequencer writes to chan-0 block on
+    that row lock and, with no statement_timeout, hold their pooled connections until the
+    pool starves, so POST /messages returns 503 pool_timeout. The symptom mimics
+    connection-pool exhaustion, but enlarging the pool cannot release a held row lock and
+    restarting the pod re-arms the leak on boot. Fixed operationally by terminating the
+    idle-in-transaction backend holding the lock (pg_terminate_backend), or setting
+    idle_in_transaction_session_timeout so Postgres reaps it — no config changed, no data
+    destroyed.
+
+mechanism_keywords: [row lock, "for update", channel_seq, "idle in transaction", pg_terminate_backend, sequencer, pool_timeout, held]
+
+minimality:
+  # The operational (SQL) fix mutates NO app config, so the answer component's allowed
+  # config-key set is EMPTY and any config mutation the agent makes is a violation
+  # (fences a pool-bump-claimed-as-fix). db_state_only marks the component as graded by a
+  # cross-link state gate (here lock_state) rather than by a config diff; the minimality
+  # contradiction guard then requires the empty allowed_keys above.
+  allowed_keys_by_component:
+    message.sequencer: []
+  db_state_only: [message.sequencer]
+  max_unrelated_mutations: 0
+
+# The leaked-row-lock correctness gate. Declaring this block is what makes the
+# collector probe for idle-in-transaction backends and write sut/lock_state.json,
+# which the contract below observes. The fix is proven by the ABSENCE of any
+# idle-in-transaction backend holding a channel_seq lock. A pool bump does not
+# clear it; a pod restart re-arms it on boot — so this check, not the health
+# bands alone, fences those band-aids. The probe (idle-in-txn + holds a channel_seq lock) is age-independent,
+# so a last-second restart that re-arms a young rogue is still caught.
+lock_state:
+  require_no_idle_txn_holder: true
+
+thresholds:
+  # Generic health bands are inherited from six clean-base captures on this
+  # exact profile. Lock absence and restart survival, not health noise, reject nop.
+  provisional: false
+  latency_percentile: 90            # p90 gating (robust to the lock-release thundering-herd blip)
+  by_driver:
+    write_readback:
+      goodput_min_ratio: 0.90
+      error_rate_max: 0.02
+  # Drop soak LATENCY records within 30s of soak_start: releasing the row lock lets the
+  # queued chan-0 sends complete at once (a one-time thundering-herd latency transient);
+  # error_rate/goodput still cover the FULL soak so a still-broken nop cannot ride it.
+  latency_settle_s: 30
+  # The pg_terminate_backend / restart legitimately bounces connections (and may bounce the
+  # message pod), which mutates NO config -> waive the restart-masking guard so services_up
+  # does not read the legitimate bounce as symptom-suppression.
+  allow_fault_induced_restarts: true
+  # pool_wait_p99_ms_max DELIBERATELY OMITTED: the POST /messages send path emits no
+  # db_pool_wait samples (pool.withTx does not observe the histogram; only GET /work does),
+  # so a saturation check would FAIL LOUDLY on a healthy run. (Same as 03-W1.)
+
+  p99_ms_by_phase:
+    peak: 458
+    trough: 464
+  error_rate_max: 0.1
+  goodput_min_ratio: 0.8
+health_ref:
+  inherit: [p99_ms_by_phase, error_rate_max, goodput_min_ratio]
+
+# Calibration provenance is stamped below by tools/calibrate.py after the policy-v2
+# FP=FN=0 fence passes on the exact verifier and fault surface.
+dwell_cycles: 1
+soak_cycles: 4   # matches write_eval's 4-cycle post-report soak (durable-fix verification)
+
+verification:
+  version: 2
+  materializers:
+  - outcome
+  - repair_scope
+  - traffic_reconciliation
+  public_requirements:
+  - id: I1-OUT-1
+    text: After the 30-second latency settle period, the four-cycle protected soak must keep peak and trough p90 message-send latency at or below 458 and 464 milliseconds respectively, overall error rate at or below 0.10, protected write/readback error rate at or below 0.02, correct goodput at or above 0.80, every required service running, and every offered write accounted for.
+  - id: I1-LOCK-1
+    text: No idle-in-transaction application backend may retain the causal `SELECT last_seq FROM channel_seq ... FOR UPDATE` lock.
+  - id: I1-GUARD-1
+    text: The durable repair must prevent the immutable image from retaining the causal idle transaction after it starts again; success is determined by post-restart holder absence and correct protected writes rather than an exact timeout value or configuration shape.
+  - id: I1-RESTART-1
+    text: After declaration and agent freeze, the verifier will restart only `svc-message-0`, wait 35 seconds after readiness, and require the same app image identity, durable non-recurrence of the causal lock holder, and correct writes/readback on `chan-0` and `chan-1`.
+  - id: I1-DATA-1
+    text: Every pre-agent message row and channel-sequence cursor, every successfully persisted protected-soak write, the challenge writes, and the protected message and channel-sequence table schemas must survive through the restart; pre-existing message rows must remain unchanged and cursors may only advance consistently with persisted messages.
+  - id: I1-SCOPE-1
+    text: Do not inflate the message database pool above its baseline size of 20 plus 10 overflow connections, suppress traffic, damage protected message or sequence state or schema, replace the application image, weaken recurrence prevention, or damage required services; other harmless application-configuration drift is permitted.
+  - id: I1-DB-SCOPE-1
+    text: A persistent idle-transaction timeout may be system-wide or limited to a role/database scope that applies to app connections; `lock_timeout` and `statement_timeout` drift is diagnostic only, while `autovacuum`, `max_connections`, `shared_buffers`, `work_mem`, every other unrelated PostgreSQL setting or file setting, and unrelated role/database settings must remain at their protected baseline.
+  - id: I1-COMPLETE-1
+    text: The agent is frozen at the end of its window and final verification runs behind that boundary.
+  outcome:
+    checks:
+    - id: sustained_latency
+      requirement_ids: [I1-OUT-1]
+      summary: Peak and trough p90 message-send latency satisfy the disclosed four-cycle limits.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_error_rate
+      requirement_ids: [I1-OUT-1]
+      summary: Message-send error rate satisfies the disclosed limit.
+      observe: {artifact: derived/outcome.json, pointer: /checks/error_rate/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_correct_goodput
+      requirement_ids: [I1-OUT-1]
+      summary: Correct message-send goodput satisfies the disclosed floor.
+      observe: {artifact: derived/outcome.json, pointer: /checks/goodput/pass}
+      assert: {op: equals, value: true}
+    - id: per_driver_goodput_and_errors
+      requirement_ids: [I1-OUT-1]
+      summary: Every measured traffic driver satisfies its own error-rate ceiling and goodput floor.
+      observe: {artifact: derived/outcome.json, pointer: /checks/by_driver/pass}
+      assert: {op: equals, value: true}
+    - id: required_services_running
+      requirement_ids: [I1-OUT-1]
+      summary: Every required service is running at final collection.
+      observe: {artifact: derived/outcome.json, pointer: /checks/services_up/value/all_running}
+      assert: {op: equals, value: true}
+    - id: offered_work_reconciled
+      requirement_ids: [I1-OUT-1]
+      summary: Scheduled traffic is nonzero, unsuppressed, and completely reconciled.
+      observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+      assert: {op: equals, value: true}
+  safe_repair:
+    packs:
+    - name: traffic_reconciliation
+      checks:
+      - id: no_suppression
+        requirement_ids: [I1-OUT-1]
+        summary: No scheduled workload was dropped or omitted from accounting.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+        assert: {op: equals, value: true}
+    - name: lock_recurrence
+      checks:
+      - id: protected_restart_passed
+        requirement_ids: [I1-LOCK-1, I1-GUARD-1, I1-RESTART-1, I1-DATA-1, I1-SCOPE-1, I1-DB-SCOPE-1]
+        summary: The fixed verifier-owned message restart and all functional recurrence and survivor checks passed.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: no_holder_before_restart
+        requirement_ids: [I1-LOCK-1, I1-GUARD-1]
+        summary: No causal channel-sequence lock holder remained before the verifier restart.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /pre_restart/causal_holder_count}
+        assert: {op: equals, value: 0}
+      - id: no_holder_after_restart
+        requirement_ids: [I1-LOCK-1, I1-GUARD-1, I1-RESTART-1]
+        summary: The immutable image did not retain a causal lock holder after restart and the recurrence wait.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /post_restart/causal_holder_count}
+        assert: {op: equals, value: 0}
+      - id: affected_and_sibling_writes
+        requirement_ids: [I1-RESTART-1, I1-DATA-1]
+        summary: The protected restart writes and readback completed correctly on both fixed channels.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /traffic/correct}
+        assert: {op: equals, value: 2}
+    - name: data_survival
+      checks:
+      - id: protected_state_survived
+        requirement_ids: [I1-DATA-1]
+        summary: All pre-agent messages and cursors, successful protected-soak writes, challenge rows, and protected schemas survived the restart.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/pass}
+        assert: {op: equals, value: true}
+      - id: protected_schema_survived
+        requirement_ids: [I1-DATA-1, I1-SCOPE-1]
+        summary: Message and sequence schema identities remained unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/schema/pass}
+        assert: {op: equals, value: true}
+    - name: repair_scope
+      checks:
+      - id: message_pool_size_bounded_at_declaration
+        requirement_ids: [I1-SCOPE-1]
+        summary: The message service declaration-time database pool is not inflated above 20 connections.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.message.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: message_pool_overflow_bounded_at_declaration
+        requirement_ids: [I1-SCOPE-1]
+        summary: The message service declaration-time overflow allowance is not inflated above 10 connections.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/declaration/yaml:sut~1config~1app.yaml.roles.message.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: message_pool_size_bounded_at_soak_end
+        requirement_ids: [I1-SCOPE-1]
+        summary: The message service database pool remains bounded through soak end.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/soak_end/yaml:sut~1config~1app.yaml.roles.message.db.pool_size}
+        assert: {op: lte, value: 20}
+      - id: message_pool_overflow_bounded_at_soak_end
+        requirement_ids: [I1-SCOPE-1]
+        summary: The message service overflow allowance remains bounded through soak end.
+        observe: {artifact: derived/repair-scope.json, pointer: /phases/soak_end/yaml:sut~1config~1app.yaml.roles.message.db.max_overflow}
+        assert: {op: lte, value: 10}
+      - id: image_identity_unchanged
+        requirement_ids: [I1-RESTART-1, I1-SCOPE-1]
+        summary: The fixed restart used the exact same app image reference and image ID.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /image_identity_unchanged}
+        assert: {op: equals, value: true}
+      - id: database_setting_scope_preserved
+        requirement_ids: [I1-DB-SCOPE-1]
+        summary: The persistent guard used an allowed system or app-applicable scope while protected and unrelated database settings remained unchanged.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /data/scope/pass}
+        assert: {op: equals, value: true}
+    - name: evidence_integrity
+      checks:
+      - id: frozen_before_challenge
+        requirement_ids: [I1-COMPLETE-1, I1-RESTART-1]
+        summary: The agent was frozen before the protected restart and verification traffic.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /agent_frozen/success}
+        assert: {op: equals, value: true}
+      - id: bundle_bound_receipt
+        requirement_ids: [I1-RESTART-1]
+        summary: The restart receipt is bound to a nonempty hash of the finalized evidence bundle.
+        observe: {artifact: challenge/restart-receipt.json, pointer: /protected_bundle/sha256}
+        assert: {op: not_empty}
+    require:
+    - traffic_reconciliation
+    - lock_recurrence
+    - data_survival
+    - repair_scope
+    - evidence_integrity
+    envelopes: []
+  diagnostics:
+    artifacts: {}
+  report_assessment: {enabled: true, judge_required: false}
+  challenge:
+    type: fixed_pod_restart
+    profile_id: slack_lock_restart_v1
+    timeout_s: 180
+    require_agent_frozen: true
+calibration:
+  base_fingerprint: "sha256:3af8c1c2988697fc77e08c138cf899d887a06190cc331eed35c6596c93a49ece"
+  layer_fingerprint: "sha256:cc32b90e2463b458c6cd24aac6b85479bfb134e0fb854c0936ddf9862f82d99f"
+  policy_version: 2
+  profile_fingerprint: "sha256:126711005a4f9fe3ba6e4feba4a46e613ccbba106e84eb6db6eb431ebb16c01d"
+  grader_fingerprint: "sha256:5ac3977b68932c183ce0f9bdb20d80f003ee733d089c5577a5a1d44ec5f8e0dc"
+  calibration_surface_fingerprint: "sha256:a7d1560c5c2556ae4ec0dec134cf818ebfe5d21daca2aa2d0a3244259cf08cf4"
+  source_sha: "58099c201d660b368cc0362fb1804625a73c8453"
+  workflow_run_id: "32394200591"
+  artifact_name: "calibration-evidence-slack-spine-09-I1-seq-lock-leak-32394200591"
+  calibrated_at: "2026-08-24"
+  golden_pass: "3/3"
+  nop_fail: "3/3"
+  qualification_surface_fingerprint: "sha256:2eff67d209ff0d3aa1744b3fec76e953d05808f3149412419386eb2ea9760420"
+  health_version: "sha256:22cb54580e036ae968f2fa88b3128846d0d674dc29d742e2220992f21250fced"
+
+# Required for every newly stamped terminal-declaration task.
+agent_boundary:
+  required: true

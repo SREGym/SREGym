@@ -25,7 +25,7 @@ CREDENTIALS = (
 )
 
 
-def run_command(args):
+def run_command(args, *, mounts=(), environment=(), forward_credentials=True):
     run_id = args.name or f"sregym-{uuid.uuid4().hex[:12]}"
     output = (args.output or REPO / "results" / "dind" / run_id).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -56,10 +56,14 @@ def run_command(args):
             ]
         )
     for name in CREDENTIALS:
-        if name in os.environ:
+        if forward_credentials and name in os.environ:
             command.extend(["--env", name])
     if args.env_file:
         command.extend(["--env-file", str(args.env_file.resolve())])
+    for mount in mounts:
+        command.extend(["--mount", mount])
+    for value in environment:
+        command.extend(["--env", value])
     command.append(args.image)
     payload = args.command
     if payload[:1] == ["--"]:

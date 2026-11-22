@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if selected %}{{ selected.name }} · {% endif %}SREGym traces</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='viewer.css') }}">
+</head>
+<body>
+{% macro hidden(exclude=[]) %}
+  {% for key, value in query.items() if key not in exclude %}
+    <input type="hidden" name="{{ key }}" value="{{ value }}">
+  {% endfor %}
+{% endmacro %}
+{% macro badge(label) %}<span class="badge {{ label|lower|replace(' ', '-') }}">{{ label }}</span>{% endmacro %}
+{% macro content(block) %}
+  {% if block.matched %}<p class="search-match">Search match in {{ block.label|lower }}.</p>{% endif %}
+  {% if block.text %}<pre>{{ block.text }}</pre>{% endif %}
+  {% if block.truncated %}<p class="notice">Preview ends after 8,000 characters. <a href="{{ block.url }}">Read the full text</a>.</p>{% endif %}
+  {% for image in block.images %}
+    {% if image.url %}
+      <a href="{{ image.url }}"><img class="trace-image" src="{{ image.url }}" alt="Recorded image: {{ image.path }}" loading="lazy"></a>
+    {% else %}
+      <p class="notice">External image not loaded: {{ image.path }}</p>
+    {% endif %}
+  {% endfor %}
+{% endmacro %}
+{% macro output(item) %}
+  {{ content(item.content) }}
+  {% for ref in item.refs %}
+    <p>{% if ref.url %}<a href="{{ ref.url }}">Open subagent: {{ ref.name }}</a>{% else %}Unavailable subagent reference: {{ ref.name }}{% endif %}</p>
+  {% endfor %}
+{% endmacro %}
+{% macro pagination(page, pages, name) %}
+  {% if pages > 1 %}
+  <nav class="pagination" aria-label="{{ name|replace('_', ' ') }}">
+    {% if page > 1 %}<a href="{{ url(**{name: page-1, 'focus': none}) }}">Previous</a>{% endif %}
+    <span>Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a href="{{ url(**{name: page+1, 'focus': none}) }}">Next</a>{% endif %}
+  </nav>
+  {% endif %}
+{% endmacro %}
+{% macro select_filter(name, label, choices, empty_label) %}
+  <label>{{ label }}
+    <select name="{{ name }}">
+      <option value="">{{ empty_label }}</option>
+      {% for value in choices %}
+        <option {% if query.get(name) == value %}selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+{% endmacro %}
+<a class="skip" href="#trace">Skip to the selected trace</a>
+<header class="masthead">
+  <a class="brand" href="/">SREGym <span>Trace viewer</span></a>
+  <a class="button secondary" href="{{ url() }}">Refresh files</a>
+</header>
+{% if not single_file %}
+<nav class="breadcrumbs reader-breadcrumbs" aria-label="Breadcrumb">
+  <a href="{{ browse_url(campaign=none, run_page=none) }}">Campaigns</a>
+  {% if selected %}
+    <span>/</span>
+    <a href="{{ browse_url(campaign=selected.campaign, run_page=none) }}">{{ selected.campaign if selected.campaign != '.' else 'Current directory' }}</a>
+    <span>/</span><span>Attempt {{ selected.attempt or 'trace' }}</span>
+  {% endif %}
+</nav>
+{% endif %}
+<div class="reader-layout {% if document and query.get('tab', 'trace') == 'trace' %}with-outline{% endif %}">
+{% if document and query.get('tab', 'trace') == 'trace' %}
+<aside class="step-outline" aria-label="Step navigation">
+  <details open>
+    <summary>Steps <span>{{ step_count }} total</span></summary>
+    {{ pagination(step_page, step_pages, 'step_page') }}
+    <ol>
+      {% for item in steps %}
+      <li>
+        <a href="{{ url(focus=item.step.step_id) }}#step-{{ item.step.step_id }}" {% if query.get('focus') == item.step.step_id|string %}aria-current="true"{% endif %}>
+          <span class="outline-number">{{ item.step.step_id }}</span>
+          <span class="outline-description">
+            <strong>{{ item.calls[0].call.function_name if item.calls else item.step.source|capitalize }}</strong>
+            {% if item.calls and item.calls[0].primary %}
+              <small class="outline-command" title="{{ item.calls[0].primary.preview }}">{{ item.calls[0].primary.preview }}</small>
+            {% endif %}
+            {% if item.stage != 'Unknown' %}<small>{{ item.stage }}</small>{% endif %}
+          </span>
+        </a>
+      </li>
+      {% endfor %}
+    </ol>
+  </details>
+</aside>
+{% endif %}
+<main id="trace" tabindex="-1">
+{% if selected %}
+  <header class="trace-header">
+    <h1>{{ selected.name|replace('_', ' ') }}</h1>
+    <p>{{ selected.agent }} · {{ selected.model }}{% if selected.attempt %} · Attempt {{ selected.attempt }}{% endif %}</p>
+    <div class="result-strip">
+      <span>Diagnosis {{ badge(selected.diagnosis) }}</span>
+      <span>Mitigation {{ badge(selected.mitigation) }}</span>
+      <span>Run {{ badge(selected.status) }}</span>
+    </div>
+    {% set reason = selected.evaluation.get('incomplete_reason') if selected.status == 'incomplete' else selected.evaluation.get('Mitigation.reason') if selected.mitigation == 'Fail' else none %}
+    {% if reason %}<p class="evaluation-context {{ 'incomplete' if selected.status == 'incomplete' else 'fail' }}"><strong>Recorded {{ 'incomplete-attempt' if selected.status == 'incomplete' else 'mitigation' }} reason:</strong> {{ reason[:180] }}{% if reason|length > 180 %}…{% endif %} <a href="{{ url(tab='evaluation') }}">Evaluation details</a></p>{% endif %}
+    <div class="attempt-switcher">
+      <span>This fault:</span>
+      {% for run in siblings|default([]) %}
+        <a href="{{ url(run=run.key, doc=none, tab='trace', step_page=none, focus=none, search=none, role=none, tool=none, stage=none) }}" class="attempt-link {{ run.mitigation|lower }}{% if run.status == 'incomplete' %} incomplete{% endif %}" {% if selected.key == run.key %}aria-current="true"{% endif %} title="Diagnosis {{ run.diagnosis }} · Mitigation {{ run.mitigation }} · Run {{ run.status }}">{% if run.attempt %}Attempt {{ run.attempt }}{% else %}Trace{% endif %} · {{ run.mitigation }}{% if run.status == 'incomplete' %} · Incomplete{% endif %}</a>
+      {% endfor %}
+    </div>
+    <details class="file-details">
+      <summary>File and download</summary><p class="trace-path">{{ selected.key }}</p>
+      <a class="download" href="/download?{{ {'run': selected.key}|urlencode }}">Download original JSON</a>
+    </details>
+  </header>
+  <nav class="tabs" aria-label="Trace sections">
+    {% for value, title in [('trace', 'Trajectory'), ('evaluation', 'Evaluation'), ('metadata', 'Metadata'), ('raw', 'Raw JSON')] %}
+    <a href="{{ url(tab=value) }}" {% if query.get('tab', 'trace') == value %}aria-current="page"{% endif %}>{{ title }}</a>
+    {% endfor %}
+  </nav>
+{% endif %}
+{% if error %}
+  <section class="error">
+    <h2>This trace could not be displayed</h2><p>{{ error }}</p>
+    <p>The viewer did not change the file. Use the JSON download to inspect it.</p>
+  </section>
+{% endif %}
+{% if not selected and not error %}
+  <section class="empty">
+    <h1>Select a recorded attempt</h1>
+    <p>The viewer reads <code>trajectory.json</code> files from the selected directory.</p>
+    <p>Evaluation grades appear only when a matching result exists beside the trace.</p>
+  </section>
+{% endif %}
+{% if selected and query.get('tab') == 'evaluation' %}
+  <section class="evaluation">
+    <h2>Recorded evaluation</h2><p>{{ selected.evaluation_note }}</p>
+    {% if selected.status == 'incomplete' %}<p class="notice">This attempt is incomplete. Do not treat missing stages as failures.</p>{% endif %}
+    <p class="muted">An agent submission is not an oracle result. The viewer does not calculate new grades.</p>
+    {% if selected.evaluation.get('Mitigation.reason') %}<h3>Mitigation reason</h3><pre>{{ selected.evaluation['Mitigation.reason'][:8000] }}</pre>{% endif %}
+    {% if selected.evaluation.get('incomplete_reason') %}<h3>Incomplete attempt</h3><pre>{{ selected.evaluation['incomplete_reason'][:8000] }}</pre>{% endif %}
+    {% if selected.evaluation %}
+      <details class="evaluation-fields">
+        <summary>All recorded evaluation fields</summary>
+        <dl class="data-list">
+          {% for key, value in selected.evaluation.items() %}
+            <div><dt>{{ key }}</dt><dd><pre>{{ value or '' }}</pre></dd></div>
+          {% endfor %}
+        </dl>
+      </details>
+    {% endif %}
+  </section>
+{% elif selected and query.get('tab') == 'raw' %}
+  <section><h2>Raw JSON preview</h2><p>Preview limited to 8,000 characters. The download contains the complete original file, including all subagents.</p><pre>{{ raw or 'No JSON object is available.' }}</pre></section>
+{% elif document and query.get('tab') == 'metadata' %}
+  <section><h2>Trajectory metadata</h2><p class="muted">Preview limited to 8,000 characters. The JSON download contains all metadata.</p><pre>{{ metadata }}</pre></section>
+{% elif document %}
+  {% if doc_key %}<p class="subagent-heading"><a href="{{ parent_url }}">Back to the parent trace</a> · Subagent: {{ document.agent.name }} · {{ document.trajectory_id }}</p>{% endif %}
+  {% if document.final_metrics %}
+  <details class="usage">
+    <summary>Recorded usage · {{ document.final_metrics.total_prompt_tokens|number }} input · {{ document.final_metrics.total_completion_tokens|number }} output tokens</summary>
+    <dl class="metrics">
+    <div><dt>Input tokens</dt><dd>{{ document.final_metrics.total_prompt_tokens|number }}</dd></div>
+    <div><dt>Cached input <span>(included)</span></dt><dd>{{ document.final_metrics.total_cached_tokens|number }}</dd></div>
+    <div><dt>Output tokens</dt><dd>{{ document.final_metrics.total_completion_tokens|number }}</dd></div>
+    <div><dt>Recorded cost</dt><dd>{% if document.final_metrics.total_cost_usd is not none %}${{ '%.4f'|format(document.final_metrics.total_cost_usd) }}{% else %}Unknown{% endif %}</dd></div>
+    </dl>
+  </details>
+  {% endif %}
+  {% if children or document.continued_trajectory_ref %}
+  <details class="related">
+    <summary>Subagents and continuation</summary>
+    <ul>
+      {% for child in children %}<li><a href="{{ child.url }}">{{ child.name }} · {{ child.id }}</a></li>{% endfor %}
+    </ul>
+    {% if continued_url %}<a href="{{ continued_url }}">Open continuation</a>{% elif document.continued_trajectory_ref %}<p>Unavailable continuation: {{ document.continued_trajectory_ref }}</p>{% endif %}
+    <p class="muted">Token totals come from the selected document. Child totals are not added again.</p>
+  </details>
+  {% endif %}
+  <form class="trace-filters" method="get">
+    {{ hidden(['search', 'role', 'tool', 'stage', 'step_page', 'focus']) }}
+    {% if not query.get('run') %}<input type="hidden" name="run" value="{{ selected.key }}">{% endif %}
+    <label class="trace-search">Search this trace<input name="search" value="{{ query.get('search', '') }}" placeholder="Messages, reasoning, arguments, or output"></label>
+    <button type="submit">Search</button><a href="{{ url(search=none, role=none, tool=none, stage=none, step_page=none, focus=none) }}">Reset</a>
+    <details class="trace-filter-options" {% if query.get('role') or query.get('tool') or query.get('stage') %}open{% endif %}>
+      <summary>More trace filters</summary>
+      <div>
+        {{ select_filter('role', 'Source', ['agent', 'user', 'system'], 'All sources') }}
+        {{ select_filter('tool', 'Tool', tool_options, 'All tools') }}
+        {{ select_filter('stage', 'Stage', stage_options, 'All stages') }}
+      </div>
+    </details>
+  </form>
+  <div class="trace-toolbar">
+    <form class="jump" action="/jump" method="get">
+      {{ hidden(['focus', 'step_page']) }}
+      <label>Go to step <input type="number" name="focus" min="1" max="{{ document.steps|length }}" value="{{ query.get('focus', '') }}" required></label>
+      <button class="secondary">Go</button>
+    </form>
+    <p class="trace-count">{{ step_count }} of {{ document.steps|length }} steps{% if 'Unknown' in stage_options %} · Some stages were not recorded.{% endif %}</p>
+    <nav aria-label="Step view">
+      <a href="{{ url(mode=none, step_page=none, focus=none) }}" {% if query.get('mode') != 'tools' %}aria-current="true"{% endif %}>All steps</a>
+      <a href="{{ url(mode='tools', step_page=none, focus=none) }}" {% if query.get('mode') == 'tools' %}aria-current="true"{% endif %}>Tool calls only</a>
+    </nav>
+  </div>
+  {{ pagination(step_page, step_pages, 'step_page') }}
+  {% if not steps %}<p class="empty">No steps match these filters. <a href="{{ url(search=none, role=none, tool=none, stage=none, mode=none, step_page=none, focus=none) }}">Show all steps in this trace</a>.</p>{% endif %}
+  {% for item in steps %}
+  {% set step = item.step %}
+  <article class="step" id="step-{{ step.step_id }}">
+    <header class="step-header">
+      <a href="{{ url(focus=step.step_id) }}#step-{{ step.step_id }}">Step {{ step.step_id }}</a>
+      <strong class="source-label source-{{ step.source }}">{{ step.source|capitalize }}</strong>
+      <span>{{ step.timestamp or 'Time not recorded' }}</span>
+      {% if item.stage != 'Unknown' %}<span>{{ item.stage }}</span>{% endif %}
+    </header>
+    {% if step.model_name or step.reasoning_effort or step.is_copied_context or step.llm_call_count is not none %}<p class="step-meta">{{ step.model_name or document.agent.model_name or '' }}{% if step.reasoning_effort %} · Effort {{ step.reasoning_effort }}{% endif %}{% if step.llm_call_count is not none %} · {{ step.llm_call_count }} LLM calls{% endif %}{% if step.is_copied_context %} · Copied context{% endif %}</p>{% endif %}
+    {% if item.message.text and (item.message.text|length > 1600 or query.get('mode') == 'tools') and not item.message.matched %}
+      <details>
+        <summary>{{ step.source|capitalize }} message · {{ item.message.text|length }} characters shown</summary>
+        {{ content(item.message) }}
+      </details>
+    {% else %}
+      {{ content(item.message) }}
+    {% endif %}
+    {% if step.reasoning_content %}
+      <details class="reasoning" {% if item.reasoning.matched %}open{% endif %}>
+        <summary>Reasoning</summary>{{ content(item.reasoning) }}
+      </details>
+    {% endif %}
+    {% for call in item.calls %}
+    <div class="tool-call">
+      <h3><span class="tool-label">Tool call</span>{{ call.call.function_name }}</h3>
+      <p class="call-id">Call ID: {{ call.call.tool_call_id }}</p>
+      {% if call.primary %}
+        <div class="primary-payload"><p class="payload-label">{{ call.primary.label }}</p>{{ content(call.primary) }}</div>
+      {% endif %}
+      <details class="arguments" {% if not call.primary or call.arguments.matched %}open{% endif %}>
+        <summary>All arguments (JSON)</summary>{{ content(call.arguments) }}
+      </details>
+      {% for i in call.outputs %}
+        <details class="tool-output" {% if item.outputs[i].content.matched %}open{% endif %}>
+          <summary>Tool output <span>{{ item.outputs[i].content.text|length }} characters{% if item.outputs[i].content.truncated %} in preview{% endif %}</span></summary>
+          {{ output(item.outputs[i]) }}
+        </details>
+      {% else %}
+        <p class="notice">No output was recorded for this call.</p>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    {% for i in item.unlinked %}
+      <details {% if item.outputs[i].content.matched %}open{% endif %}>
+        <summary>Observation without a call ID</summary>{{ output(item.outputs[i]) }}
+      </details>
+    {% endfor %}
+    {% if step.metrics or step.extra %}<details class="step-metrics"><summary>Step metrics and metadata</summary>{{ content(item.metrics) }}{{ content(item.extra) }}</details>{% endif %}
+  </article>
+  {% endfor %}
+  {{ pagination(step_page, step_pages, 'step_page') }}
+{% endif %}
+{% if previous_run or next_run %}
+<nav class="adjacent-traces" aria-label="Adjacent filtered traces">
+  {% if previous_run %}
+    <a href="{{ url(run=previous_run.key, doc=none, tab='trace', search=none, role=none, tool=none, stage=none, focus=none, step_page=none) }}">Previous trace<span>{{ previous_run.name|replace('_', ' ') }} · {{ previous_run.attempt }}</span></a>
+  {% endif %}
+  {% if next_run %}
+    <a href="{{ url(run=next_run.key, doc=none, tab='trace', search=none, role=none, tool=none, stage=none, focus=none, step_page=none) }}">Next trace<span>{{ next_run.name|replace('_', ' ') }} · {{ next_run.attempt }}</span></a>
+  {% endif %}
+</nav>
+{% endif %}
+</main>
+</div>
+</body>
+</html>

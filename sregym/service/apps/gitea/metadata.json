@@ -1,0 +1,8 @@
+{
+  "Name": "Gitea",
+  "Namespace": "gitea",
+  "Desc": "A real Gitea server with persistent Git repositories and PostgreSQL managed by CloudNativePG. The gitea-db-rw service routes writes to the elected database primary. Seeded users, organizations and repositories come from The Zoo benchmark.",
+  "frontend_service": "gitea",
+  "frontend_port": 3000,
+  "Supported Operations": ["Browse and update Git repositories", "Create and read issues", "Inspect PostgreSQL primary and replicas", "Inspect Gitea and database logs"]
+}

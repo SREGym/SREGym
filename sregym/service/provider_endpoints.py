@@ -64,7 +64,7 @@ def provider_endpoint_rules(
         if codex_subscription_auth:
             return _rules_from_urls(("https://chatgpt.com", "https://auth.openai.com"))
         return _rules_from_urls((_provider_url("openai", environment),))
-    if agent == "claudecode":
+    if agent in ("claudecode", "claudecode_radar"):
         urls = [_provider_url("anthropic", environment)]
         if environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
             urls.append("https://platform.claude.com")
@@ -84,7 +84,7 @@ def provider_endpoint_rules(
         if provider == "local":
             return _required_custom_base(environment, agent, model)
         return _provider_rules(provider, environment)
-    if agent == "stratus":
+    if agent in {"stratus", "mini-sre"}:
         if _configured_url(environment, "AGENT_API_BASE"):
             return _required_custom_base(environment, agent, model)
         return _provider_rules(_provider_from_model(model), environment)

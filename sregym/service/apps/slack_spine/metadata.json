@@ -1,0 +1,14 @@
+{
+    "Name": "Slack Spine",
+    "Namespace": "slack-spine",
+    "Desc": "A polyglot Slack clone: nine TypeScript roles (svc-auth, svc-workspace, svc-channel, svc-message, svc-thread, svc-file, svc-search, svc-notification, svc-platform) behind an Envoy edge, Go real-time and connection services (ws-gateway, flannel, channel-rt, dispatcher, kafkagate, search-engine), Python async workers over Redpanda, and PostgreSQL, Redis and MinIO for state. Every application role exposes GET/PUT /admin/config, POST /admin/reload, GET/PUT /admin/event and /admin/sequencer on port 8000; the database maintenance controller exposes /v1/maintenance on db-maintenance:8081. Ported from Incident Arena. An `ops-toolbox` pod provides an operator shell: psql with the privileged DSN in $DB_ADMIN_DSN, curl, and restart-svc.sh (applies a JSON config block to a role through PUT /admin/config + POST /admin/reload). Application and PostgreSQL metrics are scraped by Prometheus.",
+    "Supported Operations": [
+        "Sign in and validate sessions",
+        "Send, read and search messages in channels",
+        "Load unread counts and deliver messages in real time"
+    ],
+    "Helm Config": {
+        "release_name": "slack-spine",
+        "namespace": "slack-spine"
+    }
+}

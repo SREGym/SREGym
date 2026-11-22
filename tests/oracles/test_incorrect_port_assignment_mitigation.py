@@ -80,6 +80,21 @@ class _KubeCtl:
         return self.deployment
 
 
+@pytest.mark.parametrize(
+    "address,expected",
+    [("redis://redis:6379/0", "redis:6379"), ("redis:6379", "redis:6379"), ("redis://redis", None), ("", None)],
+)
+def test_url_address_normalization_is_explicit(address, expected):
+    problem = SimpleNamespace(env_var="PRODUCT_CATALOG_ADDR")
+    oracle = IncorrectPortAssignmentMitigationOracle(problem, address_is_url=True)
+    assert oracle._configured_address(_deployment(address=address)) == expected
+
+
+def test_plain_address_behavior_is_unchanged():
+    oracle = IncorrectPortAssignmentMitigationOracle(SimpleNamespace(env_var="PRODUCT_CATALOG_ADDR"))
+    assert oracle._configured_address(_deployment(address="product-catalog:8080")) == "product-catalog:8080"
+
+
 def _oracle(kubectl, *, require_source_ready=True):
     problem = SimpleNamespace(
         namespace="astronomy-shop",

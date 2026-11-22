@@ -3,13 +3,14 @@ import asyncio
 import contextlib
 import csv
 import importlib
+import itertools
 import logging
 import os
 import sys
 import threading
 import time
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.progress import (
@@ -26,15 +27,16 @@ from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_
 from clients.jev.config import configure as configure_jev
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
-from sregym.agent_registry import get_agent, list_agents
+from sregym.agent_registry import get_agent, list_agents, registry_path
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
-from sregym.conductor.conductor_api import request_shutdown, run_api
+from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
+from sregym.conductor.hooks import AttemptHookError, load_hooks
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
-from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
+from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts, stabilize_run_csv_headers, write_json_artifact
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
@@ -43,12 +45,43 @@ from sregym.traces import postprocess as trace_postprocess
 from sregym.traces import store as trace_store
 
 LAUNCHER = AgentLauncher()
+_launcher_cleanup_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
 EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
-CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
+# Seconds the agent process gets to exit and flush its logs before it is
+# reaped. Used by both the normal completion path and the timeout path.
+AGENT_REAP_GRACE_SECONDS = 60
+# Namespace deletion may itself wait 300 seconds, after fault recovery and Helm
+# teardown have already consumed part of the cleanup budget. Keep the outer
+# watchdog long enough for those bounded steps to finish and allow slower hosts
+# to raise it without editing the benchmark runner.
+CLEANUP_DRAIN_TIMEOUT_SECONDS = float(os.environ.get("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "600"))
+
+
+def problem_cleanup_timeout(conductor) -> float:
+    """Allow stateful reference recovery its own budget after agent grading."""
+    problem = getattr(conductor, "problem", None)
+    problem_timeout = getattr(problem, "cleanup_timeout_seconds", CLEANUP_DRAIN_TIMEOUT_SECONDS)
+    return max(CLEANUP_DRAIN_TIMEOUT_SECONDS, problem_timeout)
+
+
+def cleanup_interrupted_problem(conductor) -> None:
+    """Give an interrupted workload the same bounded teardown as a completed run."""
+    if getattr(conductor, "problem", None) is None:
+        return
+    try:
+        if conductor.close_submissions():
+            asyncio.run(conductor.wait_for_submission_evaluations(timeout=EVALUATION_DRAIN_TIMEOUT_SECONDS))
+        cleanup = conductor.finish_problem_in_background()
+        cleanup.result(timeout=problem_cleanup_timeout(conductor))
+    except TimeoutError:
+        conductor.abandon_submission_work()
+        logger.warning("Interrupted benchmark work exceeded its deadline; no further cleanup will run")
+    except Exception as exc:
+        logger.warning("Interrupted benchmark cleanup did not finish cleanly: %s", exc)
 
 
 def _http_endpoint(value: str) -> str:
@@ -72,16 +105,19 @@ def run_preflight_check(
     agent_name: str,
     container_runner: ContainerRunner | None = None,
     install_script: str | None = None,
+    kickoff_env: dict[str, str] | None = None,
 ) -> None:
     """Run the agent's pre-flight check inside the container."""
     agent_driver_modules = {
         "stratus": "clients.stratus.stratus_agent.driver.driver",
         "claudecode": "clients.claudecode.driver",
+        "claudecode_radar": "clients.claudecode_radar.driver",
         "codex": "clients.codex.driver",
         "copilot": "clients.copilot.driver",
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
         "cursor": "clients.cursor.driver",
+        "mini-sre": "clients.mini_sre.driver",
     }
     module_path = agent_driver_modules.get(agent_name)
     if not module_path:
@@ -96,7 +132,9 @@ def run_preflight_check(
     if install_script and not container_runner.has_prepared_agent_tools:
         check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
     try:
-        result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+        result = container_runner.run_sync(
+            ExecInput(command=check_cmd, env=dict(kickoff_env or {}), label="preflight", timeout=180)
+        )
     except BaseException:
         container_runner.close()
         raise
@@ -130,10 +168,79 @@ def _problem_result_paths(base_dir: Path, agent: str, problem_id: str) -> tuple[
     return final_path.with_name(f"_running_{final_path.name}"), final_path
 
 
+# Exit status when a problem exhausted its deploy retries. Distinct from the
+# 1 a campaign abort exits with, so a caller can tell the two apart.
+EXIT_DEPLOY_EXHAUSTED = 2
+
+
+def _deploy_exhausted_problems(results: list[dict[str, list[dict]]]) -> set[str]:
+    """Problem ids with a deploy_failed marker row in `results`, the list of
+    {agent: rows} driver_loop returns. Every deploy retry for that attempt
+    was spent, so the attempt was never run; with more than one attempt per
+    problem, an earlier attempt may still have scored.
+
+    driver_loop() writes the marker as a bool. The string form is accepted
+    too, so a row that passed through a CSV reads the same.
+    """
+    return {
+        str(row["problem_id"])
+        for entry in results
+        for rows in entry.values()
+        for row in rows
+        if row.get("problem_id") is not None and row.get("deploy_failed") in (True, "True")
+    }
+
+
 def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
+
+
+def claim_results_dir(root: Path = Path("results")) -> Path:
+    """Create this run's results directory, named for the current minute.
+
+    If another run already has that name, use <name>_2, <name>_3 and so on. mkdir without
+    exist_ok is the claim, so two runs started in the same minute cannot share a directory.
+    """
+    name = get_current_datetime_formatted()
+    root.mkdir(parents=True, exist_ok=True)
+    for candidate in itertools.chain([name], (f"{name}_{n}" for n in itertools.count(2))):
+        try:
+            (root / candidate).mkdir()
+            return root / candidate
+        except FileExistsError:
+            continue
+
+
+def _write_fault_spec(published_dir: Path, conductor, problem_id: str) -> Path | None:
+    """Record what was injected beside the attempt's published artifacts.
+
+    Written after publication, not into the staging directory: the agent reads
+    that directory as AGENT_LOGS_DIR, and finalization rejects any staged file
+    carrying the real problem id, which this one does. Null fields mean the
+    attempt published without injecting.
+    """
+    # Tests drive driver_loop with stand-in conductors, so accept only a real spec.
+    captured = getattr(conductor, "fault_spec", None)
+    if not isinstance(captured, dict):
+        captured = {}
+    injected_at = captured.get("fault_injected_at")
+    if injected_at is not None:
+        injected_at = datetime.fromtimestamp(injected_at, UTC).isoformat().replace("+00:00", "Z")
+    spec = {
+        "problem_id": problem_id,
+        "namespace": captured.get("namespace"),
+        "root_cause": captured.get("root_cause"),
+        "fault_injected_at": injected_at,
+    }
+    path = published_dir / "fault-spec.json"
+    try:
+        write_json_artifact(path, spec)
+    except OSError as exc:
+        logger.warning("Could not write %s: %s", path, exc)
+        return None
+    return path
 
 
 def _restore_env_var(name: str, previous_value: str | None) -> None:
@@ -217,6 +324,7 @@ def driver_loop(
     agent_timeout: int = 1800,
     resume_csv: str | None = None,
     judge_backend: str = "api",
+    stop_event: threading.Event | None = None,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -229,15 +337,27 @@ def driver_loop(
         use_external_harness: If True, inject fault and exit without running evaluation logic.
         n_attempts: Number of end-to-end attempts to run each problem.
         resume_csv: Path to a previous results CSV to resume from (skip completed problems).
+        stop_event: Optional signal to stop before starting more driver work.
     """
 
+    progress: Progress | None = None
+
     async def driver():
-        base_dir = Path("results") / get_current_datetime_formatted()
-        base_dir.mkdir(parents=True, exist_ok=True)
+        nonlocal progress
+        all_results_for_agent = []
+
+        def check_interrupted() -> None:
+            if stop_event is not None and stop_event.is_set():
+                raise BenchmarkCampaignAborted(
+                    "Benchmark interrupted by user.", [{agent_to_run: all_results_for_agent}]
+                )
+
+        base_dir = claim_results_dir()
         global _driver_base_dir
         _driver_base_dir = base_dir
         # give the API a moment to bind
         await asyncio.sleep(1)
+        check_interrupted()
 
         # Verify agent exists in registry (skip if using external harness)
         if use_external_harness:
@@ -246,7 +366,7 @@ def driver_loop(
             # so do not let stale local-run state affect them.
             conductor.clear_cluster_egress_boundary()
         else:
-            available_agents = list_agents(path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml").keys()
+            available_agents = list_agents(path=registry_path(Path(os.path.dirname(os.path.abspath(__file__))))).keys()
             if agent_to_run not in available_agents:
                 console.log(f"⚠️ Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}")
                 sys.exit(1)
@@ -259,13 +379,11 @@ def driver_loop(
             conductor.start_k8s_proxy()
             LAUNCHER.set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
 
-        all_results_for_agent = []
-
         async def finish_problem_with_deadline(timeout_reason: str) -> bool:
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
             try:
                 conductor.finish_problem_in_background()
-                await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
             except TimeoutError:
                 conductor.abandon_submission_work()
                 conductor.results["cleanup_timed_out"] = True
@@ -356,6 +474,7 @@ def driver_loop(
         progress.start()
 
         for pid in problem_ids:
+            check_interrupted()
             if pid in completed_problems:
                 console.log(f"⏭️  Skipping already-completed problem: {pid}")
                 continue
@@ -370,6 +489,7 @@ def driver_loop(
                 attempt for attempt in range(1, n_attempts + 1) if attempt not in completed_attempts.get(pid, set())
             ]
             for attempt_position, attempt in enumerate(attempts_to_run):
+                check_interrupted()
                 abort_campaign_after_attempt = False
                 progress.update(
                     task_id,
@@ -401,7 +521,15 @@ def driver_loop(
                 max_deploy_retries = 3
                 result = None
                 deploy_cleanup_failed = False
+                # How many deploys this attempt cost. Recorded on the result
+                # row because a retry is expensive and otherwise invisible:
+                # start_problem waits out pod readiness before it raises, and
+                # the retry then tears down and redeploys the whole problem.
+                deploy_attempts = 0
+                hook_failed = ""
                 for deploy_attempt in range(1, max_deploy_retries + 1):
+                    check_interrupted()
+                    deploy_attempts = deploy_attempt
                     try:
                         result = await conductor.start_problem()
                         break  # Success — exit retry loop
@@ -414,6 +542,10 @@ def driver_loop(
                             console.log(
                                 "⛔ Image platform failures require a compatible image; skipping deploy retries"
                             )
+                            break
+                        if isinstance(e, AttemptHookError):
+                            hook_failed = str(e)
+                            console.log("⛔ A hook refused the attempt; redeploying would not change that")
                             break
                         if deploy_attempt < max_deploy_retries:
                             console.log("🧹 Cleaning up before retry...")
@@ -431,6 +563,7 @@ def driver_loop(
                             )
                             result = None
 
+                check_interrupted()
                 if result is None:
                     # The inner retry loop already logged the failure. Don't crash the
                     # entire driver — record the failure, clean up cluster state, and
@@ -446,7 +579,10 @@ def driver_loop(
                         "attempt": attempt,
                         "deployment_profile": get_profile(),
                         "deploy_failed": True,
+                        "deploy_attempts": deploy_attempts,
                     }
+                    if hook_failed:
+                        snapshot["hook_failed"] = hook_failed
                     for stage, outcome in conductor.results.items():
                         if isinstance(outcome, dict):
                             for key, value in outcome.items():
@@ -502,20 +638,23 @@ def driver_loop(
                     attempt=attempt,
                 )
                 agent_proc = None
+                conductor.agent_timeout_seconds = agent_timeout
 
                 if conductor.stage_sequence:
                     with _artifact_environment(run):
                         reg = get_agent(
                             agent_to_run,
-                            path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
+                            path=registry_path(Path(os.path.dirname(os.path.abspath(__file__)))),
                         )
                         if reg:
+                            check_interrupted()
                             agent_proc = await LAUNCHER.ensure_started(reg)
+                            check_interrupted()
                 else:
                     console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
                     if conductor.close_submissions():
                         try:
-                            await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                            await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                         except TimeoutError:
                             abort_campaign_after_attempt = True
                             conductor.abandon_submission_work()
@@ -528,13 +667,16 @@ def driver_loop(
                             conductor.record_incomplete_attempt("cleanup_failed")
 
                 timed_out = False
-                agent_start_time = time.time()
+                agent_start_time = time.monotonic()
+                conductor.agent_deadline_monotonic = agent_start_time + agent_timeout
                 while not abort_campaign_after_attempt and conductor.submission_stage != "done":
-                    if time.time() - agent_start_time > agent_timeout:
+                    check_interrupted()
+                    if time.monotonic() > conductor.agent_deadline_monotonic:
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         submission_work = conductor.close_submissions()
-                        LAUNCHER.cleanup_agent(agent_to_run)
+                        # Same grace to flush output as a normal exit, then kill.
+                        LAUNCHER.cleanup_agent(agent_to_run, timeout=AGENT_REAP_GRACE_SECONDS)
                         conductor.results["timed_out"] = True
                         conductor.results["agent_timeout_seconds"] = agent_timeout
                         evaluation_failed = False
@@ -620,7 +762,7 @@ def driver_loop(
                 # freezing the attempt snapshot or starting another attempt.
                 if not abort_campaign_after_attempt and conductor.close_submissions():
                     try:
-                        await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                        await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                     except TimeoutError:
                         abort_campaign_after_attempt = True
                         conductor.abandon_submission_work()
@@ -654,9 +796,10 @@ def driver_loop(
                     agent_proc = LAUNCHER._procs.get(agent_to_run) or agent_proc
                     if agent_proc and not timed_out and not abort_campaign_after_attempt:
                         console.log("⏳ Waiting for agent process to complete...")
-                        timeout = 60  # seconds
+                        timeout = AGENT_REAP_GRACE_SECONDS
                         elapsed = 0
                         while elapsed < timeout:
+                            check_interrupted()
                             agent_proc.proc.poll()
                             if agent_proc.proc.returncode is not None:
                                 console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
@@ -676,6 +819,7 @@ def driver_loop(
                     "attempt": attempt,
                     "deployment_profile": get_profile(),
                     "judge_backend": judge_backend,
+                    "deploy_attempts": deploy_attempts,
                 }
                 if os.environ.get("AGENT_JEV_MODEL"):
                     snapshot["jev_model"] = os.environ["AGENT_JEV_MODEL"]
@@ -695,6 +839,7 @@ def driver_loop(
                     else:
                         snapshot[stage] = outcome
 
+                snapshot = run.save_judge_responses(snapshot)
                 fieldnames = sorted({key for row in [*all_results_for_agent, snapshot] for key in row})
                 ownership_image = LAUNCHER.container_image
                 try:
@@ -708,6 +853,8 @@ def driver_loop(
                     snapshot["artifact_staging_path"] = str(run.active_dir)
                     if run.network_audit_path.exists():
                         snapshot["internet_audit_staging_path"] = str(run.network_audit_path)
+                    if run.judge_responses_path.exists():
+                        snapshot["judge_responses_staging_path"] = str(run.judge_responses_path)
                     logger.error(
                         "Artifact finalization failed for %s attempt %s; staging retained at %s: %s",
                         pid,
@@ -725,6 +872,7 @@ def driver_loop(
                     writer.writerows(all_results_for_agent)
 
                 if published_run_dir is not None:
+                    _write_fault_spec(published_run_dir, conductor, pid)
                     logger.info(
                         f"⏳ Attempt {attempt} of {n_attempts} for problem {pid} complete - "
                         f"Intermediate results written to {tmp_path}; artifacts published to {published_run_dir}"
@@ -788,7 +936,11 @@ def driver_loop(
 
         return [{agent_to_run: all_results_for_agent}]
 
-    return asyncio.run(driver())
+    try:
+        return asyncio.run(driver())
+    finally:
+        if progress is not None:
+            progress.stop()
 
 
 def _run_driver_and_shutdown(
@@ -800,6 +952,7 @@ def _run_driver_and_shutdown(
     agent_timeout: int = 1800,
     resume_csv: str | None = None,
     judge_backend: str = "api",
+    stop_event: threading.Event | None = None,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     global _driver_error, _driver_results
@@ -813,6 +966,7 @@ def _run_driver_and_shutdown(
             agent_timeout=agent_timeout,
             resume_csv=resume_csv,
             judge_backend=judge_backend,
+            stop_event=stop_event,
         )
         _driver_results = results
     except BenchmarkCampaignAborted as exc:
@@ -823,8 +977,23 @@ def _run_driver_and_shutdown(
         _driver_error = exc
         logger.exception("Driver thread crashed")
     finally:
-        LAUNCHER.cleanup_all()
-        request_shutdown()
+        try:
+            with _launcher_cleanup_lock:
+                LAUNCHER.cleanup_all()
+            if stop_event is not None and stop_event.is_set():
+                # This thread owns deployment, so its setup work has stopped before
+                # recovery starts. The main thread must not tear down concurrently.
+                cleanup_interrupted_problem(conductor)
+        finally:
+            try:
+                if not use_external_harness:
+                    # Keep MCP available through problem teardown, then reap only
+                    # this campaign's forward (borrowed forwards have no handle).
+                    conductor.mcp_server.stop_port_forward()
+            except Exception:
+                logger.exception("Could not stop the MCP port-forward")
+            finally:
+                request_shutdown()
 
 
 def main(args):
@@ -859,6 +1028,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     # Assigning unconditionally here would clobber the caller's value, which
     # then surfaces far away as a connection to the wrong service.
     os.environ.setdefault("API_PORT", "8000")
+    check_api_port_available()
     os.environ.setdefault("MCP_SERVER_PORT", "9954")
     # Derived, never duplicated: a literal here silently disagrees with
     # MCP_SERVER_PORT, and consumers prefer the URL over the parts.
@@ -877,7 +1047,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
-        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+        get_agent(args.agent, path=registry_path(Path(os.path.dirname(os.path.abspath(__file__)))))
         if args.agent
         else None
     )
@@ -892,10 +1062,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
             "Run it with --internet-access open or enable container isolation."
         )
 
-    # Mitigation-only runs use the problem's executable oracle, not the
-    # diagnosis judge. They must also work with key-free agents like autosubmit.
-    if not args.use_external_harness and (args.stages is None or "diagnosis" in args.stages):
-        run_judge_preflight_check()
+    # An invalid hook registration must fail before agent resources are prepared.
+    agent_hooks = load_hooks(agent_reg.hooks) if agent_reg else None
 
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
@@ -910,8 +1078,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
         stages=tuple(args.stages) if args.stages else None,
-        baseline_override_s=args.baseline,
-        propagation_override_s=args.propagation,
+        baseline_override_s=getattr(args, "baseline", None),
+        propagation_override_s=getattr(args, "propagation", None),
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)
@@ -925,17 +1093,25 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
                     image=agent_image,
                 )
             if agent_reg and LAUNCHER._container_runner is not None:
+                # Before the first container (tools install, preflight) starts the egress proxy,
+                # whose endpoint rules then hold for the whole run.
+                LAUNCHER._container_runner.config.cluster_access = agent_reg.cluster_access
                 LAUNCHER._container_runner.prepare_agent_tools(agent_reg.install_script, agent_reg.agent_version)
             run_preflight_check(
                 args.agent,
                 container_runner=LAUNCHER._container_runner,
                 install_script=agent_reg.install_script if agent_reg else None,
+                kickoff_env=agent_reg.kickoff_env if agent_reg else None,
             )
     except BaseException:
         LAUNCHER.cleanup_all()
         raise
 
-    conductor = Conductor(config=conductor_config)
+    conductor = Conductor(
+        config=conductor_config,
+        judge_preflight=None if args.use_external_harness else run_judge_preflight_check,
+        hooks=agent_hooks,
+    )
 
     suite = getattr(args, "suite", None)
     problem_selection = (args.problem,) if args.problem else PROBLEM_SETS.get(suite)
@@ -943,6 +1119,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         logger.info(f"Running {suite}: {len(problem_selection)} problems")
 
     # Start the driver in the background; it will call request_shutdown() when finished
+    stop_event = threading.Event()
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
         args=(
@@ -955,7 +1132,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
             args.resume,
         ),
         name="driver",
-        kwargs={"judge_backend": judge_backend},
+        kwargs={"judge_backend": judge_backend, "stop_event": stop_event},
         daemon=True,
     )
     driver_thread.start()
@@ -964,12 +1141,19 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     try:
         run_api(conductor)
     except KeyboardInterrupt:
-        # If interrupted, still try to shut down cleanly
-        LAUNCHER.cleanup_all()
+        stop_event.set()
+        with _launcher_cleanup_lock:
+            LAUNCHER.cleanup_all()
         request_shutdown()
+        driver_thread.join(timeout=EVALUATION_DRAIN_TIMEOUT_SECONDS + problem_cleanup_timeout(conductor))
+        if driver_thread.is_alive():
+            conductor.abandon_submission_work()
+            _driver_error = RuntimeError("Interrupted benchmark driver did not stop before its deadline")
+            logger.warning("Driver did not stop before the interrupt deadline; refusing concurrent teardown")
     finally:
         # Stop any remaining agent containers/processes
-        LAUNCHER.cleanup_all()
+        with _launcher_cleanup_lock:
+            LAUNCHER.cleanup_all()
         if not args.use_external_harness:
             conductor.stop_k8s_proxy()
 
@@ -1010,14 +1194,45 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     else:
         logger.warning("⚠️ No results to write.")
 
+    # Each per-attempt CSV was published against whatever fieldnames the
+    # driver had accumulated so far, so a file from early in this run can be
+    # missing a column a later attempt's oracle introduced. Now that no more
+    # attempts will be published, whether the run completed or aborted,
+    # reconcile them all to one header.
+    if _driver_base_dir is not None:
+        try:
+            header_stabilization = stabilize_run_csv_headers(_driver_base_dir)
+            if header_stabilization.rewritten:
+                logger.info(
+                    f"🧹 Normalized headers on {len(header_stabilization.rewritten)} per-attempt result file(s)"
+                )
+            if header_stabilization.overflow_dropped:
+                logger.warning(
+                    f"⚠️ {len(header_stabilization.overflow_dropped)} result file(s) had a row with more "
+                    "values than its own header, so something wrote a malformed line. The "
+                    f"unlabeled overflow was dropped, not attributed to any column: "
+                    f"{header_stabilization.overflow_dropped}"
+                )
+        except (OSError, csv.Error) as exc:
+            logger.warning(f"⚠️ Result CSV header normalization failed (non-fatal): {exc}")
+
     if _driver_error is not None:
         if __name__ == "__main__":
             raise SystemExit(1) from _driver_error
         raise RuntimeError("Benchmark campaign did not complete") from _driver_error
 
+    deploy_exhausted = _deploy_exhausted_problems(results or [])
+    if deploy_exhausted:
+        logger.error(
+            f"❌ Deploy retries exhausted for {len(deploy_exhausted)} problem(s), "
+            f"at least one attempt was not run: {sorted(deploy_exhausted)}"
+        )
+
     if __name__ == "__main__":
-        # separate run, use exit
-        sys.exit(0)
+        # separate run, use exit. Non-zero when a problem exhausted its deploy
+        # retries: an attempt was never run, which is not a clean run, and
+        # nothing else reports it to the caller.
+        sys.exit(EXIT_DEPLOY_EXHAUSTED if deploy_exhausted else 0)
     else:
         # function call run, return results
         return results
@@ -1086,6 +1301,19 @@ if __name__ == "__main__":
         "--jev-model",
         default=None,
         help="Enable experimental Jev decision support for Codex (e.g. jev-latest). Requires TYPESAFE_API_KEY and --force-build.",
+    )
+    parser.add_argument(
+        "--check-setup",
+        action="store_true",
+        help=(
+            "Check that this machine is ready for a run with the other flags given (tools, Docker, cluster, "
+            "network policy, agent and judge credentials), print how to fix each problem, and exit"
+        ),
+    )
+    parser.add_argument(
+        "--check-setup-offline",
+        action="store_true",
+        help="With --check-setup, check judge credentials without sending the judge a test request",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -1180,5 +1408,26 @@ if __name__ == "__main__":
         parser.error("--propagation must be a non-negative integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
+
+    if args.check_setup:
+        from sregym.setup_check import SetupCheckOptions, run_setup_check
+
+        sys.exit(
+            run_setup_check(
+                SetupCheckOptions(
+                    agent=args.agent,
+                    model=args.model,
+                    judge_model=args.judge_model,
+                    judge_backend=args.judge_backend,
+                    profile=args.profile,
+                    internet_access=args.internet_access,
+                    use_external_harness=args.use_external_harness,
+                    noise=args.noise,
+                    problem=args.problem,
+                    live_judge=not args.check_setup_offline,
+                ),
+                console=console,
+            )
+        )
 
     main(args)

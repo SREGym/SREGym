@@ -1,0 +1,330 @@
+scenario: slack-spine/06-logins-unread-and-sends-all-slow-since-noon
+fault:
+  # NO CONFIG KEY. `store_consistency_strict` is a RUNTIME entry in servicekit's
+  # /admin/event registry (a module-level Set, event.ts:88) armed by the loadgen's own PUT
+  # at t=40 s — it is never an app.yaml key, so it contributes nothing to the config diff.
+  # STORE_HOLD_MS is the magnitude constant on the role's container `env`, which renders
+  # into the role Deployment only, never into the app.yaml ConfigMap behind /admin/config.
+  # So injected and golden_fix are BOTH EMPTY, exactly as PR #408's probe and 06-F3's
+  # env-only leg ship, and the correct repair leaves `changed_keys` == [] (checked below).
+  file: sut/config/app.yaml
+  injected: {}
+  golden_fix: {}
+
+component_registry:
+  services: [redis, auth, workspace, notification, message, channel, db, load-generator]
+  components:
+  # The answer: the shared store's operating policy (contracts/registry.yaml:150, tier
+  # 06-data). Canonical, and used by no other task's answer key.
+  - redis.cache-policy
+  - redis.redis-server
+  # Near-miss decoys — each victim role's OWN components, which an agent that reaches a
+  # slow service and stops at the first hop names instead of the shared store behind all
+  # three. Every id here is canonical in substrates/slack-spine/contracts/registry.yaml.
+  - auth.session-store-client
+  - auth.login-handler
+  - auth.jwks-cache
+  - workspace.settings-cache
+  - workspace.membership-loader
+  - notification.counter
+  - notification.fanout
+  # Cross-tier decoys for the "the send path itself got slower" hypothesis. The message
+  # role's pool is measured healthy throughout (capacity 30, checked_out max 7-9).
+  - message.send-pipeline
+  - message.db-pool
+  - channel.membership-acl
+  - channel.channel-crud
+  - db.postgres-server
+
+ground_truth:
+  service: redis
+  component: redis.cache-policy
+  mechanism: >-
+    The single cause. See ground_truth_set.
+ground_truth_set:
+  - service: redis
+    component: redis.cache-policy
+    mechanism: >-
+      The shared key-value store that backs auth sessions, the workspace settings cache
+      and the notification unread counters was switched into a degraded strict-consistency
+      operating policy partway through the day, so every operation against it pays a fixed
+      hold before it returns. Three services depend on that one store, so they slowed
+      together: sign-in waits on the session write, message sends wait twice (once on the
+      session validate and once on the channel-to-workspace settings read, which is why
+      the send lane moved by roughly twice as much as the other two), and unread checks
+      wait on the counter read — while every service's own database pool and per-service
+      cache stayed healthy. Returning the shared store to its normal operating policy on
+      each dependent service clears all three lanes at once, with no restart and no
+      configuration edit.
+mechanism_keywords: [redis, store, shared, cache, consistency, strict, hold, session, settings, counter, unread, login, fan-out, blast, dependency, latency]
+
+# Minimality allow-list (consumed by check_task_consistency: golden_fix must fit under the
+# ANSWER component's keys). The repair touches NO app.yaml key, so the answer component's
+# allow-list is empty and golden_fix ({}) fits it trivially.
+minimality:
+  allowed_keys_by_component:
+    redis.cache-policy: []
+  max_unrelated_mutations: 0
+
+thresholds:
+  # PROVISIONAL: this scenario has no fence of its own yet. Every band below is derived by
+  # the CANONICAL health envelope — mean + max(1.0*mean, 3*stdev, 100 ms)
+  # (tools/health_policy.py:13-37, mirrored by tools/calibrate.py:57-59,238-247) — from the
+  # GOLDEN (healthy) capture of PR #408's `probe-o8-strict-store-250` cell, run
+  # 33114415259, oracle artifact 9664140740. That capture is the first per-lane healthy
+  # reference this shape has ever had; its aggregate (151.4 / 155.0) reproduces the
+  # p1_shell_distractor_eval_1h base-health record (152.2 / 155.7), which is what licenses
+  # it as a healthy reference.
+  provisional: true
+  latency_percentile: 90
+  # Aggregate: golden soak 151 / 155 -> calibrate's own suggestion 303 / 309. The nop
+  # measured 651.974 / 650.093.
+  p99_ms_by_phase: {peak: 303, trough: 309}
+  # Measured 0.0 / 1.0 in all eight probe cells (both dose arms, both cells each): the
+  # hold is a setTimeout, not a pooled connection, so NOTHING errors. These are the
+  # canonical margins (error_rate_ceiling(0.0) = 0.10, goodput_floor(1.0) = 0.80) and they
+  # are SCOPE GUARDS against a repair that trades latency for dropped work — they are not,
+  # and are not claimed to be, victim discriminators.
+  error_rate_max: 0.1
+  goodput_min_ratio: 0.8
+  # NOT waived. Two reasons, and the second is the inverse of PR #408's:
+  #   (a) nothing here takes the data plane down, so a restart without a persisted diff
+  #       would be restart-masking; and
+  #   (b) with RUNTIME arming a pod recreation would CLEAR the event with no config diff
+  #       (the active set is initialized from an env var this overlay leaves unset), i.e.
+  #       it would mask the fault rather than reinstate it. No agent-reachable path
+  #       recreates a pod (rebuild-svc.sh requires BUILD_TARGET_ROLE + REBUILD_BROKER_URL,
+  #       which non-build-capable tasks do not set; agent RBAC is `pods get` +
+  #       `pods/exec create`), and the shipped `database_survival` challenge restarts
+  #       nothing — so the trap never springs. The flag stays false so the scenario does
+  #       not license it.
+  allow_fault_induced_restarts: false
+  # Drop the first 30 s of the soak from the LATENCY window. The golden's repair is three
+  # PUTs with no reload, but the event is live until the last of them lands, so a handful
+  # of in-flight 250 ms holds can straddle the declaration. 30 s clears them and still
+  # leaves >= 90 s of the 120 s soak — always at least one complete peak and one complete
+  # trough at this profile's 30/30 cycle, so no declared (driver, phase) window can be
+  # empty (an empty window FAILS LOUDLY, verifier/providers/outcome.py::_saturation_check). error_rate
+  # and goodput are NOT settled; they grade the full soak.
+  latency_settle_s: 30
+  # SCOPE GUARDS, consumed by `lane_goodput_and_errors`. Measured 0.0 / 1.0 on every lane
+  # in every probe cell — declared so a lane that starts SHEDDING work is caught, not to
+  # discriminate the fault. Canonical margins on the measured healthy point.
+  by_driver:
+    session_login:
+      goodput_min_ratio: 0.80
+      error_rate_max: 0.10
+    session_post:
+      goodput_min_ratio: 0.80
+      error_rate_max: 0.10
+    session_unread:
+      goodput_min_ratio: 0.80
+      error_rate_max: 0.10
+  # THE VICTIM GRADING. One band per lane, canonical envelope on that lane's own measured
+  # healthy p90 — NOT the aggregate placeholder PR #408's probe borrowed, and NOT the
+  # "2x mean" approximation in the design log, which omits the 100 ms absolute margin and
+  # would put a 2.6 ms ceiling on a 1 ms lane (fragile enough for the GOLDEN to fail it).
+  #
+  #   lane            golden peak/trough   band peak/trough   nop peak/trough    fails?
+  #   session_login     1.001 / 1.288        101 / 101        251.518 / 251.861   YES
+  #   session_post    225.082 / 228.525      450 / 457        728.196 / 729.964   YES
+  #   session_unread    0.791 / 0.879        101 / 101        251.374 / 251.665   YES
+  #
+  # Three separately gradeable victims under the canonical policy — a stronger claim than
+  # the design log's, which reached the same count via the looser approximation.
+  latency_by_driver:
+    session_login: {peak: 101, trough: 101}
+    session_post: {peak: 450, trough: 457}
+    session_unread: {peak: 101, trough: 101}
+
+dwell_cycles: 1
+soak_cycles: 2
+
+verification:
+  version: 2
+  materializers:
+  - repair_scope
+  - outcome
+  - traffic_reconciliation
+  public_requirements:
+  - id: OSV-OUT-1
+    text: During the sustained recovery period after the report, protected-soak traffic remains nonzero, unsuppressed, and fully reconciled, while the complete traffic ledger remains internally consistent.
+  - id: OSV-LANE-1
+    text: Each separately measured user-facing lane — sign-in, unread check, and message send — returns to its published latency, error, and goodput limits.
+  - id: OSV-SCOPE-1
+    text: "The repair is operational rather than a configuration edit: the protected application configuration is unchanged at declaration and does not drift afterwards, and protected PostgreSQL resource, timeout, durability, and maintenance guardrails remain intact."
+  - id: OSV-DATA-1
+    text: Pre-agent records and successfully offered writes survive unchanged.
+  - id: OSV-EVID-1
+    text: Final verification runs behind a terminal agent boundary and its receipt is bound to the finalized evidence bundle.
+  - id: OSV-COMPLETE-1
+    text: The agent is frozen at the end of its window and final verification runs behind that boundary.
+  outcome:
+    checks:
+    # These authored rows grade the disclosed SLI limits. The unified verifier
+    # separately derives exact report-component grading from the answer set; the
+    # safe_repair rows below reject touching the shared store and a victim role.
+    - id: sustained_latency
+      requirement_ids: [OSV-OUT-1]
+      summary: Peak and trough p90 message-write latency satisfy the disclosed two-cycle limits.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_error_rate
+      requirement_ids: [OSV-OUT-1]
+      summary: Message-write error rate satisfies the disclosed limit.
+      observe: {artifact: derived/outcome.json, pointer: /checks/error_rate/pass}
+      assert: {op: equals, value: true}
+    - id: sustained_correct_goodput
+      requirement_ids: [OSV-OUT-1]
+      summary: Correct message-write goodput satisfies the disclosed floor.
+      observe: {artifact: derived/outcome.json, pointer: /checks/goodput/pass}
+      assert: {op: equals, value: true}
+    # THE THREE VICTIMS, named individually so a verdict says WHICH lane is unrepaired
+    # rather than only that something is.
+    - id: lane_login_latency
+      requirement_ids: [OSV-LANE-1]
+      summary: The sign-in lane's own p90 satisfies its published peak and trough limits.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency_by_driver/per_driver/session_login/pass}
+      assert: {op: equals, value: true}
+    - id: lane_unread_latency
+      requirement_ids: [OSV-LANE-1]
+      summary: The unread-check lane's own p90 satisfies its published peak and trough limits.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency_by_driver/per_driver/session_unread/pass}
+      assert: {op: equals, value: true}
+    - id: lane_send_latency
+      requirement_ids: [OSV-LANE-1]
+      summary: The message-send lane's own p90 satisfies its published peak and trough limits.
+      observe: {artifact: derived/outcome.json, pointer: /checks/latency_by_driver/per_driver/session_post/pass}
+      assert: {op: equals, value: true}
+    - id: lane_goodput_and_errors
+      requirement_ids: [OSV-LANE-1]
+      summary: Every separately measured lane satisfies its own error-rate ceiling and goodput floor.
+      observe: {artifact: derived/outcome.json, pointer: /checks/by_driver/pass}
+      assert: {op: equals, value: true}
+    - id: required_services_running
+      requirement_ids: [OSV-OUT-1]
+      summary: Every required service is running at final collection.
+      observe: {artifact: derived/outcome.json, pointer: /checks/services_up/value/all_running}
+      assert: {op: equals, value: true}
+    - id: restarts_are_legitimate
+      requirement_ids: [OSV-SCOPE-1]
+      summary: Protected pod-state evidence proves no restart masked the in-memory fault without a persisted repair.
+      observe: {artifact: derived/outcome.json, pointer: /checks/services_up/value/restart_legitimate}
+      assert: {op: equals, value: true}
+    - id: offered_work_reconciled
+      requirement_ids: [OSV-OUT-1]
+      summary: The complete immutable traffic ledger is internally reconciled, and post-declaration protected-soak traffic is nonzero and unsuppressed.
+      observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+      assert: {op: equals, value: true}
+  safe_repair:
+    packs:
+    - name: traffic_reconciliation
+      checks:
+      - id: no_suppression
+        requirement_ids: [OSV-OUT-1]
+        summary: No scheduled workload is dropped during the post-declaration protected soak.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: full_ledger_accounting_complete
+        requirement_ids: [OSV-OUT-1]
+        summary: Every arrival across the complete immutable traffic ledger is represented by the recorded accounting totals.
+        observe: {artifact: derived/traffic-reconciliation.json, pointer: /complete_accounting}
+        assert: {op: equals, value: true}
+    - name: repair_scope
+      checks:
+      # NO CONFIG MUTATION. The licensed repair is three PUTs to /admin/event, which
+      # touch no app.yaml key, so a correct trajectory leaves the protected config
+      # byte-identical. This is the O8'/#400 pattern: it fences the "raise a pool / drop a
+      # hold_ms until the band goes green" family of masking repairs, which on this
+      # scenario would be pure capacity buying against a fault that is not a capacity
+      # problem. It is a SCOPE GUARD, not a discriminator — the nop changes nothing
+      # either, and passes it.
+      - id: no_protected_config_mutation
+        requirement_ids: [OSV-SCOPE-1]
+        summary: The operational repair leaves the protected application configuration unchanged.
+        observe: {artifact: derived/repair-scope.json, pointer: /changed_keys}
+        assert: {op: set_equals, value: []}
+      - id: no_post_declaration_config_drift
+        requirement_ids: [OSV-SCOPE-1]
+        summary: Protected application configuration does not drift after completion.
+        observe: {artifact: derived/repair-scope.json, pointer: /post_declaration_drift}
+        assert: {op: empty}
+      - id: postgres_scope_unchanged
+        requirement_ids: [OSV-SCOPE-1]
+        summary: Protected PostgreSQL settings, role/database settings, and file settings match their pre-agent state.
+        observe: {artifact: challenge/database-survival.json, pointer: /data/scope/pass}
+        assert: {op: equals, value: true}
+    - name: data_survival
+      checks:
+      # The challenge consumer the contract layer requires: the receipt's top-level /pass
+      # asserted true (verifier/contract.py:442-455), carrying NO evidence list. That
+      # split is load-bearing: on the no-declaration path the challenge is not run and the
+      # receipt is the `applicable: false` shape, whose /pass resolves (false) but which
+      # has no /data at all, so attaching evidence here would turn the intended nop FAIL
+      # into an ERRORED trial (checks.py:255-311). Same split 06-F4 and PR #385 ship.
+      - id: protected_challenge_passed
+        requirement_ids: [OSV-DATA-1]
+        summary: The verifier-owned protected database-survival challenge passes.
+        observe: {artifact: challenge/database-survival.json, pointer: /pass}
+        assert: {op: equals, value: true}
+      - id: protected_state_survived
+        requirement_ids: [OSV-DATA-1]
+        summary: Every protected pre-agent message and channel-sequence row plus every successful offered write survives unchanged.
+        observe: {artifact: challenge/database-survival.json, pointer: /data/pass}
+        assert: {op: equals, value: true}
+        evidence:
+        - {artifact: challenge/database-survival.json, pointer: /data/pre_agent_rows/messages}
+        - {artifact: challenge/database-survival.json, pointer: /data/pre_agent_rows/channel_seq}
+        - {artifact: challenge/database-survival.json, pointer: /data/offered_messages}
+    - name: resource_ceiling
+      checks:
+      - id: postgres_capacity_unchanged
+        requirement_ids: [OSV-SCOPE-1]
+        summary: Protected PostgreSQL capacity, timeout, and checkpoint settings remain unchanged.
+        observe: {artifact: challenge/database-survival.json, pointer: /data/scope/settings_unchanged}
+        assert: {op: equals, value: true}
+    - name: agent_boundary
+      checks:
+      - id: frozen_before_challenge
+        requirement_ids: [OSV-COMPLETE-1, OSV-EVID-1]
+        summary: The terminal agent boundary succeeded before soak and active verification.
+        observe: {artifact: challenge/database-survival.json, pointer: /agent_frozen/success}
+        assert: {op: equals, value: true}
+      - id: no_agent_survivors
+        requirement_ids: [OSV-COMPLETE-1, OSV-EVID-1]
+        summary: No agent process survived to influence the protected challenge.
+        observe: {artifact: challenge/database-survival.json, pointer: /agent_frozen/remaining_pids}
+        assert: {op: empty}
+    - name: evidence_integrity
+      checks:
+      - id: bundle_bound_receipt
+        requirement_ids: [OSV-EVID-1]
+        summary: The challenge receipt is bound to a nonempty hash of the finalized evidence bundle.
+        observe: {artifact: challenge/database-survival.json, pointer: /protected_bundle/sha256}
+        assert: {op: not_empty}
+    require:
+    - traffic_reconciliation
+    - repair_scope
+    - data_survival
+    - resource_ceiling
+    - agent_boundary
+    - evidence_integrity
+  diagnostics:
+    artifacts:
+      mutations: {artifact: derived/repair-scope.json, pointer: /changed_keys}
+  report_assessment: {enabled: true, judge_required: false}
+  # `database_survival` (verifier/profiles/slack_database_survival_v1.py) is the
+  # simplest challenge that restarts NOTHING: no broker, no pod replacement. That matters
+  # mechanically here, and in the OPPOSITE direction from PR #408's env-armed probe: with
+  # runtime arming a recreated pod would COME UP CLEAN and silently repair the fault under
+  # the verifier, so a restarting challenge would hand every cell a free pass.
+  # timeout_s MUST equal the profile's fixed 30 s (contract.py:424-431).
+  challenge:
+    type: database_survival
+    profile_id: slack_database_survival_v1
+    timeout_s: 30
+    require_agent_frozen: true
+
+# Required for every newly stamped terminal-declaration task.
+agent_boundary:
+  required: true

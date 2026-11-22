@@ -25,6 +25,9 @@ HOTEL_RESERVATION_APPLICATION_IMAGE = (
 
 
 class HotelReservation(Application):
+    services = frozenset({"frontend", "geo", "profile", "rate", "recommendation", "reservation", "search", "user"})
+    jaeger_agent_address = "otel-collector.observe.svc.cluster.local:6831"
+
     def __init__(
         self,
         mount_failure_scripts: bool = True,
@@ -139,17 +142,12 @@ class HotelReservation(Application):
 
     @contextlib.contextmanager
     def _rendered_deployment_configs(self) -> Iterator[Path]:
-        """Render problem-specific env values before Kubernetes sees a Deployment.
+        """Configure tracing and problem-specific env values before deployment.
 
-        Most problems use the application manifests unchanged. A problem that
-        needs a different, initially healthy runtime policy can provide exact
-        Deployment/container overrides. Rendering a temporary manifest tree
-        avoids a setup rollout and its misleading ReplicaSet history.
+        Jaeger clients cache the destination IP at startup. Use the central
+        collector directly because Conductor replaces the app-local Service.
+        Rendering a temporary tree also keeps env overrides out of source files.
         """
-        if not self.deployment_env_overrides:
-            yield Path(self.k8s_deploy_path)
-            return
-
         with tempfile.TemporaryDirectory(prefix="hotel-reservation-config-") as temporary_dir:
             rendered_path = Path(temporary_dir) / "kubernetes"
             shutil.copytree(self.k8s_deploy_path, rendered_path)
@@ -168,12 +166,17 @@ class HotelReservation(Application):
                     if not isinstance(document, dict) or document.get("kind") != "Deployment":
                         continue
                     deployment_name = document.get("metadata", {}).get("name")
-                    container_overrides = self.deployment_env_overrides.get(deployment_name)
-                    if not container_overrides:
-                        continue
+                    container_overrides = self.deployment_env_overrides.get(deployment_name, {})
 
                     containers = document.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
                     for container in containers:
+                        if deployment_name in self.services and container.get("command") == [deployment_name]:
+                            container["args"] = [
+                                *container.get("args", []),
+                                "-jaegeraddr",
+                                self.jaeger_agent_address,
+                            ]
+                            changed = True
                         container_name = container.get("name")
                         values = container_overrides.get(container_name)
                         if not values:

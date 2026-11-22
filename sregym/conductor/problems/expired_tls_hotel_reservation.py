@@ -8,6 +8,7 @@ from sregym.conductor.oracles.expired_tls_mitigation_oracle import ExpiredTlsMit
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.observer.ingress_nginx import IngressNginx
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -24,8 +25,10 @@ class ExpiredTlsHotelReservation(Problem):
     inside the referenced secret to discover the root cause.
     """
 
-    def __init__(self):
-        super().__init__(app=HotelReservation())
+    HOST = "hotel-reservation.local"
+
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else HotelReservation())
 
         self.kubectl = KubeCtl()
         self.problem_id = "expired_tls_hotel_reservation"
@@ -143,7 +146,7 @@ class ExpiredTlsHotelReservation(Problem):
 
         subject = issuer = x509.Name(
             [
-                x509.NameAttribute(NameOID.COMMON_NAME, "hotel-reservation.local"),
+                x509.NameAttribute(NameOID.COMMON_NAME, self.HOST),
             ]
         )
         now = datetime.datetime.now(datetime.UTC)
@@ -160,7 +163,7 @@ class ExpiredTlsHotelReservation(Problem):
             .add_extension(
                 x509.SubjectAlternativeName(
                     [
-                        x509.DNSName("hotel-reservation.local"),
+                        x509.DNSName(self.HOST),
                     ]
                 ),
                 critical=False,

@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 import pytest
 from kubernetes import client
 
-from sregym.service.kubectl import ContainerPlatformError, KubeCtl
+from sregym.service.kubectl import ContainerPlatformError, KubeCtl, PodReadinessTimeout
 
 
 def _pod(message, *, init=False, ready=False, previous=False):
@@ -63,6 +63,98 @@ def test_transient_pull_failure_can_recover():
     with patch("sregym.service.kubectl.time.sleep") as sleep:
         kubectl.wait_for_ready("test", max_wait=10)
     sleep.assert_called_once()
+
+
+def test_preload_image_creates_all_node_pods_before_waiting_and_cleans_up():
+    kubectl = KubeCtl.__new__(KubeCtl)
+    kubectl.core_v1_api = Mock()
+    kubectl.core_v1_api.list_node.return_value = client.V1NodeList(
+        items=[
+            client.V1Node(metadata=client.V1ObjectMeta(name="worker-a")),
+            client.V1Node(metadata=client.V1ObjectMeta(name="worker-b")),
+        ]
+    )
+    kubectl.core_v1_api.read_namespaced_pod.return_value = client.V1Pod(
+        metadata=client.V1ObjectMeta(name="preload"),
+        spec=client.V1PodSpec(containers=[]),
+        status=client.V1PodStatus(phase="Succeeded"),
+    )
+
+    kubectl.preload_image_on_nodes("registry.example/helper:v1", "openebs", timeout=10)
+
+    creates = kubectl.core_v1_api.create_namespaced_pod.call_args_list
+    assert len(creates) == 2
+    assert {call.kwargs["body"].spec.node_name for call in creates} == {"worker-a", "worker-b"}
+    assert all(call.kwargs["body"].spec.containers[0].image == "registry.example/helper:v1" for call in creates)
+    assert len({call.kwargs["body"].metadata.name for call in creates}) == 2
+    assert kubectl.core_v1_api.method_calls[1:3] == [
+        call for call in kubectl.core_v1_api.method_calls if call[0] == "create_namespaced_pod"
+    ]
+    assert kubectl.core_v1_api.delete_namespaced_pod.call_count == 2
+    for method, _args, kwargs in kubectl.core_v1_api.method_calls:
+        budget = kwargs["_request_timeout"]
+        assert all(0 < value <= 10 for value in (budget if isinstance(budget, tuple) else (budget,))), method
+
+
+def test_preload_accounts_for_a_create_that_times_out_after_reaching_the_api():
+    kubectl = KubeCtl.__new__(KubeCtl)
+    kubectl.core_v1_api = Mock()
+    kubectl.core_v1_api.list_node.return_value = client.V1NodeList(
+        items=[client.V1Node(metadata=client.V1ObjectMeta(name="worker-a"))]
+    )
+    kubectl.core_v1_api.create_namespaced_pod.side_effect = TimeoutError("API did not acknowledge creation")
+    kubectl.core_v1_api.delete_namespaced_pod.side_effect = TimeoutError("API unavailable during cleanup")
+
+    with pytest.raises(TimeoutError, match="API did not acknowledge creation"):
+        kubectl.preload_image_on_nodes("registry.example/helper:v1", "openebs", timeout=10)
+
+    name = kubectl.core_v1_api.create_namespaced_pod.call_args.kwargs["body"].metadata.name
+    kubectl.core_v1_api.delete_namespaced_pod.assert_called_once_with(
+        name=name,
+        namespace="openebs",
+        grace_period_seconds=0,
+        _request_timeout=10,
+    )
+
+
+def test_preload_node_lookup_uses_the_callers_deadline():
+    kubectl = KubeCtl.__new__(KubeCtl)
+    kubectl.core_v1_api = Mock()
+    kubectl.core_v1_api.list_node.side_effect = TimeoutError("node API timed out")
+
+    with pytest.raises(TimeoutError, match="node API timed out"):
+        kubectl.preload_image_on_nodes("registry.example/helper:v1", "openebs", timeout=0.25)
+
+    assert all(0 < value <= 0.25 for value in kubectl.core_v1_api.list_node.call_args.kwargs["_request_timeout"])
+    kubectl.core_v1_api.create_namespaced_pod.assert_not_called()
+
+
+def test_preload_deadline_reaches_the_real_kubernetes_http_transport():
+    kubectl = KubeCtl.__new__(KubeCtl)
+    api = client.ApiClient(client.Configuration())
+    request = Mock(return_value=Mock(status=200, data=b'{"apiVersion":"v1","kind":"NodeList","items":[]}'))
+    api.rest_client.pool_manager.request = request
+    kubectl.core_v1_api = client.CoreV1Api(api)
+
+    with pytest.raises(RuntimeError, match="cluster has no nodes"):
+        kubectl.preload_image_on_nodes("registry.example/helper:v1", "openebs", timeout=0.25)
+
+    # Kubernetes 30.1 silently ignores scalar floats before calling urllib3.
+    timeout = request.call_args.kwargs["timeout"]
+    assert 0 < timeout.connect_timeout <= 0.25
+    assert 0 < timeout.read_timeout <= 0.25
+
+
+def test_readiness_timeout_names_the_blocking_container_and_pull_error(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay))
+    kubectl = KubeCtl.__new__(KubeCtl)
+    kubectl.list_pods = Mock(return_value=client.V1PodList(items=[_pod("temporary registry timeout")]))
+    kubectl.core_v1_api = Mock()
+
+    with pytest.raises(PodReadinessTimeout, match="app-123.*ImagePullBackOff.*temporary registry timeout"):
+        kubectl.wait_for_ready("test", sleep=1, max_wait=1)
 
 
 def test_platform_status_is_checked_before_slow_logs_from_other_pods():

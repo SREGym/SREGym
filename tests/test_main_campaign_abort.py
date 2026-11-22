@@ -1,11 +1,16 @@
 import importlib.util
 import sys
 import tempfile
+import threading
+import time
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
+
+from sregym.agent_registry import AgentRegistration
 
 
 def _load_main_module():
@@ -41,11 +46,158 @@ def test_driver_wrapper_preserves_partial_results_and_failure(monkeypatch):
     monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", lambda: None)
     monkeypatch.setattr(benchmark_main, "request_shutdown", lambda: shutdown_called.append(True))
 
-    benchmark_main._run_driver_and_shutdown(object())
+    benchmark_main._run_driver_and_shutdown(SimpleNamespace(mcp_server=Mock()))
 
     assert benchmark_main._driver_results == partial_results
     assert isinstance(benchmark_main._driver_error, benchmark_main.BenchmarkCampaignAborted)
     assert shutdown_called == [True]
+
+
+def test_interrupted_problem_uses_the_bounded_cleanup_budget():
+    benchmark_main = _load_main_module()
+    cleanup = Mock()
+    conductor = SimpleNamespace(
+        problem=SimpleNamespace(cleanup_timeout_seconds=42),
+        finish_problem_in_background=Mock(return_value=cleanup),
+        close_submissions=Mock(return_value=False),
+    )
+
+    benchmark_main.cleanup_interrupted_problem(conductor)
+
+    cleanup.result.assert_called_once_with(timeout=benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS)
+
+
+@pytest.mark.parametrize("evaluation_stuck", [False, True])
+def test_interrupt_drains_evaluation_before_cleanup(evaluation_stuck):
+    benchmark_main = _load_main_module()
+    conductor = SimpleNamespace(
+        problem=SimpleNamespace(),
+        close_submissions=Mock(return_value=True),
+        wait_for_submission_evaluations=AsyncMock(side_effect=TimeoutError if evaluation_stuck else None),
+        finish_problem_in_background=Mock(),
+        abandon_submission_work=Mock(),
+    )
+
+    benchmark_main.cleanup_interrupted_problem(conductor)
+
+    conductor.wait_for_submission_evaluations.assert_awaited_once_with(
+        timeout=benchmark_main.EVALUATION_DRAIN_TIMEOUT_SECONDS
+    )
+    if evaluation_stuck:
+        conductor.finish_problem_in_background.assert_not_called()
+        conductor.abandon_submission_work.assert_called_once()
+    else:
+        conductor.finish_problem_in_background.assert_called_once()
+
+
+def test_stopped_driver_does_not_start_deployment(monkeypatch, tmp_path):
+    benchmark_main = _load_main_module()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
+    stop_event = threading.Event()
+    stop_event.set()
+    conductor = SimpleNamespace(start_problem=AsyncMock())
+
+    with pytest.raises(benchmark_main.BenchmarkCampaignAborted, match="interrupted"):
+        benchmark_main.driver_loop(conductor, use_external_harness=True, stop_event=stop_event)
+    conductor.start_problem.assert_not_awaited()
+
+
+def test_interrupt_stops_agent_before_driver_owned_teardown(monkeypatch):
+    benchmark_main = _load_main_module()
+    entered_driver = threading.Event()
+    entered_cleanup = threading.Event()
+    agent_running = [True]
+    cleanup_active = [False]
+    overlapping_cleanup = []
+    cleanup_states = []
+    finished = Future()
+    finished.set_result(None)
+
+    def finish():
+        cleanup_states.append(agent_running[0])
+        return finished
+
+    conductor = SimpleNamespace(
+        problem=SimpleNamespace(),
+        finish_problem_in_background=finish,
+        close_submissions=Mock(return_value=False),
+        stop_k8s_proxy=Mock(),
+    )
+
+    def driver(*args, stop_event, **kwargs):
+        entered_driver.set()
+        assert stop_event.wait(2)
+        assert entered_cleanup.wait(2)
+        raise benchmark_main.BenchmarkCampaignAborted("interrupted", [])
+
+    def stop_agents():
+        if cleanup_active[0]:
+            overlapping_cleanup.append(True)
+        cleanup_active[0] = True
+        entered_cleanup.set()
+        time.sleep(0.02)
+        agent_running[0] = False
+        cleanup_active[0] = False
+
+    def interrupt(_):
+        assert entered_driver.wait(2)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(benchmark_main, "Conductor", lambda **kwargs: conductor)
+    monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
+    monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
+    monkeypatch.setattr(benchmark_main, "driver_loop", driver)
+    monkeypatch.setattr(benchmark_main, "run_api", interrupt)
+    monkeypatch.setattr(benchmark_main, "request_shutdown", Mock())
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", stop_agents)
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "enable_container_isolation", Mock())
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "_container_runner", None)
+    monkeypatch.setattr(benchmark_main, "run_preflight_check", Mock())
+    args = SimpleNamespace(
+        agent=None,
+        internet_access="open",
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        use_external_harness=False,
+        force_build=False,
+        stages=["mitigation"],
+        baseline=None,
+        propagation=None,
+        suite=None,
+        problem=None,
+        n_attempts=1,
+        agent_timeout=30,
+        resume=None,
+    )
+
+    with pytest.raises(RuntimeError, match="Benchmark campaign did not complete"):
+        benchmark_main._run_benchmark(args)
+    assert cleanup_states == [False]
+    assert not overlapping_cleanup
+
+
+def test_interrupt_after_setup_does_not_start_another_attempt(monkeypatch, tmp_path):
+    benchmark_main = _load_main_module()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
+    stop_event = threading.Event()
+
+    async def finish_setup():
+        stop_event.set()
+        return object()
+
+    conductor = SimpleNamespace(
+        problems=Mock(get_problem_ids=Mock(return_value=["problem"])),
+        clear_cluster_egress_boundary=Mock(),
+        start_problem=AsyncMock(side_effect=finish_setup),
+        bind_phase_ledger=Mock(),
+    )
+    with pytest.raises(benchmark_main.BenchmarkCampaignAborted, match="interrupted"):
+        benchmark_main.driver_loop(conductor, use_external_harness=True, n_attempts=2, stop_event=stop_event)
+    conductor.start_problem.assert_awaited_once()
 
 
 def test_result_csv_publication_with_results_on_another_filesystem(tmp_path, monkeypatch):
@@ -63,16 +215,17 @@ def test_result_csv_publication_with_results_on_another_filesystem(tmp_path, mon
 
 
 @pytest.mark.parametrize(
-    ("stages", "external", "expected_calls"),
-    [(None, False, 1), (["diagnosis"], False, 1), (["mitigation"], False, 0), (None, True, 0)],
+    ("stages", "external"),
+    [(None, False), (["diagnosis"], False), (["mitigation"], False), (None, True)],
 )
-def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, external, expected_calls):
+def test_judge_preflight_is_deferred_until_effective_stages_are_known(monkeypatch, stages, external):
     benchmark_main = _load_main_module()
     monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
     calls = []
     monkeypatch.setattr(benchmark_main, "init_logger", lambda: None)
     monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
     monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
     monkeypatch.setattr(benchmark_main, "run_judge_preflight_check", lambda: calls.append(True))
 
     class ReachedConductor(Exception):
@@ -90,14 +243,72 @@ def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, extern
         noise=False,
         use_external_harness=external,
         stages=stages,
+        baseline=None,
+        propagation=None,
     )
     with pytest.raises(ReachedConductor):
         benchmark_main._run_benchmark(args)
-    assert len(calls) == expected_calls
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("hook_spec", "error"),
+    [
+        ("missing_colon", ValueError),
+        ("missing_sregym_test_hook_module:hooks", ModuleNotFoundError),
+        ("json:missing_sregym_test_hooks", AttributeError),
+    ],
+)
+def test_invalid_hooks_fail_before_agent_preparation(monkeypatch, hook_spec, error):
+    benchmark_main = _load_main_module()
+    monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
+    monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
+    monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
+    monkeypatch.setattr(benchmark_main, "get_container_host_bind_address", lambda: "127.0.0.1")
+    registration = AgentRegistration(name="codex", install_script="install-codex.sh", hooks=hook_spec)
+    monkeypatch.setattr(benchmark_main, "get_agent", lambda *args, **kwargs: registration)
+    launcher = Mock()
+    monkeypatch.setattr(benchmark_main, "LAUNCHER", launcher)
+    preflight = Mock()
+    constructor = Mock()
+    monkeypatch.setattr(benchmark_main, "run_preflight_check", preflight)
+    monkeypatch.setattr(benchmark_main, "Conductor", constructor)
+    args = SimpleNamespace(
+        agent="codex",
+        internet_access="filtered",
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        use_external_harness=False,
+        force_build=False,
+        stages=["mitigation"],
+    )
+
+    with pytest.raises(error):
+        benchmark_main._run_benchmark(args)
+
+    launcher.enable_container_isolation.assert_not_called()
+    launcher._container_runner.prepare_agent_tools.assert_not_called()
+    preflight.assert_not_called()
+    constructor.assert_not_called()
+
+
+def test_cleanup_deadline_covers_namespace_deletion_and_honors_override(monkeypatch):
+    monkeypatch.delenv("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", raising=False)
+    benchmark_main = _load_main_module()
+    assert benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS == 600
+
+    monkeypatch.setenv("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "900")
+    benchmark_main = _load_main_module()
+    assert benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS == 900
 
 
 @pytest.mark.parametrize("platform_failure, expected_attempts", [(True, 1), (False, 3)])
-def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platform_failure, expected_attempts):
+@pytest.mark.parametrize("cleanup_budget", [None, 300, 900])
+def test_deployment_retries_only_transient_failures(
+    monkeypatch, tmp_path, platform_failure, expected_attempts, cleanup_budget
+):
     benchmark_main = _load_main_module()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
@@ -112,13 +323,168 @@ def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platf
         finish_problem_in_background=Mock(),
         wait_for_submission_work=AsyncMock(),
     )
+    if cleanup_budget is not None:
+        conductor.problem = SimpleNamespace(cleanup_timeout_seconds=cleanup_budget)
 
     results = benchmark_main.driver_loop(conductor, use_external_harness=True)
 
     assert conductor.start_problem.await_count == expected_attempts
     assert conductor.finish_problem_in_background.call_count == expected_attempts
     assert conductor.wait_for_submission_work.await_count == expected_attempts
+    expected_cleanup_budget = max(
+        benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS,
+        cleanup_budget or benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS,
+    )
+    assert all(
+        call.kwargs["timeout"] == expected_cleanup_budget for call in conductor.wait_for_submission_work.await_args_list
+    )
     conductor.bind_phase_ledger.assert_called_once()
     assert results == [
-        {None: [{"problem_id": "problem", "attempt": 1, "deployment_profile": "full", "deploy_failed": True}]}
+        {
+            None: [
+                {
+                    "problem_id": "problem",
+                    "attempt": 1,
+                    "deployment_profile": "full",
+                    "deploy_failed": True,
+                    "deploy_attempts": expected_attempts,
+                }
+            ]
+        }
     ]
+
+
+def test_timed_out_agent_gets_the_normal_exit_reap_grace(monkeypatch, tmp_path):
+    benchmark_main = _load_main_module()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(benchmark_main, "get_profile", lambda: "full")
+    monkeypatch.setattr(benchmark_main, "list_agents", lambda path: {"agent": object()})
+    monkeypatch.setattr(benchmark_main.trace_postprocess, "write_trajectory", lambda _run_dir: None)
+    run = Mock(finalize_and_publish=Mock(return_value=tmp_path / "run"))
+    run.save_judge_responses.side_effect = lambda snapshot: snapshot
+    monkeypatch.setattr(benchmark_main, "RunArtifacts", SimpleNamespace(create=Mock(return_value=run)))
+    cleanup_agent = Mock()
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_agent", cleanup_agent)
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "set_agent_kubeconfig", Mock())
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "internet_policy_result", Mock(return_value={}))
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "_procs", {})
+    conductor = SimpleNamespace(
+        problems=Mock(get_problem_ids=Mock(return_value=["problem"])),
+        results={},
+        phases=None,
+        stage_sequence=[],
+        submission_stage="running",
+        register_agent=Mock(),
+        start_k8s_proxy=Mock(),
+        stop_k8s_proxy=Mock(),
+        get_agent_kubeconfig_path=Mock(return_value="kubeconfig"),
+        bind_phase_ledger=Mock(),
+        start_problem=AsyncMock(),
+        close_submissions=Mock(return_value=False),
+        missing_submission_stages=Mock(return_value=False),
+        finish_problem_in_background=Mock(),
+        wait_for_submission_work=AsyncMock(),
+        finalize_attempt_status=Mock(return_value="incomplete"),
+    )
+
+    # A negative budget puts the deadline in the past before the first poll.
+    benchmark_main.driver_loop(conductor, agent_to_run="agent", agent_timeout=-1)
+
+    assert conductor.results["timed_out"] is True
+    assert cleanup_agent.call_args_list == [
+        call("agent", timeout=benchmark_main.AGENT_REAP_GRACE_SECONDS),
+        call("agent"),
+    ]
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "interrupt"])
+def test_campaign_stops_mcp_after_teardown_before_api_shutdown(monkeypatch, outcome):
+    benchmark_main = _load_main_module()
+    events = []
+    conductor = SimpleNamespace(mcp_server=Mock())
+    conductor.mcp_server.stop_port_forward.side_effect = lambda: events.append("stop_mcp")
+    stop_event = threading.Event()
+
+    def driver(*args, **kwargs):
+        events.append("driver")
+        if outcome == "failure":
+            raise RuntimeError("deployment failed")
+        if outcome == "interrupt":
+            stop_event.set()
+            raise benchmark_main.BenchmarkCampaignAborted("interrupted", [])
+        return []
+
+    monkeypatch.setattr(benchmark_main, "driver_loop", driver)
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", lambda: events.append("agents"))
+    monkeypatch.setattr(benchmark_main, "cleanup_interrupted_problem", lambda c: events.append("teardown"))
+    monkeypatch.setattr(benchmark_main, "request_shutdown", lambda: events.append("shutdown"))
+    benchmark_main._run_driver_and_shutdown(conductor, stop_event=stop_event)
+    expected = ["driver", "agents"]
+    if outcome == "interrupt":
+        expected.append("teardown")
+    assert events == expected + ["stop_mcp", "shutdown"]
+
+
+def test_external_harness_does_not_stop_mcp(monkeypatch):
+    benchmark_main = _load_main_module()
+    conductor = SimpleNamespace(mcp_server=Mock())
+    monkeypatch.setattr(benchmark_main, "driver_loop", lambda *a, **k: [])
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", lambda: None)
+    shutdown = Mock()
+    monkeypatch.setattr(benchmark_main, "request_shutdown", shutdown)
+    benchmark_main._run_driver_and_shutdown(conductor, use_external_harness=True)
+    conductor.mcp_server.stop_port_forward.assert_not_called()
+    shutdown.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["agents", "teardown", "mcp"])
+def test_cleanup_failure_still_shuts_down_api(monkeypatch, failure):
+    benchmark_main = _load_main_module()
+    conductor = SimpleNamespace(mcp_server=Mock())
+    stop_event = threading.Event()
+    stop_event.set()
+    monkeypatch.setattr(benchmark_main, "driver_loop", lambda *a, **k: [])
+    cleanup_agents = Mock(side_effect=RuntimeError("agents") if failure == "agents" else None)
+    teardown = Mock(side_effect=RuntimeError("teardown") if failure == "teardown" else None)
+    if failure == "mcp":
+        conductor.mcp_server.stop_port_forward.side_effect = RuntimeError("mcp")
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", cleanup_agents)
+    monkeypatch.setattr(benchmark_main, "cleanup_interrupted_problem", teardown)
+    shutdown = Mock()
+    monkeypatch.setattr(benchmark_main, "request_shutdown", shutdown)
+    if failure == "mcp":
+        benchmark_main._run_driver_and_shutdown(conductor, stop_event=stop_event)
+    else:
+        with pytest.raises(RuntimeError, match=failure):
+            benchmark_main._run_driver_and_shutdown(conductor, stop_event=stop_event)
+    conductor.mcp_server.stop_port_forward.assert_called_once()
+    shutdown.assert_called_once()
+
+
+def test_campaign_reaps_its_forward_and_leaves_borrowed_process_alive(monkeypatch):
+    import subprocess
+
+    from sregym.service.mcp_server import MCPServer
+
+    benchmark_main = _load_main_module()
+    server = object.__new__(MCPServer)
+    owned = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    borrowed = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    server.port_forward_process = owned
+    conductor = SimpleNamespace(mcp_server=server)
+    monkeypatch.setattr(benchmark_main, "driver_loop", lambda *a, **k: [])
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", lambda: None)
+    monkeypatch.setattr(benchmark_main, "request_shutdown", lambda: None)
+    try:
+        benchmark_main._run_driver_and_shutdown(conductor)
+        assert owned.poll() is not None
+        # Reusing somebody else's forward doesn't store their process handle.
+        server.port_forward_process = None
+        benchmark_main._run_driver_and_shutdown(conductor)
+        assert borrowed.poll() is None
+    finally:
+        for process in (owned, borrowed):
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)

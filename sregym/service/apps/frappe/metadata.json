@@ -1,0 +1,14 @@
+{
+    "Name": "Frappe",
+    "Namespace": "frappe",
+    "Desc": "Frappe Framework (the platform under ERPNext) serving a single site through gunicorn/nginx Desk APIs, with MariaDB for data, a Redis cache, and a Redis queue (RQ) drained by a long-queue background worker. Background work includes emails, prepared report exports and scheduled jobs. Ported from Incident Arena. An `ops-toolbox` pod provides an operator shell: mysql with the MariaDB root DSN in $DB_ADMIN_DSN, python3, and reconfigure-infra.sh for bounded Redis queue repairs (it applies them through the frappe-admin service so they survive a broker restart). MariaDB and Redis exporters are scraped by Prometheus.",
+    "Supported Operations": [
+        "Browse, search and load dashboards in Desk",
+        "Create, edit and delete records",
+        "Enqueue and complete background jobs (emails, report exports, scheduled jobs)"
+    ],
+    "Helm Config": {
+        "release_name": "frappe",
+        "namespace": "frappe"
+    }
+}

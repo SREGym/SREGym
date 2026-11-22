@@ -7,8 +7,7 @@
 [![Quick Start](https://img.shields.io/badge/%F0%9F%9A%80-Quick%20Start-blue?style=flat-square)](#🚀quickstart)
 [![Usage](https://img.shields.io/badge/%E2%9A%99%EF%B8%8F-Usage-blue?style=flat-square)](#⚙️usage)
 [![Contributing](https://img.shields.io/badge/%F0%9F%A4%9D-Contributing-blue?style=flat-square)](./CONTRIBUTING.md)
-[![Docs](https://img.shields.io/badge/%F0%9F%93%96-Docs-blue?style=flat-square)](https://sregym.com/docs)
-[![Leaderboard](https://img.shields.io/badge/%F0%9F%8F%86-Leaderboard-blue?style=flat-square)](https://sregym.com)
+[![Leaderboard](https://img.shields.io/badge/%F0%9F%8F%86-Leaderboard-blue?style=flat-square)](https://sregym.com/leaderboard)
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
 [![arXiv](https://img.shields.io/badge/arXiv-2605.07161-b31b1b?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2605.07161)
 </div>
@@ -31,8 +30,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
 
-[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 21 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
-
+[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 17 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
 <h2 id="📦installation">📦 Installation</h2>
 
@@ -41,7 +39,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 - [Docker](https://docs.docker.com/get-docker/)
 - [Helm](https://helm.sh/docs/intro/install/) >= 4.0
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- [uv](https://github.com/astral-sh/uv)
+- [uv](https://github.com/astral-sh/uv) >= 0.11.8
 - [kind](https://kind.sigs.k8s.io/) (if running locally)
 
 ### Recommendations
@@ -54,6 +52,10 @@ cd SREGym
 uv sync
 uv run prek install
 ```
+
+When resolving dependencies, uv excludes packages uploaded in the last seven days. The agent image applies the same delay to pip dependencies and npm-based agent installers. The existing lockfile keeps its pinned versions. A new package version, including a security fix, can be unavailable until the delay ends.
+
+The delay requires upload-time metadata from the package registry. It does not cover existing installed packages, container images, OS packages, Git dependencies, or direct downloads. The DinD image uses an older uv for frozen installs. Resolve dependencies outside that image with uv 0.11.8 or later.
 
 <h2 id="🚀quickstart">🚀 Quickstart</h2>
 
@@ -84,6 +86,16 @@ For existing clusters, see the [upgrade and baseline instructions](./docs/networ
 
 ### Running an Agent
 
+#### Check your setup first
+
+Add `--check-setup` to the command you plan to run. Instead of starting the benchmark, it checks that the machine is ready for that configuration (Docker, the cluster, network, credentials, and the hosts the run downloads from) and prints a fix for each problem. It exits non-zero when a run would fail.
+
+```bash
+uv run main.py --agent codex --model gpt-5 --profile svelte --check-setup
+```
+
+Add `--check-setup-offline` to skip the test request it sends to the judge.
+
 #### Quick Start
 
 To get started with the included Stratus agent:
@@ -112,6 +124,11 @@ uv run main.py --agent stratus --model gpt-5
 Or start with SREGym-Lite:
 ```bash
 uv run main.py --suite sregym-lite --agent stratus --model gpt-5
+```
+
+Or run the SREGym-Lite faults on Frappe, Saleor and Slack Spine (see [the ported suite](./docs/SREGym-Lite-IA.md)):
+```bash
+uv run main.py --suite sregym-lite-ia --agent stratus --model gpt-5
 ```
 
 Use `--judge-model` to override the judge model separately (defaults to `--model`):
@@ -360,6 +377,42 @@ If our work is useful for you, please cite it:
   month = MAY,
 }
 ```
+
+## Who uses SREGym?
+
+SREGym is used by researchers and engineers at organizations including:
+
+<p align="center">
+  <a href="https://www.microsoft.com/research/#gh-light-mode-only"><img src="assets/who-uses/light/microsoft.png" alt="Microsoft Research" height="31"></a><a href="https://www.microsoft.com/research/#gh-dark-mode-only"><img src="assets/who-uses/dark/microsoft.png" alt="Microsoft Research" height="31"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.datadoghq.com/#gh-light-mode-only"><img src="assets/who-uses/light/datadog.png" alt="Datadog" height="35"></a><a href="https://www.datadoghq.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/datadog.png" alt="Datadog" height="35"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.pagerduty.com/#gh-light-mode-only"><img src="assets/who-uses/light/pagerduty.png" alt="PagerDuty" height="31"></a><a href="https://www.pagerduty.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/pagerduty.png" alt="PagerDuty" height="31"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://snorkel.ai/#gh-light-mode-only"><img src="assets/who-uses/light/snorkel.png" alt="Snorkel AI" height="38"></a><a href="https://snorkel.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/snorkel.png" alt="Snorkel AI" height="38"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://cognition.com/#gh-light-mode-only"><img src="assets/who-uses/light/cognition.png" alt="Cognition" height="31"></a><a href="https://cognition.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/cognition.png" alt="Cognition" height="31"></a>
+</p>
+
+<p align="center">
+  <a href="https://chironvision.ai/#gh-light-mode-only"><img src="assets/who-uses/light/chiron.png" alt="Chiron" height="34"></a><a href="https://chironvision.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/chiron.png" alt="Chiron" height="34"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://cloudthinker.io/#gh-light-mode-only"><img src="assets/who-uses/light/cloudthinker.png" alt="CloudThinker" height="28"></a><a href="https://cloudthinker.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/cloudthinker.png" alt="CloudThinker" height="28"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://one2n.io/#gh-light-mode-only"><img src="assets/who-uses/light/one2n.png" alt="One2N" height="36"></a><a href="https://one2n.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/one2n.png" alt="One2N" height="36"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://komodor.com/#gh-light-mode-only"><img src="assets/who-uses/light/komodor.png" alt="Komodor" height="26"></a><a href="https://komodor.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/komodor.png" alt="Komodor" height="26"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://radarhq.io/#gh-light-mode-only"><img src="assets/who-uses/light/skyhook.png" alt="Skyhook, makers of Radar" height="36"></a><a href="https://radarhq.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/skyhook.png" alt="Skyhook, makers of Radar" height="36"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.nofire.ai/#gh-light-mode-only"><img src="assets/who-uses/light/nofire.png" alt="NOFire" height="30"></a><a href="https://www.nofire.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/nofire.png" alt="NOFire" height="30"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://ciroos.ai/#gh-light-mode-only"><img src="assets/who-uses/light/ciroos.png" alt="Ciroos" height="33"></a><a href="https://ciroos.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/ciroos.png" alt="Ciroos" height="33"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://bespokelabs.ai/#gh-light-mode-only"><img src="assets/who-uses/light/bespoke.png" alt="Bespoke Labs" height="26"></a><a href="https://bespokelabs.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/bespoke.png" alt="Bespoke Labs" height="26"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/exoharness/exo#gh-light-mode-only"><img src="assets/who-uses/light/exo.png" alt="Exo" height="36"></a><a href="https://github.com/exoharness/exo#gh-dark-mode-only"><img src="assets/who-uses/dark/exo.png" alt="Exo" height="36"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://p95.ai/#gh-light-mode-only"><img src="assets/who-uses/light/p95.png" alt="P95.ai" height="30"></a><a href="https://p95.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/p95.png" alt="P95.ai" height="30"></a>
+</p>
+
+<p align="center">
+  <a href="https://illinois.edu/#gh-light-mode-only"><img src="assets/who-uses/light/illinois.png" alt="University of Illinois Urbana-Champaign" height="38"></a><a href="https://illinois.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/illinois.png" alt="University of Illinois Urbana-Champaign" height="38"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.washington.edu/#gh-light-mode-only"><img src="assets/who-uses/light/washington.png" alt="University of Washington" height="33"></a><a href="https://www.washington.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/washington.png" alt="University of Washington" height="33"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.utoronto.ca/#gh-light-mode-only"><img src="assets/who-uses/light/toronto.png" alt="University of Toronto" height="45"></a><a href="https://www.utoronto.ca/#gh-dark-mode-only"><img src="assets/who-uses/dark/toronto.png" alt="University of Toronto" height="45"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.berkeley.edu/#gh-light-mode-only"><img src="assets/who-uses/light/berkeley.png" alt="University of California, Berkeley" height="38"></a><a href="https://www.berkeley.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/berkeley.png" alt="University of California, Berkeley" height="38"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.asu.edu/#gh-light-mode-only"><img src="assets/who-uses/light/asu.png" alt="Arizona State University" height="31"></a><a href="https://www.asu.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/asu.png" alt="Arizona State University" height="31"></a>
+</p>
 
 ## Acknowledgements
 

@@ -1,0 +1,24 @@
+{
+  "problem_id": "timeline_checkpoint_ids_in_feed_social_network",
+  "app": "social_network",
+  "recurrence_bound_s": 210,
+  "title": "Timeline cache mixes checkpoint IDs with post IDs",
+  "fault_layer": "data",
+  "fault_primitive": "Detached Redis publisher adds partition checkpoint epochs as post members in existing timeline sorted sets",
+  "root_cause_class": "timeline_checkpoint_control_data_keyspace_alias",
+  "diagnosis": {
+    "component": "deployment/media-mongodb",
+    "description": "An unmanaged checkpoint publisher in media-mongodb inserts negative checkpoint epoch identifiers into user-timeline-redis and home-timeline-redis sorted sets under live user keys. These members receive high scores and appear as recent feed entries, but they are not real post IDs. Timeline readers request nonexistent posts and post-storage-service reports Return set incomplete, causing HTTP 500 responses. MongoDB post data remains intact. Removing the invalid feed members alone is temporary because the publisher inserts new checkpoint entries again."
+  },
+  "incident_class": "Cancelled timeline migration leaves an unmanaged checkpoint publisher using the live feed key namespace",
+  "affected_components": [
+    "media-mongodb",
+    "user-timeline-redis",
+    "home-timeline-redis",
+    "user-timeline-service",
+    "home-timeline-service",
+    "post-storage-service",
+    "nginx-thrift"
+  ],
+  "symptoms": "Timeline HTTP requests return 500. Both timeline readers report failures from post-storage-service, which logs Return set incomplete. Pods remain Running and Ready; MongoDB content and deployment configurations remain valid."
+}

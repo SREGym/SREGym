@@ -1,6 +1,7 @@
 """Mitigation oracle for PriorityClass preemption cascade failures."""
 
 import time
+from collections.abc import Callable
 
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
@@ -43,8 +44,9 @@ class PriorityPreemptionMitigationOracle(Oracle):
         "pressure_workload_scaled_to_zero": FailureClass.AGENT_ERROR,
     }
 
-    def __init__(self, problem):
+    def __init__(self, problem, *, application_check: Callable[[], None] | None = None):
         super().__init__(problem)
+        self.application_check = application_check
         self.apps_v1 = client.AppsV1Api()
         self.core_v1 = client.CoreV1Api()
         self.scheduling_v1 = client.SchedulingV1Api()
@@ -232,7 +234,9 @@ class PriorityPreemptionMitigationOracle(Oracle):
         if target_unready is not None:
             return target_unready
 
-        endpoint_failure = self._service_endpoint_unready(target, namespace)
+        # The Service is named after the Deployment unless the problem says otherwise (``service_name``).
+        service_name = getattr(self.problem, "service_name", None) or target
+        endpoint_failure = self._service_endpoint_unready(service_name, namespace)
         if endpoint_failure is not None:
             return endpoint_failure
         for check in (self._any_deployment_unready, self._any_app_pod_unready):
@@ -287,6 +291,14 @@ class PriorityPreemptionMitigationOracle(Oracle):
         reduced = self._request_was_reduced(pressure, getattr(self.problem, "pressure_request_memory", None))
         if reduced is not None:
             return reduced
+
+        if self.application_check is not None:
+            try:
+                self.application_check()
+            except ValueError as exc:
+                return self.fail("connectivity_probe_failed", error=str(exc))
+            except ApiException as exc:
+                return self.fail_from_exception(exc)
 
         print("✅ App is healthy and priority policy has been corrected")
         return {"success": True}

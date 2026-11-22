@@ -29,6 +29,8 @@ def _conductor(diagnosis_evaluation=None, mitigation_evaluation=None) -> Conduct
     conductor.problem = None
     conductor._baseline_captured = False
     conductor.execution_start_time = time.time()
+    conductor.agent_timeout_seconds = None
+    conductor.agent_deadline_monotonic = None
     conductor.results = {}
     conductor.stage_sequence = [
         {
@@ -66,6 +68,21 @@ def _conductor(diagnosis_evaluation=None, mitigation_evaluation=None) -> Conduct
 
     conductor._advance_to_next_stage = MethodType(advance, conductor)
     return conductor
+
+
+@pytest.mark.parametrize(
+    "deadline,timeout,remaining", [(None, None, None), (None, 180, 180), (1150, 180, 150), (999, 180, 0)]
+)
+def test_status_exposes_remaining_budget_without_changing_stage(monkeypatch, deadline, timeout, remaining):
+    conductor = _conductor()
+    conductor.agent_deadline_monotonic = deadline
+    conductor.agent_timeout_seconds = timeout
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+    monkeypatch.setattr(conductor_api.time, "monotonic", lambda: 1000)
+    expected = {"stage": "diagnosis"}
+    if remaining is not None:
+        expected["agent_remaining_seconds"] = remaining
+    assert asyncio.run(conductor_api.get_status()) == expected
 
 
 def _wait_for_current_evaluation(conductor: Conductor) -> None:
@@ -894,6 +911,31 @@ def test_final_status_is_complete_only_when_every_stage_has_a_result():
     assert conductor.results["run_status"] == "complete"
 
 
+@pytest.mark.parametrize("unscored", [("diagnosis",), ("mitigation",), ("diagnosis", "mitigation")])
+def test_submitted_but_unscored_stages_make_attempt_incomplete(unscored):
+    conductor = _conductor()
+    conductor.submission_stage = "done"
+    for stage in ("diagnosis", "mitigation"):
+        conductor.results[stage.capitalize()] = {"success": None if stage in unscored else True}
+
+    assert conductor.missing_submission_stages() == []
+    assert conductor.finalize_attempt_status() == "incomplete"
+    assert conductor.results["incomplete_reason"] == "unscored_stage_results"
+    assert conductor.results["incomplete_stage"] == unscored[0]
+    assert conductor.results["unscored_stages"] == ",".join(unscored)
+    assert conductor.results["missing_stages"] == ""
+
+
+@pytest.mark.parametrize("stage", ["diagnosis", "mitigation"])
+@pytest.mark.parametrize("success", [True, False])
+def test_final_status_preserves_scored_single_stage_runs(stage, success):
+    conductor = _conductor()
+    conductor.stage_sequence = [{"name": stage}]
+    conductor.results[stage.capitalize()] = {"success": success}
+
+    assert conductor.finalize_attempt_status() == "complete"
+
+
 def test_cleanup_failure_makes_a_fully_graded_attempt_incomplete():
     conductor = _conductor()
     conductor.results["Diagnosis"] = {"success": True}
@@ -924,6 +966,33 @@ def test_cleanup_continues_after_recovery_error_and_reaches_terminal_state():
     assert conductor.submission_stage == "done"
     assert conductor.results["cleanup_failed"] is True
     assert "recover_fault: RuntimeError: recovery failed" in conductor.results["cleanup_error"]
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_retry_storm_trigger_cleanup_reaches_the_conductor(monkeypatch, cleanup_fails):
+    from sregym.conductor.problems import load_spike_rpc_retry_storm as problem_module
+
+    problem = problem_module.LoadSpikeRPCRetryStorm.__new__(problem_module.LoadSpikeRPCRetryStorm)
+    problem.namespace = "blueprint-hotel-reservation"
+    problem.faulty_service = "rpc"
+    problem.app = SimpleNamespace(cleanup=Mock())
+    cleanup = Mock(side_effect=RuntimeError("stress cleanup failed") if cleanup_fails else None)
+    problem.wrk = SimpleNamespace(cleanup_cpu_stress=cleanup)
+    monkeypatch.setattr(problem_module, "VirtualizationFaultInjector", Mock())
+    conductor = _conductor()
+    conductor.problem = problem
+    conductor._baseline_captured = True
+    conductor.cluster_state = Mock()
+    conductor.cluster_state.reconcile_to_baseline.return_value = {}
+
+    conductor._cleanup_sync()
+
+    cleanup.assert_called_once_with(wait=True)
+    problem.app.cleanup.assert_called_once_with()
+    conductor.cluster_state.reconcile_to_baseline.assert_called_once_with()
+    assert conductor.results.get("cleanup_failed", False) is cleanup_fails
+    if cleanup_fails:
+        assert "stress cleanup failed" in conductor.results["cleanup_error"]
 
 
 def test_abandoned_cleanup_does_not_run_later_cleanup_phases():

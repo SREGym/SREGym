@@ -58,6 +58,7 @@ from sregym.conductor.oracles.cumulative_admission_webhook_timeout_mitigation im
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.service.rollout import deployment_rollout_complete
@@ -328,6 +329,9 @@ srv.serve_forever()
     # Time to wait for the webhook backend deployments to become Available.
     BACKEND_ROLLOUT_TIMEOUT_S = 120
 
+    # Admission configuration and network policies propagate asynchronously.
+    ADMISSION_PROPAGATION_TIMEOUT_S = 120
+
     # Time to wait for the application-impact symptom to manifest after
     # the recommendation pod is deleted (ReplicaSet recreation attempts +
     # admission timeouts each take ~30s; the margin here is generous).
@@ -418,8 +422,8 @@ srv.serve_forever()
     )
     DECOY_WEBHOOK_TIMEOUT_SECONDS = 5
 
-    def __init__(self):
-        super().__init__(app=HotelReservation())
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else HotelReservation())
         self.kubectl = KubeCtl()
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
@@ -512,11 +516,13 @@ srv.serve_forever()
             6. Create four MutatingWebhookConfigurations scoped to the
                application namespace via ``namespaceSelector``, each
                with its own ``timeoutSeconds`` from ``WEBHOOK_TIMEOUTS_S``.
-            7. Delete the running target deployment's pod so the
+            7. Wait for a server-side dry-run pod creation to reach the
+               admission deadline, without creating a pod.
+            8. Delete the running target deployment's pod so the
                ReplicaSet attempts to recreate it; admission fails because
                of the cumulative webhook timeout, and the new pod is
                never admitted.
-            8. Poll until ``status.ready_replicas < status.replicas`` on
+            9. Poll until ``status.ready_replicas < status.replicas`` on
                the target deployment, confirming the application-impact
                symptom is live before returning.
         """
@@ -569,10 +575,15 @@ srv.serve_forever()
             f"'{self.namespace}', cumulative timeoutSeconds={cumulative}s."
         )
 
-        # Step 7: trigger the symptom by deleting the target's pod
+        # Confirm the admission path is blocked before disrupting the application.
+        # A fast connection refusal during backend startup can otherwise let
+        # Ignore webhooks finish below the aggregate admission deadline.
+        self._wait_for_admission_timeout()
+
+        # Step 8: trigger the symptom by deleting the target's pod
         self._delete_target_pod()
 
-        # Step 8: wait for ready_replicas < spec.replicas (symptom live)
+        # Step 9: wait for ready_replicas < spec.replicas (symptom live)
         self._wait_for_symptom()
         logger.info(
             f"Fault is live: '{self.TARGET_DEPLOYMENT}' deployment in "
@@ -784,6 +795,11 @@ srv.serve_forever()
             image=self.WEBHOOK_BACKEND_IMAGE,
             command=["python", "/app/server.py"],
             ports=[client.V1ContainerPort(container_port=self.WEBHOOK_BACKEND_PORT)],
+            readiness_probe=client.V1Probe(
+                tcp_socket=client.V1TCPSocketAction(port=self.WEBHOOK_BACKEND_PORT),
+                period_seconds=2,
+                timeout_seconds=1,
+            ),
             volume_mounts=[
                 client.V1VolumeMount(name="tls", mount_path="/tls", read_only=True),
                 client.V1VolumeMount(name="app", mount_path="/app", read_only=True),
@@ -1140,6 +1156,37 @@ srv.serve_forever()
                     logger.info(f"Decoy MutatingWebhookConfiguration '{spec['name']}' already absent.")
                 else:
                     raise
+
+    def _wait_for_admission_timeout(self) -> None:
+        """Confirm the real admission deadline without creating a workload."""
+        deadline = time.monotonic() + self.ADMISSION_PROPAGATION_TIMEOUT_S
+        body = client.V1Pod(
+            metadata=client.V1ObjectMeta(generate_name="admission-readiness-check-", namespace=self.namespace),
+            spec=client.V1PodSpec(
+                containers=[client.V1Container(name="probe", image="busybox:1.36", command=["sleep", "1"])],
+                restart_policy="Never",
+            ),
+        )
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                self.core_v1.create_namespaced_pod(
+                    namespace=self.namespace,
+                    body=body,
+                    dry_run="All",
+                    _request_timeout=(5, min(sum(self.WEBHOOK_TIMEOUTS_S.values()) + 10, remaining)),
+                )
+            except ApiException as exc:
+                if exc.status == 504 and "context deadline exceeded" in (exc.body or "").lower():
+                    logger.info("Fresh pod admission reaches the aggregate deadline; disrupting the target workload.")
+                    return
+                raise
+            time.sleep(min(2, max(0, deadline - time.monotonic())))
+        raise RuntimeError(
+            "Admission remained available; refusing to disrupt the application before the fault is active."
+        )
 
     def _delete_target_pod(self) -> None:
         """Delete the running pod of the target deployment so the

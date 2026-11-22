@@ -1,0 +1,6 @@
+Gitea benchmark fixtures from The Zoo
+https://github.com/bgrins/the_zoo
+Revision: 862c02dd73f2101a4b24f168d0fb7fed387dc5f4
+Original path: sites/apps/gitea.zoo/sample-data/import-data.json
+The JSON fixture is copied without modification under Apache License 2.0.
+SREGym imports it through Gitea APIs; referenced sample programs are repository content, not executed services.

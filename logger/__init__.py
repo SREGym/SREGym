@@ -1,6 +1,8 @@
+import itertools
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -20,6 +22,24 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
+def claim_log_file(log_dir: str | os.PathLike) -> Path:
+    """Create this run's log file, named for the current minute.
+
+    If another run already has that name, use sregym_<name>_2.log, _3 and so on. Creating the file
+    exclusively is the claim, so two runs started in the same minute never append to one log.
+    """
+    log_dir = Path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    name = get_current_datetime_formatted()
+    for candidate in itertools.chain([name], (f"{name}_{n}" for n in itertools.count(2))):
+        path = log_dir / f"sregym_{candidate}.log"
+        try:
+            path.touch(exist_ok=False)
+            return path
+        except FileExistsError:
+            continue
+
+
 def init_logger():
     # set up the logger for log file
     root_logger = logging.getLogger("all")
@@ -28,11 +48,7 @@ def init_logger():
 
     # Only add handlers if they don't exist to prevent duplication
     if not root_logger.handlers:
-        timestamp = get_current_datetime_formatted()
-        # create dir and file
-        log_dir = os.environ.get("AGENT_LOGS_DIR", "./logs")
-        path = f"{log_dir}/sregym_{timestamp}.log"
-        os.makedirs(log_dir, exist_ok=True)
+        path = claim_log_file(os.environ.get("AGENT_LOGS_DIR", "./logs"))
 
         handler = logging.FileHandler(path)
         # add code line and filename and function name

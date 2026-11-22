@@ -3,6 +3,7 @@ Claude Code agent implementation for SREGym.
 Based on Harbor's Claude Code agent implementation for parity experiments.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -104,13 +105,43 @@ class ClaudeCodeAgent:
         "WebSearch",
     ]
 
+    CHIRON_MCP_TOOLS = [
+        "mcp__chiron__incident_brief",
+        "mcp__chiron__k8s_changes",
+        "mcp__chiron__active_alerts",
+    ]
+
     @classmethod
     def allowed_tools(cls) -> list[str]:
         tools = list(cls.ALLOWED_TOOLS)
         if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
             tools.remove("WebFetch")
             tools.remove("WebSearch")
+        if os.environ.get("CHIRON_MCP_URL"):
+            tools += cls.CHIRON_MCP_TOOLS
         return tools
+
+    def _write_chiron_mcp_config(self) -> Path | None:
+        """Write the Chiron MCP server config when CHIRON_MCP_URL is set.
+
+        The token is referenced as ${CHIRON_MCP_TOKEN}, which Claude Code expands from its
+        environment, so it is never written to the logs dir.
+        """
+        url = os.environ.get("CHIRON_MCP_URL")
+        if not url:
+            return None
+        path = self.logs_dir / "chiron-mcp.json"
+        config = {
+            "mcpServers": {
+                "chiron": {
+                    "type": "http",
+                    "url": url,
+                    "headers": {"Authorization": "Bearer ${CHIRON_MCP_TOKEN}"},
+                }
+            }
+        }
+        path.write_text(json.dumps(config, indent=2))
+        return path
 
     def __init__(
         self,
@@ -211,59 +242,6 @@ class ClaudeCodeAgent:
 
         logger.info(f"Created session directory structure at {self.sessions_dir}")
 
-    def generate_trajectory(self, problem_id: str, output_dir: Path | None = None) -> Path | None:
-        """
-        Convert the claude-code.txt output file to a stratus JSONL trajectory
-        readable by the SREGym visualizer (visualizer/process.py).
-
-        Args:
-            problem_id:  SREGym problem identifier.
-            output_dir:  Directory for the trajectory file (defaults to logs_dir/trajectory).
-
-        Returns:
-            Path to the generated JSONL file, or None if conversion failed.
-        """
-        # Load converter directly from its file so no __init__.py or sys.path tricks needed.
-        converter_file = (
-            Path(__file__).resolve().parents[2] / "visualizer" / "converters" / "claudecode_to_trajectory.py"
-        )
-        if not converter_file.exists():
-            logger.warning(f"Converter not found: {converter_file}")
-            return None
-
-        try:
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location("claudecode_to_trajectory", converter_file)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            convert = mod.convert
-        except Exception as exc:
-            logger.warning(f"Could not load claudecode_to_trajectory: {exc}")
-            return None
-
-        if not self.output_path.exists():
-            logger.warning(f"Claude Code output file not found: {self.output_path}")
-            return None
-
-        from datetime import datetime
-
-        traj_dir = Path(output_dir) if output_dir else self.logs_dir / "trajectory"
-        traj_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%m%d_%H%M")
-        traj_file = traj_dir / f"{timestamp}_{problem_id}_claudecode_agent_trajectory.jsonl"
-
-        try:
-            return convert(
-                input_path=self.output_path,
-                output_path=traj_file,
-                problem_id=problem_id,
-            )
-        except Exception as exc:
-            logger.error(f"Trajectory conversion failed: {exc}")
-            return None
-
     def run(self, instruction: str) -> int:
         """
         Run the Claude Code agent with the given instruction.
@@ -342,6 +320,9 @@ class ClaudeCodeAgent:
         ]
         if reasoning_effort:
             command.extend(["--effort", reasoning_effort])
+        # Before --allowedTools: both options take several values.
+        if mcp_config := self._write_chiron_mcp_config():
+            command.extend(["--mcp-config", str(mcp_config)])
         command.extend(["--allowedTools", *self.allowed_tools()])
 
         logger.info(f"Executing command: {' '.join(command)}")

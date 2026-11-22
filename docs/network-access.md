@@ -4,7 +4,7 @@ Filtered access is the default. It allows the selected model provider and intern
 
 ## Endpoint configuration
 
-For a custom Stratus, Codex, or local OpenCode endpoint, set `AGENT_API_BASE`.
+For a custom Stratus, Codex, mini-sre, or local OpenCode endpoint, set `AGENT_API_BASE`.
 See [local models](../README.md#local-llms) for examples and the host-interface requirement.
 
 Use `--allow-agent-endpoint` for an extra destination:
@@ -39,7 +39,7 @@ kubectl rollout status deployment/calico-kube-controllers -n kube-system --timeo
 kubectl get tiers.crd.projectcalico.org
 ```
 
-4. Verify that the output includes the `adminnetworkpolicy` tier.
+4. Verify that the output includes the `adminnetworkpolicy` tier. `uv run main.py --check-setup` also checks for it.
 5. Remove the old baseline as described in the next section.
 
 ### Remove the old baseline after an upgrade

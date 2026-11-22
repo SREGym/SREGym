@@ -28,7 +28,9 @@ def build_report(
     *,
     problem_id: str,
     model: str,
+    harness: str,
     requested_attempts: int,
+    note: str | None = None,
 ) -> str:
     """Return a report whose saturation decision requires every requested run."""
     selected = [row for row in rows if row.get("problem_id") == problem_id]
@@ -106,10 +108,11 @@ def build_report(
         decision = "🟢 **Not saturated** — at least one attempt passed and at least one failed; keep it as a candidate."
 
     lines = [
-        "# Z.ai Problem Difficulty Evaluation",
+        "# Problem Difficulty Evaluation",
         "",
         f"- **Problem:** `{problem_id}`",
-        f"- **Model:** `{model}` via the Codex harness",
+        f"- **Model:** `{model}` via the {harness} harness",
+        *([f"- **Note:** {note}"] if note else []),
         f"- **Requested attempts:** {requested_attempts}",
         f"- **Complete attempts:** {complete_attempts}",
         f"- **Diagnosis pass rate:** {_rate(diagnosis_passes, diagnosis_evaluated)}",
@@ -134,9 +137,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", required=True, type=Path, help="SREGym results CSV")
     parser.add_argument("--problem", required=True, help="Problem ID to report")
-    parser.add_argument("--model", required=True, help="Z.ai model used by Codex")
+    parser.add_argument("--model", required=True, help="Model the agent ran on")
+    parser.add_argument("--harness", required=True, help="Agent harness, e.g. Claude Code or Codex")
     parser.add_argument("--attempts", required=True, type=int, help="Number of requested attempts")
     parser.add_argument("--output", required=True, type=Path, help="Markdown report path")
+    parser.add_argument("--note", help="Optional context line, e.g. why a fallback provider ran")
     parser.add_argument(
         "--github-summary",
         type=Path,
@@ -153,7 +158,9 @@ def main() -> None:
         rows,
         problem_id=args.problem,
         model=args.model,
+        harness=args.harness,
         requested_attempts=args.attempts,
+        note=args.note,
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

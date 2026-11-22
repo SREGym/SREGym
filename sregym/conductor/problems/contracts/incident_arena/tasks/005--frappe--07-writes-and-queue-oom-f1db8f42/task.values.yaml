@@ -1,0 +1,133 @@
+# --- fault and workload settings ---
+loadgen:
+  profilesYaml: "profiles:\n  frappe_jobs_agent:\n    base: frappe_jobs\n    loop:\
+    \ true\n    declare_deadline_s: 3690.0\n    soak_cycles: 3\n"
+  profile: frappe_jobs_agent
+  enabled: true
+erpnext:
+  redis-queue:
+    master:
+      extraFlags:
+      - --maxmemory
+      - 4mb
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - 'yes'
+      - --appendfsync
+      - everysec
+      - --user
+      - default
+      - 'on'
+      - nopass
+      - ~*
+      - '&*'
+      - +@all
+      - -flushall
+      - -flushdb
+      - -blpop
+      - -blmove
+      - -brpop
+      persistence:
+        enabled: true
+  redis-cache:
+    master:
+      extraFlags:
+      - --maxmemory
+      - 4mb
+      - --maxmemory-policy
+      - allkeys-lru
+  worker:
+    default:
+      replicaCount: 0
+    short:
+      replicaCount: 0
+    long:
+      replicaCount: 1
+      supervise: true
+      resources:
+        requests:
+          cpu: 250m
+        limits:
+          cpu: 1000m
+    scheduler:
+      replicaCount: 0
+  socketio:
+    replicaCount: 0
+faultInit:
+  mariadb:
+    enabled: true
+    kind: global_and_grants
+    variable: read_only
+    value: '{"global": true, "grants": ["UPDATE", "INSERT"]}'
+# --- agent access settings ---
+agentSurface:
+  profile: confined
+# --- grading-harness settings ---
+gradingHarness:
+  podState:
+    enabled: true
+  answerKey:
+    enabled: true
+  dbState:
+    enabled: true
+  lockState:
+    enabled: false
+  verifierEvidence:
+    persistent: true
+    size: 256Mi
+# --- agent report vocabulary ---
+agentReport:
+  vocabulary:
+    services:
+    - frappe-web
+    - frappe-worker-short
+    - frappe-worker-default
+    - frappe-worker-long
+    - frappe-scheduler
+    - frappe-socketio
+    - mariadb
+    - redis-cache
+    - redis-queue
+    - network
+    - load-generator
+    components:
+    - frappe-web.db-conn
+    - frappe-web.handler
+    - frappe-web.config
+    - frappe-worker-short.db-conn
+    - frappe-worker-short.rq-queue
+    - frappe-worker-default.db-conn
+    - frappe-worker-default.rq-queue
+    - frappe-worker-long.db-conn
+    - frappe-worker-long.rq-queue
+    - frappe-scheduler.tick
+    - frappe-scheduler.db-conn
+    - frappe-socketio.affinity
+    - frappe-socketio.config
+    - mariadb.read-only
+    - mariadb.grants
+    - mariadb.max-connections
+    - mariadb.max-user-connections
+    - mariadb.config
+    - mariadb.storage
+    - redis-cache.config
+    - redis-queue.config
+    - redis-queue.acl
+    - mariadb.txn-isolation
+    - mariadb.wait-timeout
+    - mariadb.buffer-pool
+    - mariadb.statement-time
+    - network
+# --- pinned-image settings ---
+global:
+  imagePullPolicy: IfNotPresent
+images:
+  main: ghcr.io/abundant-ai/sre-world/frappe-main@sha256:6204c277489b115057dbe2bb3465f7ba95327c3928e1be9076d92e960d94c9a7
+  loadgen: ghcr.io/abundant-ai/sre-world/frappe-loadgen@sha256:9229609b8adf60157608f47abbba82b96a31efc26044ec41c793d1db8b1c6c87
+  obsMcp: ghcr.io/abundant-ai/sre-world/frappe-obs-mcp@sha256:a3ba71aa515722d99c66c0d93ac177c2facf9d117ca8b205faf10f692ca2d407
+  frappeAdmin: ghcr.io/abundant-ai/sre-world/frappe-admin-sidecar@sha256:8682d96965e833d5d95814b612a67b8b206f9b6fdb694af40a975f9599e9dea6
+platformTools:
+  enabled: true
+  image: ghcr.io/abundant-ai/sre-world/codex-tools@sha256:c0ed85e5280e4d70c3ec341288fd240d2d64647d952db3712f94cd27c9c08d64
+  digest: sha256:c0ed85e5280e4d70c3ec341288fd240d2d64647d952db3712f94cd27c9c08d64

@@ -52,8 +52,8 @@ def get_agent(is_mock):
 
 
 def validate_condition(validate_cmd, validator):
-    exec_shell_cmd(validate_cmd)
-    return eval(validator)
+    output = exec_shell_cmd(validate_cmd)
+    return eval(validator, {"opt": output})
 
 
 def set_up_preconditions(preconditions):
@@ -102,6 +102,46 @@ def running_test(test_rounds, agent):
                     break
 
 
+def test_agent_reuses_the_transport_session_for_commands(monkeypatch):
+    from tests.kubectl_tool_tests import nl2kubectl_agent
+
+    monkeypatch.setattr(nl2kubectl_agent.uuid, "uuid4", lambda: "test-session")
+    agent = NL2KubectlAgent(None)
+    assert agent.kubectl_tools[0].session_id == "test-session"
+    assert agent.client.transport.headers["sregym_ssid"] == "test-session"
+
+
+def test_mock_agent_runs_async_tools_with_current_graph_state(monkeypatch, tmp_path):
+    from clients.stratus.tools import kubectl_tools
+
+    calls = []
+
+    async def call_tool(tool, name, *args, **kwargs):
+        calls.append(name)
+        return "No previous commands."
+
+    monkeypatch.setattr(kubectl_tools, "_call_mcp_with_retry", call_tool)
+    campaign = tmp_path / "campaign.yaml"
+    campaign.write_text(yaml.safe_dump({"test": [{"tool_call": "get_previous_rollbackable_cmd"}] * 2}))
+    agent = NL2KubectlAgent(None)
+    agent.test_campaign_setter(campaign)
+    agent.build_agent(mock=True)
+
+    agent.graph_step("Show the command history")
+    agent.graph_step("Show the command history again")
+
+    assert calls == ["get_previous_rollbackable_cmd"] * 2
+    state = agent.graph.get_state({"configurable": {"thread_id": "1"}})
+    assert len(state.values["messages"]) == 8
+
+
+@pytest.mark.parametrize("output,expected", [("deployment.apps/example\n", True), ("", False)])
+def test_condition_uses_the_command_output(monkeypatch, output, expected):
+    monkeypatch.setattr(f"{__name__}.exec_shell_cmd", lambda command: output)
+    assert validate_condition("kubectl get deployment", "len(opt.strip()) > 0") is expected
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("test_campaign_file", TEST_SETTINGS)
 class TestKubectlTools:
     def test_kubectl_tools_success(self, test_campaign_file: str):

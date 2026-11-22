@@ -94,8 +94,16 @@ def _wait_for_pod_completion(core_v1, pod_name: str, namespace: str, timeout: in
 
 
 class ConntrackMitigationOracle(MitigationOracle):
-    def __init__(self, problem, ratio_threshold: float = 0.70, probe_attempts: int = 20, drain_timeout: int = 90):
+    def __init__(
+        self,
+        problem,
+        ratio_threshold: float = 0.70,
+        probe_attempts: int = 20,
+        drain_timeout: int = 90,
+        probe_url: str = "http://frontend:5000/",
+    ):
         super().__init__(problem=problem)
+        self.probe_url = probe_url
         self.core_v1 = client.CoreV1Api()
         self.ratio_threshold = ratio_threshold
         self.probe_attempts = probe_attempts
@@ -137,7 +145,7 @@ class ConntrackMitigationOracle(MitigationOracle):
         pod_name = f"service-healthcheck-{int(time.time() * 1000)}"
         script = (
             f"ok=0; fail=0; for i in $(seq 1 {self.probe_attempts}); do "
-            "wget -q -T 2 -O /dev/null http://frontend:5000/ && ok=$((ok+1)) || fail=$((fail+1)); "
+            f"wget -q -T 2 -O /dev/null {self.probe_url} && ok=$((ok+1)) || fail=$((fail+1)); "
             'sleep 0.1; done; echo "PROBE_OK=${ok} PROBE_FAIL=${fail}"; test "$fail" -le 1'
         )
         pod = {

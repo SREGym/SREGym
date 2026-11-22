@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -164,3 +165,52 @@ def test_each_unsafe_priority_reports_its_own_reason(priority_class, expected_re
 
     assert verdict["reason"] == expected_reason
     assert verdict["failure_class"] == FailureClass.AGENT_ERROR
+
+
+@pytest.fixture
+def repaired_oracle():
+    oracle = _oracle()
+    oracle.application_check = Mock()
+    oracle._wait_for_rollouts = Mock()
+    oracle._deployment_unready = Mock(return_value=(None, _deployment("reservation")))
+    oracle._service_endpoint_unready = Mock(return_value=None)
+    oracle._any_deployment_unready = Mock(return_value=None)
+    oracle._any_app_pod_unready = Mock(return_value=None)
+    oracle._read_priority_class = Mock(return_value=_priority_class("platform-medium", 100000))
+    oracle._target_priority_unsafe = Mock(return_value=None)
+    oracle._request_was_reduced = Mock(return_value=None)
+    oracle.apps_v1 = SimpleNamespace(read_namespaced_deployment=Mock(return_value=_deployment("tenant-ingester")))
+    return oracle
+
+
+def test_ready_pods_with_broken_requests_cannot_pass(repaired_oracle):
+    repaired_oracle.application_check.side_effect = ValueError("Hotel request returned HTTP 500")
+    result = repaired_oracle.evaluate()
+    assert result["success"] is False
+    assert result["reason"] == "connectivity_probe_failed"
+    assert result["failure_class"] == FailureClass.AMBIGUOUS
+    assert "HTTP 500" in result["detail"]["error"]
+
+
+def test_functioning_application_and_repaired_priorities_pass(repaired_oracle):
+    assert repaired_oracle.evaluate() == {"success": True}
+    repaired_oracle.application_check.assert_called_once_with()
+
+
+def test_ports_can_keep_their_own_application_checks(repaired_oracle):
+    repaired_oracle.application_check = None
+    assert repaired_oracle.evaluate() == {"success": True}
+
+
+def test_bad_priority_still_fails_before_functional_check(repaired_oracle):
+    repaired_oracle._read_priority_class.return_value.global_default = True
+    assert repaired_oracle.evaluate()["reason"] == "platform_priority_still_global_default"
+    repaired_oracle.application_check.assert_not_called()
+
+
+def test_application_api_auth_error_is_not_relabelled_as_a_failed_request(repaired_oracle):
+    from kubernetes.client.exceptions import ApiException
+
+    error = ApiException(status=403)
+    repaired_oracle.application_check.side_effect = error
+    assert repaired_oracle.evaluate() == repaired_oracle.fail_from_exception(error)

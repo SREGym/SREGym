@@ -3,7 +3,9 @@ from kubernetes import client
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.network_policy_oracle import NetworkPolicyMitigationOracle
 from sregym.conductor.problems.base import Problem
+from sregym.conductor.problems.environment import reopen_connections
 from sregym.paths import TARGET_MICROSERVICES
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -13,10 +15,17 @@ class NetworkPolicyBlock(Problem):
     # HotelReservation pods use "io.kompose.service" as their label key
     POD_LABEL_KEY = "io.kompose.service"
 
-    def __init__(self, faulty_service="recommendation"):
-        super().__init__(app=HotelReservation())
+    def __init__(
+        self,
+        faulty_service="recommendation",
+        *,
+        app: Application | None = None,
+        client_deployment: str = "frontend",
+    ):
+        super().__init__(app=app if app is not None else HotelReservation())
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
+        self.client_deployment = client_deployment
         self.policy_name = f"deny-all-{faulty_service}"
 
         self.app.payload_script = (
@@ -42,7 +51,12 @@ class NetworkPolicyBlock(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
-        """Block ALL traffic to/from the target service"""
+        """Block ALL traffic to/from the target service.
+
+        The policy stops only new connections, and the frontend keeps the gRPC
+        channel it opened at startup, so the frontend is rolled to reconnect
+        under the policy. Its requests to the target then fail fast.
+        """
         policy = {
             "apiVersion": "networking.k8s.io/v1",
             "kind": "NetworkPolicy",
@@ -55,6 +69,7 @@ class NetworkPolicyBlock(Problem):
             },
         }
         self.networking_v1.create_namespaced_network_policy(namespace=self.namespace, body=policy)
+        reopen_connections(self, self.client_deployment)
 
     @mark_fault_injected
     def recover_fault(self):

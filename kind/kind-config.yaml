@@ -10,22 +10,22 @@ networking:
 #      endpoint = ["http://128.105.144.30:5000"]
 nodes:
   - role: control-plane
-    image: ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93
+    image: ghcr.io/sregym/kind-node:k8s-v1.32.5-containerd-v2.1.0-20261026@sha256:4ea90b4941351857bc87656e57a2d0b02cecadd4384a97d4a8cab5aa0655fc1e
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93
+    image: ghcr.io/sregym/kind-node:k8s-v1.32.5-containerd-v2.1.0-20261026@sha256:4ea90b4941351857bc87656e57a2d0b02cecadd4384a97d4a8cab5aa0655fc1e
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93
+    image: ghcr.io/sregym/kind-node:k8s-v1.32.5-containerd-v2.1.0-20261026@sha256:4ea90b4941351857bc87656e57a2d0b02cecadd4384a97d4a8cab5aa0655fc1e
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93
+    image: ghcr.io/sregym/kind-node:k8s-v1.32.5-containerd-v2.1.0-20261026@sha256:4ea90b4941351857bc87656e57a2d0b02cecadd4384a97d4a8cab5aa0655fc1e
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev

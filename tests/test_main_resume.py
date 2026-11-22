@@ -1,3 +1,5 @@
+import pytest
+
 from sregym.results.resume import complete_resume_rows, resume_row_is_complete
 
 
@@ -31,3 +33,34 @@ def test_legacy_diagnosis_only_row_is_rerun():
 
     assert resume_row_is_complete(diagnosis_only) is False
     assert resume_row_is_complete(both_stages) is True
+
+
+@pytest.mark.parametrize("run_status", ["", "complete", "incomplete"])
+@pytest.mark.parametrize("reason", ["judge_parse_failure", "judge_backend_unavailable"])
+def test_unscored_diagnosis_never_satisfies_resume(run_status, reason):
+    row = _row(
+        1,
+        run_status=run_status,
+        **{"Diagnosis.success": "", "Diagnosis.unscored_reason": reason, "Mitigation.success": "True"},
+    )
+
+    assert complete_resume_rows([row], requested_attempts=1) == {}
+
+
+@pytest.mark.parametrize("stage", ["Diagnosis", "Mitigation"])
+@pytest.mark.parametrize("success", ["True", "False"])
+def test_resume_preserves_complete_single_stage_runs(stage, success):
+    row = _row(1, run_status="complete", **{f"{stage}.success": success, "Diagnosis.unscored_reason": ""})
+
+    assert resume_row_is_complete(row) is True
+
+
+@pytest.mark.parametrize("evidence", ["reasoning", "oracles"])
+def test_resume_retries_historical_unscored_evaluations_without_top_level_reason(evidence):
+    row = _row(
+        1,
+        run_status="complete",
+        **{"Diagnosis.success": "", f"Diagnosis.{evidence}": "recorded evaluation", "Mitigation.success": "True"},
+    )
+
+    assert resume_row_is_complete(row) is False

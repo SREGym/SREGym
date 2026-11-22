@@ -227,8 +227,7 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
         ok = True
 
         try:
-            start_time = logs[0]["time"][0:26] + "Z"  # Convert to ISO 8601 format
-            start_time = datetime.strptime(start_time, "%Y-%m-%dT%H:%M:%S.%fZ").timestamp()
+            start_time = datetime.fromisoformat(logs[0]["time"].replace("Z", "+00:00")).timestamp()
 
             for i, part in enumerate(logs):
                 log = part["content"]
@@ -269,18 +268,16 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
                 self.core_v1_api.connect_get_namespaced_pod_exec,
                 name=pods.items[0].metadata.name,
                 namespace=self.namespace,
-                command=["date", "-Ins"],
+                command=["date", "+%s"],
                 stderr=True,
                 stdin=False,
                 stdout=True,
                 tty=False,
             )
 
-            # 2025-01-01T12:34:56,123456
-            shorter = resp.strip()[:26]
-            pod_current_time = datetime.strptime(shorter, "%Y-%m-%dT%H:%M:%S,%f").timestamp()
+            pod_current_time = float(resp.strip())
             # Use the difference between pod's current time and requested start_time
-            kwargs["since_seconds"] = math.ceil(pod_current_time - start_time) + STREAM_WORKLOAD_EPS
+            kwargs["since_seconds"] = max(1, math.ceil(pod_current_time - start_time) + STREAM_WORKLOAD_EPS)
 
         try:
             logs = self.core_v1_api.read_namespaced_pod_log(pods.items[0].metadata.name, self.namespace, **kwargs)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 from collections.abc import Iterable
 
 import yaml
@@ -26,6 +27,12 @@ POLICY_LABEL_KEY = "network-access"
 POLICY_LABEL_VALUE = "restricted"
 CLUSTER_DNS_SELECTOR = "projectcalico.org/namespace == 'kube-system' && k8s-app == 'kube-dns'"
 DOCKER_DNS_LOOPBACK = "127.0.0.11/32"
+
+# Optional telemetry export path through the boundary.
+# SREGYM_TELEMETRY_NAMESPACE names the only namespace allowed out;
+# SREGYM_TELEMETRY_EGRESS lists its destinations as "cidr:port[,cidr:port]".
+TELEMETRY_NAMESPACE_ENV = "SREGYM_TELEMETRY_NAMESPACE"
+TELEMETRY_EGRESS_ENV = "SREGYM_TELEMETRY_EGRESS"
 
 
 class ClusterEgressBoundary:
@@ -224,6 +231,7 @@ class ClusterEgressBoundary:
             for protocol in ("UDP", "TCP")
             for destination in dns_destinations
         ]
+        rules.extend(_telemetry_rules())
         if ipv4:
             rules.append(
                 {
@@ -257,6 +265,29 @@ class ClusterEgressBoundary:
                 "egress": rules,
             },
         }
+
+
+def _telemetry_rules() -> list[dict]:
+    """Pass rules for the configured telemetry namespace to its collector endpoints only."""
+    namespace = os.environ.get(TELEMETRY_NAMESPACE_ENV, "").strip()
+    egress = os.environ.get(TELEMETRY_EGRESS_ENV, "").strip()
+    if not namespace or not egress:
+        return []
+    rules = []
+    for item in egress.split(","):
+        cidr, _, port = item.strip().rpartition(":")
+        ipaddress.ip_network(cidr, strict=False)
+        selector = f"projectcalico.org/name == '{namespace}'"
+        rules.append(
+            {
+                "action": "Pass",
+                "protocol": "TCP",
+                "source": {"namespaceSelector": selector},
+                "destination": {"nets": [cidr], "ports": [int(port)]},
+            }
+        )
+    logger.info("Cluster egress boundary passes %s to %s", namespace, egress)
+    return rules
 
 
 def _split_cidrs(value: str | None) -> list[str]:

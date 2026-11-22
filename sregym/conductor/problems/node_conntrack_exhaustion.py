@@ -12,6 +12,7 @@ from sregym.conductor.oracles.conntrack_mitigation import (
 )
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.service.apps.base import Application
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.service.rollout import deployment_rollout_complete
@@ -26,8 +27,8 @@ class NodeConntrackExhaustionHotelReservation(Problem):
     conntrack_max_cap = 262144
     inject_ratio_threshold, recovery_ratio_threshold = 0.98, 0.10
 
-    def __init__(self):
-        super().__init__(app=HotelReservation())
+    def __init__(self, *, app: Application | None = None):
+        super().__init__(app=app if app is not None else HotelReservation())
         self.kubectl = KubeCtl()
         self.apps_v1 = client.AppsV1Api()
         self.core_v1 = client.CoreV1Api()
@@ -115,7 +116,19 @@ class NodeConntrackExhaustionHotelReservation(Problem):
                     f"of injection limit {effective_maximum}"
                 )
             self.conntrack_max_changed = True
-            write_node_conntrack_max(self.kubectl, node, effective_maximum, self.namespace)
+            try:
+                write_node_conntrack_max(self.kubectl, node, effective_maximum, self.namespace)
+            except RuntimeError as exc:
+                if "Permission denied" not in str(exc):
+                    raise
+                # The write was refused, so there is nothing to restore.
+                self.conntrack_max_changed = False
+                raise RuntimeError(
+                    f"Could not lower nf_conntrack_max on {node} from {original_maximum} to "
+                    f"{effective_maximum}: the kernel makes it read-only in any network namespace but "
+                    f"the host's, such as a kind node's. Set net.netfilter.nf_conntrack_max to "
+                    f"{effective_maximum} or less on the host. ({exc})"
+                ) from exc
             _, updated_maximum = read_node_conntrack_usage(self.kubectl, node, self.namespace)
             if updated_maximum != effective_maximum:
                 raise RuntimeError(

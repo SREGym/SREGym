@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if query.get('campaign') %}{{ query['campaign'] }} · {% endif %}Campaigns · SREGym traces</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='viewer.css') }}">
+</head>
+<body>
+{% macro counts(values, field, group) %}
+  {% set total = values.values()|sum %}
+  <div class="result-summary">
+    {% if total %}
+    <svg class="result-bar" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <rect class="pass" x="0" y="0" width="{{ values['Pass'] * 100 / total }}" height="6" />
+      <rect class="fail" x="{{ values['Pass'] * 100 / total }}" y="0" width="{{ values['Fail'] * 100 / total }}" height="6" />
+      <rect class="unknown" x="{{ (values['Pass'] + values['Fail']) * 100 / total }}" y="0" width="{{ values['Unknown'] * 100 / total }}" height="6" />
+    </svg>
+    {% endif %}
+    <div class="result-counts">
+      {% for grade in ['Pass', 'Fail', 'Unknown'] if values[grade] %}
+        {% set target = browse_url(fault=group.name, agent=group.agent, model=group.model, run_page=none, **{field: grade}) if query.get('campaign') else browse_url(campaign=group.key, run_page=none, **{field: grade}) %}
+        <a class="grade-count {{ grade|lower }}" href="{{ target }}" aria-label="{{ values[grade] }} {{ field }} {{ grade|lower }}: {{ group.name }}">{{ values[grade] }} {{ grade|lower }}</a>
+      {% endfor %}
+    </div>
+  </div>
+{% endmacro %}
+{% macro pages() %}
+  {% if run_pages > 1 %}
+  <nav class="pagination" aria-label="Browse pages">
+    {% if run_page > 1 %}<a href="{{ url(run_page=run_page-1) }}">Previous</a>{% endif %}
+    <span>Page {{ run_page }} of {{ run_pages }}</span>
+    {% if run_page < run_pages %}<a href="{{ url(run_page=run_page+1) }}">Next</a>{% endif %}
+  </nav>
+  {% endif %}
+{% endmacro %}
+{% macro select_filter(name, label, choices, empty_label) %}
+  <label>{{ label }}
+    <select name="{{ name }}">
+      <option value="">{{ empty_label }}</option>
+      {% for value in choices %}
+        <option {% if query.get(name) == value %}selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+{% endmacro %}
+<a class="skip" href="#results">Skip to results</a>
+<header class="masthead">
+  <a class="brand" href="/">SREGym <span>Trace viewer</span></a>
+  <a class="button secondary" href="{{ url() }}">Refresh files</a>
+</header>
+<main class="browser-main">
+  {% if query.get('campaign') %}
+  <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <a href="{{ browse_url(campaign=none, run_page=none) }}">Campaigns</a>
+    <span>/</span><span>{{ query['campaign'] if query['campaign'] != '.' else 'Current directory' }}</span>
+  </nav>
+  {% endif %}
+  <header class="browse-header">
+    <div>
+      <h1>{% if query.get('campaign') %}Faults and attempts{% else %}Campaigns{% endif %}</h1>
+      <p>{% if query.get('campaign') %}{{ group_count }} fault/model groups · {{ matched }} matching attempts{% else %}{{ campaign_count }} campaigns · {{ total }} recorded attempts{% endif %}</p>
+    </div>
+    <details class="directory-info"><summary>Source directory</summary><p class="trace-path">{{ root }}</p></details>
+  </header>
+  <form class="browse-filters" method="get">
+    {% if query.get('campaign') %}<input type="hidden" name="campaign" value="{{ query['campaign'] }}">{% endif %}
+    {% if query.get('fault') %}<input type="hidden" name="fault" value="{{ query['fault'] }}">{% endif %}
+    <label class="browse-search">Search<input name="q" value="{{ query.get('q', '') }}" placeholder="Campaign, fault, application, or model"></label>
+    {{ select_filter('agent', 'Agent', agents, 'All agents') }}
+    {{ select_filter('model', 'Model', models, 'All models') }}
+    {{ select_filter('mitigation', 'Mitigation', ['Pass', 'Fail', 'Unknown'], 'All results') }}
+    <button>Filter</button>
+    <details class="extra-filters" {% if query.get('diagnosis') or query.get('status') %}open{% endif %}>
+      <summary>More filters</summary>
+      {{ select_filter('diagnosis', 'Diagnosis', ['Pass', 'Fail', 'Unknown'], 'All results') }}
+      {{ select_filter('status', 'Run status', statuses, 'All statuses') }}
+      <label>Row spacing<select name="density"><option value="compact" {% if query.get('density') != 'comfortable' %}selected{% endif %}>Compact</option><option value="comfortable" {% if query.get('density') == 'comfortable' %}selected{% endif %}>Comfortable</option></select></label>
+      {% set current_sort = query.get('sort', 'name' if query.get('campaign') else 'recent') %}
+      <label>Sort
+        <select name="sort">
+          {% for value, label in [('recent', 'Recent first'), ('name', 'Name'), ('failures', 'Failures first')] if value != 'recent' or not query.get('campaign') %}
+            <option value="{{ value }}" {% if current_sort == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </details>
+  </form>
+  {% if query.get('q') or query.get('fault') or query.get('agent') or query.get('model') or query.get('diagnosis') or query.get('mitigation') or query.get('status') %}
+  <nav class="active-filters" aria-label="Active filters">
+    {% for field, label in [('q', 'Search'), ('fault', 'Fault'), ('agent', 'Agent'), ('model', 'Model'), ('diagnosis', 'Diagnosis'), ('mitigation', 'Mitigation'), ('status', 'Run status')] if query.get(field) %}
+      <a href="{{ browse_url(run_page=none, **{field: none}) }}" aria-label="Remove {{ label|lower }} filter: {{ query[field] }}">{{ label }}: {{ query[field]|replace('_', ' ') }} <span aria-hidden="true">×</span></a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+  <div class="browse-toolbar">
+    <p>{% if query.get('campaign') %}{{ matched }} matching attempts{% else %}{{ group_count }} matching campaigns · {{ matched }} attempts{% endif %}</p>
+    <nav aria-label="Result shortcuts" class="result-shortcuts">
+      <span class="shortcut-label">Mitigation</span>
+      {% for grade, label in [('Pass', 'Passed'), ('Fail', 'Failed'), ('Unknown', 'Unknown')] %}
+        <a class="result-filter {{ grade|lower }}{% if not mitigation_counts[grade] %} empty-count{% endif %}" href="{{ browse_url(mitigation=grade, status=none, run_page=none) }}" {% if query.get('mitigation') == grade and not query.get('status') %}aria-current="true"{% endif %} title="Mitigation {{ grade|lower }} in this campaign or search">{{ label }} <strong>{{ mitigation_counts[grade] }}</strong></a>
+      {% endfor %}
+      <a class="result-filter incomplete{% if not incomplete_count %} empty-count{% endif %}" href="{{ browse_url(status='incomplete', mitigation=none, run_page=none) }}" {% if query.get('status') == 'incomplete' %}aria-current="true"{% endif %} title="Incomplete attempts, counted separately from mitigation results">Incomplete <strong>{{ incomplete_count }}</strong></a>
+      <a href="{{ browse_url(q=none, agent=none, model=none, diagnosis=none, mitigation=none, status=none, fault=none, sort=none, run_page=none) }}">Clear filters</a>
+    </nav>
+  </div>
+  {{ pages() }}
+  <div class="table-scroll" id="results" tabindex="0" role="region" aria-label="{% if query.get('campaign') %}Faults and attempts{% else %}Campaign results{% endif %}">
+    <table class="browse-table {% if query.get('density') != 'comfortable' %}compact{% endif %}">
+      <thead>
+        <tr>
+          {% if query.get('campaign') %}
+            <th scope="col">Fault</th><th scope="col">Model / agent</th>
+            <th scope="col">Diagnosis</th><th scope="col">Mitigation</th>
+            <th scope="col">Attempts<span class="row-secondary">Color shows mitigation</span></th>
+          {% else %}
+            <th scope="col">Campaign directory</th><th scope="col">Model / agent</th>
+            <th scope="col">Faults</th><th scope="col">Attempts</th>
+            <th scope="col">Diagnosis</th><th scope="col">Mitigation</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+      {% for group in groups %}
+      <tr>
+        {% if query.get('campaign') %}
+          <th scope="row">
+            <a class="row-title" href="{{ url(run=group.runs[0].key, tab='trace', run_page=none) }}">{{ group.name|replace('_', ' ') }}</a>
+            {% if group.application %}<span class="row-secondary">{{ group.application }}</span>{% endif %}
+            {% if group.incomplete %}<span class="row-notice incomplete">{{ group.incomplete }} incomplete</span>{% endif %}
+          </th>
+          <td class="model-cell"><span class="model-name">{{ group.model }}</span><span class="row-secondary">{{ group.agent }}</span></td>
+          <td class="grade-cell">{{ counts(group.diagnosis, 'diagnosis', group) }}</td><td class="grade-cell">{{ counts(group.mitigation, 'mitigation', group) }}</td>
+          <td>
+            <div class="attempt-links">
+              {% for run in group.runs %}
+                <a class="attempt-link {{ run.mitigation|lower }}{% if run.status == 'incomplete' %} incomplete{% endif %}" href="{{ url(run=run.key, tab='trace', run_page=none) }}" aria-label="{% if run.attempt %}Attempt {{ run.attempt }}{% else %}Trace{% endif %}: diagnosis {{ run.diagnosis }}, mitigation {{ run.mitigation }}, run {{ run.status }}" title="Diagnosis: {{ run.diagnosis }} · Mitigation: {{ run.mitigation }} · Run: {{ run.status }}">{{ run.attempt or 'Trace' }} · {{ run.mitigation }}{% if run.status == 'incomplete' %} · Incomplete{% endif %}</a>
+              {% endfor %}
+            </div>
+          </td>
+        {% else %}
+          {% set path_parts = group.name.split('/') %}
+          <th scope="row">
+            <a class="row-title campaign-title" href="{{ browse_url(campaign=group.key, run_page=none) }}" aria-label="Open campaign {{ group.name }}" title="{{ group.name }}">{{ path_parts[-2:]|join(' / ') }}</a>
+            {% if path_parts|length > 2 %}<span class="row-secondary campaign-parent">{{ path_parts[:-2]|join('/') }}</span>{% endif %}
+            {% if group.incomplete %}<span class="row-notice incomplete">{{ group.incomplete }} incomplete</span>{% endif %}
+          </th>
+          <td class="model-cell"><span class="model-name">{{ group.models|join(', ') }}</span><span class="row-secondary">{{ group.agents|join(', ') }}</span></td>
+          <td class="numeric">{{ group.faults }}</td><td class="numeric">{{ group.runs|length }}</td>
+          <td class="grade-cell">{{ counts(group.diagnosis, 'diagnosis', group) }}</td><td class="grade-cell">{{ counts(group.mitigation, 'mitigation', group) }}</td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ 5 if query.get('campaign') else 6 }}" class="table-empty">
+        {% if not total %}<strong>No trajectories found.</strong><p>This directory has no <code>trajectory.json</code> files. Select a results directory, or refresh after an attempt saves its trajectory.</p>
+        {% else %}<strong>No attempts match these filters.</strong><p><a href="{{ browse_url(q=none, agent=none, model=none, diagnosis=none, mitigation=none, status=none, fault=none, sort=none, run_page=none) }}">Clear current filters</a>{% if query.get('campaign') %} to see this campaign again. <a href="/">All campaigns</a>{% else %} to see all recorded campaigns.{% endif %}</p>{% endif %}
+      </td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {{ pages() }}
+  <p class="browse-note">Counts use recorded evaluation results. Unknown does not mean failure. Campaigns follow directories above each agent and fault.</p>
+</main>
+</body>
+</html>
