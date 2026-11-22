@@ -39,6 +39,7 @@ from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.phases import PhaseLedger
 from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
+from sregym.service.apps.persistent import PersistentNamespaceCleanupError
 from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.internet_policy import InternetPolicy
@@ -536,6 +537,7 @@ class Conductor:
         problem = self.problem
         cleanup_generation = self._submission_generation if generation is None else generation
         cleanup_errors: list[str] = []
+        persistent_disposal_pending = False
 
         def cleanup_was_abandoned() -> bool:
             with self._submission_lock:
@@ -564,7 +566,7 @@ class Conductor:
             return
 
         # Recover fault using the captured problem reference
-        if problem:
+        if problem and getattr(problem, "recover_before_undeploy", True):
             self.logger.info("[CLEANUP] Recovering fault...")
             try:
                 problem.recover_fault()
@@ -585,12 +587,15 @@ class Conductor:
             except Exception as exc:
                 self.logger.exception("[CLEANUP] App cleanup failed")
                 cleanup_errors.append(f"app_cleanup: {type(exc).__name__}: {exc}")
+                persistent_disposal_pending = isinstance(exc, PersistentNamespaceCleanupError)
 
         if stop_late_cleanup():
             return
 
         # Reconcile cluster state to baseline
-        if self._baseline_captured:
+        if persistent_disposal_pending:
+            self.logger.warning("[CLEANUP] Skipping reconciliation while namespace and volume disposal is unconfirmed")
+        elif self._baseline_captured:
             self.logger.info("[CLEANUP] Reconciling cluster state to baseline...")
             try:
                 changes = self.cluster_state.reconcile_to_baseline()

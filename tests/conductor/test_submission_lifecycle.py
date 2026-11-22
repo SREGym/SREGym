@@ -1,6 +1,8 @@
 import asyncio
 import concurrent.futures
+import json
 import logging
+import subprocess
 import sys
 import threading
 import time
@@ -966,6 +968,104 @@ def test_cleanup_continues_after_recovery_error_and_reaches_terminal_state():
     assert conductor.submission_stage == "done"
     assert conductor.results["cleanup_failed"] is True
     assert "recover_fault: RuntimeError: recovery failed" in conductor.results["cleanup_error"]
+
+
+@pytest.mark.parametrize(
+    "success,cleanup_ok,lost_delete_reply",
+    [(None, True, False), (True, True, False), (False, True, True), (True, False, False)],
+)
+def test_airport_meal_disposal_uses_stock_budget_and_preserves_results(
+    monkeypatch, success, cleanup_ok, lost_delete_reply
+):
+    import main as runner
+    from sregym.conductor.problems.airport_meal_clearing import AirportMealClearing
+    from sregym.service.apps import persistent
+    from sregym.service.apps.airport_meals.application import AirportMealClearingApplication
+
+    now = 0
+    reads = 0
+    snapshots = []
+
+    def advance(seconds):
+        nonlocal now
+        now += seconds
+
+    def kubectl(*args, timeout):
+        nonlocal reads
+        assert 0 < timeout <= 15
+        if args == ("get", "pv", "-o", "json"):
+            reads += 1
+            if reads == 1:
+                raise subprocess.TimeoutExpired(args, timeout)
+            volumes = [
+                {
+                    "metadata": {"name": name},
+                    "spec": {"claimRef": claim, "persistentVolumeReclaimPolicy": policy},
+                }
+                for name, claim, policy in (
+                    ("meal-volume", {"namespace": "airport-meals"}, "Delete"),
+                    ("retained", {"namespace": "airport-meals"}, "Retain"),
+                    ("unrelated", {"namespace": "other"}, "Delete"),
+                    ("unbound", None, "Delete"),
+                )
+            ]
+            return json.dumps({"items": volumes})
+        if args[0] == "delete":
+            assert args == ("delete", "namespace", "airport-meals", "--ignore-not-found", "--wait=false")
+            if lost_delete_reply:
+                raise subprocess.TimeoutExpired(args, timeout)
+            return ""
+        assert args[0] == "get" and args[-3:] == ("--ignore-not-found", "-o", "name")
+        targets = set(args[1:-3])
+        snapshots.append((now, targets))
+        assert targets <= {"namespace/airport-meals", "persistentvolume/meal-volume"}
+        if len(snapshots) == 1:
+            raise subprocess.CalledProcessError(1, args, stderr="temporarily unavailable")
+        if now <= 200:
+            return "namespace/airport-meals\npersistentvolume/meal-volume\n"
+        return "persistentvolume/meal-volume\n" if now <= 400 or not cleanup_ok else ""
+
+    monkeypatch.setenv("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "600")
+    monkeypatch.setattr(persistent, "time", SimpleNamespace(monotonic=lambda: now, sleep=advance))
+    conductor = _conductor()
+    conductor.submission_stage = "setup" if success is None else "mitigation"
+    conductor.results = {} if success is None else {"Mitigation": {"success": success}}
+    conductor._baseline_captured = True
+    conductor.phases = None
+    app = AirportMealClearingApplication.__new__(AirportMealClearingApplication)
+    app.namespace = "airport-meals"
+    app.command = Mock(side_effect=kubectl)
+    problem = AirportMealClearing.__new__(AirportMealClearing)
+    problem.app = app
+    problem.recover_fault = Mock(side_effect=AssertionError("disposal ran the reference recovery"))
+    conductor.problem = problem
+    conductor.cluster_state = Mock()
+    reconciled_at = []
+    conductor.cluster_state.reconcile_to_baseline.side_effect = lambda: reconciled_at.append(now) or {}
+    assert runner.problem_cleanup_timeout(conductor) == runner.CLEANUP_DRAIN_TIMEOUT_SECONDS
+
+    if success is None:
+        runner.cleanup_interrupted_problem(conductor)
+    else:
+        conductor.finish_problem_in_background().result(timeout=runner.problem_cleanup_timeout(conductor))
+
+    problem.recover_fault.assert_not_called()
+    assert [call.args[0] for call in app.command.call_args_list[:4]] == ["get", "get", "delete", "get"]
+    assert sum(call.args[0] == "delete" for call in app.command.call_args_list) == 1
+    assert snapshots[0][1] == {"namespace/airport-meals", "persistentvolume/meal-volume"}
+    assert snapshots[-1][1] == {"persistentvolume/meal-volume"}
+    expected = {} if success is None else {"Mitigation": {"success": success}}
+    if cleanup_ok:
+        conductor.cluster_state.reconcile_to_baseline.assert_called_once_with()
+        assert len(reconciled_at) == 1 and 400 < reconciled_at[0] < 600
+        assert conductor.results == expected
+    else:
+        conductor.cluster_state.reconcile_to_baseline.assert_not_called()
+        assert now == 600
+        assert conductor.results["Mitigation"] == expected["Mitigation"]
+        assert conductor.results["cleanup_failed"] is True
+        assert "Disposal unconfirmed for persistentvolume/meal-volume" in conductor.results["cleanup_error"]
+    assert conductor.submission_stage == "done"
 
 
 @pytest.mark.parametrize("cleanup_fails", [False, True])

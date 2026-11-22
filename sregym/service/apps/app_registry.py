@@ -16,6 +16,7 @@ from sregym.paths import (
     SOCIAL_NETWORK_METADATA,
     TRAIN_TICKET_METADATA,
 )
+from sregym.service.apps.airport_meals.application import AirportMealClearingApplication
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.base import Application
 from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
@@ -75,6 +76,13 @@ class AppDefinition:
 
 
 APPLICATIONS = (
+    AppDefinition(
+        "airport-meal-clearing",
+        AirportMealClearingApplication,
+        AirportMealClearingApplication.metadata_file,
+        ("airport_meal_clearing",),
+        service_port=8080,
+    ),
     AppDefinition("astronomy-shop", AstronomyShop, ASTRONOMY_SHOP_METADATA, ("astronomy_shop",)),
     AppDefinition(
         "hotel-reservation",

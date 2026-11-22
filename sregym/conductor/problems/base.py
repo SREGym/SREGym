@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 
 class Problem(ABC):
     run_default_workload = True
+    # Problems whose resources are removed by app cleanup may skip in-place recovery here.
+    recover_before_undeploy = True
 
     def __init__(self, app, namespace: str | None = None):
         self.app = app
