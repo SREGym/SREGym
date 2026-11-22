@@ -64,6 +64,12 @@ SREGym is used by researchers and engineers at organizations including:
   <a href="https://www.asu.edu/#gh-light-mode-only"><img src="assets/who-uses/light/asu.png" alt="Arizona State University" height="31"></a><a href="https://www.asu.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/asu.png" alt="Arizona State University" height="31"></a>
 </p>
 
+<p align="center">
+  <a href="https://www.wisc.edu/#gh-light-mode-only"><img src="assets/who-uses/light/wisconsin.png" alt="University of Wisconsin–Madison" height="40"></a><a href="https://www.wisc.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/wisconsin.png" alt="University of Wisconsin–Madison" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.buet.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a><a href="https://www.buet.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.bracu.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/brac.png" alt="BRAC University" height="50"></a><a href="https://www.bracu.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/brac.png" alt="BRAC University" height="50"></a>
+</p>
+
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
 
 [SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 17 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
