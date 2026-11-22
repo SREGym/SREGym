@@ -246,8 +246,8 @@ Measured on one astronomy-shop problem (peak RSS / peak CPU, sampled over the ru
 > [!WARNING]
 > `svelte` changes what an agent can observe in the cluster, so its scores are **not**
 > comparable with `full`. It is intended for local iteration on memory-constrained hosts,
-> not for leaderboard submissions. Note that `--profile svelte` and `--suite sregym-lite`
-> are unrelated: you can run either without the other.
+> not for [leaderboard submissions](#submit-results-to-the-leaderboard). Note that
+> `--profile svelte` and `--suite sregym-lite` are unrelated: you can run either without the other.
 
 ### Model Selection
 
@@ -364,6 +364,16 @@ uv run main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20
 See the full list of supported providers and model strings in the [LiteLLM docs](https://docs.litellm.ai/docs/providers).
 
 </details>
+
+## Submit results to the leaderboard
+
+To submit results, [open a submission issue](https://github.com/SREGym/SREGym/issues/new?labels=submission&title=%5BSubmission%5D%20) or [join our Slack](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w) to message the SREGym team.
+We only require the agent trajectories for the submitted runs.
+
+We recommend:
+
+- At least three attempts for each fault you evaluate.
+- The strongest available model as the diagnosis judge (such as Astra, Opus, or Fable) at high reasoning effort or higher.
 
 ## Cite Our Work
 If our work is useful for you, please cite it:
