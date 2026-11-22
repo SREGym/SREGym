@@ -182,6 +182,20 @@ def build(theme):
             HEIGHT,
             centered_logo("asu-white.png" if dark else "asu-color.png", 210 if dark else 185, 60 if dark else 40),
         ),
+        "wisconsin": (
+            HEIGHT,
+            centered_logo(
+                "uw-logo-horizontal-color-reverse-web-digital.svg"
+                if dark
+                else "uw-logo-horizontal-color-web-digital.svg",
+                200,
+                67,
+            ),
+        ),
+        "buet": (
+            HEIGHT,
+            logo("buet.png", 32, 17, 56, 56) + text("BUET", 100, 56, 30, ink, weight=600),
+        ),
     }
     output = ROOT / theme
     output.mkdir(exist_ok=True)
