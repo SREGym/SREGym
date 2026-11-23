@@ -14,6 +14,7 @@ variable "REVISION" {
 group "default" {
   targets = [
     "mattermost-server",
+    "mattermost-fleets",
     "stripe-backend",
     "incident-arena",
     "hotel-reservation",
@@ -49,6 +50,7 @@ group "default" {
 group "publish" {
   targets = [
     "mattermost-server",
+    "mattermost-fleets",
     "stripe-backend",
     "incident-arena",
     "hotel-reservation",
@@ -154,7 +156,7 @@ target "_common" {
 }
 
 group "postmortem-apps" {
-  targets = ["mattermost-server", "stripe-backend"]
+  targets = ["mattermost-server", "mattermost-fleets", "stripe-backend"]
 }
 
 group "incident-arena" {
@@ -286,6 +288,30 @@ target "mattermost-server" {
   inherits = ["_common"]
   context = "docker/apps/mattermost/server"
   tags = ["${REGISTRY}/mattermost:${IMAGE_TAG}"]
+}
+
+// The in-house services of mattermost_transit_saturation_tier2. Contexts are
+// generated: uv run python -m sregym.service.apps.mattermost.in_house
+group "mattermost-fleets" {
+  targets = ["mattermost-instance-bootstrap", "mattermost-provisioner", "mattermost-capacity-scaler", "mattermost-push-proxy"]
+}
+
+// Tier 1b of the same incident, which is not registered; built locally only.
+group "mattermost-single-fleet" {
+  targets = ["mattermost-gateway", "mattermost-gateway-provisioner", "mattermost-gateway-scaler"]
+}
+
+target "mattermost-in-house" {
+  inherits = ["_common"]
+  name = "mattermost-${image}"
+  matrix = {
+    image = [
+      "instance-bootstrap", "provisioner", "capacity-scaler", "push-proxy",
+      "gateway", "gateway-provisioner", "gateway-scaler",
+    ]
+  }
+  context = "docker/apps/mattermost/${image}"
+  tags = ["${REGISTRY}/mattermost:${IMAGE_TAG}-${image}"]
 }
 
 target "stripe-backend" {
