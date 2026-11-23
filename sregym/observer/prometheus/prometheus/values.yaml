@@ -947,6 +947,7 @@ serverFiles:
                   sum by (le, service_name, namespace) (
                     rate(traces_span_metrics_duration_milliseconds_bucket{
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                      span_name!="order-consumed",
                       namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                     }[2m])
                   )

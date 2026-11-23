@@ -123,3 +123,31 @@ def test_span_histograms_use_explicit_durations(name, buckets):
     histogram = config["connectors"][name]["histogram"]
     assert histogram["unit"] == "ms"
     assert histogram["explicit"]["buckets"] == buckets
+
+
+def selects(expr, labels):
+    # Evaluates the label matchers of the rule's single series selector.
+    matchers = re.findall(r'(\w+)\s*(=~|!~|!=|=)\s*"([^"]*)"', re.search(r"\{([^}]*)\}", expr)[1])
+    ops = {
+        "=": lambda v, p: v == p,
+        "!=": lambda v, p: v != p,
+        "=~": lambda v, p: re.fullmatch(p, v) is not None,
+        "!~": lambda v, p: re.fullmatch(p, v) is None,
+    }
+    return all(ops[op](labels.get(name, ""), pattern) for name, op, pattern in matchers)
+
+
+@pytest.mark.parametrize(
+    ("labels", "selected"),
+    [
+        # order-consumed wraps the blocking Kafka Consume(), so it measures idle time between orders.
+        ({"service_name": "accounting", "span_name": "order-consumed"}, False),
+        ({"service_name": "accounting", "span_name": "receive orders"}, True),
+        ({"service_name": "checkout", "span_name": "oteldemo.CheckoutService/PlaceOrder"}, True),
+    ],
+)
+def test_high_request_latency_ignores_consumer_wait_spans(labels, selected):
+    values = yaml.safe_load((ROOT / "sregym/observer/prometheus/prometheus/values.yaml").read_text())
+    groups = values["serverFiles"]["alerting_rules.yml"]["groups"]
+    rule = next(r for g in groups for r in g.get("rules", []) if r.get("alert") == "HighRequestLatency")
+    assert selects(rule["expr"], {**labels, "namespace": "astronomy-shop"}) is selected
