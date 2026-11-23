@@ -67,5 +67,10 @@
   "sregym-mcp": "ghcr.io/sregym/sregym-mcp:sha-5ced3166d8a90c49317b9e243bc021d67d7ad77e@sha256:238122adef3852976f82f15ce11aace411669f59a0ea74893a6a1c678e348cfe",
   "local-volume-provisioner": "registry.k8s.io/sig-storage/local-volume-provisioner:v2.5.0@sha256:a112f1625aad84e4f425141199ab6ddbb49432c66e05dbbaab033d0ab2e8dfaf",
   "advanced-statefulset": "pingcap/advanced-statefulset:v0.7.0@sha256:2aff07392d168e3a02d6cbe4bc76eb1dd3b9eec2117fb49e6101e4180f63c849",
-  "chaos-pause": "registry.k8s.io/pause:3.9@sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097"
+  "chaos-pause": "registry.k8s.io/pause:3.9@sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097",
+  "workspace-edge": "ghcr.io/sregym/workspace:20261118-edge-2026.11.1@sha256:7482e02f4b73150ed63bc70854290ba24e8ccf6a7df6a5d38fb9a7a9b134a9d3",
+  "workspace-mail": "ghcr.io/sregym/workspace:20261118-mail@sha256:0123d09c1fbc7b55fdaf1ae8ea0bf215bfd5dba85ab75aec5d998ba71fb42587",
+  "workspace-edge-2026.06.4": "ghcr.io/sregym/workspace:20261118-edge-2026.06.4@sha256:6ff678177307d822232f68e00acbe4f07a50f398344d930ee467129d4dd3b8e3",
+  "workspace-edge-2026.07.2": "ghcr.io/sregym/workspace:20261118-edge-2026.07.2@sha256:3616939c5c14c2d2e9faad561a10117b018befd3854498d33ee85b71429d37fd",
+  "workspace-edge-2026.09.1": "ghcr.io/sregym/workspace:20261118-edge-2026.09.1@sha256:24432b88153c718c5667da9ffc4016f622135f96c711217e88cd12a71ae29ea1"
 }
