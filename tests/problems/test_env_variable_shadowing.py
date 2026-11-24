@@ -91,15 +91,21 @@ def test_injection_appends_a_later_shadowing_definition_with_json_patch():
                 {
                     "op": "add",
                     "path": "/spec/template/spec/containers/1/env/-",
-                    "value": {"name": "FRONTEND_HOST", "value": "localhost"},
+                    "value": {"name": "FRONTEND_HOST", "value": "frontend-legacy"},
                 }
             ],
         )
     ]
 
 
+def test_shadow_value_does_not_point_the_proxy_at_itself():
+    # Loopback and the proxy's own Service both reach envoy's listener on 8080.
+    # The proxy then forwards to itself until it runs out of memory or fds.
+    assert EnvVariableShadowing.SHADOW_VALUE not in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "frontend-proxy"}
+
+
 def test_injection_rejects_an_already_ambiguous_baseline():
-    problem = _problem(_KubeCtl(_deployment(_template("frontend", "localhost"))))
+    problem = _problem(_KubeCtl(_deployment(_template("frontend", "frontend-legacy"))))
 
     try:
         problem._append_shadowing_definition()
@@ -114,7 +120,7 @@ def test_capture_preserves_the_original_single_definition():
     problem = _problem(_KubeCtl(_deployment(original)))
 
     problem._capture_baseline_template()
-    original.spec.containers[1].env.append(_env("FRONTEND_HOST", "localhost"))
+    original.spec.containers[1].env.append(_env("FRONTEND_HOST", "frontend-legacy"))
 
     assert _host_values(problem._baseline_template) == ["frontend"]
 
@@ -122,7 +128,7 @@ def test_capture_preserves_the_original_single_definition():
 def test_restore_replaces_template_but_preserves_latest_deployment_settings():
     baseline = _template("frontend", annotations={"baseline": "true"})
     current = _deployment(
-        _template("frontend", "localhost", annotations={"agent": "extra-rollout"}),
+        _template("frontend", "frontend-legacy", annotations={"agent": "extra-rollout"}),
         replicas=3,
         strategy="agent-strategy",
     )
@@ -141,7 +147,7 @@ def test_restore_replaces_template_but_preserves_latest_deployment_settings():
 
 
 def test_recovery_waits_for_rollout_and_clears_snapshot():
-    kubectl = _KubeCtl(_deployment(_template("frontend", "localhost")))
+    kubectl = _KubeCtl(_deployment(_template("frontend", "frontend-legacy")))
     problem = _problem(kubectl)
     problem._baseline_template = _template("frontend")
 
