@@ -188,3 +188,14 @@ def test_port_forward_health_rejects_disconnected_and_unresponsive_servers(legac
     assert get.call_count == (2 if legacy else 1)
     if legacy:
         missing_route.close.assert_called_once_with()
+
+
+def test_deployment_progress_deadline_covers_rollout_timeout(rendered_manifests, monkeypatch):
+    monkeypatch.setattr("sregym.service.mcp_server.MCP_ROLLOUT_TIMEOUT_SECONDS", 1800)
+    with patch("sregym.service.mcp_server.KubeCtl"):
+        server = MCPServer(restrict_network_access=False)
+    server.kubectl.exec_command_checked.return_value = rendered_manifests
+
+    resources = server._deployment_resources()
+    deployment = next(body for body in resources if body["kind"] == "Deployment")
+    assert deployment["spec"]["progressDeadlineSeconds"] == 1800
