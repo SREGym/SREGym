@@ -3,16 +3,14 @@ name: Problem Difficulty Evaluation
 # Opt-in only: a core team member starts this workflow from the Actions UI or
 # comments "/evaluate-problem <id> [3|5] [model]" on a pull request.
 #
-# By default Codex runs on NCSA Lumen (LUMEN_API_KEY) for five attempts.
-# Codex requires the Responses API, so a local LiteLLM proxy translates its
-# requests to Lumen's OpenAI-compatible Chat Completions endpoint. The Lumen
-# preflight requires a real tool call, because a model that can only answer in
-# text would fail every attempt and make the problem look hard.
-#
-# Claude Code on the Anthropic API (ANTHROPIC_API_KEY, a monthly credit grant)
-# runs only when a Claude model is named, for three attempts; use it for the
-# final check of a problem. glm-5.3-flash runs Codex on the Z.ai GLM Coding
-# Plan through the same LiteLLM proxy.
+# By default Claude Code runs on Claude Opus through the Anthropic API
+# (ANTHROPIC_API_KEY) for three attempts. Name deepseek-v4.1-flash-1017 to run
+# Codex on NCSA Lumen (LUMEN_API_KEY) for five attempts instead: Codex
+# requires the Responses API, so a local LiteLLM proxy translates its requests
+# to Lumen's OpenAI-compatible Chat Completions endpoint. The Lumen preflight
+# requires a real tool call, because a model that can only answer in text
+# would fail every attempt and make the problem look hard. glm-5.3-flash runs
+# Codex on the Z.ai GLM Coding Plan through the same LiteLLM proxy.
 #
 # When the requested provider's preflight fails (credits exhausted, outage,
 # no tool calls, or the secret isn't set), the run falls back in the order
@@ -46,15 +44,15 @@ on:
           - "3"
           - "5"
       model:
-        description: "Model; Lumen by default, Claude for a final check. Unusable providers fall back to Lumen, Z.ai, then Cursor"
+        description: "Model; Claude Opus by default. Unusable providers fall back to Lumen, Z.ai, then Cursor"
         required: true
-        # Keep the Lumen option in sync with LUMEN_MODEL below.
-        default: deepseek-v4.1-flash-1017
+        default: claude-opus-5-5
         type: choice
         options:
-          - deepseek-v4.1-flash-1017
           - claude-opus-5-5
           - claude-sonnet-5-5
+          # Keep the Lumen option in sync with LUMEN_MODEL below.
+          - deepseek-v4.1-flash-1017
           - glm-5.3-flash
 
 concurrency:
@@ -62,7 +60,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The default model, served by NCSA Lumen's OpenAI-compatible API.
+  # The first fallback, served by NCSA Lumen's OpenAI-compatible API.
   LUMEN_MODEL: deepseek-v4.1-flash-1017
   LUMEN_API_BASE: https://lumen.ncsa.illinois.edu/v1
 
@@ -142,15 +140,15 @@ jobs:
                 read -r -a words <<< "$raw" || true
                 problem_id=${words[0]:-}
                 # Both optional values may be omitted, so tell them apart by
-                # shape: "/evaluate-problem <id> claude-opus-5-5" keeps
-                # Claude's default attempt count.
+                # shape: "/evaluate-problem <id> glm-5.3-flash" keeps GLM's
+                # default attempt count.
                 for word in "${words[@]:1:2}"; do
                   case "$word" in
                     *[!0-9]*) model="$word" ;;
                     *) attempts="$word" ;;
                   esac
                 done
-                model=${model:-$LUMEN_MODEL}
+                model=${model:-claude-opus-5-5}
               fi
               ;;
           esac
@@ -166,8 +164,8 @@ jobs:
               skip_reason="attempts must be 3 or 5"
             else
               case "$model" in
-                "$LUMEN_MODEL"|claude-opus-5-5|claude-sonnet-5-5|glm-5.3-flash) should_run=true ;;
-                *) skip_reason="model must be $LUMEN_MODEL, claude-opus-5-5, claude-sonnet-5-5, or glm-5.3-flash" ;;
+                claude-opus-5-5|claude-sonnet-5-5|"$LUMEN_MODEL"|glm-5.3-flash) should_run=true ;;
+                *) skip_reason="model must be claude-opus-5-5, claude-sonnet-5-5, $LUMEN_MODEL, or glm-5.3-flash" ;;
               esac
             fi
           fi
@@ -369,7 +367,7 @@ jobs:
           }
 
           # The requested provider goes first, then the rest in fallback
-          # order. Claude only runs when a Claude model is named.
+          # order. Claude runs unless another model is named.
           case "$REQUESTED_MODEL" in
             claude-*) chain="anthropic lumen zai cursor" ;;
             glm-*) chain="zai lumen cursor" ;;
