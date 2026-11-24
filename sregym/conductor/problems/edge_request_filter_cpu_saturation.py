@@ -29,7 +29,7 @@ class EdgeRequestFilterCPUSaturation(Problem):
         self.regex_env = "WAF_RULE_REGEX"
         self.bad_regex = "^([a-zA-Z]+)*$"
         self.safe_regex = "^[A-Za-z]+$"
-        self.crafted_payload = "a" * 5000 + "!"
+        self.crafted_payload = "a" * 15000 + "!"
         self.cpu_limit = "100m"
         self.memory_limit = "65Mi"
         self.process_marker = "edge-traffic-replay"
