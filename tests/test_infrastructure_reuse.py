@@ -141,6 +141,13 @@ def test_startup_repairs_ndm_scheduling_only_in_full(startup, monkeypatch, svelt
     with pytest.raises(ObserverSetupReached):
         startup.deploy_app()
     patch = startup.kubectl.apps_v1_api.patch_namespaced_daemon_set
+    deploy_patch = startup.kubectl.apps_v1_api.patch_namespaced_deployment
+    deploy_patch.assert_called_once_with(
+        "openebs-localpv-provisioner",
+        "openebs",
+        [{"op": "add", "path": "/spec/template/spec/containers/0/livenessProbe/timeoutSeconds", "value": 10}],
+        _request_timeout=10,
+    )
     if svelte:
         patch.assert_not_called()
         startup._trim_openebs_ndm.assert_called_once()
@@ -149,7 +156,10 @@ def test_startup_repairs_ndm_scheduling_only_in_full(startup, monkeypatch, svelt
         patch.assert_called_once_with(
             "openebs-ndm",
             "openebs",
-            [{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}}],
+            [
+                {"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}},
+                {"op": "add", "path": "/spec/template/spec/containers/0/livenessProbe/timeoutSeconds", "value": 10},
+            ],
             _request_timeout=10,
         )
         startup._ensure_openebs_device_storageclass.assert_called_once()
@@ -161,6 +171,7 @@ def test_healthy_infrastructure_is_not_patched(startup):
         startup.deploy_app()
     startup.kubectl.assert_pod_networking.assert_called_once_with()
     startup.kubectl.core_v1_api.patch_namespaced_service.assert_not_called()
+    startup.kubectl.apps_v1_api.patch_namespaced_deployment.assert_not_called()
     startup.kubectl.apps_v1_api.patch_namespaced_daemon_set.assert_not_called()
     assert startup._metrics_server_configured.call_count == 2
     assert startup._openebs_ready.call_count == 2
@@ -198,6 +209,55 @@ def test_startup_removes_interrupted_preloads_before_waiting_for_openebs(startup
     )
     assert cleanup_index < wait_index
     assert events.mock_calls[cleanup_index].kwargs["timeout"] == conductor_module.WAIT_FOR_POD_READY_TIMEOUT + 10
+
+
+def test_cleanup_openebs_helper_pods_deletes_only_orphaned_terminal_helpers(conductor):
+    def make_pod(name, phase, container_name, *, owner_references=None, uid=None):
+        return SimpleNamespace(
+            metadata=SimpleNamespace(name=name, uid=uid or f"{name}-uid", owner_references=owner_references),
+            status=SimpleNamespace(phase=phase),
+            spec=SimpleNamespace(containers=[SimpleNamespace(name=container_name)]),
+        )
+
+    conductor.kubectl.core_v1_api.list_namespaced_pod.return_value = SimpleNamespace(
+        items=[
+            make_pod("init-pvc-111", "Succeeded", "local-path-init"),
+            make_pod("cleanup-pvc-222", "Failed", "local-path-cleanup"),
+            make_pod("init-pvc-active", "Running", "local-path-init"),
+            make_pod("init-pvc-owned", "Succeeded", "local-path-init", owner_references=[SimpleNamespace(kind="Job")]),
+            make_pod("other-pod", "Succeeded", "local-path-init"),
+            make_pod("init-pvc-wrong-container", "Succeeded", "unexpected"),
+        ]
+    )
+
+    conductor._cleanup_openebs_helper_pods()
+
+    assert [
+        (call.kwargs["name"], call.kwargs["namespace"], call.kwargs["body"])
+        for call in conductor.kubectl.core_v1_api.delete_namespaced_pod.call_args_list
+    ] == [
+        ("init-pvc-111", "openebs", {"preconditions": {"uid": "init-pvc-111-uid"}}),
+        ("cleanup-pvc-222", "openebs", {"preconditions": {"uid": "cleanup-pvc-222-uid"}}),
+    ]
+
+
+def test_startup_cleans_orphaned_openebs_helpers_before_waiting_for_openebs(startup):
+    events = MagicMock()
+    events.attach_mock(startup.kubectl.core_v1_api.list_namespaced_pod, "list_openebs_pods")
+    events.attach_mock(startup.kubectl.wait_for_ready, "wait")
+
+    with pytest.raises(ObserverSetupReached):
+        startup.deploy_app()
+
+    list_index = next(
+        index
+        for index, call in enumerate(events.mock_calls)
+        if call[0] == "list_openebs_pods" and call.args == ("openebs",)
+    )
+    wait_index = next(
+        index for index, call in enumerate(events.mock_calls) if call[0] == "wait" and call.args == ("openebs",)
+    )
+    assert list_index < wait_index
 
 
 def test_openebs_helper_image_is_discovered_and_preloaded(conductor):
