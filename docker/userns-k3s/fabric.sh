@@ -101,10 +101,16 @@ for n in $NODES; do
         userns="$userns unshare --user --map-users=0:0:65536 --map-groups=0:0:65536 --setgroups=allow --setuid=0 --setgid=0"
     fi
     owner=$((owner + 1))
-    sh -c "$join; exec $userns unshare --mount --net --uts --ipc --cgroup --pid --fork --mount-proc /bin/sh $lib/node.sh $n $ip $cgroup_version $role $server_ip" \
+    # Wait for the child to enter its new network namespace via a marker file
+    # rather than readlink /proc/$pid/ns/net, which fails with EACCES under
+    # setpriv --reuid when CAP_SYS_PTRACE is dropped (returning empty string).
+    ready=/var/log/node-$n.netns
+    rm -f "$ready"
+    sh -c "$join; exec $userns unshare --mount --net --uts --ipc --cgroup --pid --fork --mount-proc /bin/sh -c 'echo ready > $ready && exec /bin/sh $lib/node.sh $n $ip $cgroup_version $role $server_ip'" \
         > /var/log/node-$n.log 2>&1 &
     pid=$!
-    until [ "$(readlink /proc/$pid/ns/net)" != "$(readlink /proc/self/ns/net)" ]; do sleep 0.1; done
+    until [ -s "$ready" ]; do kill -0 "$pid" 2>/dev/null || exit 1; sleep 0.1; done
+    rm -f "$ready"
     if [ $cgroup_version = 2 ]; then
         # The unshare parent stays outside the node's PID namespace, where the
         # node cannot move it; park it in the node's leaf so the node's root
