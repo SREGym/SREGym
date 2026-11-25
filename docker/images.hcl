@@ -40,6 +40,9 @@ group "default" {
     "blueprint-hotel",
     "stress",
     "openwhisk",
+    "workspace-edge",
+    "workspace-edge-releases",
+    "workspace-mail",
   ]
 }
 
@@ -75,6 +78,9 @@ group "publish" {
     "blueprint-hotel",
     "stress",
     "openwhisk",
+    "workspace-edge",
+    "workspace-edge-releases",
+    "workspace-mail",
   ]
 }
 
@@ -244,6 +250,36 @@ target "slack-spine-minio" {
     mc-source = "https://github.com/minio/mc.git#04c5116c9bdf8b762acc54b5500a9a276a5ec05a"
   }
   tags = ["${REGISTRY}/slack-spine:${IMAGE_TAG}-minio"]
+}
+
+# The gateway's release history: 2026.06.4 is the last release before the
+# shared admission table; the problem rolls the fleet through all four.
+target "workspace-edge" {
+  inherits = ["_common"]
+  context = "docker/apps/workspace/edge-gw"
+  args = { VERSION = "2026.11.1" }
+  tags = ["${REGISTRY}/workspace:${IMAGE_TAG}-edge-2026.11.1"]
+}
+
+target "workspace-edge-releases" {
+  inherits = ["_common"]
+  name = "workspace-edge-${replace(release.version, ".", "-")}"
+  matrix = {
+    release = [
+      { version = "2026.06.4", tags = "release2606" },
+      { version = "2026.07.2", tags = "" },
+      { version = "2026.09.1", tags = "" },
+    ]
+  }
+  context = "docker/apps/workspace/edge-gw"
+  args = { VERSION = release.version, TAGS = release.tags }
+  tags = ["${REGISTRY}/workspace:${IMAGE_TAG}-edge-${release.version}"]
+}
+
+target "workspace-mail" {
+  inherits = ["_common"]
+  context = "docker/apps/workspace/mail"
+  tags = ["${REGISTRY}/workspace:${IMAGE_TAG}-mail"]
 }
 
 target "mattermost-server" {
