@@ -47,12 +47,14 @@ class TrainTicket(Application):
     def _delete_bundled_monitoring(self):
         # The deploy job image also applies train-ticket's own Prometheus/Grafana stack into kube-system;
         # SREGym uses observe/prometheus-server, and the stray copy misleads Prometheus auto-discovery.
-        manifests = TARGET_MICROSERVICES / "train-ticket" / "deployment" / "kubernetes-manifests" / "prometheus"
+        # Same copy deploy.sh applies, so the delete stays in sync with it.
+        manifests = (
+            TARGET_MICROSERVICES / "train-ticket" / "deploy-job" / "deployment" / "kubernetes-manifests" / "prometheus"
+        )
         self.kubectl.exec_command(f"kubectl delete -f {manifests} --ignore-not-found --wait=false")
 
     def delete(self):
         """Delete the Helm configurations."""
-        self._delete_bundled_monitoring()
         # Helm.uninstall(**self.helm_configs) # Don't helm uninstall until cleanup job is fixed on train-ticket
         if self.namespace:
             self.kubectl.delete_namespace(self.namespace)
@@ -75,6 +77,8 @@ class TrainTicket(Application):
 
     def cleanup(self):
         """Cleanup the train-ticket application."""
+        # Also runs after a deploy that timed out, which never reached the delete in deploy().
+        self._delete_bundled_monitoring()
         # Helm.uninstall(**self.helm_configs)
         if self.namespace:
             self.kubectl.delete_namespace(self.namespace)
