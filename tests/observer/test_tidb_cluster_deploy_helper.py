@@ -1,47 +1,24 @@
-"""TiDBClusterDeployHelper redeploys when its cached "ready" cluster is gone.
+"""TiDBClusterDeployHelper deploys TiDB on every call.
 
-The between-problem reset removes the TiDB operator, CRDs and cluster, so a cached
-ready flag from an earlier problem must not skip the redeploy.
+A cached "ready" flag from an earlier problem skipped the deploy after the
+between-problem reset had removed TiDB, or reused a cluster still carrying the
+previous problem's fault.
 """
 
-import subprocess
 from unittest.mock import Mock
-
-import pytest
 
 from sregym.observer import tidb_cluster_deploy_helper as helper_module
 from sregym.observer.tidb_cluster_deploy_helper import TiDBClusterDeployHelper
 
 
-@pytest.fixture
-def deployer(monkeypatch):
+def test_deploys_on_every_call(monkeypatch):
+    # Arrange
     deployer = Mock()
     monkeypatch.setattr(helper_module, "TiDBClusterDeployer", Mock(return_value=deployer))
-    monkeypatch.setattr(TiDBClusterDeployHelper, "_ready", True)
-    return deployer
-
-
-def _cluster_lookup(monkeypatch, returncode):
-    monkeypatch.setattr(subprocess, "run", Mock(return_value=subprocess.CompletedProcess("kubectl", returncode)))
-
-
-def test_redeploys_when_the_cached_cluster_was_removed(monkeypatch, deployer):
-    # Arrange
-    _cluster_lookup(monkeypatch, returncode=1)
 
     # Act
     TiDBClusterDeployHelper.running_cluster()
-
-    # Assert
-    deployer.deploy_all.assert_called_once()
-
-
-def test_reuses_the_cluster_when_it_still_exists(monkeypatch, deployer):
-    # Arrange
-    _cluster_lookup(monkeypatch, returncode=0)
-
-    # Act
     TiDBClusterDeployHelper.running_cluster()
 
     # Assert
-    deployer.deploy_all.assert_not_called()
+    assert deployer.deploy_all.call_count == 2
