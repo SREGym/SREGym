@@ -1,19 +1,23 @@
 """Build individual transparent logos for the README's light and dark themes.
 
-Run from any directory with Python 3 and rsvg-convert installed.
+Run from any directory with rsvg-convert and Pillow installed.
 The build uses only saved assets and makes no network or model calls.
 """
 
 import base64
 import subprocess
 from html import escape
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 LOGOS = ROOT / "logos"
 WIDTH = 240
 HEIGHT = 90
 SCALE = 3
+EDGE_PADDING = 2 * SCALE
 
 
 def logo(filename, x, y, width, height, *, replacements=()):
@@ -91,6 +95,17 @@ def microsoft_logo(dark):
     )
 
 
+def brac_logo(dark):
+    content = centered_logo("brac.png", 76, 70)
+    if not dark:
+        return content
+    return (
+        '<defs><filter id="brac-white"><feColorMatrix type="matrix" '
+        'values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0"/>'
+        '</filter></defs><g filter="url(#brac-white)">' + content + "</g>"
+    )
+
+
 def build(theme):
     dark = theme == "dark"
     ink = "#f0f6fc" if dark else "#1f2328"
@@ -101,6 +116,8 @@ def build(theme):
             '<g transform="translate(120 45) scale(0.70) translate(-120 -38.5)">' + microsoft_logo(dark) + "</g>",
         ),
         "datadog": (HEIGHT, centered_logo(f"datadog-{'white' if dark else 'purple'}.svg", 185, 46)),
+        "pagerduty": (HEIGHT, centered_logo(f"pagerduty-{'white' if dark else 'green'}.svg", 210, 45)),
+        "snorkel": (HEIGHT, centered_logo(f"snorkel-{theme}.svg", 164, 47)),
         "cognition": (HEIGHT, named_mark("cognition-0.svg", 45, 34, "Cognition", 126, ink)),
         "komodor": (
             HEIGHT,
@@ -176,6 +193,21 @@ def build(theme):
             HEIGHT,
             centered_logo("asu-white.png" if dark else "asu-color.png", 210 if dark else 185, 60 if dark else 40),
         ),
+        "wisconsin": (
+            HEIGHT,
+            centered_logo(
+                "uw-logo-horizontal-color-reverse-web-digital.svg"
+                if dark
+                else "uw-logo-horizontal-color-web-digital.svg",
+                200,
+                67,
+            ),
+        ),
+        "buet": (
+            HEIGHT,
+            logo("buet.png", 32, 17, 56, 56) + text("BUET", 100, 56, 30, ink, weight=600),
+        ),
+        "brac": (HEIGHT, brac_logo(dark)),
     }
     output = ROOT / theme
     output.mkdir(exist_ok=True)
@@ -185,19 +217,32 @@ def build(theme):
             f'height="{height}" viewBox="0 0 {WIDTH} {height}">'
             f"{content}</svg>"
         )
-        subprocess.run(
+        rendered = subprocess.run(
             [
                 "rsvg-convert",
                 "--width",
                 str(WIDTH * SCALE),
                 "--height",
                 str(height * SCALE),
-                "--output",
-                str(output / f"{name}.png"),
             ],
             input=svg.encode(),
+            capture_output=True,
             check=True,
-        )
+        ).stdout
+        with Image.open(BytesIO(rendered)) as image:
+            # Crop to the mark; the README sets the gaps between logos.
+            bounds = image.getchannel("A").getbbox()
+            if bounds is None:
+                raise ValueError(f"The {theme} logo for {name} rendered empty")
+            left, top, right, bottom = bounds
+            image.crop(
+                (
+                    left - EDGE_PADDING,
+                    top - EDGE_PADDING,
+                    right + EDGE_PADDING,
+                    bottom + EDGE_PADDING,
+                )
+            ).save(output / f"{name}.png", optimize=True)
     print(f"Built {len(organizations)} transparent {theme} logos.")
 
 

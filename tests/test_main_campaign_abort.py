@@ -46,7 +46,7 @@ def test_driver_wrapper_preserves_partial_results_and_failure(monkeypatch):
     monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", lambda: None)
     monkeypatch.setattr(benchmark_main, "request_shutdown", lambda: shutdown_called.append(True))
 
-    benchmark_main._run_driver_and_shutdown(object())
+    benchmark_main._run_driver_and_shutdown(SimpleNamespace(mcp_server=Mock()))
 
     assert benchmark_main._driver_results == partial_results
     assert isinstance(benchmark_main._driver_error, benchmark_main.BenchmarkCampaignAborted)
@@ -471,3 +471,95 @@ def test_timed_out_agent_gets_the_normal_exit_reap_grace(monkeypatch, tmp_path):
         call("agent", timeout=benchmark_main.AGENT_REAP_GRACE_SECONDS),
         call("agent"),
     ]
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "interrupt"])
+def test_campaign_stops_mcp_after_teardown_before_api_shutdown(monkeypatch, outcome):
+    benchmark_main = _load_main_module()
+    events = []
+    conductor = SimpleNamespace(mcp_server=Mock())
+    conductor.mcp_server.stop_port_forward.side_effect = lambda: events.append("stop_mcp")
+    stop_event = threading.Event()
+
+    def driver(*args, **kwargs):
+        events.append("driver")
+        if outcome == "failure":
+            raise RuntimeError("deployment failed")
+        if outcome == "interrupt":
+            stop_event.set()
+            raise benchmark_main.BenchmarkCampaignAborted("interrupted", [])
+        return []
+
+    monkeypatch.setattr(benchmark_main, "driver_loop", driver)
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", lambda: events.append("agents"))
+    monkeypatch.setattr(benchmark_main, "cleanup_interrupted_problem", lambda c: events.append("teardown"))
+    monkeypatch.setattr(benchmark_main, "request_shutdown", lambda: events.append("shutdown"))
+    benchmark_main._run_driver_and_shutdown(conductor, stop_event=stop_event)
+    expected = ["driver", "agents"]
+    if outcome == "interrupt":
+        expected.append("teardown")
+    assert events == expected + ["stop_mcp", "shutdown"]
+
+
+def test_external_harness_does_not_stop_mcp(monkeypatch):
+    benchmark_main = _load_main_module()
+    conductor = SimpleNamespace(mcp_server=Mock())
+    monkeypatch.setattr(benchmark_main, "driver_loop", lambda *a, **k: [])
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", lambda: None)
+    shutdown = Mock()
+    monkeypatch.setattr(benchmark_main, "request_shutdown", shutdown)
+    benchmark_main._run_driver_and_shutdown(conductor, use_external_harness=True)
+    conductor.mcp_server.stop_port_forward.assert_not_called()
+    shutdown.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["agents", "teardown", "mcp"])
+def test_cleanup_failure_still_shuts_down_api(monkeypatch, failure):
+    benchmark_main = _load_main_module()
+    conductor = SimpleNamespace(mcp_server=Mock())
+    stop_event = threading.Event()
+    stop_event.set()
+    monkeypatch.setattr(benchmark_main, "driver_loop", lambda *a, **k: [])
+    cleanup_agents = Mock(side_effect=RuntimeError("agents") if failure == "agents" else None)
+    teardown = Mock(side_effect=RuntimeError("teardown") if failure == "teardown" else None)
+    if failure == "mcp":
+        conductor.mcp_server.stop_port_forward.side_effect = RuntimeError("mcp")
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", cleanup_agents)
+    monkeypatch.setattr(benchmark_main, "cleanup_interrupted_problem", teardown)
+    shutdown = Mock()
+    monkeypatch.setattr(benchmark_main, "request_shutdown", shutdown)
+    if failure == "mcp":
+        benchmark_main._run_driver_and_shutdown(conductor, stop_event=stop_event)
+    else:
+        with pytest.raises(RuntimeError, match=failure):
+            benchmark_main._run_driver_and_shutdown(conductor, stop_event=stop_event)
+    conductor.mcp_server.stop_port_forward.assert_called_once()
+    shutdown.assert_called_once()
+
+
+def test_campaign_reaps_its_forward_and_leaves_borrowed_process_alive(monkeypatch):
+    import subprocess
+
+    from sregym.service.mcp_server import MCPServer
+
+    benchmark_main = _load_main_module()
+    server = object.__new__(MCPServer)
+    owned = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    borrowed = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    server.port_forward_process = owned
+    conductor = SimpleNamespace(mcp_server=server)
+    monkeypatch.setattr(benchmark_main, "driver_loop", lambda *a, **k: [])
+    monkeypatch.setattr(benchmark_main.LAUNCHER, "cleanup_all", lambda: None)
+    monkeypatch.setattr(benchmark_main, "request_shutdown", lambda: None)
+    try:
+        benchmark_main._run_driver_and_shutdown(conductor)
+        assert owned.poll() is not None
+        # Reusing somebody else's forward doesn't store their process handle.
+        server.port_forward_process = None
+        benchmark_main._run_driver_and_shutdown(conductor)
+        assert borrowed.poll() is None
+    finally:
+        for process in (owned, borrowed):
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
