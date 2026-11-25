@@ -28,6 +28,48 @@ SREGym has been used to simulate real-world cloud failures, such as:
 - Kafka poison pill ([postmortem](https://www.lydtechconsulting.com/blog/kafka-poison-pill), [simulation](https://github.com/SREGym/SREGym/pull/790))
 - The Reddit Pi-Day Outage ([postmortem](https://www.reddit.com/r/RedditEng/comments/11xx5o0/you_broke_reddit_the_piday_outage/), [simulation](https://github.com/SREGym/SREGym/pull/828))
 
+## Who uses SREGym?
+
+SREGym is used by researchers and engineers at organizations including:
+
+<p align="center">
+  <a href="https://www.microsoft.com/research/#gh-light-mode-only"><img src="assets/who-uses/light/microsoft.png" alt="Microsoft Research" height="31"></a><a href="https://www.microsoft.com/research/#gh-dark-mode-only"><img src="assets/who-uses/dark/microsoft.png" alt="Microsoft Research" height="31"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.datadoghq.com/#gh-light-mode-only"><img src="assets/who-uses/light/datadog.png" alt="Datadog" height="35"></a><a href="https://www.datadoghq.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/datadog.png" alt="Datadog" height="35"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.pagerduty.com/#gh-light-mode-only"><img src="assets/who-uses/light/pagerduty.png" alt="PagerDuty" height="31"></a><a href="https://www.pagerduty.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/pagerduty.png" alt="PagerDuty" height="31"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://snorkel.ai/#gh-light-mode-only"><img src="assets/who-uses/light/snorkel.png" alt="Snorkel AI" height="38"></a><a href="https://snorkel.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/snorkel.png" alt="Snorkel AI" height="38"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://cognition.com/#gh-light-mode-only"><img src="assets/who-uses/light/cognition.png" alt="Cognition" height="31"></a><a href="https://cognition.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/cognition.png" alt="Cognition" height="31"></a>
+</p>
+
+<p align="center">
+  <a href="https://chironvision.ai/#gh-light-mode-only"><img src="assets/who-uses/light/chiron.png" alt="Chiron" height="34"></a><a href="https://chironvision.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/chiron.png" alt="Chiron" height="34"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://cloudthinker.io/#gh-light-mode-only"><img src="assets/who-uses/light/cloudthinker.png" alt="CloudThinker" height="28"></a><a href="https://cloudthinker.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/cloudthinker.png" alt="CloudThinker" height="28"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://one2n.io/#gh-light-mode-only"><img src="assets/who-uses/light/one2n.png" alt="One2N" height="36"></a><a href="https://one2n.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/one2n.png" alt="One2N" height="36"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://komodor.com/#gh-light-mode-only"><img src="assets/who-uses/light/komodor.png" alt="Komodor" height="26"></a><a href="https://komodor.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/komodor.png" alt="Komodor" height="26"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://radarhq.io/#gh-light-mode-only"><img src="assets/who-uses/light/skyhook.png" alt="Skyhook, makers of Radar" height="36"></a><a href="https://radarhq.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/skyhook.png" alt="Skyhook, makers of Radar" height="36"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.nofire.ai/#gh-light-mode-only"><img src="assets/who-uses/light/nofire.png" alt="NOFire" height="30"></a><a href="https://www.nofire.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/nofire.png" alt="NOFire" height="30"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://ciroos.ai/#gh-light-mode-only"><img src="assets/who-uses/light/ciroos.png" alt="Ciroos" height="33"></a><a href="https://ciroos.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/ciroos.png" alt="Ciroos" height="33"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://bespokelabs.ai/#gh-light-mode-only"><img src="assets/who-uses/light/bespoke.png" alt="Bespoke Labs" height="26"></a><a href="https://bespokelabs.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/bespoke.png" alt="Bespoke Labs" height="26"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://github.com/exoharness/exo#gh-light-mode-only"><img src="assets/who-uses/light/exo.png" alt="Exo" height="36"></a><a href="https://github.com/exoharness/exo#gh-dark-mode-only"><img src="assets/who-uses/dark/exo.png" alt="Exo" height="36"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://p95.ai/#gh-light-mode-only"><img src="assets/who-uses/light/p95.png" alt="P95.ai" height="30"></a><a href="https://p95.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/p95.png" alt="P95.ai" height="30"></a>
+</p>
+
+<p align="center">
+  <a href="https://illinois.edu/#gh-light-mode-only"><img src="assets/who-uses/light/illinois.png" alt="University of Illinois Urbana-Champaign" height="38"></a><a href="https://illinois.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/illinois.png" alt="University of Illinois Urbana-Champaign" height="38"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.washington.edu/#gh-light-mode-only"><img src="assets/who-uses/light/washington.png" alt="University of Washington" height="33"></a><a href="https://www.washington.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/washington.png" alt="University of Washington" height="33"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.utoronto.ca/#gh-light-mode-only"><img src="assets/who-uses/light/toronto.png" alt="University of Toronto" height="45"></a><a href="https://www.utoronto.ca/#gh-dark-mode-only"><img src="assets/who-uses/dark/toronto.png" alt="University of Toronto" height="45"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.berkeley.edu/#gh-light-mode-only"><img src="assets/who-uses/light/berkeley.png" alt="University of California, Berkeley" height="38"></a><a href="https://www.berkeley.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/berkeley.png" alt="University of California, Berkeley" height="38"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.asu.edu/#gh-light-mode-only"><img src="assets/who-uses/light/asu.png" alt="Arizona State University" height="31"></a><a href="https://www.asu.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/asu.png" alt="Arizona State University" height="31"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.wisc.edu/#gh-light-mode-only"><img src="assets/who-uses/light/wisconsin.png" alt="University of Wisconsin–Madison" height="40"></a><a href="https://www.wisc.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/wisconsin.png" alt="University of Wisconsin–Madison" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.buet.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a><a href="https://www.buet.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://www.bracu.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/brac.png" alt="BRAC University" height="50"></a><a href="https://www.bracu.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/brac.png" alt="BRAC University" height="50"></a>
+</p>
+
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
 
 [SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 17 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
@@ -246,8 +288,8 @@ Measured on one astronomy-shop problem (peak RSS / peak CPU, sampled over the ru
 > [!WARNING]
 > `svelte` changes what an agent can observe in the cluster, so its scores are **not**
 > comparable with `full`. It is intended for local iteration on memory-constrained hosts,
-> not for leaderboard submissions. Note that `--profile svelte` and `--suite sregym-lite`
-> are unrelated: you can run either without the other.
+> not for [leaderboard submissions](#submit-results-to-the-leaderboard). Note that
+> `--profile svelte` and `--suite sregym-lite` are unrelated: you can run either without the other.
 
 ### Model Selection
 
@@ -365,11 +407,21 @@ See the full list of supported providers and model strings in the [LiteLLM docs]
 
 </details>
 
+## Submit results to the leaderboard
+
+To submit results, [open a submission issue](https://github.com/SREGym/SREGym/issues/new?labels=submission&title=%5BSubmission%5D%20) or [join our Slack](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w) to message the SREGym team.
+We only require the agent trajectories for the submitted runs.
+
+We recommend:
+
+- At least three attempts for each fault you evaluate.
+- The strongest available model as the diagnosis judge (such as Astra, Opus, or Fable) at high reasoning effort or higher.
+
 ## Cite Our Work
 If our work is useful for you, please cite it:
 
 ```bibtex
-@article{clark:arxiv:2026,
+@article{sregym2026,
   author = {Jackson Clark and Yiming Su and Saad Mohammad Rafid Pial and Yifang Tian and Lily Gniedziejko and Hans-Arno Jacobsen and Yinfang Chen and Tianyin Xu},
   title = "{SREGym: A Live Benchmark for AI SRE Agents with High-Fidelity Failure Scenarios}",
   journal = {arXiv:2605.07161},
@@ -377,37 +429,6 @@ If our work is useful for you, please cite it:
   month = MAY,
 }
 ```
-
-## Who uses SREGym?
-
-SREGym is used by researchers and engineers at organizations including:
-
-<p align="center">
-  <a href="https://www.microsoft.com/research/#gh-light-mode-only"><img src="assets/who-uses/light/microsoft.png" alt="Microsoft Research" width="160" height="60"></a><a href="https://www.microsoft.com/research/#gh-dark-mode-only"><img src="assets/who-uses/dark/microsoft.png" alt="Microsoft Research" width="160" height="60"></a>
-  <a href="https://www.datadoghq.com/#gh-light-mode-only"><img src="assets/who-uses/light/datadog.png" alt="Datadog" width="160" height="60"></a><a href="https://www.datadoghq.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/datadog.png" alt="Datadog" width="160" height="60"></a>
-  <a href="https://cognition.com/#gh-light-mode-only"><img src="assets/who-uses/light/cognition.png" alt="Cognition" width="160" height="60"></a><a href="https://cognition.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/cognition.png" alt="Cognition" width="160" height="60"></a>
-  <a href="https://cloudthinker.io/#gh-light-mode-only"><img src="assets/who-uses/light/cloudthinker.png" alt="CloudThinker" width="160" height="60"></a><a href="https://cloudthinker.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/cloudthinker.png" alt="CloudThinker" width="160" height="60"></a>
-  <a href="https://komodor.com/#gh-light-mode-only"><img src="assets/who-uses/light/komodor.png" alt="Komodor" width="160" height="60"></a><a href="https://komodor.com/#gh-dark-mode-only"><img src="assets/who-uses/dark/komodor.png" alt="Komodor" width="160" height="60"></a>
-</p>
-<p align="center">
-  <a href="https://www.nofire.ai/#gh-light-mode-only"><img src="assets/who-uses/light/nofire.png" alt="NOFire" width="160" height="60"></a><a href="https://www.nofire.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/nofire.png" alt="NOFire" width="160" height="60"></a>
-  <a href="https://chironvision.ai/#gh-light-mode-only"><img src="assets/who-uses/light/chiron.png" alt="Chiron" width="160" height="60"></a><a href="https://chironvision.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/chiron.png" alt="Chiron" width="160" height="60"></a>
-  <a href="https://radarhq.io/#gh-light-mode-only"><img src="assets/who-uses/light/skyhook.png" alt="Skyhook, makers of Radar" width="160" height="60"></a><a href="https://radarhq.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/skyhook.png" alt="Skyhook, makers of Radar" width="160" height="60"></a>
-  <a href="https://ciroos.ai/#gh-light-mode-only"><img src="assets/who-uses/light/ciroos.png" alt="Ciroos" width="160" height="60"></a><a href="https://ciroos.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/ciroos.png" alt="Ciroos" width="160" height="60"></a>
-</p>
-<p align="center">
-  <a href="https://one2n.io/#gh-light-mode-only"><img src="assets/who-uses/light/one2n.png" alt="One2N" width="160" height="60"></a><a href="https://one2n.io/#gh-dark-mode-only"><img src="assets/who-uses/dark/one2n.png" alt="One2N" width="160" height="60"></a>
-  <a href="https://github.com/exoharness/exo#gh-light-mode-only"><img src="assets/who-uses/light/exo.png" alt="Exo" width="160" height="60"></a><a href="https://github.com/exoharness/exo#gh-dark-mode-only"><img src="assets/who-uses/dark/exo.png" alt="Exo" width="160" height="60"></a>
-  <a href="https://p95.ai/#gh-light-mode-only"><img src="assets/who-uses/light/p95.png" alt="P95.ai" width="160" height="60"></a><a href="https://p95.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/p95.png" alt="P95.ai" width="160" height="60"></a>
-  <a href="https://bespokelabs.ai/#gh-light-mode-only"><img src="assets/who-uses/light/bespoke.png" alt="Bespoke Labs" width="160" height="60"></a><a href="https://bespokelabs.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/bespoke.png" alt="Bespoke Labs" width="160" height="60"></a>
-</p>
-<p align="center">
-  <a href="https://illinois.edu/#gh-light-mode-only"><img src="assets/who-uses/light/illinois.png" alt="University of Illinois Urbana-Champaign" width="160" height="60"></a><a href="https://illinois.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/illinois.png" alt="University of Illinois Urbana-Champaign" width="160" height="60"></a>
-  <a href="https://www.washington.edu/#gh-light-mode-only"><img src="assets/who-uses/light/washington.png" alt="University of Washington" width="160" height="60"></a><a href="https://www.washington.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/washington.png" alt="University of Washington" width="160" height="60"></a>
-  <a href="https://www.utoronto.ca/#gh-light-mode-only"><img src="assets/who-uses/light/toronto.png" alt="University of Toronto" width="160" height="60"></a><a href="https://www.utoronto.ca/#gh-dark-mode-only"><img src="assets/who-uses/dark/toronto.png" alt="University of Toronto" width="160" height="60"></a>
-  <a href="https://www.berkeley.edu/#gh-light-mode-only"><img src="assets/who-uses/light/berkeley.png" alt="University of California, Berkeley" width="160" height="60"></a><a href="https://www.berkeley.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/berkeley.png" alt="University of California, Berkeley" width="160" height="60"></a>
-  <a href="https://www.asu.edu/#gh-light-mode-only"><img src="assets/who-uses/light/asu.png" alt="Arizona State University" width="160" height="60"></a><a href="https://www.asu.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/asu.png" alt="Arizona State University" width="160" height="60"></a>
-</p>
 
 ## Acknowledgements
 
