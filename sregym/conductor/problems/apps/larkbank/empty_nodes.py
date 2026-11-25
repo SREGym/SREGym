@@ -134,10 +134,9 @@ class LarkbankEmptyNodesProblem(Problem):
             return
         try:
             app = self.app
-            if app.setting_in_force()["planned"] is not True:
-                if app.nodes_running() > NODES:
-                    app.remove_new_nodes(between=lambda: print(f"reference repair: {app.dedupe()}"))
-                app.fix_setting()
+            if app.nodes_running() > NODES and app.new_nodes_started_empty():
+                app.remove_new_nodes(between=lambda: print(f"reference repair: {app.dedupe()}"))
+            app.fix_setting()
             time.sleep(10)  # customers look again and see what they have twice
             print(f"reference repair: {app.dedupe()}")
             app.add_nodes()

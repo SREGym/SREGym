@@ -43,6 +43,24 @@ SCHEDULER = "scheduler"
 RAIL = "payment-rail"
 WORLD = "larkbank-world"
 WORLD_STATUS = "http://127.0.0.1:8091"
+PROBE = "ring-probe"
+#: Run in the test node: wait for the Cassandra JVM, print its arguments, then the cassandra.yaml it reads.
+PROBE_READ = """\
+pid=""
+daemon="Cassandra""Daemon"  # split, so that this script's own command line does not match
+for i in $(seq 90); do
+  for p in /proc/[0-9]*; do
+    if grep -q "$daemon" "$p/cmdline" 2>/dev/null; then pid=${p#/proc/}; break 2; fi
+  done
+  sleep 1
+done
+[ -n "$pid" ] || exit 0
+tr '\\0' '\\n' < /proc/$pid/cmdline
+echo ===CONFIG===
+config=$(tr '\\0' '\\n' < /proc/$pid/cmdline | sed -n 's/^-Dcassandra.config=//p' | tail -1)
+config=${config#file://}
+cat "${config:-/etc/cassandra/cassandra.yaml}"
+"""
 CHANGE_CAUSE = "CAP-311: three more nodes ahead of month end"
 
 #: Seconds between a standing order's payments (the customers' "month").
@@ -746,9 +764,70 @@ class LarkbankApplication(KubernetesCommands, Application):
             self.wait_ring(nodes, timeout)
 
     def setting_in_force(self):
-        """The auto_bootstrap setting a node added now would start with: what the ConfigMap it starts from says."""
-        data = json.loads(self.command("get", "configmap", RING_CONFIG, "-o", "jsonpath={.data}") or "{}")
-        return {"planned": all(parse_auto_bootstrap(text) for text in data.values())}
+        """The auto_bootstrap setting a node added now would start with.
+
+        A node is started from the StatefulSet's pod template as it is now, cut off from the ring, and asked
+        what it got: whatever the template mounts, runs, sets in the environment or passes to the JVM.
+        """
+        self.remove_probe()
+        try:
+            self.apply(self.probe_documents())
+            self.command("wait", "--for=condition=Ready", f"pod/{PROBE}", "--timeout=120s", timeout=140)
+            container = self.probe_container
+            seen = self.command("exec", PROBE, "-c", container, "--", "sh", "-c", PROBE_READ, timeout=140)
+        finally:
+            self.remove_probe()
+        if "===CONFIG===" not in seen:
+            raise ValueError("the test node did not start Cassandra")
+        args, _, config = seen.partition("===CONFIG===")
+        return {"planned": effective_auto_bootstrap(args.splitlines(), config)}
+
+    def remove_probe(self):
+        self.command("delete", "pod,networkpolicy", PROBE, "--ignore-not-found", "--grace-period=0", timeout=120)
+
+    def probe_documents(self):
+        """A pod like the next ring node (the template's containers, volumes and ordinal), with no network and
+        its own cluster name, so that whatever it starts cannot join the ring."""
+        ring = json.loads(self.command("get", "statefulset", RING, "-o", "json"))
+        spec = ring["spec"]["template"]["spec"]
+        claims = [claim["metadata"]["name"] for claim in ring["spec"].get("volumeClaimTemplates", [])]
+        spec["volumes"] = [volume for volume in spec.get("volumes", []) if volume["name"] not in claims]
+        spec["volumes"] += [{"name": name, "emptyDir": {}} for name in claims]
+        spec["hostname"] = f"{RING}-{NODES}"
+        spec["restartPolicy"] = "Never"
+        spec.pop("subdomain", None)
+        for container in spec["containers"]:
+            for probe in ("readinessProbe", "livenessProbe", "startupProbe"):
+                container.pop(probe, None)
+            env = [
+                var
+                for var in container.get("env", [])
+                if var["name"] not in ("CASSANDRA_SEEDS", "CASSANDRA_CLUSTER_NAME")
+            ]
+            container["env"] = env + [
+                {"name": "CASSANDRA_SEEDS", "value": "127.0.0.1"},
+                {"name": "CASSANDRA_CLUSTER_NAME", "value": "larkbank-probe"},
+            ]
+        self.probe_container = spec["containers"][0]["name"]
+        labels = {"larkbank-probe": "true"}
+        return [
+            {
+                "apiVersion": "networking.k8s.io/v1",
+                "kind": "NetworkPolicy",
+                "metadata": {"name": PROBE},
+                "spec": {"podSelector": {"matchLabels": labels}, "policyTypes": ["Ingress", "Egress"]},
+            },
+            {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": PROBE, "labels": labels}, "spec": spec},
+        ]
+
+    def new_nodes_started_empty(self):
+        """The added nodes that started with auto_bootstrap off, that is, joined without taking their data."""
+        empty = []
+        for node in range(NODES, self.nodes_running()):
+            text = self.command("exec", f"{RING}-{node}", "--", "cat", "/etc/cassandra/cassandra.yaml")
+            if not parse_auto_bootstrap(text):
+                empty.append(node)
+        return empty
 
     def load_old_data(self, nodes=range(NODES)):
         """Put the rows the old nodes still hold back into the ring as it is now: a snapshot of each old node
@@ -768,6 +847,17 @@ class LarkbankApplication(KubernetesCommands, Application):
         self.command("scale", "deployment", SCHEDULER, f"--replicas={0 if paused else 1}")
         if not paused:
             self.command("rollout", "status", f"deployment/{SCHEDULER}", "--timeout=120s", timeout=140)
+
+
+def effective_auto_bootstrap(jvm_args, config):
+    """What Cassandra makes of auto_bootstrap given its JVM arguments and its cassandra.yaml: the file, then
+    -Dcassandra.settings.auto_bootstrap, then -Dcassandra.auto_bootstrap (which Cassandra reads last)."""
+    value = parse_auto_bootstrap(config)
+    for name in ("-Dcassandra.settings.auto_bootstrap=", "-Dcassandra.auto_bootstrap="):
+        for arg in jvm_args:
+            if arg.strip().startswith(name):
+                value = arg.strip()[len(name) :].lower() == "true"
+    return value
 
 
 def parse_auto_bootstrap(yaml_text):

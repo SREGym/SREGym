@@ -25,6 +25,7 @@ from sregym.service.apps.larkbank.application import (
     RING_PLAN,
     TIERS,
     LarkbankApplication,
+    effective_auto_bootstrap,
     parse_auto_bootstrap,
     tokens,
     world_spec,
@@ -121,6 +122,40 @@ def test_what_a_cassandra_yaml_sets_auto_bootstrap_to():
     assert parse_auto_bootstrap("# auto_bootstrap: false\n") is True
     assert parse_auto_bootstrap("auto_bootstrap: false\nauto_bootstrap: true  # fixed\n") is True
     assert parse_auto_bootstrap("auto_bootstrap: true\nauto_bootstrap: False\n") is False
+
+
+def test_jvm_flags_override_the_file_as_cassandra_reads_them():
+    on, off = "auto_bootstrap: true\n", "auto_bootstrap: false\n"
+    assert effective_auto_bootstrap(["java", "-Xmx320M"], off) is False
+    assert effective_auto_bootstrap(["-Dcassandra.auto_bootstrap=true"], off) is True
+    assert effective_auto_bootstrap(["-Dcassandra.auto_bootstrap=false"], on) is False
+    assert effective_auto_bootstrap(["-Dcassandra.settings.auto_bootstrap=true"], off) is True
+    assert (
+        effective_auto_bootstrap(["-Dcassandra.settings.auto_bootstrap=true", "-Dcassandra.auto_bootstrap=false"], on)
+        is False
+    )
+
+
+def test_the_test_node_is_the_next_node_as_the_template_now_starts_it_cut_off_from_the_ring(app, monkeypatch):
+    ring = app.ring_documents()[1]
+    template = ring["spec"]["template"]["spec"]
+    template["volumes"] = [{"name": "config", "configMap": {"name": "ring-config-v2"}}]
+    template["containers"][0]["env"].append({"name": "JVM_EXTRA_OPTS", "value": "-Dcassandra.auto_bootstrap=true"})
+    monkeypatch.setattr(app, "command", lambda *args, **kwargs: json.dumps(ring))
+    policy, pod = app.probe_documents()
+    assert policy["kind"] == "NetworkPolicy" and set(policy["spec"]["policyTypes"]) == {"Ingress", "Egress"}
+    assert "ingress" not in policy["spec"] and "egress" not in policy["spec"]
+    assert policy["spec"]["podSelector"]["matchLabels"] == pod["metadata"]["labels"]
+    spec = pod["spec"]
+    assert spec["hostname"] == f"ring-{NODES}" and spec["restartPolicy"] == "Never"
+    assert {"name": "config", "configMap": {"name": "ring-config-v2"}} in spec["volumes"]
+    assert {"name": "data", "emptyDir": {}} in spec["volumes"]
+    container = spec["containers"][0]
+    assert container["command"] == ["sh", "/etc/ring/start.sh"] and "readinessProbe" not in container
+    env = {var["name"]: var.get("value") for var in container["env"]}
+    assert env["CASSANDRA_SEEDS"] == "127.0.0.1" and env["CASSANDRA_CLUSTER_NAME"] == "larkbank-probe"
+    assert env["JVM_EXTRA_OPTS"] == "-Dcassandra.auto_bootstrap=true"
+    assert "app" not in pod["metadata"]["labels"]
 
 
 def test_manifests_keep_the_hidden_side_out_of_the_namespace(app):

@@ -82,6 +82,7 @@ type item struct {
 type state struct {
 	items     []*item
 	recheckAt float64
+	newPayee  *item // the payee a customer is adding, once it is made
 	added     bool
 	cancelled bool
 }
@@ -288,20 +289,7 @@ func (w *world) useApp(i int, rng *mrand.Rand) {
 				w.redo(i, st, payees, orders)
 			}
 			if scaled && c.AddAt >= 0 && !st.added && at >= scale+c.AddAt {
-				it := &item{Kind: "payee", Key: payeeKey(*c.AddPayee), Origin: "new", MadeAt: at, payee: *c.AddPayee}
-				if id, ok := w.addPayee(i, it); ok {
-					so := &item{Kind: "standing_order", Key: orderKey(*c.AddPayee, *c.Add), PayeeKey: it.Key, Origin: "new", MadeAt: at, payee: *c.AddPayee, order: *c.Add}
-					w.mu.Lock()
-					st.items = append(st.items, it)
-					w.mu.Unlock()
-					if w.addOrder(i, so, id) {
-						w.mu.Lock()
-						st.items = append(st.items, so)
-						w.mu.Unlock()
-					}
-					st.added = true
-					w.note(i, "added a payee and a standing order", map[string]any{"payee": it.Key})
-				}
+				w.addNew(i, st, at, payees, orders)
 			}
 			if scaled && c.CancelAt >= 0 && !st.cancelled && at >= scale+c.CancelAt {
 				// A customer can cancel only what the app shows them, and this one sees it once.
@@ -324,6 +312,36 @@ func (w *world) useApp(i int, rng *mrand.Rand) {
 		w.inFlight.Add(-1)
 		time.Sleep(time.Duration(c.Period * (0.7 + 0.6*rng.Float64()) * float64(time.Second)))
 	}
+}
+
+// addNew is the customer adding a new payee and a standing order to it. A step
+// that fails is tried again at the next look, unless the app shows it was made
+// after all (a request can fail after the write).
+func (w *world) addNew(i int, st *state, at float64, payees, orders map[string][]string) {
+	c := w.spec[i]
+	if st.newPayee == nil {
+		it := &item{Kind: "payee", Key: payeeKey(*c.AddPayee), Origin: "new", MadeAt: at, payee: *c.AddPayee}
+		if ids := payees[it.Key]; len(ids) > 0 {
+			it.MadeIDs = append(it.MadeIDs, ids[0])
+		} else if _, ok := w.addPayee(i, it); !ok {
+			return
+		}
+		w.mu.Lock()
+		st.items = append(st.items, it)
+		w.mu.Unlock()
+		st.newPayee = it
+	}
+	so := &item{Kind: "standing_order", Key: orderKey(*c.AddPayee, *c.Add), PayeeKey: st.newPayee.Key, Origin: "new", MadeAt: at, payee: *c.AddPayee, order: *c.Add}
+	if ids := orders[so.Key]; len(ids) > 0 {
+		so.MadeIDs = append(so.MadeIDs, ids[0])
+	} else if !w.addOrder(i, so, st.newPayee.MadeIDs[0]) {
+		return
+	}
+	w.mu.Lock()
+	st.items = append(st.items, so)
+	w.mu.Unlock()
+	st.added = true
+	w.note(i, "added a payee and a standing order", map[string]any{"payee": so.PayeeKey})
 }
 
 // redo is the customer setting up again what the app no longer shows: the
