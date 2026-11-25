@@ -148,7 +148,7 @@ class K8SOperatorFaultInjector(FaultInjector):
         # Finish removal before restoring the CR, otherwise PD can adopt a
         # leftover PVC carrying the invalid storage class.
         # Background cascade: with foreground the operator keeps recreating the
-        # StatefulSets of the terminating CR, so the delete never completes.
+        # StatefulSets of the terminating CR, so the delete can take minutes.
         self.kubectl.exec_command_checked(
             f"kubectl delete tidbcluster basic -n {namespace} --ignore-not-found=true --cascade=background"
         )

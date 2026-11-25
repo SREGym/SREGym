@@ -124,7 +124,7 @@ def test_recovery_state_is_scoped_to_the_namespace_uid(operator):
 
 
 def test_storage_recovery_deletes_in_background_and_waits_for_pd_pods(operator):
-    # A foreground cascade never completes: the operator keeps recreating the StatefulSets
+    # A foreground cascade can take minutes: the operator keeps recreating the StatefulSets
     # of the terminating cluster. Delete in the background, then wait for the PD pods to go
     # before removing their PVCs, so PD can't adopt a PVC with the invalid storage class.
     operator.injector.inject_non_existent_storage()
