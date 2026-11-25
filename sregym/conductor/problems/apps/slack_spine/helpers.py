@@ -118,23 +118,48 @@ SEND_HEAVY_ACTION_WEIGHTS = {
 
 
 _SPIKE_SCRIPT = """
-import json, time, urllib.request
-from concurrent.futures import ThreadPoolExecutor
+import asyncio, json, time
 RPS, DUR = {rps}, {seconds}
-def send(i):
+TOTAL = RPS * DUR
+sent = written = finished_writes = 0
+async def send(i):
+    global written, finished_writes
     body = json.dumps({{'channel_id': f'spike-{{i % 64}}', 'client_msg_id': f'spike-{{time.time_ns()}}-{{i}}', 'text': 'spike'}}).encode()
-    req = urllib.request.Request('http://svc-message:8000/messages', data=body, method='POST', headers={{'Content-Type': 'application/json'}})
+    head = ('POST /messages HTTP/1.1\\r\\nHost: svc-message\\r\\nContent-Type: application/json\\r\\n'
+            f'Content-Length: {{len(body)}}\\r\\nConnection: close\\r\\n\\r\\n').encode()
+    w = None
     try:
-        urllib.request.urlopen(req, timeout=10).read()
+        try:
+            r, w = await asyncio.wait_for(asyncio.open_connection('svc-message', 8000), 10)
+            w.write(head + body)
+            await asyncio.wait_for(w.drain(), 10)
+            written += 1
+        finally:
+            finished_writes += 1
+        await asyncio.wait_for(r.read(), 10)
     except Exception:
         pass
-pool = ThreadPoolExecutor(max_workers=256)
-start = time.monotonic(); i = 0
-while time.monotonic() - start < DUR:
-    pool.submit(send, i); i += 1
-    time.sleep(max(0.0, start + i / RPS - time.monotonic()))
-pool.shutdown(wait=False, cancel_futures=True)
-print('spike sent', i)
+    finally:
+        if w is not None:
+            w.close()
+async def main():
+    global sent
+    tasks = set()
+    start = time.monotonic()
+    for i in range(TOTAL):
+        task = asyncio.ensure_future(send(i))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        sent = i + 1
+        await asyncio.sleep(max(0.0, start + sent / RPS - time.monotonic()))
+    # Each connect/write has its own timeout. Do not cancel pending writes,
+    # but do not wait for responses from the service we are overloading.
+    while finished_writes < sent:
+        await asyncio.sleep(0.05)
+asyncio.run(main())
+print('spike sent', written, 'of', sent)
+if written != sent:
+    raise SystemExit(f'{{sent - written}} requests were not written')
 """
 
 

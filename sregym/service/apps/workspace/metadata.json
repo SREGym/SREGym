@@ -1,0 +1,8 @@
+{
+  "Name": "Hosted workspace",
+  "Namespace": "workspace",
+  "Desc": "A hosted workspace for one tenant: mail (Postfix transport, Dovecot mailboxes over IMAP) and chat (Mattermost on CloudNativePG PostgreSQL). Users in three regions reach both services through the edge-gw gateway fleet; a traffic manager probes the units and steers each region's mail-<region> and chat-<region> Services. An independent alternate gateway, edge-alt, can carry services placed on it. Operational history is in the operations-log ConfigMap.",
+  "frontend_service": "mattermost",
+  "frontend_port": 8065,
+  "Supported Operations": ["Read and send mail over IMAP and SMTP", "Read and create chat messages", "Inspect gateway, traffic manager and mail queue state", "Inspect application logs and Prometheus metrics"]
+}
