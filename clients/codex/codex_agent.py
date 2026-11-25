@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from clients.harness.bedrock import bedrock_region, is_bedrock_model
 from clients.harness.token_usage import read_jsonl, token_count, usage_metrics
 from clients.jev.config import codex_args as jev_codex_args
 
@@ -66,9 +67,11 @@ def use_bedrock_provider(model_name: str) -> None:
     """Point Codex at Bedrock's OpenAI Responses endpoint for bedrock/<inference-profile> models.
 
     The bearer token is the SigV4 presigned URL that aws-bedrock-token-generator builds, signed
-    with the forwarded AWS credentials (12h max, capped by those credentials' own expiry).
+    with the forwarded AWS credentials (12h max, capped by those credentials' own expiry). Each
+    attempt runs in a new agent container, so the token is minted once per attempt; temporary
+    credentials (SSO, assumed role) must outlast the attempt.
     """
-    if not model_name.startswith("bedrock/"):
+    if not is_bedrock_model(model_name):
         return
     import base64
 
@@ -77,7 +80,7 @@ def use_bedrock_provider(model_name: str) -> None:
     from botocore.awsrequest import AWSRequest
 
     session = botocore.session.Session()
-    region = os.environ.get("AWS_REGION") or session.get_config_variable("region")
+    region = bedrock_region(os.environ) or session.get_config_variable("region")
     creds = session.get_credentials()
     if not region or creds is None:
         raise RuntimeError("bedrock/ models need AWS credentials and AWS_REGION")
@@ -95,7 +98,7 @@ def use_bedrock_provider(model_name: str) -> None:
 
 def bedrock_runtime_args(model_name: str) -> list[str]:
     """Bedrock's Responses endpoint rejects the web_search tool Codex sends by default."""
-    return ["-c", 'web_search="disabled"'] if model_name.startswith("bedrock/") else []
+    return ["-c", 'web_search="disabled"'] if is_bedrock_model(model_name) else []
 
 
 class CodexAgent:

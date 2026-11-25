@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from clients.harness.bedrock import is_bedrock_model
 from clients.harness.token_usage import aggregate_usage, read_jsonl, sum_counts, token_count, usage_metrics
 
 logger = logging.getLogger("all.claudecode.agent")
@@ -280,7 +281,7 @@ class ClaudeCodeAgent:
         oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
 
         # bedrock/<inference-profile> runs Claude Code on Bedrock with the forwarded AWS credentials.
-        if self.model_name.startswith("bedrock/"):
+        if is_bedrock_model(self.model_name):
             env["CLAUDE_CODE_USE_BEDROCK"] = "1"
             env.pop("ANTHROPIC_API_KEY", None)
             env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)

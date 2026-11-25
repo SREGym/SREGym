@@ -15,6 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
+from clients.harness.bedrock import is_bedrock_model
 from sregym.service.docker_egress import DEFAULT_EGRESS_PROXY_IMAGE, DockerEgress
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.provider_endpoints import provider_endpoint_rules
@@ -470,6 +471,10 @@ class ContainerRunner:
         # to the evaluated agent and must not enter the agent container.
         for name in ("JUDGE_MODEL_ID", "JUDGE_API_BASE", "JUDGE_API_KEY"):
             env_vars.pop(name, None)
+        # A bedrock/ agent authenticates with AWS, so host Anthropic credentials belong to the judge.
+        if is_bedrock_model(env_vars.get("AGENT_MODEL_ID", "")):
+            for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+                env_vars.pop(name, None)
 
         if self.config.forward_host_credentials and os.environ.get("AGENT_JEV_MODEL"):
             env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])

@@ -39,20 +39,30 @@ def _run_preflight(monkeypatch, module, model):
     return calls[0]
 
 
+def _judge_credentials(monkeypatch):
+    # The host's Anthropic credentials belong to the judge and must not reach a Bedrock agent.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "judge-key")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "judge-oauth")
+
+
 def test_claude_code_preflight_uses_bedrock(monkeypatch, aws):
     from clients.claudecode import driver
 
+    _judge_credentials(monkeypatch)
     command, env = _run_preflight(monkeypatch, driver, f"bedrock/{PROFILE}")
 
     assert command[command.index("--model") + 1] == PROFILE
     assert env["CLAUDE_CODE_USE_BEDROCK"] == "1"
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
 
 
-def test_claude_code_run_uses_bedrock_without_anthropic_keys(monkeypatch, aws, tmp_path):
+@pytest.mark.parametrize("prefix", ["bedrock", "Bedrock"])
+def test_claude_code_run_uses_bedrock_without_anthropic_keys(monkeypatch, aws, tmp_path, prefix):
     from clients.claudecode import claudecode_agent
     from clients.claudecode.claudecode_agent import ClaudeCodeAgent
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "judge-key")  # the judge's key must not reach the agent
+    _judge_credentials(monkeypatch)
     seen = {}
 
     class Stop(Exception):
@@ -63,7 +73,7 @@ def test_claude_code_run_uses_bedrock_without_anthropic_keys(monkeypatch, aws, t
         raise Stop
 
     monkeypatch.setattr(claudecode_agent.subprocess, "Popen", fake_popen)
-    agent = ClaudeCodeAgent(logs_dir=tmp_path, model_name=f"bedrock/{PROFILE}")
+    agent = ClaudeCodeAgent(logs_dir=tmp_path, model_name=f"{prefix}/{PROFILE}")
 
     with contextlib.suppress(Stop):
         agent.run("inspect the cluster")
@@ -71,6 +81,7 @@ def test_claude_code_run_uses_bedrock_without_anthropic_keys(monkeypatch, aws, t
     assert seen["env"]["CLAUDE_CODE_USE_BEDROCK"] == "1"
     assert seen["env"]["ANTHROPIC_MODEL"] == PROFILE
     assert "ANTHROPIC_API_KEY" not in seen["env"]
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in seen["env"]
 
 
 def test_codex_preflight_uses_bedrock_responses_endpoint(monkeypatch, aws, tmp_path):
@@ -101,3 +112,51 @@ def test_non_bedrock_codex_model_is_untouched(monkeypatch, aws):
 
     assert "AGENT_API_BASE" not in os.environ
     assert bedrock_runtime_args("gpt-5") == []
+
+
+def test_codex_run_uses_bedrock_responses_endpoint(monkeypatch, aws, tmp_path):
+    from clients.codex import codex_agent
+    from clients.codex.codex_agent import CodexAgent
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake_popen(command, **kwargs):
+        seen.update(command=command, env=kwargs["env"])
+        raise Stop
+
+    monkeypatch.setattr(codex_agent.subprocess, "Popen", fake_popen)
+    agent = CodexAgent(logs_dir=tmp_path, model_name=f"bedrock/{PROFILE}")
+
+    with contextlib.suppress(Stop):
+        agent.run("inspect the cluster")
+
+    assert seen["env"]["AGENT_API_BASE"] == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1"
+    assert seen["env"]["AGENT_API_KEY"].startswith("bedrock-api-key-")
+    assert 'web_search="disabled"' in seen["command"]
+
+
+@pytest.mark.parametrize("model", [f"bedrock/{PROFILE}", f"Bedrock/{PROFILE}"])
+def test_runner_keeps_judge_credentials_out_of_a_bedrock_agent_container(monkeypatch, aws, tmp_path, model):
+    from sregym.service.container_runner import ContainerConfig, ContainerRunner
+
+    _judge_credentials(monkeypatch)
+
+    env = ContainerRunner(ContainerConfig(logs_path=tmp_path))._build_env_vars({"AGENT_MODEL_ID": model})
+
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+
+
+def test_runner_forwards_anthropic_credentials_to_a_non_bedrock_agent(monkeypatch, aws, tmp_path):
+    from sregym.service.container_runner import ContainerConfig, ContainerRunner
+
+    _judge_credentials(monkeypatch)
+
+    env = ContainerRunner(ContainerConfig(logs_path=tmp_path))._build_env_vars({"AGENT_MODEL_ID": "claude-opus-5-5"})
+
+    assert env["ANTHROPIC_API_KEY"] == "judge-key"

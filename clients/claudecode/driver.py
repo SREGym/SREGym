@@ -14,6 +14,7 @@ from pathlib import Path
 import requests
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
+from clients.harness.bedrock import is_bedrock_model
 from clients.harness.problem_id import resolve_problem_id
 from clients.harness.stages import mitigation_workflow
 from logger import init_logger
@@ -39,7 +40,7 @@ def run_preflight() -> None:
     # drop ANTHROPIC_API_KEY for this subprocess so the Claude CLI authenticates
     # via OAuth (and the preflight tests the same path the actual run uses).
     env = os.environ.copy()
-    if os.environ["AGENT_MODEL_ID"].startswith("bedrock/"):
+    if is_bedrock_model(os.environ["AGENT_MODEL_ID"]):
         env["CLAUDE_CODE_USE_BEDROCK"] = "1"
         env.pop("ANTHROPIC_API_KEY", None)
         env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)

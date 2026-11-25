@@ -218,7 +218,7 @@ def test_claude_code_clients_reach_the_anthropic_api(agent):
     ("agent", "model"),
     [
         ("claudecode", "bedrock/us.anthropic.claude-sonnet-5"),
-        ("claudecode_radar", "bedrock/us.anthropic.claude-sonnet-5"),
+        ("claudecode", "Bedrock/us.anthropic.claude-sonnet-5"),
         ("codex", "bedrock/us.openai.gpt-5.5"),
     ],
 )
@@ -229,6 +229,27 @@ def test_bedrock_models_allow_only_bedrock_in_the_region(agent, model):
     rules = provider_endpoint_rules(policy, {"AWS_REGION": "us-west-2", "ANTHROPIC_API_KEY": "judge-key"})
 
     assert rules == (
+        EndpointRule("bedrock-runtime.us-west-2.amazonaws.com", 443),
+        EndpointRule("sts.us-west-2.amazonaws.com", 443),
+    )
+
+
+def test_bedrock_rules_follow_the_cli_region_over_litellms():
+    # Claude Code and Codex call AWS_REGION; a leftover AWS_REGION_NAME must not pick the allowed region.
+    policy = InternetPolicy.from_mode("filtered", agent_name="codex", model_id="bedrock/us.openai.gpt-5.5")
+
+    rules = provider_endpoint_rules(policy, {"AWS_REGION": "us-west-2", "AWS_REGION_NAME": "us-east-1"})
+
+    assert EndpointRule("bedrock-runtime.us-west-2.amazonaws.com", 443) in rules
+
+
+def test_claudecode_radar_keeps_the_anthropic_rules_for_bedrock_models():
+    # Radar's run() has no Bedrock path, so a bedrock/ model must not pass its preflight.
+    policy = InternetPolicy.from_mode(
+        "filtered", agent_name="claudecode_radar", model_id="bedrock/us.anthropic.claude-sonnet-5"
+    )
+
+    assert provider_endpoint_rules(policy, {"AWS_REGION": "us-west-2"}) != (
         EndpointRule("bedrock-runtime.us-west-2.amazonaws.com", 443),
         EndpointRule("sts.us-west-2.amazonaws.com", 443),
     )
