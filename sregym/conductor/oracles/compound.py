@@ -1,5 +1,5 @@
 from sregym.conductor.oracles.base import Oracle
-from sregym.conductor.oracles.failure import worst
+from sregym.conductor.oracles.failure import FailureClass, worst
 
 
 class CompoundedOracle(Oracle):
@@ -23,7 +23,19 @@ class CompoundedOracle(Oracle):
         for oracle in self.oracles.values():
             oracle.capture_baseline()
 
-    def evaluate(self, *args, **kwargs):
+    def evaluate_fault_readiness(self):
+        """Confirm a known fault without also waiting for recovery traffic.
+
+        Only the explicit fault/app-health composition supports this shortcut.
+        A passing, ambiguous or broken fault check still evaluates every child.
+        Ordinary evaluate(), including final grading, always evaluates them all.
+        """
+        supported = list(self.oracles) == ["fault", "app_health"]
+        if supported:
+            return self.evaluate(_fault_readiness=True)
+        return self.evaluate()
+
+    def evaluate(self, *args, _fault_readiness=False, **kwargs):
         result = {
             "success": True,
             "oracles": [],
@@ -47,6 +59,14 @@ class CompoundedOracle(Oracle):
                 else:
                     accuracy = 100.0 if res.get("success", False) else 0.0
                     result["accuracy"] += accuracy * accuracy_weight
+
+                if (
+                    _fault_readiness
+                    and key == "fault"
+                    and res.get("success") is False
+                    and res.get("failure_class") == FailureClass.AGENT_ERROR
+                ):
+                    break
 
             except Exception as e:
                 print(f"[❌] Error during evaluation of oracle '{key}': {e}")

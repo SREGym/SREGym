@@ -54,16 +54,31 @@ The integration targets Harbor 0.23 or newer (task `schema_version = "1.4"`).
    Their oracle also ignores alerts about workloads the proxy hides from the
    agent, SREGym's load generators (`AlertOracle(ignore_hidden_workloads=True)`):
    the agent cannot see or fix them, and a replaced load-generator pod's alerts
-   escape the baseline. The backend then polls the mitigation oracle until it
-   fails, as SREGym's problem validator does: alerts fire minutes after
-   injection, and an agent that stopped before then would pass. It waits up to
-   10 minutes, twice the validator's default, because on a 4-CPU sandbox some
-   alerts took longer. If the oracle has not seen the fault by then, setup
-   fails and Harbor reports an error rather than a reward. Last, the backend starts SREGym's
-   filtered Kubernetes API proxy and publishes the agent's kubeconfig.
+   escape the baseline. The backend then confirms that the fault is live.
+   SLO problems can reuse their injection gates when the healthy baseline is
+   complete, all validity gates pass, and the most recent impact sample is at
+   most 120 seconds old. The impact window must either be complete or contain
+   the oracle's minimum number of distinct measured request rounds with actual
+   error/timeout violations, including the latest round. Gaps, absent samples
+   and low throughput alone do not prove a fault. This follows the injection
+   gate's distinction between observed violations and complete healthy coverage;
+   recovery and final grading still require their original measurements. For the explicit
+   fault/app-health compound oracle, a definitive fault-state failure is enough
+   for readiness; an ambiguous or passing check still evaluates every child.
+   Other problems poll the full mitigation oracle, ignoring environment errors,
+   harness errors and SLO results with missing rounds or incomplete coverage.
+   Legacy health oracles retain their original readiness behavior: an unready
+   deployment can be their expected fault signal even though their failure
+   vocabulary classifies it as ambiguous. Final grading preserves that verdict.
+   Alerts can fire minutes
+   after injection, so this polling allows up to 10 minutes. If no fault is
+   confirmed, setup fails and Harbor reports an error rather than a reward.
+   These readiness checks never replace recovery confirmation or final grading.
+   The backend publishes the agent's kubeconfig only after readiness succeeds.
 2. **Readiness.** `sregym-ready` blocks until the fault is live and the agent's
    kubeconfig works, and fails at once if setup failed. Harbor starts the agent
-   clock only after this.
+   clock only after this. The backend reports `checking_fault` while it confirms
+   fault impact, separately from deployment.
 3. **Agent.** Harbor runs the agent as the unprivileged `agent` user (task.toml
    `[agent] user`). It sees the application name, namespaces and description,
    the same information SREGym's own agents get, and works through `kubectl`
@@ -218,6 +233,61 @@ the matching adapter command. Other hosts pull anonymously, so the GHCR package
 must be public. Generate tasks with `--backend-image` pointing at the published
 tag, so a dataset pins the SREGym version that produced it.
 
+### Optional application image bundles
+
+The Harbor base image also fetches Astronomy Shop's locked Helm dependencies
+at build time. This preserves `Chart.lock` and lets deployment skip repeated
+repository downloads; each trial still installs a fresh release. The build
+fails if Helm changes the lock or leaves a dependency unsatisfied.
+
+Each trial normally downloads its application and infrastructure images into
+its new nodes. An image bundle can preload the same registry content while
+retaining a fresh cluster, deployment, healthy baseline and fault injection.
+It does not contain Kubernetes databases, credentials or oracle state.
+
+After validating an application's tasks, save the nodes' image inventory while
+the task container still exists. Include snapshots from several tasks when
+their fault injection uses additional images:
+
+```bash
+docker exec --user root <container> \
+    kubectl --kubeconfig /root/.kube/config get nodes -o json > saleor-nodes.json
+
+# Requires skopeo for registry access and Docker to build the derived image.
+uv run python -m sregym.harbor.preload --nodes saleor-nodes.json \
+    --architecture amd64 --output-dir build/harbor-preload/saleor \
+    --base-image ghcr.io/sregym/sregym-harbor:<validated-tag> \
+    --build --tag sregym-harbor-preload:saleor
+
+# Generate tasks for that application using the derived image.
+uv run python -m sregym.harbor.adapter \
+    --task-ids astronomy_shop_product_catalog_service_failure_saleor \
+    --backend-image sregym-harbor-preload:saleor --output-dir datasets/preloaded
+```
+
+`--plan` writes the inventory without downloading images or building anything.
+The builder pins registry reads to the observed digests, verifies manifest and
+layer bytes, and preserves both tags and digest references. It rejects a tag
+that changed between snapshots instead of choosing one version silently.
+Because k3s's archive retagger accepts tagged names, digest-only images receive
+deterministic import tags. A node-local helper then restores the original
+canonical references and verifies their exact lookup through CRI; setup fails
+if a node cannot verify them instead of silently falling back to registry pulls.
+Archives include the selected platform's content while preserving the original
+multi-platform index; build the derived image for the same architecture.
+`bundle.json` records the inventory and archive checksums. The build context
+also installs the startup hooks, so a validated published image can be used as
+the base without rebuilding all its dependencies.
+
+Common archives occupy a separate, deterministic Docker layer that application
+bundles can share. At startup the bundle is copied once to the trial's new cluster volume. Nodes
+hard-link common archives into k3s's image-import directory; worker-only images
+are imported on the three workers. Unobserved images can still be pulled using
+the normal image proxy, and image pull policies are unchanged. No extra Docker
+capabilities, devices, mounts or host services are needed. The larger task image
+and archive imports also cost time: measure cold-image and cached-image runs,
+and require oracle 1.0/no-op 0.0 again before publishing bundled tasks.
+
 ## Run with Harbor
 
 ```bash
@@ -257,9 +327,18 @@ Running many trials on one Docker host:
 
 Every trial collects `/sregym-harbor/logs` as an artifact:
 
-- `start.log`: cluster startup and the backend handoff
+- `start.log`: cluster startup, deployment and backend/oracle progress
 - `cluster.log`: the node fabric; each node's own log stays in the container
 - `sregym_*.log`: the backend, including deployment and grading
+
+For a live local Docker trial, follow the root-only backend log from the host:
+
+```bash
+docker exec --user root <container> tail -f /sregym-harbor/logs/start.log
+```
+
+The backend uses unbuffered output so oracle progress is written while the
+measurement runs. Long observation windows still run for their full duration.
 
 If setup fails before the backend starts, `start.sh` marks the shared state
 `failed` with the stage that broke. The healthcheck then stops at once with a

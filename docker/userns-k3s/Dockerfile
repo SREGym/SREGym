@@ -12,7 +12,7 @@ COPY --from=tools /usr/lib/libelf.so.1 /usr/lib/libmnl.so.0 /usr/lib/libcap.so.2
     /usr/lib/libssl.so.3 /usr/lib/libcrypto.so.3 /usr/lib/libncursesw.so.6 /usr/lib/
 RUN mv /bin/runc /bin/runc.real
 COPY runc-wrapper /bin/runc
-COPY entrypoint.sh fabric.sh node.sh /usr/local/lib/userns-k3s/
+COPY entrypoint.sh fabric.sh node.sh preload-aliases.py /usr/local/lib/userns-k3s/
 ENV PATH=/usr/local/bin:$PATH
 EXPOSE 6443
 ENTRYPOINT ["/bin/sh", "/usr/local/lib/userns-k3s/entrypoint.sh"]

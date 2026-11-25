@@ -27,6 +27,7 @@ import grp
 import hmac
 import json
 import logging
+import math
 import os
 import pwd
 import secrets
@@ -66,6 +67,10 @@ FAULT_LIVE_INTERVAL_S = 15
 # Oracle failure classes (sregym/conductor/oracles/failure.py) that say nothing
 # about the fault.
 NOT_THE_FAULT = frozenset({"environment_error", "harness_error"})
+# Generic health oracles deliberately classify an unready rollout as ambiguous,
+# even when it is the injected fault. Preserve their existing readiness contract.
+# Missing SLO measurements, however, do not establish any observed violation.
+UNMEASURED_SLO_REASONS = frozenset({"slo_no_rounds", "slo_incomplete_measurement"})
 # Written to the trial's logs when setup fails: what the cluster looked like.
 CLUSTER_SNAPSHOT_NAME = "cluster-state.txt"
 
@@ -84,6 +89,67 @@ class ProblemSession(Protocol):
 
     def close(self) -> None:
         """Release local listeners before exit."""
+
+
+def slo_fault_evidence(gates: dict | None, problem_id: str, min_rounds: int, *, now: float) -> dict | None:
+    """Reuse positive, recent injection evidence; gaps alone never prove a fault."""
+    if not isinstance(gates, dict) or gates.get("problem_id") != problem_id:
+        return None
+    if not all(
+        gates.get(key) is True for key in ("impact_pass", "observability_pass", "integrity_pass", "no_leak_pass")
+    ):
+        return None
+    baseline, impact = gates.get("baseline") or {}, gates.get("impact") or {}
+    if not (
+        baseline.get("healthy") is True
+        and baseline.get("measurement_complete") is True
+        and baseline.get("rounds", 0) >= 3
+        and impact.get("violated") is True
+        and impact.get("rounds", 0) >= min_rounds
+        and gates.get("request_symptoms")
+    ):
+        return None
+    details = impact.get("details") or []
+
+    def request_failures(detail: dict) -> bool:
+        # A temporal gap cannot certify recovery, but does not erase requests
+        # that were actually measured failing. Require real response statistics
+        # and the existing SLO's error/timeout violation, not low sample counts
+        # or low throughput alone. Recovery/final grading remain unchanged.
+        try:
+            if not (detail["requests"] > 0 and detail["rps"] > 0 and detail["p99_ms"] is not None):
+                return False
+            return any(
+                math.isfinite(detail.get(metric, 0))
+                and 0 < detail.get(metric, 0) <= 1
+                and any(reason.startswith(metric + "=") for reason in detail.get("violations", []))
+                for metric in ("error_ratio", "timeout_ratio")
+            )
+        except (KeyError, TypeError):
+            return False
+
+    complete = impact.get("measurement_complete") is True
+    if not complete and not (
+        len({detail.get("time") for detail in details if request_failures(detail)}) >= min_rounds
+        and details
+        and request_failures(details[-1])
+    ):
+        return None
+    try:
+        latest = max(float(detail["time"]) for detail in impact["details"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not math.isfinite(latest) or not -10 <= now - latest <= 120:
+        return None
+    return {
+        "success": False,
+        "reason": "slo_violated" if complete else "fault_still_present",
+        "failure_class": "agent_error",
+        "detail": {
+            "readiness_evidence": "validated_injection_gates" if complete else "validated_request_failures",
+            "window": impact,
+        },
+    }
 
 
 def grade_visible_alerts_only(problem) -> None:
@@ -151,6 +217,26 @@ class ConductorSession:
 
     def grade(self) -> dict:
         return self.conductor._evaluate_mitigation("")
+
+    def check_fault(self) -> dict:
+        """Readiness can prove a fault without repeating recovery-only waits."""
+        from sregym.conductor.oracles.compound import CompoundedOracle
+        from sregym.conductor.oracles.slo_oracle import SLOMitigationOracle
+
+        problem = self.conductor.problem
+        oracle = problem.mitigation_oracle
+        if isinstance(oracle, SLOMitigationOracle):
+            evidence = slo_fault_evidence(
+                getattr(problem, "gates", None), self.problem_id, oracle.min_rounds, now=time.time()
+            )
+            if evidence is not None:
+                logger.info(
+                    f"[HARBOR] Injection evidence confirms the fault: {evidence['detail']['readiness_evidence']}"
+                )
+                return evidence
+        if type(oracle) is CompoundedOracle:
+            return oracle.evaluate_fault_readiness()
+        return self.grade()
 
     def recover(self) -> None:
         problem = self.conductor.problem
@@ -283,6 +369,7 @@ class Backend:
         try:
             with self._lock:
                 kubeconfig = self.session.setup()
+                self.set_state(protocol.STATE_CHECKING_FAULT)
                 self._wait_until_fault_is_live()
             # Readable by any agent user; the file only grants the proxy's
             # filtered view of the cluster.
@@ -353,19 +440,28 @@ class Backend:
         Failures the oracle blames on the environment or on SREGym itself (an
         unreachable Prometheus, an oracle that raised) do not show the fault.
         Returns the number of checks it took, and raises if the oracle had not
-        seen the fault by the timeout. Nothing is cached.
+        seen the fault by the timeout. Readiness evidence never becomes the
+        final cached grade.
         """
         deadline = time.monotonic() + self.fault_live_timeout_s
         checks = 0
         while True:
             checks += 1
             try:
-                verdict = self.session.grade()
+                logger.info(f"[HARBOR] Checking fault readiness (check {checks})")
+                # Other sessions, including the self-test and external adapters,
+                # retain their existing grading-based readiness contract.
+                check_fault = getattr(self.session, "check_fault", self.session.grade)
+                verdict = check_fault()
             except Exception:
                 logger.exception("[HARBOR] Mitigation check after injection raised")
                 verdict = {}
-            if verdict.get("success") is False and verdict.get("failure_class") not in NOT_THE_FAULT:
-                logger.info(f"[HARBOR] Mitigation oracle sees the fault (check {checks})")
+            if (
+                verdict.get("success") is False
+                and verdict.get("failure_class") not in NOT_THE_FAULT
+                and verdict.get("reason") not in UNMEASURED_SLO_REASONS
+            ):
+                logger.info(f"[HARBOR] Readiness check accepted (check {checks})")
                 return checks
             if time.monotonic() >= deadline:
                 logger.warning(f"[HARBOR] Mitigation oracle has not seen the fault after injection: {verdict}")

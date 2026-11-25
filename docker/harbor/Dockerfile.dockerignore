@@ -12,5 +12,6 @@ results
 logs
 cache_dir
 docker/agents/build-context
+build/harbor-preload
 *.pem
 *.key
