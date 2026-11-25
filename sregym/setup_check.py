@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from clients.harness.bedrock import is_bedrock_model
 from sregym.profile import SVELTE
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -479,6 +480,8 @@ class SetupChecker:
             return CheckResult(
                 name, Status.FAIL, "AGENT_API_BASE is set but AGENT_API_KEY is not", "export AGENT_API_KEY=..."
             )
+        if agent in {"claudecode", "codex"} and is_bedrock_model(model):
+            return _aws_credentials(name, model, self.env)
         if agent == "codex" and _codex_logged_in(self.env):
             return CheckResult(name, Status.OK, "Codex subscription login found")
         if agent in SUBSCRIPTION_CREDENTIALS:
@@ -884,7 +887,36 @@ def _codex_logged_in(env: dict[str, str]) -> bool:
     return isinstance(data, dict) and bool(data.get("tokens") or data.get("OPENAI_API_KEY"))
 
 
+def _aws_credentials(name: str, model: str, env: dict[str, str]) -> CheckResult:
+    """Bedrock signs with the AWS credential chain: env keys, a profile or SSO, or an instance role."""
+    from unittest import mock
+
+    import botocore.session
+
+    from clients.harness.bedrock import bedrock_region
+
+    with mock.patch.dict(os.environ, env, clear=True):
+        session = botocore.session.Session()
+        try:
+            creds = session.get_credentials()
+        except Exception as exc:  # noqa: BLE001 - an expired SSO token or bad profile is a finding, not a crash
+            return CheckResult(name, Status.FAIL, f"{model}: AWS credentials failed to load: {exc}", "aws sso login")
+        region = bedrock_region(env) or env.get("AWS_REGION_NAME") or session.get_config_variable("region")
+    if creds is None:
+        return CheckResult(
+            name,
+            Status.FAIL,
+            f"{model} needs AWS credentials",
+            "set AWS_PROFILE (and aws sso login), export AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, or use an instance role",
+        )
+    if not region:
+        return CheckResult(name, Status.FAIL, f"{model} needs an AWS region", "export AWS_REGION=...")
+    return CheckResult(name, Status.OK, f"AWS credentials ({creds.method}) for {model} in {region}")
+
+
 def _litellm_credentials(name: str, model: str, env: dict[str, str]) -> CheckResult:
+    if is_bedrock_model(model):
+        return _aws_credentials(name, model, env)
     try:
         from unittest import mock
 

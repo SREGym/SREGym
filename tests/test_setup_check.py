@@ -57,6 +57,8 @@ def repo(tmp_path: Path) -> Path:
         "    kickoff_command: python -m clients.stratus\n"
         "  - name: codex\n"
         "    kickoff_command: python -m clients.codex.driver\n"
+        "  - name: claudecode\n"
+        "    kickoff_command: python -m clients.claudecode.driver\n"
         "  - name: legacy\n"
         "    kickoff_command: python legacy.py\n"
         "    container_isolation: false\n"
@@ -812,3 +814,44 @@ def test_problem_check_is_skipped_without_problem(repo):
 
 def test_real_registry_lookup_finds_a_shipped_problem():
     assert "missing_service_hotel_reservation" in REAL_KNOWN_PROBLEM_IDS()
+
+
+# Bedrock authenticates through the AWS credential chain (env keys, profiles, SSO, instance roles),
+# not provider API keys; IMDS stays off so these tests never reach the network.
+NO_IMDS = {
+    "AWS_EC2_METADATA_DISABLED": "true",
+    "AWS_CONFIG_FILE": "/nonexistent",
+    "AWS_SHARED_CREDENTIALS_FILE": "/nonexistent",
+}
+
+
+@pytest.mark.parametrize("agent", ["claudecode", "codex"])
+def test_bedrock_agent_accepts_aws_chain_credentials(repo, agent):
+    env = {**NO_IMDS, "AWS_ACCESS_KEY_ID": "AKIDEXAMPLE", "AWS_SECRET_ACCESS_KEY": "s", "AWS_REGION": "eu-west-2"}
+    results = make(repo, env=env, agent=agent, model="bedrock/global.anthropic.claude-opus-5-5")[0].check_agent()
+    creds = next(r for r in results if r.name == "Agent credentials")
+    assert creds.status == Status.OK, creds.detail
+
+
+def test_bedrock_agent_without_aws_credentials_is_a_blocker(repo):
+    env = {**NO_IMDS, "AWS_REGION": "eu-west-2"}
+    results = make(repo, env=env, agent="claudecode", model="bedrock/global.anthropic.claude-opus-5-5")[0].check_agent()
+    creds = next(r for r in results if r.name == "Agent credentials")
+    assert creds.status == Status.FAIL
+    assert "AWS" in creds.detail
+
+
+def test_bedrock_agent_without_region_is_a_blocker(repo):
+    env = {**NO_IMDS, "AWS_ACCESS_KEY_ID": "AKIDEXAMPLE", "AWS_SECRET_ACCESS_KEY": "s"}
+    results = make(repo, env=env, agent="codex", model="bedrock/global.openai.gpt-5.5")[0].check_agent()
+    creds = next(r for r in results if r.name == "Agent credentials")
+    assert creds.status == Status.FAIL
+    assert "AWS_REGION" in creds.fix
+
+
+def test_bedrock_judge_accepts_a_profile(repo, tmp_path):
+    creds_file = tmp_path / "credentials"
+    creds_file.write_text("[bench]\naws_access_key_id = AKIDEXAMPLE\naws_secret_access_key = s\n")
+    env = {**NO_IMDS, "AWS_SHARED_CREDENTIALS_FILE": str(creds_file), "AWS_PROFILE": "bench", "AWS_REGION": "eu-west-2"}
+    result = make(repo, env=env, judge_model="bedrock/global.anthropic.claude-opus-5-5")[0].check_judge()
+    assert result.status == Status.OK, result.detail
