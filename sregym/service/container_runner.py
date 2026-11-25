@@ -127,6 +127,30 @@ class ContainerConfig:
     codex_auth: Literal["copy", "shared", "none"] = "copy"
 
 
+def _host_aws_credentials() -> dict[str, str]:
+    """Keys, session token and region from the host's AWS credential chain, or {} if none resolve."""
+    import botocore.session
+
+    from clients.harness.bedrock import bedrock_region
+
+    session = botocore.session.Session()
+    try:
+        creds = session.get_credentials()
+        frozen = creds.get_frozen_credentials() if creds else None
+    except Exception as exc:  # noqa: BLE001 - an expired SSO login should surface at the agent, not crash the runner
+        logger.warning("Could not resolve AWS credentials for a Bedrock agent: %s", exc)
+        return {}
+    if frozen is None:
+        return {}
+    resolved = {"AWS_ACCESS_KEY_ID": frozen.access_key, "AWS_SECRET_ACCESS_KEY": frozen.secret_key}
+    if frozen.token:
+        resolved["AWS_SESSION_TOKEN"] = frozen.token
+    region = bedrock_region(os.environ) or session.get_config_variable("region")
+    if region:
+        resolved["AWS_REGION"] = region
+    return resolved
+
+
 class ContainerRunner:
     # Env vars forwarded from host to agent containers.
     # These cover LiteLLM and the provider integrations used by agent CLIs.
@@ -475,6 +499,12 @@ class ContainerRunner:
         if is_bedrock_model(env_vars.get("AGENT_MODEL_ID", "")):
             for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
                 env_vars.pop(name, None)
+            # A filtered container can't reach the instance metadata service or an SSO cache refresh,
+            # so pass the host's resolved AWS chain (profile, SSO, instance role) in as plain keys.
+            if self.config.forward_host_credentials and not env_vars.get("AWS_ACCESS_KEY_ID"):
+                resolved = _host_aws_credentials()
+                if resolved:
+                    env_vars.update(resolved)
 
         if self.config.forward_host_credentials and os.environ.get("AGENT_JEV_MODEL"):
             env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])

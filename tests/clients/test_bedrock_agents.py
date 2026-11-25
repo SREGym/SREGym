@@ -160,3 +160,36 @@ def test_runner_forwards_anthropic_credentials_to_a_non_bedrock_agent(monkeypatc
     env = ContainerRunner(ContainerConfig(logs_path=tmp_path))._build_env_vars({"AGENT_MODEL_ID": "claude-opus-5-5"})
 
     assert env["ANTHROPIC_API_KEY"] == "judge-key"
+
+
+def test_runner_passes_resolved_aws_credentials_to_a_bedrock_agent(monkeypatch, aws, tmp_path):
+    # A filtered agent container cannot reach the instance metadata service, so the runner
+    # resolves the host's AWS chain (here a profile) and passes plain keys in.
+    from sregym.service.container_runner import ContainerConfig, ContainerRunner
+
+    creds = tmp_path / "credentials"
+    creds.write_text("[bench]\naws_access_key_id = AKIDPROFILE\naws_secret_access_key = profile-secret\n")
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(creds))
+    monkeypatch.setenv("AWS_PROFILE", "bench")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+    env = ContainerRunner(ContainerConfig(logs_path=tmp_path))._build_env_vars({"AGENT_MODEL_ID": f"bedrock/{PROFILE}"})
+
+    assert env["AWS_ACCESS_KEY_ID"] == "AKIDPROFILE"
+    assert env["AWS_SECRET_ACCESS_KEY"] == "profile-secret"
+    assert env["AWS_REGION"] == "us-west-2"
+
+
+def test_runner_does_not_resolve_aws_credentials_for_other_models(monkeypatch, aws, tmp_path):
+    from sregym.service import container_runner
+    from sregym.service.container_runner import ContainerConfig, ContainerRunner
+
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.setattr(container_runner, "_host_aws_credentials", lambda: pytest.fail("resolved AWS credentials"))
+
+    env = ContainerRunner(ContainerConfig(logs_path=tmp_path))._build_env_vars({"AGENT_MODEL_ID": "claude-opus-5-5"})
+
+    assert "AWS_ACCESS_KEY_ID" not in env
