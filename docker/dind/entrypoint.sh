@@ -107,7 +107,7 @@ if [[ ${SREGYM_ETCD_TMPFS_SIZE:-512m} != 0 ]]; then
     mkdir -p /run/sregym-etcd
     mount -t tmpfs -o "size=${SREGYM_ETCD_TMPFS_SIZE:-512m}" tmpfs /run/sregym-etcd
 fi
-if [[ ${SREGYM_ETCD_TMPFS_SIZE:-512m} != 0 || -n ${SREGYM_REGISTRY_MIRRORS:-} ]]; then
+if [[ ${SREGYM_ETCD_TMPFS_SIZE:-512m} != 0 || -n ${SREGYM_REGISTRY_MIRRORS:-}${SREGYM_GHCR_MIRRORS:-} ]]; then
     export KIND_CONFIG=/run/sregym-kind.yaml
     python - <<'PY'
 import os
@@ -120,18 +120,30 @@ if os.environ.get("SREGYM_ETCD_TMPFS_SIZE", "512m") != "0":
     config["nodes"][0].setdefault("extraMounts", []).append(
         {"hostPath": "/run/sregym-etcd", "containerPath": "/var/lib/etcd"}
     )
-mirrors = [m for m in os.environ.get("SREGYM_REGISTRY_MIRRORS", "").split(",") if m]
-if mirrors:
-    # containerd reads per-registry hosts.toml files from config_path; every
-    # node mounts the same directory, so mirrors apply from the first pull.
-    certs = Path("/run/sregym-certs.d/docker.io")
+# containerd reads per-registry hosts.toml files from config_path; every node
+# mounts the same directory, so mirrors apply from the first pull.
+# SREGYM_GHCR_MIRRORS serves ghcr.io images, for example images built locally
+# and pushed to a host registry before they are published: a digest-pinned
+# reference resolves identically from either.
+upstreams = {
+    "docker.io": ("https://registry-1.docker.io", "SREGYM_REGISTRY_MIRRORS"),
+    "ghcr.io": ("https://ghcr.io", "SREGYM_GHCR_MIRRORS"),
+}
+configured = False
+for registry, (server, variable) in upstreams.items():
+    mirrors = [m for m in os.environ.get(variable, "").split(",") if m]
+    if not mirrors:
+        continue
+    configured = True
+    certs = Path("/run/sregym-certs.d") / registry
     certs.mkdir(parents=True, exist_ok=True)
-    hosts = ['server = "https://registry-1.docker.io"']
+    hosts = [f'server = "{server}"']
     for mirror in mirrors:
         hosts += ["", f'[host."{mirror}"]', '  capabilities = ["pull", "resolve"]']
         if mirror.startswith("http://"):
             hosts.append("  skip_verify = true")
     (certs / "hosts.toml").write_text("\n".join(hosts) + "\n")
+if configured:
     config.setdefault("containerdConfigPatches", []).append(
         '[plugins."io.containerd.grpc.v1.cri".registry]\n  config_path = "/etc/containerd/certs.d"\n'
     )

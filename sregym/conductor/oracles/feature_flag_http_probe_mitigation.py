@@ -1,12 +1,13 @@
 """Verify that the frontend Service serves hotel searches after mitigation."""
 
 import json
-import re
-import shlex
 import time
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.http_probe import find_probe_pod, wget_from_pod
+
+_HOTELS_URL = "http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194"
 
 
 class FeatureFlagHttpProbeMitigationOracle(Oracle):
@@ -53,20 +54,7 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
     def _get_probe_pod(self) -> str | None:
         """Find the consul pod as a reliable probe origin — always present
         in hotel-reservation and guaranteed to have wget."""
-        pod_list = self.problem.kubectl.list_pods(self.problem.namespace)
-        for pod in pod_list.items:
-            if pod.status.phase == "Running" and pod.metadata.name and pod.metadata.name.startswith("consul"):
-                return pod.metadata.name
-        # Fallback: any running non-frontend, non-wrk2 pod
-        for pod in pod_list.items:
-            if (
-                pod.status.phase == "Running"
-                and pod.metadata.name
-                and "frontend" not in pod.metadata.name
-                and "wrk2" not in pod.metadata.name
-            ):
-                return pod.metadata.name
-        return None
+        return find_probe_pod(self.problem.kubectl, self.problem.namespace)
 
     FAILURE_CLASSES = {
         # Measured over several attempts against the endpoint the feature flag
@@ -102,16 +90,7 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
 
         success_count = 0
         for _i in range(self.probe_attempts):
-            # wget exits nonzero for HTTP errors. Preserve its response inside the
-            # pod, without masking a failure to execute the command through Kubernetes.
-            script = (
-                "wget -T 10 -S -O - "
-                "'http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'"
-                " 2>&1 || true"
-            )
-            cmd = f"kubectl exec {shlex.quote(probe_pod)} -n {shlex.quote(namespace)} -- sh -c {shlex.quote(script)}"
-            result = kubectl.exec_command_checked(cmd, timeout=30)
-            statuses = re.findall(r"^\s*HTTP/\S+\s+(\d{3})\b", result, re.MULTILINE)
+            statuses, result = wget_from_pod(kubectl, probe_pod, namespace, _HOTELS_URL)
             if not statuses:
                 return self.fail("http_probe_response_missing", pod=probe_pod, output=result.strip()[:500])
             if statuses[-1] == "200" and self._valid_hotel_response(result):
