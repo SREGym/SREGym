@@ -887,31 +887,52 @@ def _codex_logged_in(env: dict[str, str]) -> bool:
     return isinstance(data, dict) and bool(data.get("tokens") or data.get("OPENAI_API_KEY"))
 
 
+# Runs in a child process with the environment being checked, so the lookup never touches this
+# process's os.environ. Prints only the credential method and region, never the keys.
+_AWS_CHAIN_PROBE = """
+import json
+import botocore.session
+session = botocore.session.Session()
+try:
+    creds = session.get_credentials()
+except Exception as exc:
+    print(json.dumps({"error": str(exc)}))
+else:
+    print(json.dumps({"method": creds.method if creds else None, "region": session.get_config_variable("region")}))
+"""
+
+
 def _aws_credentials(name: str, model: str, env: dict[str, str]) -> CheckResult:
     """Bedrock signs with the AWS credential chain: env keys, a profile or SSO, or an instance role."""
-    from unittest import mock
-
-    import botocore.session
-
     from clients.harness.bedrock import bedrock_region
 
-    with mock.patch.dict(os.environ, env, clear=True):
-        session = botocore.session.Session()
-        try:
-            creds = session.get_credentials()
-        except Exception as exc:  # noqa: BLE001 - an expired SSO token or bad profile is a finding, not a crash
-            return CheckResult(name, Status.FAIL, f"{model}: AWS credentials failed to load: {exc}", "aws sso login")
-        region = bedrock_region(env) or env.get("AWS_REGION_NAME") or session.get_config_variable("region")
-    if creds is None:
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-I", "-c", _AWS_CHAIN_PROBE],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        found = json.loads(probe.stdout)
+    except (subprocess.SubprocessError, ValueError) as exc:
+        return CheckResult(name, Status.WARN, f"could not look up AWS credentials for {model}: {exc}")
+    if found.get("error"):
+        return CheckResult(
+            name, Status.FAIL, f"{model}: AWS credentials failed to load: {found['error']}", "aws sso login"
+        )
+    if not found.get("method"):
         return CheckResult(
             name,
             Status.FAIL,
             f"{model} needs AWS credentials",
             "set AWS_PROFILE (and aws sso login), export AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, or use an instance role",
         )
+    region = bedrock_region(env) or env.get("AWS_REGION_NAME") or found.get("region")
     if not region:
         return CheckResult(name, Status.FAIL, f"{model} needs an AWS region", "export AWS_REGION=...")
-    return CheckResult(name, Status.OK, f"AWS credentials ({creds.method}) for {model} in {region}")
+    return CheckResult(name, Status.OK, f"AWS credentials ({found['method']}) for {model} in {region}")
 
 
 def _litellm_credentials(name: str, model: str, env: dict[str, str]) -> CheckResult:
