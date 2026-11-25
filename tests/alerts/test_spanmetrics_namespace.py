@@ -126,7 +126,8 @@ def test_span_histograms_use_explicit_durations(name, buckets):
 
 
 def selects(expr, labels):
-    # Evaluates the label matchers of the rule's single series selector.
+    # Evaluates the label matchers of the rule's first series selector only; a rule that gains
+    # a second selector (an `or` branch) needs this extended.
     matchers = re.findall(r'(\w+)\s*(=~|!~|!=|=)\s*"([^"]*)"', re.search(r"\{([^}]*)\}", expr)[1])
     ops = {
         "=": lambda v, p: v == p,
