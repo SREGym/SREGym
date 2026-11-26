@@ -101,6 +101,11 @@ class ObserverSetupReached(Exception):
     pass
 
 
+def openebs_workload(container_name, timeout_seconds):
+    container = SimpleNamespace(name=container_name, liveness_probe=SimpleNamespace(timeout_seconds=timeout_seconds))
+    return SimpleNamespace(spec=SimpleNamespace(template=SimpleNamespace(spec=SimpleNamespace(containers=[container]))))
+
+
 @pytest.fixture
 def startup(conductor, monkeypatch):
     conductor._baseline_captured = True
@@ -113,6 +118,10 @@ def startup(conductor, monkeypatch):
     conductor._trim_openebs_ndm = MagicMock()
     conductor._preload_openebs_helper_image = MagicMock()
     conductor._ensure_openebs_device_storageclass = MagicMock()
+    conductor.kubectl.apps_v1_api.read_namespaced_deployment.return_value = openebs_workload(
+        "openebs-provisioner-hostpath", 10
+    )
+    conductor.kubectl.apps_v1_api.read_namespaced_daemon_set.return_value = openebs_workload("node-disk-manager", 15)
     monkeypatch.setattr(conductor_module, "is_svelte", lambda: False)
     monkeypatch.setattr(conductor_module.time, "sleep", MagicMock())
     return conductor
@@ -138,6 +147,10 @@ def test_startup_repairs_the_metrics_selector_then_waits_for_metrics(startup, mo
 def test_startup_repairs_ndm_scheduling_only_in_full(startup, monkeypatch, svelte):
     monkeypatch.setattr(conductor_module, "is_svelte", lambda: svelte)
     startup._openebs_ready.side_effect = [False, False, True]
+    startup.kubectl.apps_v1_api.read_namespaced_deployment.return_value = openebs_workload(
+        "openebs-provisioner-hostpath", 1
+    )
+    startup.kubectl.apps_v1_api.read_namespaced_daemon_set.return_value = openebs_workload("node-disk-manager", 1)
     with pytest.raises(ObserverSetupReached):
         startup.deploy_app()
     patch = startup.kubectl.apps_v1_api.patch_namespaced_daemon_set
@@ -145,7 +158,10 @@ def test_startup_repairs_ndm_scheduling_only_in_full(startup, monkeypatch, svelt
     deploy_patch.assert_called_once_with(
         "openebs-localpv-provisioner",
         "openebs",
-        [{"op": "add", "path": "/spec/template/spec/containers/0/livenessProbe/timeoutSeconds", "value": 10}],
+        [
+            {"op": "test", "path": "/spec/template/spec/containers/0/name", "value": "openebs-provisioner-hostpath"},
+            {"op": "add", "path": "/spec/template/spec/containers/0/livenessProbe/timeoutSeconds", "value": 10},
+        ],
         _request_timeout=10,
     )
     if svelte:
@@ -153,11 +169,18 @@ def test_startup_repairs_ndm_scheduling_only_in_full(startup, monkeypatch, svelt
         startup._trim_openebs_ndm.assert_called_once()
         startup._ensure_openebs_device_storageclass.assert_not_called()
     else:
-        patch.assert_called_once_with(
+        assert patch.call_count == 2
+        patch.assert_any_call(
+            "openebs-ndm",
+            "openebs",
+            [{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}}],
+            _request_timeout=10,
+        )
+        patch.assert_any_call(
             "openebs-ndm",
             "openebs",
             [
-                {"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}},
+                {"op": "test", "path": "/spec/template/spec/containers/0/name", "value": "node-disk-manager"},
                 {"op": "add", "path": "/spec/template/spec/containers/0/livenessProbe/timeoutSeconds", "value": 10},
             ],
             _request_timeout=10,
@@ -175,6 +198,16 @@ def test_healthy_infrastructure_is_not_patched(startup):
     startup.kubectl.apps_v1_api.patch_namespaced_daemon_set.assert_not_called()
     assert startup._metrics_server_configured.call_count == 2
     assert startup._openebs_ready.call_count == 2
+
+
+def test_startup_updates_reused_openebs_without_reinstalling(startup):
+    apps = startup.kubectl.apps_v1_api
+    apps.read_namespaced_deployment.return_value = openebs_workload("openebs-provisioner-hostpath", 1)
+    with pytest.raises(ObserverSetupReached):
+        startup.deploy_app()
+    apps.patch_namespaced_deployment.assert_called_once()
+    apps.patch_namespaced_daemon_set.assert_not_called()
+    assert not any("openebs-operator.yaml" in call.args[0] for call in startup.kubectl.exec_command.call_args_list)
     startup._preload_openebs_helper_image.assert_called_once_with()
 
 
@@ -212,18 +245,34 @@ def test_startup_removes_interrupted_preloads_before_waiting_for_openebs(startup
 
 
 def test_cleanup_openebs_helper_pods_deletes_only_orphaned_terminal_helpers(conductor):
-    def make_pod(name, phase, container_name, *, owner_references=None, uid=None):
+    def make_pod(name, phase, container_name, *, owner_references=None, created_at=1):
         return SimpleNamespace(
-            metadata=SimpleNamespace(name=name, uid=uid or f"{name}-uid", owner_references=owner_references),
+            metadata=SimpleNamespace(
+                name=name,
+                uid=f"{name}-uid",
+                owner_references=owner_references,
+                labels={},
+                creation_timestamp=created_at,
+            ),
             status=SimpleNamespace(phase=phase),
             spec=SimpleNamespace(containers=[SimpleNamespace(name=container_name)]),
         )
 
+    provisioner = make_pod("provisioner", "Running", "openebs-provisioner-hostpath")
+    provisioner.metadata.labels["name"] = "openebs-localpv-provisioner"
+    provisioner.status.container_statuses = [
+        SimpleNamespace(
+            name="openebs-provisioner-hostpath", state=SimpleNamespace(running=SimpleNamespace(started_at=2))
+        )
+    ]
     conductor.kubectl.core_v1_api.list_namespaced_pod.return_value = SimpleNamespace(
         items=[
+            provisioner,
             make_pod("init-pvc-111", "Succeeded", "local-path-init"),
             make_pod("cleanup-pvc-222", "Failed", "local-path-cleanup"),
             make_pod("init-pvc-active", "Running", "local-path-init"),
+            make_pod("init-pvc-finished-for-current-process", "Succeeded", "local-path-init", created_at=3),
+            make_pod("init-pvc-unknown-age", "Succeeded", "local-path-init", created_at=None),
             make_pod("init-pvc-owned", "Succeeded", "local-path-init", owner_references=[SimpleNamespace(kind="Job")]),
             make_pod("other-pod", "Succeeded", "local-path-init"),
             make_pod("init-pvc-wrong-container", "Succeeded", "unexpected"),
@@ -239,6 +288,10 @@ def test_cleanup_openebs_helper_pods_deletes_only_orphaned_terminal_helpers(cond
         ("init-pvc-111", "openebs", {"preconditions": {"uid": "init-pvc-111-uid"}}),
         ("cleanup-pvc-222", "openebs", {"preconditions": {"uid": "cleanup-pvc-222-uid"}}),
     ]
+    provisioner.status.container_statuses[0].state.running = None
+    conductor.kubectl.core_v1_api.delete_namespaced_pod.reset_mock()
+    conductor._cleanup_openebs_helper_pods()
+    conductor.kubectl.core_v1_api.delete_namespaced_pod.assert_not_called()
 
 
 def test_startup_cleans_orphaned_openebs_helpers_before_waiting_for_openebs(startup):
@@ -294,9 +347,10 @@ def test_failed_repair_stops_before_observers_and_application(startup, monkeypat
     getattr(startup, check).return_value = False
     monkeypatch.setattr(conductor_module.time, "monotonic", MagicMock(side_effect=[0, 180]))
     # An earlier healthy component can complete its own wait immediately.
+    timeout = conductor_module.WAIT_FOR_POD_READY_TIMEOUT if name == "OpenEBS" else 180
     if name == "OpenEBS":
-        conductor_module.time.monotonic.side_effect = [0, 0, 180]
-    with pytest.raises(RuntimeError, match=f"{name} did not become healthy within 180s"):
+        conductor_module.time.monotonic.side_effect = [0, 0, timeout]
+    with pytest.raises(RuntimeError, match=f"{name} did not become healthy within {timeout}s"):
         startup.deploy_app()
     startup.prometheus.deploy.assert_not_called()
     startup._ensure_openebs_device_storageclass.assert_not_called()
