@@ -43,6 +43,8 @@ group "default" {
     "workspace-edge",
     "workspace-edge-releases",
     "workspace-mail",
+    "tracker",
+    "tracker-hidden",
   ]
 }
 
@@ -81,6 +83,8 @@ group "publish" {
     "workspace-edge",
     "workspace-edge-releases",
     "workspace-mail",
+    "tracker",
+    "tracker-hidden",
   ]
 }
 
@@ -280,6 +284,22 @@ target "workspace-mail" {
   inherits = ["_common"]
   context = "docker/apps/workspace/mail"
   tags = ["${REGISTRY}/workspace:${IMAGE_TAG}-mail"]
+}
+
+# tracker-api, and the hidden side of the restore replay problem: the users of
+# every workspace and the reference repair. The hidden image never runs in the
+# application's namespace.
+target "tracker" {
+  inherits = ["_common"]
+  context = "docker/apps/tracker"
+  tags = ["${REGISTRY}/tracker:${IMAGE_TAG}"]
+}
+
+target "tracker-hidden" {
+  inherits = ["_common"]
+  context = "docker/apps/tracker"
+  target = "hidden"
+  tags = ["${REGISTRY}/tracker:${IMAGE_TAG}-hidden"]
 }
 
 target "mattermost-server" {

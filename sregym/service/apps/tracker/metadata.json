@@ -1,0 +1,5 @@
+{
+  "Name": "Tracker",
+  "Namespace": "tracker",
+  "Desc": "Tracker is an issue tracker used by many companies, each in its own workspace. tracker-api serves every read and write, and tracker-db (PostgreSQL) is its system of record. Every change is recorded as a sync action: the kind of change, the entity after it, the fields that changed, and who made it. Users' apps hold a copy of their workspace and stay current by following those actions. Users work in Tracker around the clock and expect it to stay available and responsive and to keep everything they do."
+}
