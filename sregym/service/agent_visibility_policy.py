@@ -4,7 +4,7 @@ import json
 import re
 from collections.abc import Callable
 
-HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
+HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos", "provider-network"}
 HIDDEN_OBJECT_PATTERN = rf"(^|[^a-z0-9-])({'|'.join(sorted(HIDDEN_NAMESPACES))})/"
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},

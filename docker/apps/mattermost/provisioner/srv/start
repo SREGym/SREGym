@@ -1,0 +1,3 @@
+#!/bin/sh
+ulimit -n "${MAX_OPEN_FILES:-32}"
+exec python -u /srv/provisioner
