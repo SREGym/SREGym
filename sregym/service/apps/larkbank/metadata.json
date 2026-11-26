@@ -1,0 +1,5 @@
+{
+  "Name": "Larkbank",
+  "Namespace": "larkbank",
+  "Desc": "Larkbank is a bank. In its app a customer keeps the people they pay (payees) and standing orders, each of which pays a payee the same amount every period. api serves the app; it describes itself at GET /. scheduler pays every standing order when it is due, by sending the payment over the payment rail, an outside service reached at http://payment-rail:8080 with the key in the secret payment-rail; a payment the rail has taken cannot be recalled. Payees, standing orders and the payments made are kept in a Cassandra ring (the StatefulSet ring, keyspace bank), three copies of every row, read and written at QUORUM. The ConfigMap ring-config holds the ring's settings, the token planned for each node and the script that starts a node. Customers use the app around the clock and expect it to keep working."
+}

@@ -13,6 +13,8 @@ variable "REVISION" {
 
 group "default" {
   targets = [
+    "larkbank",
+    "larkbank-hidden",
     "mattermost-server",
     "stripe-backend",
     "incident-arena",
@@ -48,6 +50,8 @@ group "default" {
 
 group "publish" {
   targets = [
+    "larkbank",
+    "larkbank-hidden",
     "mattermost-server",
     "stripe-backend",
     "incident-arena",
@@ -280,6 +284,19 @@ target "workspace-mail" {
   inherits = ["_common"]
   context = "docker/apps/workspace/mail"
   tags = ["${REGISTRY}/workspace:${IMAGE_TAG}-mail"]
+}
+
+target "larkbank" {
+  inherits = ["_common"]
+  context = "docker/apps/larkbank"
+  tags = ["${REGISTRY}/larkbank:${IMAGE_TAG}"]
+}
+
+target "larkbank-hidden" {
+  inherits = ["_common"]
+  context = "docker/apps/larkbank"
+  target = "hidden"
+  tags = ["${REGISTRY}/larkbank:${IMAGE_TAG}-hidden"]
 }
 
 target "mattermost-server" {
