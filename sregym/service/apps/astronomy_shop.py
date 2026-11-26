@@ -1,10 +1,11 @@
 """Interface to the OpenTelemetry Astronomy Shop application"""
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
-from sregym.generators.workload.image_client import start_image_client, stop_image_client
+from sregym.generators.workload.image_client import start_image_client, stop_image_client, wait_for_images
 from sregym.generators.workload.locust import LocustWorkloadManager
 from sregym.paths import ASTRONOMY_SHOP_METADATA
 from sregym.profile import is_svelte
@@ -138,18 +139,22 @@ class AstronomyShop(Application):
 
     def delete(self):
         """Delete the Helm configurations."""
-        self._stop_image_client()
-        Helm.uninstall(**self.helm_configs)
-        self.kubectl.delete_namespace(self.helm_configs["namespace"])
-        self.kubectl.wait_for_namespace_deletion(self.namespace)
+        try:
+            stop_image_client(self.kubectl)
+        finally:
+            Helm.uninstall(**self.helm_configs)
+            self.kubectl.delete_namespace(self.helm_configs["namespace"])
+            self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def cleanup(self):
-        self._stop_image_client()
-        Helm.uninstall(**self.helm_configs)
-        self.kubectl.delete_namespace(self.helm_configs["namespace"])
-
-        if hasattr(self, "wrk"):
-            self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
+        # The previous problem may have left the client in the shared namespace.
+        try:
+            stop_image_client(self.kubectl)
+        finally:
+            Helm.uninstall(**self.helm_configs)
+            self.kubectl.delete_namespace(self.helm_configs["namespace"])
+            if hasattr(self, "wrk"):
+                self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
 
     def create_workload(self):
         self.wrk = LocustWorkloadManager(
@@ -163,16 +168,14 @@ class AstronomyShop(Application):
         self.wrk.start()
         if self.image_client_enabled:
             start_image_client(self.namespace)
+            evidence = wait_for_images(self.kubectl, after=time.time(), timeout=120)
+            self.logger.info("[WORKLOAD] Product images ready: %s", evidence)
 
     def stop_workload(self):
         if hasattr(self, "wrk"):
             self.wrk.stop()
-        self._stop_image_client()
-
-    def _stop_image_client(self):
-        # The client runs outside the app namespace, so deleting that namespace does not remove it.
         if self.image_client_enabled:
-            stop_image_client()
+            stop_image_client(self.kubectl)
 
 
 # Run this code to test installation/deletion
