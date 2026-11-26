@@ -941,12 +941,17 @@ serverFiles:
                 summary: "Abnormal request rate: {{ $labels.service_name }}"
                 description: "Service {{ $labels.service_name }} in namespace {{ $labels.namespace }} is receiving an unusually high request rate (current: {{ $value | printf \"%.1f\" }} req/s)."
 
+            # span_name!="order-consumed": accounting starts that span before its blocking Kafka Consume(),
+            # so it times the idle wait for the next order. Matched by name, so if the demo renames the
+            # span the alert fires again. Source:
+            # https://github.com/open-telemetry/opentelemetry-demo/blob/8c143c8d2ac2f5d2e1de2fe2a0bd4f629fb74743/src/accounting/Consumer.cs#L63-L64
             - alert: HighRequestLatency
               expr: |
                 histogram_quantile(0.95,
                   sum by (le, service_name, namespace) (
                     rate(traces_span_metrics_duration_milliseconds_bucket{
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                      span_name!="order-consumed",
                       namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                     }[2m])
                   )
