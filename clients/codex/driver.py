@@ -22,7 +22,13 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.codex.codex_agent import CodexAgent, custom_provider_args, filtered_runtime_args  # noqa: E402
+from clients.codex.codex_agent import (  # noqa: E402
+    CodexAgent,
+    bedrock_runtime_args,
+    custom_provider_args,
+    filtered_runtime_args,
+    use_bedrock_provider,
+)
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.harness.stages import mitigation_workflow  # noqa: E402
 from clients.jev.config import MODEL_ENV as JEV_MODEL_ENV
@@ -38,6 +44,7 @@ def run_preflight() -> None:
     home = Path(os.environ.get("CODEX_HOME", "/root/.codex"))
     auth = home / "auth.json"
     key = os.environ.get("OPENAI_API_KEY", "")
+    use_bedrock_provider(os.environ["AGENT_MODEL_ID"])
     provider_args = custom_provider_args()
 
     if not provider_args and not auth.exists() and not key:
@@ -61,6 +68,7 @@ def run_preflight() -> None:
         "--skip-git-repo-check",
     ]
     command.extend(provider_args)
+    command.extend(bedrock_runtime_args(os.environ["AGENT_MODEL_ID"]))
     command.extend(filtered_runtime_args(env))
     if os.environ.get(JEV_MODEL_ENV):
         from clients.jev.config import codex_args

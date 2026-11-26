@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from clients.harness.bedrock import bedrock_region, is_bedrock_model
 from clients.harness.token_usage import read_jsonl, token_count, usage_metrics
 from clients.jev.config import codex_args as jev_codex_args
 
@@ -60,6 +61,44 @@ def filtered_runtime_args(env: Mapping[str, str] | None = None) -> list[str]:
     if source.get("AGENT_INTERNET_ACCESS") != "filtered":
         return []
     return ["-c", 'web_search="disabled"', "--disable", "apps", "--disable", "plugins"]
+
+
+def use_bedrock_provider(model_name: str) -> None:
+    """Point Codex at Bedrock's OpenAI Responses endpoint for bedrock/<inference-profile> models.
+
+    The bearer token is the SigV4 presigned URL that aws-bedrock-token-generator builds, signed
+    with the forwarded AWS credentials (12h max, capped by those credentials' own expiry). Each
+    attempt runs in a new agent container, so the token is minted once per attempt; temporary
+    credentials (SSO, assumed role) must outlast the attempt.
+    """
+    if not is_bedrock_model(model_name):
+        return
+    import base64
+
+    import botocore.session
+    from botocore.auth import SigV4QueryAuth
+    from botocore.awsrequest import AWSRequest
+
+    session = botocore.session.Session()
+    region = bedrock_region(os.environ) or session.get_config_variable("region")
+    creds = session.get_credentials()
+    if not region or creds is None:
+        raise RuntimeError("bedrock/ models need AWS credentials and AWS_REGION")
+    request = AWSRequest(
+        method="POST",
+        url="https://bedrock.amazonaws.com/",
+        headers={"host": "bedrock.amazonaws.com"},
+        params={"Action": "CallWithBearerToken"},
+    )
+    SigV4QueryAuth(creds, "bedrock", region, expires=43200).add_auth(request)
+    token = base64.b64encode((request.url.replace("https://", "") + "&Version=1").encode()).decode()
+    os.environ["AGENT_API_BASE"] = f"https://bedrock-runtime.{region}.amazonaws.com/openai/v1"
+    os.environ["AGENT_API_KEY"] = f"bedrock-api-key-{token}"
+
+
+def bedrock_runtime_args(model_name: str) -> list[str]:
+    """Bedrock's Responses endpoint rejects the web_search tool Codex sends by default."""
+    return ["-c", 'web_search="disabled"'] if is_bedrock_model(model_name) else []
 
 
 class CodexAgent:
@@ -292,6 +331,7 @@ class CodexAgent:
             "unified_exec",
         ]
         command.extend(custom_provider_args())
+        command.extend(bedrock_runtime_args(self.model_name))
         command.extend(filtered_runtime_args())
         command.extend(jev_codex_args(self.logs_dir))
         reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
@@ -319,6 +359,7 @@ class CodexAgent:
         logger.info(f"Using reasoning effort: {reasoning_effort or 'Codex default'}")
 
         # Setup authentication
+        use_bedrock_provider(self.model_name)
         using_custom_provider = bool(os.environ.get("AGENT_API_BASE", "").strip())
         using_api_key = self._setup_auth()
         env = os.environ.copy()

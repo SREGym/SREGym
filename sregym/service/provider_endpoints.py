@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from clients.harness.bedrock import bedrock_region, is_bedrock_model
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 
 
@@ -57,6 +58,11 @@ def provider_endpoint_rules(
 
     if agent in {"autosubmit", "debug"}:
         return ()
+    # bedrock/<inference-profile> runs Claude Code and Codex on Bedrock, not the vendor API.
+    # Their CLIs read AWS_REGION, so allow that region rather than LiteLLM's AWS_REGION_NAME.
+    if agent in {"codex", "claudecode"} and is_bedrock_model(model):
+        region = bedrock_region(environment)
+        return _provider_rules("bedrock", {**environment, "AWS_REGION_NAME": region} if region else environment)
     if agent == "codex":
         custom_base = _configured_url(environment, "AGENT_API_BASE")
         if custom_base:
