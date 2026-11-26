@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from sregym.conductor.oracles.env_variable_shadowing_mitigation import (
     EnvVariableShadowingMitigationOracle,
 )
+from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 
 
 def _env(value):
@@ -104,7 +105,7 @@ def _oracle(kubectl):
         namespace="astronomy-shop",
         faulty_service="frontend-proxy",
         ENV_NAME="FRONTEND_HOST",
-        SHADOW_VALUE="localhost",
+        SHADOW_VALUE=EnvVariableShadowing.SHADOW_VALUE,
         kubectl=kubectl,
     )
     oracle = EnvVariableShadowingMitigationOracle(problem)
@@ -139,7 +140,7 @@ def test_accepts_no_environment_definition_when_equivalent_runtime_config_works(
 
 def test_rejects_shadowing_duplicate_without_starting_probe():
     core_v1 = _CoreV1()
-    deployment = _deployment(container=_container("frontend", "localhost"))
+    deployment = _deployment(container=_container("frontend", EnvVariableShadowing.SHADOW_VALUE))
 
     assert _oracle(_KubeCtl(deployment=deployment, core_v1=core_v1)).evaluate()["success"] is False
     assert core_v1.created_pods == []
@@ -155,7 +156,7 @@ def test_rejects_duplicate_even_when_both_values_are_functional():
 
 def test_rejects_single_known_bad_value_without_starting_probe():
     core_v1 = _CoreV1()
-    deployment = _deployment(container=_container("localhost"))
+    deployment = _deployment(container=_container(EnvVariableShadowing.SHADOW_VALUE))
 
     assert _oracle(_KubeCtl(deployment=deployment, core_v1=core_v1)).evaluate()["success"] is False
     assert core_v1.created_pods == []

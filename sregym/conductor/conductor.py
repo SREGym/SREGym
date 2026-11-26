@@ -1567,20 +1567,25 @@ class Conductor:
                     [{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}}],
                     _request_timeout=10,
                 )
+        self._ensure_openebs_liveness_timeouts(svelte)
         # Idempotent and cheap; also covers an `openebs` left over from an
         # earlier full-profile run on the same cluster.
         if svelte:
             self._trim_openebs_ndm()
-        # An interrupted preload can leave completed non-Job pods behind.
-        # Remove only our disposable helpers before checking OpenEBS readiness.
+        # An interrupted preload or restarted provisioner can leave completed
+        # non-Job pods behind. Remove only disposable helpers before checking
+        # OpenEBS readiness.
         self.kubectl.exec_command_checked(
             "kubectl delete pods -n openebs -l app=sregym-image-preload "
             "--ignore-not-found=true --grace-period=0 --wait=true "
             f"--timeout={WAIT_FOR_POD_READY_TIMEOUT}s",
             timeout=WAIT_FOR_POD_READY_TIMEOUT + 10,
         )
+        self._wait_for_infrastructure_ready(
+            "OpenEBS", lambda: self._openebs_ready(svelte), timeout=WAIT_FOR_POD_READY_TIMEOUT
+        )
+        self._cleanup_openebs_helper_pods()
         self.kubectl.wait_for_ready("openebs")
-        self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
         self._preload_openebs_helper_image()
         if not svelte:
             self._ensure_openebs_device_storageclass()
@@ -1762,6 +1767,104 @@ class Conductor:
             and status.number_available == desired
             and (status.number_misscheduled or 0) == 0
         )
+
+    _OPENEBS_PROVISIONER = "openebs-localpv-provisioner"
+    _OPENEBS_PROVISIONER_CONTAINER = "openebs-provisioner-hostpath"
+    _OPENEBS_HELPER_PREFIXES = ("init-pvc-", "cleanup-pvc-")
+    _OPENEBS_HELPER_CONTAINERS = frozenset({"local-path-init", "local-path-cleanup"})
+
+    def _ensure_openebs_liveness_timeouts(self, svelte: bool) -> None:
+        """Repair the one-second default on new and reused OpenEBS workloads."""
+        apps = self.kubectl.apps_v1_api
+        workloads = [
+            (
+                self._OPENEBS_PROVISIONER,
+                self._OPENEBS_PROVISIONER_CONTAINER,
+                apps.read_namespaced_deployment,
+                apps.patch_namespaced_deployment,
+            )
+        ]
+        if not svelte:
+            workloads.append(
+                ("openebs-ndm", "node-disk-manager", apps.read_namespaced_daemon_set, apps.patch_namespaced_daemon_set)
+            )
+        for name, container_name, read, patch in workloads:
+            workload = read(name, "openebs", _request_timeout=10)
+            for index, container in enumerate(workload.spec.template.spec.containers):
+                probe = container.liveness_probe
+                if container.name != container_name or probe is None or (probe.timeout_seconds or 1) >= 10:
+                    continue
+                path = f"/spec/template/spec/containers/{index}"
+                patch(
+                    name,
+                    "openebs",
+                    [
+                        {"op": "test", "path": f"{path}/name", "value": container_name},
+                        {"op": "add", "path": f"{path}/livenessProbe/timeoutSeconds", "value": 10},
+                    ],
+                    _request_timeout=10,
+                )
+                break
+
+    def _cleanup_openebs_helper_pods(self) -> None:
+        """Remove terminal LocalPV helpers left by an earlier provisioner.
+
+        The running provisioner still polls its own completed pods. Only reap
+        pods created before every current provisioner container started.
+        """
+        try:
+            pod_list = self.kubectl.core_v1_api.list_namespaced_pod("openebs", _request_timeout=10)
+        except ApiException as exc:
+            if exc.status == 404:
+                return
+            raise
+        pods = getattr(pod_list, "items", None) or []
+        starts = []
+        for pod in pods:
+            metadata = pod.metadata
+            if (metadata.labels or {}).get("name") != self._OPENEBS_PROVISIONER:
+                continue
+            if pod.status.phase in {"Succeeded", "Failed"}:
+                continue
+            statuses = [
+                item for item in pod.status.container_statuses or [] if item.name == self._OPENEBS_PROVISIONER_CONTAINER
+            ]
+            running = statuses[0].state.running if statuses and statuses[0].state else None
+            if running is None or running.started_at is None:
+                return  # Cannot establish which helpers are safe to remove.
+            starts.append(running.started_at)
+        if not starts:
+            return
+        oldest_start = min(starts)
+        for pod in pods:
+            metadata = getattr(pod, "metadata", None)
+            status = getattr(pod, "status", None)
+            spec = getattr(pod, "spec", None)
+            name = getattr(metadata, "name", "") or ""
+            uid = getattr(metadata, "uid", None)
+            created_at = getattr(metadata, "creation_timestamp", None)
+            if not uid or created_at is None or created_at >= oldest_start:
+                continue
+            if getattr(metadata, "owner_references", None):
+                continue
+            if getattr(status, "phase", None) not in {"Succeeded", "Failed"}:
+                continue
+            if not name.startswith(self._OPENEBS_HELPER_PREFIXES):
+                continue
+            containers = getattr(spec, "containers", None) or []
+            container_names = {getattr(c, "name", "") for c in containers}
+            if not container_names or not container_names.issubset(self._OPENEBS_HELPER_CONTAINERS):
+                continue
+            try:
+                self.kubectl.core_v1_api.delete_namespaced_pod(
+                    name=name,
+                    namespace="openebs",
+                    body={"preconditions": {"uid": uid}},
+                    _request_timeout=30,
+                )
+            except ApiException as exc:
+                if exc.status not in (404, 409):
+                    raise
 
     def _preload_openebs_helper_image(self) -> None:
         """Make LocalPV's helper image available before workload PVC creation."""

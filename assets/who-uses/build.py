@@ -178,6 +178,7 @@ def build(theme):
                 replacements=() if dark else (("rgb(255, 255, 255)", ink),),
             ),
         ),
+        "bluebox": (HEIGHT, centered_logo(f"bluebox-{theme}.svg", 180, 55)),
         "washington": (HEIGHT, washington_logo(dark, ink, muted)),
         "illinois": (
             HEIGHT,
@@ -208,6 +209,7 @@ def build(theme):
             logo("buet.png", 32, 17, 56, 56) + text("BUET", 100, 56, 30, ink, weight=600),
         ),
         "brac": (HEIGHT, brac_logo(dark)),
+        "lums": (HEIGHT, centered_logo(f"lums-{'white' if dark else 'color'}.png", 180, 67)),
     }
     output = ROOT / theme
     output.mkdir(exist_ok=True)

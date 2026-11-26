@@ -63,6 +63,12 @@ class MCPServer:
             if body["kind"] == "ClusterRole" and self.restrict_network_access:
                 resources[index] = restricted_cluster_role(body)
             elif body["kind"] == "Deployment" and body["metadata"]["name"] == self.service_name:
+                # Match Kubernetes's progressDeadlineSeconds to the rollout budget so a
+                # slow image pull does not trip the default 600s deadline mid-download.
+                body["spec"]["progressDeadlineSeconds"] = max(
+                    int(body["spec"].get("progressDeadlineSeconds") or 600),
+                    MCP_ROLLOUT_TIMEOUT_SECONDS,
+                )
                 for container in body["spec"]["template"]["spec"]["containers"]:
                     if container["name"] == self.service_name:
                         network_env = self._network_environment()

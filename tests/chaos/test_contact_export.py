@@ -64,7 +64,12 @@ if args[:2]==['get','pods']:
 elif args[:2]==['get','pvc']:
     print('catalog-uid')
 elif args[0]=='exec':
-    sys.stdin.read()
+    payload=sys.stdin.read()
+    assert 'urllib.request' not in payload, 'Cleanup must not probe the frontend from the profile pod'
+    if 'binData' in args[-1]:
+        print(os.environ['MOCK_ENCRYPTED_COUNT'])
+    elif '.find(' in args[-1]:
+        print('["1"]')
 elif args[:2]==['get','secret']:
     if any('jsonpath' in arg for arg in args):
         sys.exit(1)  # The operational key was deleted.
@@ -75,9 +80,14 @@ elif args[:2]!=['get','configmap']:
     kubectl.chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("KUBECTL_CALL_LOG", str(calls))
+    monkeypatch.setenv("MOCK_ENCRYPTED_COUNT", "0" if matching_catalog else "1")
     result = workspace.run("recover.sh", "hotel-reservation")
     recorded = [json.loads(line) for line in calls.read_text().splitlines()]
     assert (result.returncode == 0) == matching_catalog, result.stderr
     assert any("restore-snapshot" in call for call in recorded) == matching_catalog
     if matching_catalog:
         assert not any(call[:2] == ["get", "secret"] and any("jsonpath" in arg for arg in call) for call in recorded)
+        restored = next(i for i, call in enumerate(recorded) if "restore-snapshot" in call)
+        checked = next(i for i, call in enumerate(recorded) if any("binData" in arg for arg in call))
+        invalidated = next(i for i, call in enumerate(recorded) if call[-3:] == ["python3", "-", '["1"]'])
+        assert restored < checked < invalidated
