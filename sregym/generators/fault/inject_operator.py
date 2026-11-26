@@ -147,9 +147,12 @@ class K8SOperatorFaultInjector(FaultInjector):
         labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
         # Finish removal before restoring the CR, otherwise PD can adopt a
         # leftover PVC carrying the invalid storage class.
+        # Background cascade: with foreground the operator keeps recreating the
+        # StatefulSets of the terminating CR, so the delete can take minutes.
         self.kubectl.exec_command_checked(
-            f"kubectl delete tidbcluster basic -n {namespace} --ignore-not-found=true --cascade=foreground"
+            f"kubectl delete tidbcluster basic -n {namespace} --ignore-not-found=true --cascade=background"
         )
+        self.kubectl.exec_command_checked(f"kubectl wait --for=delete pod -n {namespace} -l {labels} --timeout=300s")
         self.kubectl.exec_command_checked(f"kubectl delete pvc -n {namespace} -l {labels} --ignore-not-found=true")
         self.kubectl.exec_command_checked(f"kubectl apply -f - -n {namespace}", input_data=json.dumps(saved["cluster"]))
         path.unlink()
