@@ -91,7 +91,7 @@ def test_injection_appends_a_later_shadowing_definition_with_json_patch():
                 {
                     "op": "add",
                     "path": "/spec/template/spec/containers/1/env/-",
-                    "value": {"name": "FRONTEND_HOST", "value": "frontend-legacy"},
+                    "value": {"name": "FRONTEND_HOST", "value": "frontend-v1"},
                 }
             ],
         )
@@ -105,7 +105,7 @@ def test_shadow_value_does_not_point_the_proxy_at_itself():
 
 
 def test_injection_rejects_an_already_ambiguous_baseline():
-    problem = _problem(_KubeCtl(_deployment(_template("frontend", "frontend-legacy"))))
+    problem = _problem(_KubeCtl(_deployment(_template("frontend", "frontend-v1"))))
 
     try:
         problem._append_shadowing_definition()
@@ -120,7 +120,7 @@ def test_capture_preserves_the_original_single_definition():
     problem = _problem(_KubeCtl(_deployment(original)))
 
     problem._capture_baseline_template()
-    original.spec.containers[1].env.append(_env("FRONTEND_HOST", "frontend-legacy"))
+    original.spec.containers[1].env.append(_env("FRONTEND_HOST", "frontend-v1"))
 
     assert _host_values(problem._baseline_template) == ["frontend"]
 
@@ -128,7 +128,7 @@ def test_capture_preserves_the_original_single_definition():
 def test_restore_replaces_template_but_preserves_latest_deployment_settings():
     baseline = _template("frontend", annotations={"baseline": "true"})
     current = _deployment(
-        _template("frontend", "frontend-legacy", annotations={"agent": "extra-rollout"}),
+        _template("frontend", "frontend-v1", annotations={"agent": "extra-rollout"}),
         replicas=3,
         strategy="agent-strategy",
     )
@@ -147,7 +147,7 @@ def test_restore_replaces_template_but_preserves_latest_deployment_settings():
 
 
 def test_recovery_waits_for_rollout_and_clears_snapshot():
-    kubectl = _KubeCtl(_deployment(_template("frontend", "frontend-legacy")))
+    kubectl = _KubeCtl(_deployment(_template("frontend", "frontend-v1")))
     problem = _problem(kubectl)
     problem._baseline_template = _template("frontend")
 

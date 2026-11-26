@@ -12,8 +12,8 @@ from sregym.utils.decorators import mark_fault_injected
 class EnvVariableShadowing(Problem):
     ENV_NAME = "FRONTEND_HOST"
     EXPECTED_VALUE = "frontend"
-    # A host that does not exist. `localhost` resolves to envoy's own listener.
-    SHADOW_VALUE = "frontend-legacy"
+    # Stale service name. Avoid localhost, which reaches Envoy's own listener.
+    SHADOW_VALUE = "frontend-v1"
 
     def __init__(self, faulty_service: str = "frontend-proxy", *, app: Application | None = None):
         self.faulty_service = faulty_service
