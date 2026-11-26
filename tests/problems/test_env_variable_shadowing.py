@@ -1,5 +1,7 @@
+from ipaddress import IPv6Address, ip_address
 from types import SimpleNamespace
 
+import pytest
 from kubernetes import client
 
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
@@ -98,10 +100,50 @@ def test_injection_appends_a_later_shadowing_definition_with_json_patch():
     ]
 
 
+def _points_to_proxy(host: str) -> bool:
+    host = host.lower().removesuffix(".")
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return host in {
+            "localhost",
+            "localhost.localdomain",
+            "frontend-proxy",
+            "frontend-proxy.astronomy-shop",
+            "frontend-proxy.astronomy-shop.svc",
+            "frontend-proxy.astronomy-shop.svc.cluster.local",
+        }
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_loopback or address.is_unspecified
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("localhost", True),
+        ("LOCALHOST.localdomain.", True),
+        ("127.0.0.1", True),
+        ("127.0.0.2", True),
+        ("0.0.0.0", True),
+        ("::", True),
+        ("::1", True),
+        ("::ffff:127.0.0.2", True),
+        ("frontend-proxy", True),
+        ("frontend-proxy.astronomy-shop", True),
+        ("frontend-proxy.astronomy-shop.svc", True),
+        ("frontend-proxy.astronomy-shop.svc.cluster.local.", True),
+        ("frontend-v1", False),
+        ("frontend-proxy-v2", False),
+    ],
+)
+def test_proxy_self_reference_detection(host, expected):
+    assert _points_to_proxy(host) is expected
+
+
 def test_shadow_value_does_not_point_the_proxy_at_itself():
-    # Loopback and the proxy's own Service both reach envoy's listener on 8080.
-    # The proxy then forwards to itself until it runs out of memory or fds.
-    assert EnvVariableShadowing.SHADOW_VALUE not in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "frontend-proxy"}
+    # Envoy would send traffic back to its own listener and repeat the request.
+    assert not _points_to_proxy(EnvVariableShadowing.SHADOW_VALUE)
 
 
 def test_injection_rejects_an_already_ambiguous_baseline():
