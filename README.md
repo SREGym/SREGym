@@ -57,17 +57,19 @@ SREGym is used by researchers and engineers at organizations including:
 </p>
 
 <p align="center">
+  <a href="https://bluebox.ai/#gh-light-mode-only"><img src="assets/who-uses/light/bluebox.png" alt="Bluebox" height="40"></a><a href="https://bluebox.ai/#gh-dark-mode-only"><img src="assets/who-uses/dark/bluebox.png" alt="Bluebox" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://illinois.edu/#gh-light-mode-only"><img src="assets/who-uses/light/illinois.png" alt="University of Illinois Urbana-Champaign" height="38"></a><a href="https://illinois.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/illinois.png" alt="University of Illinois Urbana-Champaign" height="38"></a>&nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://www.washington.edu/#gh-light-mode-only"><img src="assets/who-uses/light/washington_light.png" alt="University of Washington" height="52"></a><a href="https://www.washington.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/washington_dark.png" alt="University of Washington" height="52"></a>&nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://www.utoronto.ca/#gh-light-mode-only"><img src="assets/who-uses/light/toronto.png" alt="University of Toronto" height="45"></a><a href="https://www.utoronto.ca/#gh-dark-mode-only"><img src="assets/who-uses/dark/toronto.png" alt="University of Toronto" height="45"></a>&nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://www.berkeley.edu/#gh-light-mode-only"><img src="assets/who-uses/light/berkeley.png" alt="University of California, Berkeley" height="38"></a><a href="https://www.berkeley.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/berkeley.png" alt="University of California, Berkeley" height="38"></a>&nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://www.asu.edu/#gh-light-mode-only"><img src="assets/who-uses/light/asu.png" alt="Arizona State University" height="31"></a><a href="https://www.asu.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/asu.png" alt="Arizona State University" height="31"></a>
+  <a href="https://www.berkeley.edu/#gh-light-mode-only"><img src="assets/who-uses/light/berkeley.png" alt="University of California, Berkeley" height="38"></a><a href="https://www.berkeley.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/berkeley.png" alt="University of California, Berkeley" height="38"></a>
 </p>
 
 <p align="center">
+  <a href="https://www.asu.edu/#gh-light-mode-only"><img src="assets/who-uses/light/asu.png" alt="Arizona State University" height="31"></a><a href="https://www.asu.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/asu.png" alt="Arizona State University" height="31"></a>&nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://www.wisc.edu/#gh-light-mode-only"><img src="assets/who-uses/light/wisconsin.png" alt="University of Wisconsin–Madison" height="40"></a><a href="https://www.wisc.edu/#gh-dark-mode-only"><img src="assets/who-uses/dark/wisconsin.png" alt="University of Wisconsin–Madison" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
   <a href="https://www.buet.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a><a href="https://www.buet.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/buet.png" alt="Bangladesh University of Engineering and Technology (BUET)" height="40"></a>&nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://www.bracu.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/brac.png" alt="BRAC University" height="50"></a><a href="https://www.bracu.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/brac.png" alt="BRAC University" height="50"></a>
+  <a href="https://www.bracu.ac.bd/#gh-light-mode-only"><img src="assets/who-uses/light/brac.png" alt="BRAC University" height="50"></a><a href="https://www.bracu.ac.bd/#gh-dark-mode-only"><img src="assets/who-uses/dark/brac.png" alt="BRAC University" height="50"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://lums.edu.pk/#gh-light-mode-only"><img src="assets/who-uses/light/lums.png" alt="LUMS" height="56"></a><a href="https://lums.edu.pk/#gh-dark-mode-only"><img src="assets/who-uses/dark/lums.png" alt="LUMS" height="56"></a>
 </p>
 
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
