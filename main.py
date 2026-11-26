@@ -32,6 +32,7 @@ from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
 from sregym.conductor.hooks import AttemptHookError, load_hooks
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
@@ -1065,6 +1066,12 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     # An invalid hook registration must fail before agent resources are prepared.
     agent_hooks = load_hooks(agent_reg.hooks) if agent_reg else None
 
+    suite = getattr(args, "suite", None)
+    problem = getattr(args, "problem", None)
+    problem_selection = (problem,) if problem else PROBLEM_SETS.get(suite)
+    problems = ProblemRegistry()
+    uses_cluster = any(map(problems.uses_cluster, problem_selection or problems.get_problem_ids()))
+
     k8s_proxy_listen_host = (
         get_container_host_bind_address()
         if internet_policy.is_filtered and not args.use_external_harness
@@ -1080,6 +1087,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         stages=tuple(args.stages) if args.stages else None,
         baseline_override_s=getattr(args, "baseline", None),
         propagation_override_s=getattr(args, "propagation", None),
+        uses_cluster=uses_cluster,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)
@@ -1113,8 +1121,6 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         hooks=agent_hooks,
     )
 
-    suite = getattr(args, "suite", None)
-    problem_selection = (args.problem,) if args.problem else PROBLEM_SETS.get(suite)
     if suite:
         logger.info(f"Running {suite}: {len(problem_selection)} problems")
 

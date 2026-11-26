@@ -5,6 +5,10 @@ from abc import ABC, abstractmethod
 
 class Problem(ABC):
     run_default_workload = True
+    # False for a problem whose environment is not the test cluster. The
+    # conductor then builds no cluster clients for it and deploys with the
+    # application's own deploy().
+    uses_cluster = True
 
     def __init__(self, app, namespace: str | None = None):
         self.app = app
