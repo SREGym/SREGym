@@ -4,17 +4,12 @@ from sregym.service.apps.tidb_cluster_operator import TiDBClusterDeployer
 
 
 class TiDBClusterDeployHelper:
-    _ready = False
-
     @classmethod
-    def running_cluster(self):
-        if not self._ready:
-            base_dir = Path(__file__).parent.parent
-            meta_path = base_dir / "service" / "metadata" / "tidb_metadata.json"
-            print("Starting TiDB Cluster...")
-            deployer = TiDBClusterDeployer(str(meta_path))
-            deployer.deploy_all()
-            self._ready = True
-            print("TiDB Cluster is running.")
-        else:
-            print("TiDB Cluster is already running.")
+    def running_cluster(cls):
+        # Always deploy: the between-problem reset may have removed TiDB, or a kept cluster
+        # may still carry the last problem's fault. deploy_all() is safe on a healthy cluster
+        # and reseeds the tables from scratch.
+        meta_path = Path(__file__).parent.parent / "service" / "metadata" / "tidb_metadata.json"
+        print("Starting TiDB Cluster...")
+        TiDBClusterDeployer(str(meta_path)).deploy_all()
+        print("TiDB Cluster is running.")
