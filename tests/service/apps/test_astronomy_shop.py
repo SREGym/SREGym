@@ -193,6 +193,8 @@ def test_busybox_init_containers_reuse_the_node_image():
         for c in containers:
             if c["image"].startswith("busybox"):
                 assert c["imagePullPolicy"] == "IfNotPresent", name
+        if name == "product-catalog":
+            continue
         chart = upstream.get(name, {}).get("initContainers")
-        if chart:
-            assert containers == [{**c, "imagePullPolicy": "IfNotPresent"} for c in chart], name
+        assert chart, f"{name}: the chart dropped this init container, drop the override"
+        assert containers == [{**c, "imagePullPolicy": "IfNotPresent"} for c in chart], name
