@@ -95,6 +95,17 @@ def microsoft_logo(dark):
     )
 
 
+def brac_logo(dark):
+    content = centered_logo("brac.png", 76, 70)
+    if not dark:
+        return content
+    return (
+        '<defs><filter id="brac-white"><feColorMatrix type="matrix" '
+        'values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0"/>'
+        '</filter></defs><g filter="url(#brac-white)">' + content + "</g>"
+    )
+
+
 def build(theme):
     dark = theme == "dark"
     ink = "#f0f6fc" if dark else "#1f2328"
@@ -167,6 +178,7 @@ def build(theme):
                 replacements=() if dark else (("rgb(255, 255, 255)", ink),),
             ),
         ),
+        "bluebox": (HEIGHT, centered_logo(f"bluebox-{theme}.svg", 180, 55)),
         "washington": (HEIGHT, washington_logo(dark, ink, muted)),
         "illinois": (
             HEIGHT,
@@ -182,6 +194,22 @@ def build(theme):
             HEIGHT,
             centered_logo("asu-white.png" if dark else "asu-color.png", 210 if dark else 185, 60 if dark else 40),
         ),
+        "wisconsin": (
+            HEIGHT,
+            centered_logo(
+                "uw-logo-horizontal-color-reverse-web-digital.svg"
+                if dark
+                else "uw-logo-horizontal-color-web-digital.svg",
+                200,
+                67,
+            ),
+        ),
+        "buet": (
+            HEIGHT,
+            logo("buet.png", 32, 17, 56, 56) + text("BUET", 100, 56, 30, ink, weight=600),
+        ),
+        "brac": (HEIGHT, brac_logo(dark)),
+        "lums": (HEIGHT, centered_logo(f"lums-{'white' if dark else 'color'}.png", 180, 67)),
     }
     output = ROOT / theme
     output.mkdir(exist_ok=True)
