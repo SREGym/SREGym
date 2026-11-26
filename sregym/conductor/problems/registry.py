@@ -8,6 +8,7 @@ from sregym.conductor.problems.ad_service_failure import AdServiceFailure
 from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from sregym.conductor.problems.admission_webhook_tls_mismatch import AdmissionWebhookTLSMismatch
+from sregym.conductor.problems.airport_meal_clearing import AirportMealClearing
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from sregym.conductor.problems.calico_route_reflector_label_drift import (
     CalicoRouteReflectorLabelDriftHotelReservation,
@@ -139,6 +140,7 @@ class ProblemRegistry:
             "update_incompatible_correlated": UpdateIncompatibleCorrelated,
             # --- REGULAR APPLICATION PROBLEMS ---
             "incorrect_image": IncorrectImage,
+            "airport_meal_clearing": AirportMealClearing,
             "kafka_producer_leak": KafkaProducerLeak,
             "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,

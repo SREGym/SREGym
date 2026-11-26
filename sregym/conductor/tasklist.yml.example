@@ -225,6 +225,9 @@ all:
     kafka_queue_problems_hotel_reservation:
     - diagnosis
     - mitigation
+    airport_meal_clearing:
+    - diagnosis
+    - mitigation
     kafka_producer_leak:
     - diagnosis
     - mitigation

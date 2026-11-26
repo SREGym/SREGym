@@ -30,6 +30,7 @@ from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents, registry_path
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import check_api_port_available, request_shutdown, run_api
+from sregym.conductor.constants import cleanup_drain_timeout
 from sregym.conductor.hooks import AttemptHookError, load_hooks
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
@@ -58,7 +59,7 @@ AGENT_REAP_GRACE_SECONDS = 60
 # teardown have already consumed part of the cleanup budget. Keep the outer
 # watchdog long enough for those bounded steps to finish and allow slower hosts
 # to raise it without editing the benchmark runner.
-CLEANUP_DRAIN_TIMEOUT_SECONDS = float(os.environ.get("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "600"))
+CLEANUP_DRAIN_TIMEOUT_SECONDS = cleanup_drain_timeout()
 
 
 def problem_cleanup_timeout(conductor) -> float:

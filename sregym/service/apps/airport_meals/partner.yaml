@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${site}-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: openebs-hostpath
+  resources:
+    requests:
+      storage: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${site}
+spec:
+  selector:
+    app: ${site}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${site}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ${site}
+  template:
+    metadata:
+      labels:
+        app: ${site}
+      annotations:
+        airport-meals/source-sha256: '${source_hash}'
+    spec:
+      containers:
+        - name: partner
+          image: python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
+          command: [python3, -u, /opt/airport-meals/app.py]
+          env:
+            - name: ROLE
+              value: ${role}
+            - name: SITE
+              value: ${site}
+            - name: DATA_DIR
+              value: /var/lib/airport-meals
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 20m
+              memory: 24Mi
+            limits:
+              memory: 96Mi
+          volumeMounts:
+            - name: runtime
+              mountPath: /opt/airport-meals
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/airport-meals
+      volumes:
+        - name: runtime
+          configMap:
+            name: meal-partner-runtime
+        - name: data
+          persistentVolumeClaim:
+            claimName: ${site}-data

@@ -1,0 +1,8 @@
+{
+  "Name": "Airport Meal Clearing",
+  "Namespace": "airport-meals",
+  "Desc": "This morning’s meal vouchers are scanning again. The posted departure close disagrees with the passenger service clearing accepted, and cafés have receipts that clearing hasn’t paid. Explain the disagreement and reconcile the existing passenger authorizations, supplied numbers and café receipts. Passengers still holding valid vouchers should be able to use them for the meal promised. Keep taking new departures through the next shift and capacity change. Read /opt/airport-meals/OPERATIONS.md and /opt/airport-meals/INTERFACES.md in deployment/clearing in the airport-meals namespace.",
+  "Supported Operations": [
+    "Read /opt/airport-meals/OPERATIONS.md and /opt/airport-meals/INTERFACES.md in the partner deployments."
+  ]
+}
