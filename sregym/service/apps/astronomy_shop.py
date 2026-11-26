@@ -1,9 +1,11 @@
 """Interface to the OpenTelemetry Astronomy Shop application"""
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
+from sregym.generators.workload.image_client import start_image_client, stop_image_client, wait_for_images
 from sregym.generators.workload.locust import LocustWorkloadManager
 from sregym.paths import ASTRONOMY_SHOP_METADATA
 from sregym.profile import is_svelte
@@ -26,6 +28,8 @@ class AstronomyShop(Application):
     _FLAGD_DEPLOYMENT = "flagd"
     _VARIANT_ON = "on"
     _VARIANT_OFF = "off"
+    # Problems that need product images fetched (see image_client) turn this on before the workload starts.
+    image_client_enabled = False
 
     def __init__(self):
         super().__init__(ASTRONOMY_SHOP_METADATA)
@@ -135,16 +139,22 @@ class AstronomyShop(Application):
 
     def delete(self):
         """Delete the Helm configurations."""
-        Helm.uninstall(**self.helm_configs)
-        self.kubectl.delete_namespace(self.helm_configs["namespace"])
-        self.kubectl.wait_for_namespace_deletion(self.namespace)
+        try:
+            stop_image_client(self.kubectl)
+        finally:
+            Helm.uninstall(**self.helm_configs)
+            self.kubectl.delete_namespace(self.helm_configs["namespace"])
+            self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def cleanup(self):
-        Helm.uninstall(**self.helm_configs)
-        self.kubectl.delete_namespace(self.helm_configs["namespace"])
-
-        if hasattr(self, "wrk"):
-            self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
+        # The previous problem may have left the client in the shared namespace.
+        try:
+            stop_image_client(self.kubectl)
+        finally:
+            Helm.uninstall(**self.helm_configs)
+            self.kubectl.delete_namespace(self.helm_configs["namespace"])
+            if hasattr(self, "wrk"):
+                self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
 
     def create_workload(self):
         self.wrk = LocustWorkloadManager(
@@ -156,10 +166,16 @@ class AstronomyShop(Application):
         if not hasattr(self, "wrk"):
             self.create_workload()
         self.wrk.start()
+        if self.image_client_enabled:
+            start_image_client(self.namespace)
+            evidence = wait_for_images(self.kubectl, after=time.time(), timeout=120)
+            self.logger.info("[WORKLOAD] Product images ready: %s", evidence)
 
     def stop_workload(self):
         if hasattr(self, "wrk"):
             self.wrk.stop()
+        if self.image_client_enabled:
+            stop_image_client(self.kubectl)
 
 
 # Run this code to test installation/deletion

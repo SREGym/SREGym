@@ -1,5 +1,7 @@
+from ipaddress import IPv6Address, ip_address
 from types import SimpleNamespace
 
+import pytest
 from kubernetes import client
 
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
@@ -91,15 +93,61 @@ def test_injection_appends_a_later_shadowing_definition_with_json_patch():
                 {
                     "op": "add",
                     "path": "/spec/template/spec/containers/1/env/-",
-                    "value": {"name": "FRONTEND_HOST", "value": "localhost"},
+                    "value": {"name": "FRONTEND_HOST", "value": "frontend-v1"},
                 }
             ],
         )
     ]
 
 
+def _points_to_proxy(host: str) -> bool:
+    host = host.lower().removesuffix(".")
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return host in {
+            "localhost",
+            "localhost.localdomain",
+            "frontend-proxy",
+            "frontend-proxy.astronomy-shop",
+            "frontend-proxy.astronomy-shop.svc",
+            "frontend-proxy.astronomy-shop.svc.cluster.local",
+        }
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_loopback or address.is_unspecified
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("localhost", True),
+        ("LOCALHOST.localdomain.", True),
+        ("127.0.0.1", True),
+        ("127.0.0.2", True),
+        ("0.0.0.0", True),
+        ("::", True),
+        ("::1", True),
+        ("::ffff:127.0.0.2", True),
+        ("frontend-proxy", True),
+        ("frontend-proxy.astronomy-shop", True),
+        ("frontend-proxy.astronomy-shop.svc", True),
+        ("frontend-proxy.astronomy-shop.svc.cluster.local.", True),
+        ("frontend-v1", False),
+        ("frontend-proxy-v2", False),
+    ],
+)
+def test_proxy_self_reference_detection(host, expected):
+    assert _points_to_proxy(host) is expected
+
+
+def test_shadow_value_does_not_point_the_proxy_at_itself():
+    # Envoy would send traffic back to its own listener and repeat the request.
+    assert not _points_to_proxy(EnvVariableShadowing.SHADOW_VALUE)
+
+
 def test_injection_rejects_an_already_ambiguous_baseline():
-    problem = _problem(_KubeCtl(_deployment(_template("frontend", "localhost"))))
+    problem = _problem(_KubeCtl(_deployment(_template("frontend", "frontend-v1"))))
 
     try:
         problem._append_shadowing_definition()
@@ -114,7 +162,7 @@ def test_capture_preserves_the_original_single_definition():
     problem = _problem(_KubeCtl(_deployment(original)))
 
     problem._capture_baseline_template()
-    original.spec.containers[1].env.append(_env("FRONTEND_HOST", "localhost"))
+    original.spec.containers[1].env.append(_env("FRONTEND_HOST", "frontend-v1"))
 
     assert _host_values(problem._baseline_template) == ["frontend"]
 
@@ -122,7 +170,7 @@ def test_capture_preserves_the_original_single_definition():
 def test_restore_replaces_template_but_preserves_latest_deployment_settings():
     baseline = _template("frontend", annotations={"baseline": "true"})
     current = _deployment(
-        _template("frontend", "localhost", annotations={"agent": "extra-rollout"}),
+        _template("frontend", "frontend-v1", annotations={"agent": "extra-rollout"}),
         replicas=3,
         strategy="agent-strategy",
     )
@@ -141,7 +189,7 @@ def test_restore_replaces_template_but_preserves_latest_deployment_settings():
 
 
 def test_recovery_waits_for_rollout_and_clears_snapshot():
-    kubectl = _KubeCtl(_deployment(_template("frontend", "localhost")))
+    kubectl = _KubeCtl(_deployment(_template("frontend", "frontend-v1")))
     problem = _problem(kubectl)
     problem._baseline_template = _template("frontend")
 
