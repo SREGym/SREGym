@@ -766,6 +766,7 @@ class Conductor:
         self.logger.info("Undeploying app leftovers...")
         with self._phase("undeploy_leftovers"):
             self.undeploy_app()  # Cleanup any leftovers
+            self.reconcile_leftovers()
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
         with self._phase("deploy"):
@@ -1643,6 +1644,23 @@ class Conductor:
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""
         if self.problem:
             self.problem.app.cleanup()
+
+    def reconcile_leftovers(self):
+        """Reset the cluster to the saved baseline before deploying.
+
+        A teardown cut short (a killed or stalled run) skips the end-of-problem
+        reconcile, leaving an earlier problem's apps, cluster-scoped objects and
+        observe telemetry to look like part of the next incident. Only a saved
+        baseline is used: capturing one now would record those leftovers as baseline.
+        """
+        if not self._baseline_captured:
+            if not self.cluster_state.load_baseline_state(CLUSTER_BASELINE_STATE_FILE):
+                self.logger.info("No saved cluster baseline yet; skipping leftover reconcile")
+                return
+            self._baseline_captured = True
+        changes = self.cluster_state.reconcile_to_baseline()
+        if any(changes.values()):
+            self.logger.info(f"Reconciled leftovers to baseline: {changes}")
 
     def _wait_for_infrastructure_ready(self, name: str, is_ready: Callable[[], bool], timeout: float = 180) -> None:
         """Require functional infrastructure, not just Ready surviving pods."""
