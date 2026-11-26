@@ -1,5 +1,6 @@
 # ruff: noqa: I001
 
+from functools import cached_property
 from pathlib import Path
 
 import yaml
@@ -120,6 +121,7 @@ from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.apps.train_ticket.f17 import TrainTicketF17
 from sregym.conductor.problems.apps.train_ticket.f22 import TrainTicketF22
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
+from sregym.conductor.problems.usage_reporting import UsageReporting
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
 from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
@@ -312,6 +314,8 @@ class ProblemRegistry:
             "slack_distractor_volume_seq_lock": SlackDistractorVolumeSeqLock,
             # Existing faults ported to Frappe, Saleor and Slack Spine.
             **PORTED_PROBLEMS,
+            # ==================== SMART METER (SAVED VM WORLD) ====================
+            "usage_reporting": UsageReporting,
         }
 # fmt: on
         slo_entries = slo_problems()
@@ -319,16 +323,34 @@ class ProblemRegistry:
         if duplicates:
             raise ValueError(f"SLO problem IDs already registered: {', '.join(sorted(duplicates))}")
         self.PROBLEM_REGISTRY.update(slo_entries)
-        self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
+
+    @cached_property
+    def kubectl(self) -> KubeCtl:
+        # Built on first use: listing problems, or running one that does not
+        # use the cluster, must work without a kubeconfig.
+        return KubeCtl()
+
+    def uses_cluster(self, problem_id: str) -> bool:
+        """Whether the problem runs on the test cluster. Factory entries (lambdas, partials) do."""
+        return getattr(self.PROBLEM_REGISTRY.get(problem_id), "uses_cluster", True)
+
+    def agent_endpoints(self, problem_id: str) -> tuple[str, ...]:
+        """Host URLs the problem's environment serves to the agent. Factory entries serve none."""
+        return tuple(getattr(self.PROBLEM_REGISTRY.get(problem_id), "agent_endpoints", ()))
+
+    def egress_idle_timeout(self, problem_id: str) -> int | None:
+        """The egress proxy idle timeout the problem asks for. Factory entries ask for none."""
+        return getattr(self.PROBLEM_REGISTRY.get(problem_id), "egress_idle_timeout", None)
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
 
-        is_emulated_cluster = self.kubectl.is_emulated_cluster()
-        if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
-            raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
+        if self.uses_cluster(problem_id):
+            is_emulated_cluster = self.kubectl.is_emulated_cluster()
+            if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
+                raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
 
         return self.PROBLEM_REGISTRY.get(problem_id)()
 

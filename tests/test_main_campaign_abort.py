@@ -90,6 +90,81 @@ def test_interrupt_drains_evaluation_before_cleanup(evaluation_stuck):
         conductor.finish_problem_in_background.assert_called_once()
 
 
+@pytest.mark.parametrize(("problem", "uses_cluster"), [("no_cluster", False), ("on_cluster", True), (None, True)])
+def test_conductor_builds_cluster_services_only_for_problems_that_use_the_cluster(monkeypatch, problem, uses_cluster):
+    benchmark_main = _load_main_module()
+    monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
+    monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
+    registry = SimpleNamespace(
+        uses_cluster=lambda problem_id: problem_id != "no_cluster",
+        agent_endpoints=lambda problem_id: (),
+        egress_idle_timeout=lambda problem_id: None,
+        get_problem_ids=lambda: ["on_cluster", "no_cluster"],
+    )
+    monkeypatch.setattr(benchmark_main, "ProblemRegistry", lambda: registry)
+
+    class ReachedConductor(Exception):
+        pass
+
+    def stop_before_conductor(**kwargs):
+        raise ReachedConductor(kwargs["uses_cluster"])
+
+    monkeypatch.setattr(benchmark_main, "ConductorConfig", stop_before_conductor)
+    args = SimpleNamespace(
+        agent=None,
+        problem=problem,
+        internet_access="open",
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        use_external_harness=False,
+        stages=None,
+    )
+    with pytest.raises(ReachedConductor) as reached:
+        benchmark_main._run_benchmark(args)
+    assert reached.value.args == (uses_cluster,)
+
+
+def test_selected_problems_endpoints_join_the_agent_allowlist(monkeypatch):
+    benchmark_main = _load_main_module()
+    monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
+    monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
+    monkeypatch.setattr(benchmark_main, "check_api_port_available", lambda: None)
+    endpoints = {"served": ("http://host.docker.internal:28310",), "other": ("http://host.docker.internal:9",)}
+    registry = SimpleNamespace(
+        uses_cluster=lambda problem_id: True,
+        agent_endpoints=lambda problem_id: endpoints.get(problem_id, ()),
+        egress_idle_timeout=lambda problem_id: {"served": 3600, "other": 60}.get(problem_id),
+        get_problem_ids=lambda: list(endpoints),
+    )
+    monkeypatch.setattr(benchmark_main, "ProblemRegistry", lambda: registry)
+
+    class ReachedConductor(Exception):
+        pass
+
+    def stop_before_conductor(**kwargs):
+        policy = kwargs["internet_policy"]
+        raise ReachedConductor(policy.additional_allowed_endpoints, policy.idle_timeout)
+
+    monkeypatch.setattr(benchmark_main, "ConductorConfig", stop_before_conductor)
+    args = SimpleNamespace(
+        agent=None,
+        problem="served",
+        internet_access="open",
+        allow_agent_endpoint=["http://example.test:8080"],
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        use_external_harness=False,
+        stages=None,
+    )
+    with pytest.raises(ReachedConductor) as reached:
+        benchmark_main._run_benchmark(args)
+    # Only the selected problem's endpoints, after the command line's, and only its idle timeout.
+    assert reached.value.args == (("http://example.test:8080", "http://host.docker.internal:28310"), 3600)
+
+
 def test_stopped_driver_does_not_start_deployment(monkeypatch, tmp_path):
     benchmark_main = _load_main_module()
     monkeypatch.chdir(tmp_path)
