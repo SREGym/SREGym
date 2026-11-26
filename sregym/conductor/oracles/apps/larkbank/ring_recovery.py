@@ -79,6 +79,15 @@ def shown(view):
     return payees, orders
 
 
+def payment_key(payment):
+    """What a payment on the rail pays, as a standing order's key: sort code|account|amount|reference."""
+    try:
+        amount = int(float(payment.get("amount")))
+    except (TypeError, ValueError):
+        return None
+    return f"{payment.get('sort_code', '')}|{payment.get('account_number', '')}|{amount}|{payment.get('reference', '')}"
+
+
 def judge(truth, final, submitted, ended, ring, setting, handover_at=0.0):
     """What is wrong, by reason, in REASONS' order. Empty if customers have what they are owed.
 
@@ -90,10 +99,20 @@ def judge(truth, final, submitted, ended, ring, setting, handover_at=0.0):
     found = {reason: [] for reason in REASONS}
     views = {view["customer"]: view for view in final}
 
-    paid = {}  # (customer, what the standing order says) -> [(when, standing order id)]
+    # Whose standing order a payment pays, by what it says. The scheduler names the customer; a payment sent
+    # to the rail by hand (its API asks only for the payee, amount and reference) is matched by what it pays.
+    owner = {}
+    for customer in truth["customers"]:
+        for item in customer["items"]:
+            if item["kind"] == "standing_order":
+                owner.setdefault(item["key"], customer["id"])
+    paid = {}  # (customer, what the standing order says) -> [(when, standing order id or None)]
     for payment in truth["payments"]:
-        key = f"{payment['sort_code']}|{payment['account_number']}|{int(payment['amount'])}|{payment['reference']}"
-        paid.setdefault((payment["customer"], key), []).append((payment["at"], payment.get("standing_order_id")))
+        key = payment_key(payment)
+        customer = payment.get("customer") or owner.get(key)
+        if key is None or customer is None:
+            continue  # pays nothing a customer set up
+        paid.setdefault((customer, key), []).append((payment["at"], payment.get("standing_order_id")))
 
     for customer in truth["customers"]:
         name = customer["id"]
@@ -121,7 +140,8 @@ def judge(truth, final, submitted, ended, ring, setting, handover_at=0.0):
             seen_twice = item.get("twice_at") or 0
             if seen_twice:
                 since = max(seen_twice, handover_at) + TWICE_GRACE_SECONDS
-                copies = {order for at, order in payments if at > since}
+                # A payment sent by hand names no standing order, so it cannot be one of the two copies.
+                copies = {order for at, order in payments if at > since and order}
                 if len(copies) > 1:
                     found["paid_twice"].append({**what, "from_standing_orders": sorted(copies)})
             # Paid in its last period, unless the customer added it moments ago.

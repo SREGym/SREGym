@@ -412,6 +412,25 @@ def test_a_pair_already_seen_twice_at_the_handover_is_given_its_time_from_the_ha
     assert list(found) == ["paid_twice"]
 
 
+def test_payments_sent_to_the_rail_by_hand_are_matched_by_what_they_pay():
+    truth, final = world()
+    # The rail's API asks only for the payee, amount and reference: no customer, no standing order.
+    for payment in truth["payments"]:
+        if payment["customer"] == "A":
+            payment.pop("customer")
+            payment.pop("standing_order_id")
+    truth["payments"].append({"payment_id": "x", "sort_code": "99-99-99", "account_number": "1", "amount": 5,
+                              "reference": "NOBODY", "at": ENDED - 10})  # fmt: skip
+    assert reasons(truth, final) == {}  # A's hand-sent payment still counts as paid when due
+    # A catch-up payment by hand is not a second copy of a standing order.
+    by_hand = copy.deepcopy(truth["payments"][3])
+    by_hand.pop("customer")
+    by_hand.pop("standing_order_id")
+    by_hand["at"] = 4700 + TWICE_GRACE_SECONDS + 5
+    truth["payments"].append(by_hand)
+    assert reasons(truth, final) == {}
+
+
 def test_a_standing_order_not_paid_in_its_last_period():
     truth, final = world()
     truth["payments"][0]["at"] = ENDED - EVERY_SECONDS - 60
