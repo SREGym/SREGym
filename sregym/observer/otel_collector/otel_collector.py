@@ -1,12 +1,15 @@
 import json
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
 
+from sregym.service.kubectl import WAIT_FOR_POD_READY_TIMEOUT
 from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger("all.sregym.otel_collector")
+OTEL_COLLECTOR_READY_TIMEOUT = int(os.getenv("OTEL_COLLECTOR_READY_TIMEOUT", str(WAIT_FOR_POD_READY_TIMEOUT)))
 
 
 class OtelCollector:
@@ -25,7 +28,7 @@ class OtelCollector:
         """Deploy OTel Collector with spanmetrics connector."""
         self._create_jaeger_backend_service()
         self.run_cmd(f"kubectl apply -f {self.config_file} -n {self.namespace}")
-        self._wait_for_ready(timeout=120)
+        self._wait_for_ready(timeout=OTEL_COLLECTOR_READY_TIMEOUT)
         logger.info("OTel Collector deployed successfully.")
 
     def _create_jaeger_backend_service(self):
@@ -44,10 +47,11 @@ class OtelCollector:
         )
         self.run_cmd(f"echo '{manifest}' | kubectl apply -f -")
 
-    def _wait_for_ready(self, timeout: int = 120):
+    def _wait_for_ready(self, timeout: int | None = None):
         """Wait until the OTel Collector pod is ready."""
+        wait_timeout = OTEL_COLLECTOR_READY_TIMEOUT if timeout is None else timeout
         t0 = time.time()
-        while time.time() - t0 < timeout:
+        while time.time() - t0 < wait_timeout:
             try:
                 out = self.run_cmd(f"kubectl -n {self.namespace} get deployment otel-collector -o json")
                 if deployment_rollout_complete(json.loads(out)):
@@ -55,4 +59,4 @@ class OtelCollector:
             except Exception:
                 pass
             time.sleep(3)
-        raise RuntimeError(f"OTel Collector not ready within {timeout}s")
+        raise RuntimeError(f"OTel Collector not ready within {wait_timeout}s")

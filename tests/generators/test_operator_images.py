@@ -121,3 +121,22 @@ def test_recovery_state_is_scoped_to_the_namespace_uid(operator):
     operator.kube.core_v1_api.read_namespace.return_value.metadata.uid = "another-namespace"
     with pytest.raises(RuntimeError, match="Original TiDB configuration is missing"):
         operator.injector.recover_wrong_update_strategy()
+
+
+def test_storage_recovery_deletes_in_background_and_waits_for_pd_pods(operator):
+    # A foreground cascade can take minutes: the operator keeps recreating the StatefulSets
+    # of the terminating cluster. Delete in the background, then wait for the PD pods to go
+    # before removing their PVCs, so PD can't adopt a PVC with the invalid storage class.
+    operator.injector.inject_non_existent_storage()
+    operator.kube.exec_command_checked.reset_mock()
+    labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
+
+    operator.injector.recover_non_existent_storage()
+
+    commands = [call.args[0] for call in operator.kube.exec_command_checked.call_args_list]
+    deletes = [c for c in commands if not c.startswith("kubectl get")]
+    assert deletes[:3] == [
+        "kubectl delete tidbcluster basic -n tidb-cluster --ignore-not-found=true --cascade=background",
+        f"kubectl wait --for=delete pod -n tidb-cluster -l {labels} --timeout=300s",
+        f"kubectl delete pvc -n tidb-cluster -l {labels} --ignore-not-found=true",
+    ]

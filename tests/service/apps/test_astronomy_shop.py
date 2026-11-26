@@ -169,3 +169,32 @@ def test_locust_exporter_sidecar_is_not_chronically_throttled():
     assert sidecar["name"] == "locust-exporter"
     cpu = sidecar["resources"]["limits"]["cpu"]
     assert cpu.endswith("m") and int(cpu[:-1]) >= 200
+
+
+def test_busybox_init_containers_reuse_the_node_image():
+    # busybox:latest implies imagePullPolicy Always, so every pod start pulled from Docker Hub
+    # and a failed pull left pods stuck in Init, hiding the injected fault. A list override
+    # replaces the chart's list, so each copied one must match the chart's apart from the
+    # pull policy, and a copy the chart has since dropped or changed would quietly revive it.
+    upstream = yaml.safe_load((CHART / "values.yaml").read_text())["components"]
+    fixes = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())["components"]
+
+    def busybox(components):
+        return {
+            name
+            for name, component in components.items()
+            if any(c["image"].startswith("busybox") for c in component.get("initContainers") or [])
+        }
+
+    assert busybox(upstream), "the chart no longer has busybox init containers; drop this override"
+    assert busybox(upstream) <= busybox(fixes)
+    for name in busybox(fixes):
+        containers = fixes[name]["initContainers"]
+        for c in containers:
+            if c["image"].startswith("busybox"):
+                assert c["imagePullPolicy"] == "IfNotPresent", name
+        if name == "product-catalog":
+            continue
+        chart = upstream.get(name, {}).get("initContainers")
+        assert chart, f"{name}: the chart dropped this init container, drop the override"
+        assert containers == [{**c, "imagePullPolicy": "IfNotPresent"} for c in chart], name

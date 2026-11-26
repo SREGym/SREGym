@@ -101,6 +101,14 @@ components:
     imageOverride:
       repository: ghcr.io/open-telemetry/demo
       tag: nightly-20939609681-accounting@sha256:51e6720438c13d0a4fefd129b01e2422b176fdb18a9ea71ef08fd84e717e82f4
+    # busybox:latest implies imagePullPolicy Always, so every pod start hit Docker Hub
+    # and a failed pull left cart stuck in Init, masking valkey_auth_disruption.
+    # IfNotPresent reuses the node's copy. Same for every busybox init container below.
+    initContainers:
+      - name: wait-for-kafka
+        image: busybox:latest
+        command: ["sh", "-c", "until nc -z -v -w30 kafka 9092; do echo waiting for kafka; sleep 2; done;"]
+        imagePullPolicy: IfNotPresent
   ad:
     envOverrides:
       - name: JAVA_TOOL_OPTIONS
@@ -119,6 +127,11 @@ components:
         memory: 300Mi
       limits:
         memory: 512Mi
+    initContainers:
+      - name: wait-for-kafka
+        image: busybox:latest
+        command: ["sh", "-c", "until nc -z -v -w30 kafka 9092; do echo waiting for kafka; sleep 2; done;"]
+        imagePullPolicy: IfNotPresent
   kafka:
     resources:
       # KafkaFaultInjector._run (inject_kafka.py) execs the Kafka admin CLI
@@ -157,6 +170,7 @@ components:
       - name: wait-for-postgresql
         image: busybox:latest
         command: ["sh", "-c", "until nc -z -v -w30 postgresql 5432; do echo waiting for postgresql; sleep 2; done;"]
+        imagePullPolicy: IfNotPresent
     resources:
       # The chart caps this Go service at 20Mi with GOMEMLIMIT 16MiB. Under
       # SREGym's locust load it idles at 11-15Mi working set, and in one
@@ -214,3 +228,25 @@ components:
         volumeMounts:
           - name: config-rw
             mountPath: /app/data
+    initContainers:
+      - name: init-config
+        image: busybox
+        command: ["sh", "-c", "cp /config-ro/demo.flagd.json /config-rw/demo.flagd.json && cat /config-rw/demo.flagd.json"]
+        volumeMounts:
+          - mountPath: /config-ro
+            name: config-ro
+          - mountPath: /config-rw
+            name: config-rw
+        imagePullPolicy: IfNotPresent
+  cart:
+    initContainers:
+      - name: wait-for-valkey-cart
+        image: busybox:latest
+        command: ["sh", "-c", "until nc -z -v -w30 valkey-cart 6379; do echo waiting for valkey-cart; sleep 2; done;"]
+        imagePullPolicy: IfNotPresent
+  checkout:
+    initContainers:
+      - name: wait-for-kafka
+        image: busybox:latest
+        command: ["sh", "-c", "until nc -z -v -w30 kafka 9092; do echo waiting for kafka; sleep 2; done;"]
+        imagePullPolicy: IfNotPresent

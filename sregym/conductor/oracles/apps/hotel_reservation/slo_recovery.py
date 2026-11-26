@@ -15,7 +15,13 @@ class HotelReservationRecoveryCheck(ApplicationRecoveryCheck):
     def verify_requests(self, url, records):
         profiles = {str(row["id"]): row for row in records["profiles"]}
         position = {"lat": 37.7749, "lon": -122.4194}
-        probes = [("/hotels", {**position, "inDate": "2015-04-09", "outDate": "2015-04-10"})]
+        # Query a date pair outside both the wrk2 workload's reservation range
+        # (2015-04-09..2015-04-28) and the booking probe below (2030-01-10..2030-01-11).
+        # The upstream reservation service's CheckAvailability stores cached room
+        # capacities under "<id>_cap" but looks up cacheCap["<id>"] (0), so a single
+        # cached reservation on a queried date hides that hotel from /hotels even
+        # when rooms remain available.
+        probes = [("/hotels", {**position, "inDate": "2030-01-15", "outDate": "2030-01-16"})]
         probes += [("/recommendations", {**position, "require": mode}) for mode in ("price", "dis", "rate")]
         for path, params in probes:
             body = json.loads(self.request(url, path, params))
