@@ -165,6 +165,36 @@ def test_hotel_empty_success_responder_fails(monkeypatch, body):
         check.verify_requests("http://localhost", {"profiles": []})
 
 
+def test_hotel_search_probe_avoids_workload_and_booking_dates(monkeypatch):
+    check = hotel_check(monkeypatch)
+    feature = {
+        "id": "1",
+        "properties": {"name": "Hotel", "phone_number": "123"},
+        "geometry": {"coordinates": [-122.0, 37.0]},
+    }
+    seen = {}
+
+    def request(url, path, params):
+        seen[path] = dict(params)
+        if path == "/user":
+            return json.dumps({"message": "Login successfully!"})
+        if path == "/reservation":
+            return json.dumps({"message": "Reserve successfully!"})
+        return json.dumps({"type": "FeatureCollection", "features": [feature]})
+
+    monkeypatch.setattr(check, "request", request)
+    records = {
+        "profiles": [{"id": "1", "name": "Hotel", "phoneNumber": "123", "address": {"lon": -122.0, "lat": 37.0}}]
+    }
+    check.verify_requests("http://localhost", records)
+    hotels_dates = (seen["/hotels"]["inDate"], seen["/hotels"]["outDate"])
+    booking_dates = (seen["/reservation"]["inDate"], seen["/reservation"]["outDate"])
+    assert not hotels_dates[0].startswith("2015-04-")
+    assert not hotels_dates[1].startswith("2015-04-")
+    assert hotels_dates != booking_dates
+    assert hotels_dates[1] != booking_dates[1]
+
+
 def test_social_echo_without_database_write_fails(monkeypatch):
     check = SocialNetworkRecoveryCheck(
         SimpleNamespace(namespace="app", frontend_service="frontend", frontend_port=8080)
