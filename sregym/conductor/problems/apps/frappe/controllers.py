@@ -201,7 +201,9 @@ class RollingUpdateMisconfiguredIA(Problem):
                 "deployment is stuck with zero available replicas and the work it performs has stopped."
             ),
             oracle_factory=lambda problem: RollingUpdateMitigationOracle(
-                problem=problem, deployment_name=problem.faulty_service
+                problem=problem,
+                deployment_name=problem.faulty_service,
+                rollout_timeout_seconds=240,
             ),
         )
 
