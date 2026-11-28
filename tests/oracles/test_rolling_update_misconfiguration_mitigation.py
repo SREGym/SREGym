@@ -93,7 +93,7 @@ def test_rejects_original_strategy_without_triggering_probe():
     assert kubectl.patch_commands == []
 
 
-def test_accepts_safe_strategy_after_stable_probe_rollout(monkeypatch):
+def test_accepts_safe_strategy_after_stable_probe_rollout(monkeypatch, capsys):
     monkeypatch.setattr(rolling_update_module.time, "time_ns", lambda: 1234)
     initial = _deployment()
     probe_started = _deployment(
@@ -111,6 +111,14 @@ def test_accepts_safe_strategy_after_stable_probe_rollout(monkeypatch):
         available=3,
     )
     probe_complete = _deployment(generation=2, observed_generation=2)
+    restore_started = _deployment(
+        generation=3,
+        observed_generation=2,
+        updated=0,
+        ready=3,
+        available=3,
+    )
+    restore_complete = _deployment(generation=3, observed_generation=3)
     kubectl = _KubeCtl(
         initial,
         [
@@ -118,10 +126,13 @@ def test_accepts_safe_strategy_after_stable_probe_rollout(monkeypatch):
             probe_started,
             probe_progress,
             probe_complete,
+            restore_started,
+            restore_complete,
         ],
     )
 
     assert _oracle(kubectl).evaluate()["success"] is True
+    assert kubectl.json_deployments == []
     assert len(kubectl.patch_commands) == 2
     probe_container = kubectl.patches[0]["spec"]["template"]["spec"]["initContainers"][0]
     assert probe_container["image"] == "busybox:1.36"
@@ -129,6 +140,49 @@ def test_accepts_safe_strategy_after_stable_probe_rollout(monkeypatch):
     restored_template = kubectl.patches[1]["spec"]["template"]
     assert restored_template["spec"]["initContainers"] is None
     assert restored_template["metadata"]["annotations"]["rollout-readiness-check"] is None
+    out = capsys.readouterr().out
+    assert "Probe rollout for deployment/custom-service finished in " in out
+    assert "Restore rollout for deployment/custom-service completed in " in out
+
+
+def test_restore_wait_timeout_prints_warning(monkeypatch, capsys):
+    monkeypatch.setattr(rolling_update_module.time, "time_ns", lambda: 1234)
+    monotonic_values = iter([0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0, 5.0, 20.0, 20.0])
+    monkeypatch.setattr(rolling_update_module.time, "monotonic", lambda: next(monotonic_values))
+    initial = _deployment()
+    probe_complete = _deployment(generation=2, observed_generation=2)
+    restore_started = _deployment(
+        generation=3,
+        observed_generation=2,
+        updated=0,
+        ready=3,
+        available=3,
+    )
+    kubectl = _KubeCtl(
+        initial,
+        [
+            initial,
+            probe_complete,
+            probe_complete,
+            restore_started,
+        ],
+    )
+    oracle = _oracle(kubectl)
+    oracle.rollout_timeout_seconds = 10
+
+    assert oracle.evaluate()["success"] is True
+    out = capsys.readouterr().out
+    assert "Probe rollout for deployment/custom-service finished in 5.0s (limit 10s)" in out
+    assert "⚠️ Restore rollout for deployment/custom-service timed out after 15.0s (limit 10s)" in out
+
+
+def test_rollout_timeout_seconds_override():
+    problem = SimpleNamespace(namespace="social-network", kubectl=_KubeCtl(_deployment(), []))
+    assert RollingUpdateMitigationOracle(problem, "custom-service").rollout_timeout_seconds == 120
+    assert (
+        RollingUpdateMitigationOracle(problem, "custom-service", rollout_timeout_seconds=240).rollout_timeout_seconds
+        == 240
+    )
 
 
 def test_rejects_zero_availability_during_probe(monkeypatch):

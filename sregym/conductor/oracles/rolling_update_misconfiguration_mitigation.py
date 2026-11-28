@@ -33,11 +33,13 @@ class RollingUpdateMitigationOracle(Oracle):
         "rollout_probe_ineffective": FailureClass.HARNESS_ERROR,
     }
 
-    def __init__(self, problem, deployment_name: str):
+    def __init__(self, problem, deployment_name: str, *, rollout_timeout_seconds: int | None = None):
         super().__init__(problem)
         self.deployment_name = deployment_name
         self.namespace = problem.namespace
         self.kubectl = problem.kubectl
+        if rollout_timeout_seconds is not None:
+            self.rollout_timeout_seconds = rollout_timeout_seconds
 
     @staticmethod
     def _scaled_int_or_percent(value, replicas: int, *, round_up: bool) -> int:
@@ -172,11 +174,32 @@ class RollingUpdateMitigationOracle(Oracle):
         output = self._patch_deployment({"spec": {"template": template}})
         print(f"Restored repaired pod template: {output}")
 
+    def _wait_for_restore_rollout(self, previous_generation: int) -> None:
+        restored_deployment = self._get_deployment_json()
+        restored_generation = (restored_deployment.get("metadata") or {}).get("generation", 0)
+        if restored_generation <= previous_generation:
+            return
+        started = time.monotonic()
+        restore_failed = self._rollout_failed(restored_generation, require_continuous_availability=False)
+        elapsed = time.monotonic() - started
+        if restore_failed is not None:
+            print(
+                f"⚠️ Restore rollout for deployment/{self.deployment_name} timed out "
+                f"after {elapsed:.1f}s (limit {self.rollout_timeout_seconds}s)"
+            )
+        else:
+            print(
+                f"Restore rollout for deployment/{self.deployment_name} completed "
+                f"in {elapsed:.1f}s (limit {self.rollout_timeout_seconds}s)"
+            )
+
     def evaluate(self) -> dict:
         print("== Rolling Update Mitigation Evaluation ==")
 
         original_template = None
         probe_applied = False
+        probe_generation = 0
+        succeeded = False
         try:
             output = self.kubectl.exec_command(
                 f"kubectl get deployment {self.deployment_name} -n {self.namespace} -o yaml"
@@ -214,11 +237,18 @@ class RollingUpdateMitigationOracle(Oracle):
                 # this oracle exists to run.
                 return self.fail("rollout_probe_ineffective", deployment=self.deployment_name)
 
+            probe_started = time.monotonic()
             failed = self._rollout_failed(probe_generation, require_continuous_availability=True)
+            probe_elapsed = time.monotonic() - probe_started
+            print(
+                f"Probe rollout for deployment/{self.deployment_name} finished in "
+                f"{probe_elapsed:.1f}s (limit {self.rollout_timeout_seconds}s)"
+            )
             if failed is not None:
                 return failed
 
             print("✅ Mitigation successful: rollout completed without losing all replicas")
+            succeeded = True
             return {"success": True}
         except Exception as e:
             print(f"❌ Error during evaluation: {e}")
@@ -227,5 +257,7 @@ class RollingUpdateMitigationOracle(Oracle):
             if probe_applied and original_template is not None:
                 try:
                     self._restore_pod_template(original_template)
+                    if succeeded:
+                        self._wait_for_restore_rollout(probe_generation)
                 except Exception as exc:
                     print(f"⚠️ Failed to restore repaired pod template: {exc}")
