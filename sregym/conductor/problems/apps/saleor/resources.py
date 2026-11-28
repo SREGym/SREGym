@@ -16,6 +16,7 @@ from sregym.conductor.oracles.apps.saleor.resources import (
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.oracles.nightly_rebalance_oom_mitigation import NightlyRebalanceOOMMitigationOracle
 from sregym.conductor.oracles.priority_preemption_mitigation import PriorityPreemptionMitigationOracle
+from sregym.conductor.oracles.workload_health import LoadgenHealthOracle
 from sregym.conductor.problems.apps.saleor.helpers import (
     API,
     API_SERVICE,
@@ -192,6 +193,8 @@ class PriorityPreemptionCascadeSaleor(PriorityPreemptionCascadeHotelReservation)
     """
 
     UNPROTECTED_PEERS = ("loadgen",)
+    DEPLOYMENT_READY_TIMEOUT_S = 300
+    TARGET_LIVENESS_FAILURE_THRESHOLD = 12
 
     def __init__(self, faulty_service: str = API, service_name: str = API_SERVICE):
         super().__init__(app=make_app(APP))
@@ -225,7 +228,15 @@ class PriorityPreemptionCascadeSaleor(PriorityPreemptionCascadeHotelReservation)
                 "PriorityClass (without deleting the tenant workload or shrinking requests)."
             ),
             oracle_factory=PriorityPreemptionMitigationOracle,
+            health_oracle_factory=lambda problem: LoadgenHealthOracle(problem, window_s=180.0),
         )
+        self.baseline_duration_s = 180
+
+    def _extra_target_container_patch(self, container) -> dict:
+        probe = getattr(container, "liveness_probe", None)
+        if probe is None:
+            return {}
+        return {"livenessProbe": {"failureThreshold": self.TARGET_LIVENESS_FAILURE_THRESHOLD}}
 
     def _protect_peer_deployments(self):
         peer_names = [

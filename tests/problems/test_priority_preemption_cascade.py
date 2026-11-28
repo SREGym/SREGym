@@ -614,6 +614,43 @@ def test_delete_pressure_namespace_tolerates_missing_namespace():
     assert problem._delete_pressure_namespace() is None
 
 
+def test_patch_target_requests_preserves_existing_cpu_request():
+    problem = _problem()
+    problem.target_request_memory = "2Gi"
+    deployment = _deployment("reservation", memory="512Mi")
+    deployment.spec.template.spec.containers[0].resources.requests["cpu"] = "500m"
+    patched = []
+    ready = []
+    problem.apps_v1 = SimpleNamespace(
+        read_namespaced_deployment=lambda name, namespace: deployment,
+        patch_namespaced_deployment=lambda name, namespace, body: patched.append(body),
+    )
+    problem._wait_for_deployment_ready = lambda name, namespace: ready.append((name, namespace))
+
+    problem._patch_target_requests()
+
+    container_patch = patched[0]["spec"]["template"]["spec"]["containers"][0]
+    assert container_patch["resources"]["requests"] == {"cpu": "500m", "memory": "2Gi"}
+    assert ready == [("reservation", "hotel-reservation")]
+
+
+def test_patch_target_requests_falls_back_to_25m_when_cpu_unset():
+    problem = _problem()
+    problem.target_request_memory = "2Gi"
+    deployment = _deployment("reservation", memory="512Mi")
+    patched = []
+    problem.apps_v1 = SimpleNamespace(
+        read_namespaced_deployment=lambda name, namespace: deployment,
+        patch_namespaced_deployment=lambda name, namespace, body: patched.append(body),
+    )
+    problem._wait_for_deployment_ready = lambda name, namespace: None
+
+    problem._patch_target_requests()
+
+    container_patch = patched[0]["spec"]["template"]["spec"]["containers"][0]
+    assert container_patch["resources"]["requests"] == {"cpu": "25m", "memory": "2Gi"}
+
+
 def _api_exception(status):
     from kubernetes.client.exceptions import ApiException
 
