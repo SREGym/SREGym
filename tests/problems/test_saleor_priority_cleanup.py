@@ -24,3 +24,16 @@ def test_cleanup_runs_support_and_application_cleanup_once():
 
     problem._delete_support_resources.assert_called_once_with()
     application_cleanup.assert_called_once_with()
+
+
+def test_saleor_priority_preemption_sets_liveness_threshold_and_timeout():
+    problem = object.__new__(PriorityPreemptionCascadeSaleor)
+    assert problem.DEPLOYMENT_READY_TIMEOUT_S == 300
+
+    with_liveness = SimpleNamespace(liveness_probe=SimpleNamespace(failure_threshold=3))
+    patch_dict = problem._extra_target_container_patch(with_liveness)
+    assert patch_dict == {"livenessProbe": {"failureThreshold": 12}}
+    assert "startupProbe" not in patch_dict
+
+    without_liveness = SimpleNamespace(liveness_probe=None)
+    assert problem._extra_target_container_patch(without_liveness) == {}

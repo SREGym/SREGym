@@ -96,6 +96,13 @@ class LoadgenHealthOracle(Oracle):
                     f"[LoadgenHealth] baseline: {self.baseline['offered']} requests; "
                     f"error_rate={self.baseline['error_rate']}"
                 )
+                by_driver_latency = {
+                    name: stats.get("latency") for name, stats in (self.baseline.get("by_driver") or {}).items()
+                }
+                print(
+                    f"[LoadgenHealth] baseline_latency: overall={self.baseline.get('latency')}; "
+                    f"by_driver={by_driver_latency}"
+                )
                 return
             for check in checks:
                 if not check.passed:

@@ -57,6 +57,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     PADDING_LABEL = "report-cache"
     APPLICATION_SETTLE_SECONDS = 60
     APPLICATION_POLL_SECONDS = 2
+    DEPLOYMENT_READY_TIMEOUT_S = 180
 
     def __init__(self, faulty_service: str = "reservation", *, app: Application | None = None):
         super().__init__(app=app if app is not None else HotelReservation())
@@ -230,7 +231,8 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     def _node_requested_memory_kib(self, node_name):
         return sum(self._pod_memory_request_kib(pod) for pod in self._active_pods_on_node(node_name))
 
-    def _wait_for_deployment_ready(self, name, namespace, timeout=180):
+    def _wait_for_deployment_ready(self, name, namespace, timeout=None):
+        timeout = self.DEPLOYMENT_READY_TIMEOUT_S if timeout is None else timeout
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             deployment = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
@@ -367,6 +369,9 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             )
         return self.kubectl.format_k8s_memory(pressure_kib)
 
+    def _extra_target_container_patch(self, container) -> dict:
+        return {}
+
     def _patch_target_requests(self):
         container_name = self._target_container_name()
         deployment = self._target_deployment()
@@ -374,9 +379,15 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             (container for container in deployment.spec.template.spec.containers if container.name == container_name),
             None,
         )
+        existing_requests = (
+            dict(container.resources.requests or {})
+            if container and container.resources and container.resources.requests
+            else {}
+        )
         resources = {
             "requests": {
-                "cpu": "25m",
+                **existing_requests,
+                "cpu": existing_requests.get("cpu") or "25m",
                 "memory": self.target_request_memory,
             }
         }
@@ -397,6 +408,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                             {
                                 "name": container_name,
                                 "resources": resources,
+                                **self._extra_target_container_patch(container),
                             }
                         ]
                     }

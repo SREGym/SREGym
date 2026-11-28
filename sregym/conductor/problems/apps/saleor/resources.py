@@ -192,6 +192,8 @@ class PriorityPreemptionCascadeSaleor(PriorityPreemptionCascadeHotelReservation)
     """
 
     UNPROTECTED_PEERS = ("loadgen",)
+    DEPLOYMENT_READY_TIMEOUT_S = 300
+    TARGET_LIVENESS_FAILURE_THRESHOLD = 12
 
     def __init__(self, faulty_service: str = API, service_name: str = API_SERVICE):
         super().__init__(app=make_app(APP))
@@ -226,6 +228,12 @@ class PriorityPreemptionCascadeSaleor(PriorityPreemptionCascadeHotelReservation)
             ),
             oracle_factory=PriorityPreemptionMitigationOracle,
         )
+
+    def _extra_target_container_patch(self, container) -> dict:
+        probe = getattr(container, "liveness_probe", None)
+        if probe is None:
+            return {}
+        return {"livenessProbe": {"failureThreshold": self.TARGET_LIVENESS_FAILURE_THRESHOLD}}
 
     def _protect_peer_deployments(self):
         peer_names = [
