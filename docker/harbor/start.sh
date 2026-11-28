@@ -17,6 +17,19 @@ exec >>"$out/logs/start.log" 2>&1
 stage="startup"
 fail() {
     local reason="${1:-SREGym setup failed during: $stage. Log: $out/logs/start.log}"
+    if [ "$stage" = "cluster" ]; then
+        cp -a /var/log/node-*.log "$out/logs/" 2>/dev/null || true
+        {
+            echo "=== kubeconfig state ==="
+            ls -la "$kubeconfig" /root/.kube/config 2>&1 || true
+            echo "=== kubectl get nodes -o wide ==="
+            KUBECONFIG="$kubeconfig" timeout 15 kubectl get nodes -o wide 2>&1 || true
+            echo "=== kubectl describe nodes ==="
+            KUBECONFIG="$kubeconfig" timeout 15 kubectl describe nodes 2>&1 || true
+            echo "=== dmesg tail ==="
+            dmesg 2>&1 | tail -n 100 || true
+        } > "$out/logs/cluster-diag.txt" 2>&1 || true
+    fi
     echo "$reason"
     printf '{"state": "failed", "error": "%s"}\n' "$reason" > "$shared/status.json"
     echo failed > "$shared/state"
@@ -59,7 +72,19 @@ if [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ] && [ "$start_cgroup" != / ] &
     echo "cluster cgroup: /sregym-cluster (started in shared cgroup $start_cgroup)"
 fi
 EGRESS_PROXY=127.0.0.1:3128 /bin/sh /usr/local/lib/userns-k3s/entrypoint.sh >"$out/logs/cluster.log" 2>&1 &
-timeout 300 bash -c "until [ -s $kubeconfig ]; do sleep 2; done"
+cluster_pid=$!
+kubeconfig_deadline=$((SECONDS + 300))
+until [ -s "$kubeconfig" ]; do
+    if ! kill -0 "$cluster_pid" 2>/dev/null || grep -q '^State:[[:space:]]*Z' "/proc/$cluster_pid/status" 2>/dev/null; then
+        echo "Cluster entrypoint (pid $cluster_pid) exited before kubeconfig appeared"
+        false
+    fi
+    if [ "$SECONDS" -ge "$kubeconfig_deadline" ]; then
+        echo "Timed out after 300s waiting for kubeconfig at $kubeconfig"
+        false
+    fi
+    sleep 2
+done
 cp "$kubeconfig" /root/.kube/config
 export KUBECONFIG=/root/.kube/config
 timeout 300 bash -c 'until [ "$(kubectl get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 4 ]; do sleep 3; done'
