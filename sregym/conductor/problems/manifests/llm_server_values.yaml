@@ -1,0 +1,4 @@
+# Turns off the demo's mock llm so llm_server.yaml can run the real one in its place.
+components:
+  llm:
+    enabled: false

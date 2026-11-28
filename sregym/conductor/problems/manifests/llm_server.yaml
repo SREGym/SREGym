@@ -1,0 +1,133 @@
+# Real llama.cpp server for the llm_context_window_astronomy_shop problem.
+
+# The demo's own `llm` is a mock that ignores context size, so the problem turns
+# it off (llm_server_values.yaml) and runs this instead under the same name, so
+# product-reviews keeps calling http://llm:8000/v1.
+
+# llama-server reads its settings from LLAMA_ARG_* env vars, which come from the
+# llm-server-config ConfigMap. With CTX_SIZE 2048 and N_PARALLEL 2 each request
+# gets 1024 tokens of context; the AI assistant's prompts are ~320-380 tokens.
+
+# The namespace is passed at apply time, so no `namespace:` field is set.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-server-config
+  labels:
+    app.kubernetes.io/part-of: opentelemetry-demo
+data:
+  LLAMA_ARG_MODEL: /models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+  LLAMA_ARG_ALIAS: astronomy-llm
+  LLAMA_ARG_HOST: "0.0.0.0"
+  LLAMA_ARG_PORT: "8000"
+  LLAMA_ARG_CTX_SIZE: "2048"
+  LLAMA_ARG_N_PARALLEL: "2"
+  LLAMA_ARG_THREADS: "2"
+  LLAMA_ARG_N_PREDICT: "256"
+  # product-reviews doesn't send a temperature, so greedy decoding keeps the
+  # assistant's answer to the same question the same.
+  LLAMA_ARG_TEMPERATURE: "0"
+---
+# Keeps the model on disk across restarts. The volume is tied to one node, so
+# the server doesn't move to a node that hasn't pulled the image yet.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llm-models
+  labels:
+    app.kubernetes.io/part-of: opentelemetry-demo
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm
+  labels:
+    opentelemetry.io/name: llm
+    app.kubernetes.io/name: llm
+    app.kubernetes.io/component: llm
+    app.kubernetes.io/part-of: opentelemetry-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      opentelemetry.io/name: llm
+  template:
+    metadata:
+      labels:
+        opentelemetry.io/name: llm
+        app.kubernetes.io/name: llm
+        app.kubernetes.io/component: llm
+        app.kubernetes.io/part-of: opentelemetry-demo
+    spec:
+      initContainers:
+        # Download the model once (pinned revision, checked against its sha256).
+        - name: fetch-model
+          image: curlimages/curl:8.11.1
+          securityContext:
+            runAsUser: 0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              f=/models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+              sum=74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db
+              if [ -f "$f" ] && echo "$sum  $f" | sha256sum -c - >/dev/null 2>&1; then exit 0; fi
+              curl -fsSL --retry 5 --retry-delay 5 -o "$f.$HOSTNAME.part" \
+                https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf
+              echo "$sum  $f.$HOSTNAME.part" | sha256sum -c -
+              mv "$f.$HOSTNAME.part" "$f"
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      containers:
+        - name: llm
+          image: ghcr.io/ggml-org/llama.cpp:server-b11870
+          envFrom:
+            - configMapRef:
+                name: llm-server-config
+          ports:
+            - name: http
+              containerPort: 8000
+          # /health can be slow while the model is busy; one slow probe
+          # shouldn't take the server out of the Service.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "2"
+              memory: 1536Mi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: llm-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm
+  labels:
+    app.kubernetes.io/part-of: opentelemetry-demo
+spec:
+  selector:
+    opentelemetry.io/name: llm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
