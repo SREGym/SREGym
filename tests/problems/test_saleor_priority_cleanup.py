@@ -37,3 +37,27 @@ def test_saleor_priority_preemption_sets_liveness_threshold_and_timeout():
 
     without_liveness = SimpleNamespace(liveness_probe=None)
     assert problem._extra_target_container_patch(without_liveness) == {}
+
+
+def test_saleor_priority_preemption_configures_180s_window_and_baseline():
+    app = SimpleNamespace(namespace="saleor", cleanup=Mock(), create_workload=Mock())
+    cascade_mod = "sregym.conductor.problems.priority_preemption_cascade"
+    env_mod = "sregym.conductor.problems.environment"
+    saleor_mod = "sregym.conductor.problems.apps.saleor.resources"
+    with (
+        patch(f"{saleor_mod}.make_app", return_value=app),
+        patch(f"{saleor_mod}.client.AppsV1Api"),
+        patch(f"{saleor_mod}.client.CoreV1Api"),
+        patch(f"{saleor_mod}.client.SchedulingV1Api"),
+        patch(f"{cascade_mod}.KubeCtl"),
+        patch(f"{cascade_mod}.client.AppsV1Api"),
+        patch(f"{cascade_mod}.client.CoreV1Api"),
+        patch(f"{cascade_mod}.client.SchedulingV1Api"),
+        patch(f"{cascade_mod}.LLMAsAJudgeOracle"),
+        patch(f"{env_mod}.KubeCtl"),
+        patch(f"{env_mod}.LLMAsAJudgeOracle"),
+    ):
+        problem = PriorityPreemptionCascadeSaleor()
+
+    assert problem.baseline_duration_s == 180
+    assert problem.mitigation_oracle.oracles["app_health"].window_s == 180.0
